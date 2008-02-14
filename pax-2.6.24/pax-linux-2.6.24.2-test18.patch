@@ -6163,8 +6163,17 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/ke
 +#endif
 diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/kernel/process_64.c linux-2.6.24.2-pax/arch/x86/kernel/process_64.c
 --- linux-2.6.24.2/arch/x86/kernel/process_64.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.2-pax/arch/x86/kernel/process_64.c	2008-02-13 11:13:14.000000000 +0100
-@@ -391,7 +391,7 @@ void exit_thread(void)
++++ linux-2.6.24.2-pax/arch/x86/kernel/process_64.c	2008-02-14 14:42:18.000000000 +0100
+@@ -210,6 +210,8 @@ static inline void play_dead(void)
+ void cpu_idle (void)
+ {
+ 	current_thread_info()->status |= TS_POLLING;
++	current->stack_canary = pax_get_random_long();
++	write_pda(stack_canary, current->stack_canary);
+ 	/* endless idle loop with no priority at all */
+ 	while (1) {
+ 		while (!need_resched()) {
+@@ -391,7 +393,7 @@ void exit_thread(void)
  	struct thread_struct *t = &me->thread;
  
  	if (me->thread.io_bitmap_ptr) { 
@@ -6173,7 +6182,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/ke
  
  		kfree(t->io_bitmap_ptr);
  		t->io_bitmap_ptr = NULL;
-@@ -598,7 +598,7 @@ __switch_to(struct task_struct *prev_p, 
+@@ -598,7 +600,7 @@ __switch_to(struct task_struct *prev_p, 
  	struct thread_struct *prev = &prev_p->thread,
  				 *next = &next_p->thread;
  	int cpu = smp_processor_id();  
@@ -6182,7 +6191,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/ke
  
  	/* we're going to use this soon, after a few expensive things */
  	if (next_p->fpu_counter>5)
-@@ -673,7 +673,6 @@ __switch_to(struct task_struct *prev_p, 
+@@ -673,7 +675,6 @@ __switch_to(struct task_struct *prev_p, 
  	write_pda(kernelstack,
  	(unsigned long)task_stack_page(next_p) + THREAD_SIZE - PDA_STACKOFFSET);
  #ifdef CONFIG_CC_STACKPROTECTOR
@@ -6190,7 +6199,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/ke
  	/*
  	 * Build time only check to make sure the stack_canary is at
  	 * offset 40 in the pda; this is a gcc ABI requirement
-@@ -702,7 +701,7 @@ __switch_to(struct task_struct *prev_p, 
+@@ -702,7 +703,7 @@ __switch_to(struct task_struct *prev_p, 
   */
  asmlinkage 
  long sys_execve(char __user *name, char __user * __user *argv,
@@ -6199,7 +6208,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/ke
  {
  	long error;
  	char * filename;
-@@ -711,7 +710,7 @@ long sys_execve(char __user *name, char 
+@@ -711,7 +712,7 @@ long sys_execve(char __user *name, char 
  	error = PTR_ERR(filename);
  	if (IS_ERR(filename)) 
  		return error;
@@ -6208,7 +6217,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/ke
  	if (error == 0) {
  		task_lock(current);
  		current->ptrace &= ~PT_DTRACE;
-@@ -907,10 +906,3 @@ int dump_task_regs(struct task_struct *t
+@@ -907,10 +908,3 @@ int dump_task_regs(struct task_struct *t
   
  	return 1;
  }
@@ -20706,7 +20715,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/mm/madvise.
  		goto out;
 diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/mm/memory.c linux-2.6.24.2-pax/mm/memory.c
 --- linux-2.6.24.2/mm/memory.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.2-pax/mm/memory.c	2008-02-13 15:47:02.000000000 +0100
++++ linux-2.6.24.2-pax/mm/memory.c	2008-02-14 14:40:23.000000000 +0100
 @@ -988,11 +988,11 @@ int get_user_pages(struct task_struct *t
  	vm_flags &= force ? (VM_MAYREAD | VM_MAYWRITE) : (VM_READ | VM_WRITE);
  	i = 0;
@@ -20903,7 +20912,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/mm/memory.c
 +	pte_unmap_nested(pte_m);
 +}
 +
-+static void pax_mirror_pte(struct vm_area_struct *vma, unsigned long address, pte_t *pte, spinlock_t *ptl)
++static void pax_mirror_pte(struct vm_area_struct *vma, unsigned long address, pte_t *pte, pmd_t *pmd, spinlock_t *ptl)
 +{
 +	struct page *page_m;
 +	pte_t entry;
@@ -20917,9 +20926,9 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/mm/memory.c
 +		pax_mirror_pfn_pte(vma, address, pte_pfn(entry), ptl);
 +	else if (PageAnon(page_m)) {
 +		if (pax_find_mirror_vma(vma)) {
-+			spin_unlock(ptl);
++			pte_unmap_unlock(pte, ptl);
 +			lock_page(page_m);
-+			spin_lock(ptl);
++			pte = pte_offset_map_lock(vma->vm_mm, pmd, address, &ptl);
 +			if (pte_same(entry, *pte))
 +				pax_mirror_anon_pte(vma, address, page_m, ptl);
 +			else
@@ -21052,7 +21061,7 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/mm/memory.c
  	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
-+	pax_mirror_pte(vma, address, pte, ptl);
++	pax_mirror_pte(vma, address, pte, pmd, ptl);
 +#endif
 +
  unlock:
