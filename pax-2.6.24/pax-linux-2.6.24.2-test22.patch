@@ -9916,6 +9916,64 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/mm
  	{
  		extern u32 pnp_bios_fault_eip, pnp_bios_fault_esp;
  		extern u32 pnp_bios_is_utter_crap;
+diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/mm/extable_64.c linux-2.6.24.2-pax/arch/x86/mm/extable_64.c
+--- linux-2.6.24.2/arch/x86/mm/extable_64.c	2008-01-24 23:58:37.000000000 +0100
++++ linux-2.6.24.2-pax/arch/x86/mm/extable_64.c	2008-02-15 22:53:35.000000000 +0100
+@@ -7,6 +7,54 @@
+ #include <linux/init.h>
+ #include <asm/uaccess.h>
+ 
++/*
++ * The exception table needs to be sorted so that the binary
++ * search that we use to find entries in it works properly.
++ * This is used both for the kernel exception table and for
++ * the exception tables of modules that get loaded.
++ */
++static int cmp_ex(const void *a, const void *b)
++{
++	const struct exception_table_entry *x = a, *y = b;
++
++	/* avoid overflow */
++	if (x->insn > y->insn)
++		return 1;
++	if (x->insn < y->insn)
++		return -1;
++	return 0;
++}
++
++static void swap_ex(void *a, void *b, int size)
++{
++	struct exception_table_entry t, *x = a, *y = b;
++
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++#endif
++
++	t = *x;
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
++	*x = *y;
++	*y = t;
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
++}
++
++void sort_extable(struct exception_table_entry *start,
++		  struct exception_table_entry *finish)
++{
++	sort(start, finish - start, sizeof(struct exception_table_entry),
++	     cmp_ex, swap_ex);
++}
++
+ /* Simple binary search */
+ const struct exception_table_entry *
+ search_extable(const struct exception_table_entry *first,
 diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/arch/x86/mm/fault_32.c linux-2.6.24.2-pax/arch/x86/mm/fault_32.c
 --- linux-2.6.24.2/arch/x86/mm/fault_32.c	2008-01-24 23:58:37.000000000 +0100
 +++ linux-2.6.24.2-pax/arch/x86/mm/fault_32.c	2008-02-06 01:34:27.000000000 +0100
@@ -18510,6 +18568,17 @@ diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/include/asm
  
  
  unsigned long __must_check __copy_to_user_ll(void __user *to,
+diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/include/asm-x86/uaccess_64.h linux-2.6.24.2-pax/include/asm-x86/uaccess_64.h
+--- linux-2.6.24.2/include/asm-x86/uaccess_64.h	2008-01-24 23:58:37.000000000 +0100
++++ linux-2.6.24.2-pax/include/asm-x86/uaccess_64.h	2008-02-15 22:51:51.000000000 +0100
+@@ -66,6 +66,7 @@ struct exception_table_entry
+ };
+ 
+ #define ARCH_HAS_SEARCH_EXTABLE
++#define ARCH_HAS_SORT_EXTABLE
+ 
+ /*
+  * These are the main single-value transfer routines.  They automatically
 diff -NurpX linux-2.6.24.2-pax/Documentation/dontdiff linux-2.6.24.2/include/asm-xtensa/kmap_types.h linux-2.6.24.2-pax/include/asm-xtensa/kmap_types.h
 --- linux-2.6.24.2/include/asm-xtensa/kmap_types.h	2008-01-24 23:58:37.000000000 +0100
 +++ linux-2.6.24.2-pax/include/asm-xtensa/kmap_types.h	2008-01-25 15:34:27.000000000 +0100
