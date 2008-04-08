@@ -6835,21 +6835,21 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/ke
  	load_LDT(&current->active_mm->context);	/* This does lldt */
 diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/kernel/sys_i386_32.c linux-2.6.24.4-pax/arch/x86/kernel/sys_i386_32.c
 --- linux-2.6.24.4/arch/x86/kernel/sys_i386_32.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.4-pax/arch/x86/kernel/sys_i386_32.c	2008-02-29 18:07:50.000000000 +0100
++++ linux-2.6.24.4-pax/arch/x86/kernel/sys_i386_32.c	2008-04-08 03:07:30.000000000 +0200
 @@ -39,6 +39,21 @@ asmlinkage int sys_pipe(unsigned long __
  	return error;
  }
  
 +int i386_mmap_check(unsigned long addr, unsigned long len, unsigned long flags)
 +{
-+	unsigned long task_size = TASK_SIZE;
++	unsigned long pax_task_size = TASK_SIZE;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (current->mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (len > task_size || addr > task_size - len)
++	if (len > pax_task_size || addr > pax_task_size - len)
 +		return -EINVAL;
 +
 +	return 0;
@@ -6868,14 +6868,14 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/ke
 +{
 +	struct mm_struct *mm = current->mm;
 +	struct vm_area_struct *vma;
-+	unsigned long start_addr, task_size = TASK_SIZE;
++	unsigned long start_addr, pax_task_size = TASK_SIZE;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (len > task_size)
++	if (len > pax_task_size)
 +		return -ENOMEM;
 +
 +	if (flags & MAP_FIXED)
@@ -6888,7 +6888,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/ke
 +	if (addr) {
 +		addr = PAGE_ALIGN(addr);
 +		vma = find_vma(mm, addr);
-+		if (task_size - len >= addr &&
++		if (pax_task_size - len >= addr &&
 +		    (!vma || addr + len <= vma->vm_start))
 +			return addr;
 +	}
@@ -6918,7 +6918,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/ke
 +full_search:
 +	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
 +		/* At this point:  (!vma || addr < vma->vm_end). */
-+		if (task_size - len < addr) {
++		if (pax_task_size - len < addr) {
 +			/*
 +			 * Start a new search - just in case we missed
 +			 * some holes.
@@ -6955,15 +6955,15 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/ke
 +{
 +	struct vm_area_struct *vma;
 +	struct mm_struct *mm = current->mm;
-+	unsigned long base = mm->mmap_base, addr = addr0, task_size = TASK_SIZE;
++	unsigned long base = mm->mmap_base, addr = addr0, pax_task_size = TASK_SIZE;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
 +	/* requested length too big for entire address space */
-+	if (len > task_size)
++	if (len > pax_task_size)
 +		return -ENOMEM;
 +
 +	if (flags & MAP_FIXED)
@@ -6982,7 +6982,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/ke
 +	if (addr) {
 +		addr = PAGE_ALIGN(addr);
 +		vma = find_vma(mm, addr);
-+		if (task_size - len >= addr &&
++		if (pax_task_size - len >= addr &&
 +				(!vma || addr + len <= vma->vm_start))
 +			return addr;
 +	}
@@ -10825,17 +10825,17 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm
  	return (void*) vaddr;
 diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm/hugetlbpage.c linux-2.6.24.4-pax/arch/x86/mm/hugetlbpage.c
 --- linux-2.6.24.4/arch/x86/mm/hugetlbpage.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.4-pax/arch/x86/mm/hugetlbpage.c	2008-02-29 18:07:50.000000000 +0100
++++ linux-2.6.24.4-pax/arch/x86/mm/hugetlbpage.c	2008-04-08 03:08:16.000000000 +0200
 @@ -229,13 +229,18 @@ static unsigned long hugetlb_get_unmappe
  {
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
 -	unsigned long start_addr;
-+	unsigned long start_addr, task_size = TASK_SIZE;
++	unsigned long start_addr, pax_task_size = TASK_SIZE;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
  
  	if (len > mm->cached_hole_size) {
@@ -10854,7 +10854,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm
  	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
  		/* At this point:  (!vma || addr < vma->vm_end). */
 -		if (TASK_SIZE - len < addr) {
-+		if (task_size - len < addr) {
++		if (pax_task_size - len < addr) {
  			/*
  			 * Start a new search - just in case we missed
  			 * some holes.
@@ -10936,7 +10936,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm
  {
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
-+	unsigned long task_size = TASK_SIZE;
++	unsigned long pax_task_size = TASK_SIZE;
  
  	if (len & ~HPAGE_MASK)
  		return -EINVAL;
@@ -10944,10 +10944,10 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (len > task_size)
++	if (len > pax_task_size)
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
@@ -10956,7 +10956,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm
  		addr = ALIGN(addr, HPAGE_SIZE);
  		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
-+		if (task_size - len >= addr &&
++		if (pax_task_size - len >= addr &&
  		    (!vma || addr + len <= vma->vm_start))
  			return addr;
  	}
@@ -11544,23 +11544,23 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm
  	o = remove_vm_area((void *)addr);
 diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm/mmap_32.c linux-2.6.24.4-pax/arch/x86/mm/mmap_32.c
 --- linux-2.6.24.4/arch/x86/mm/mmap_32.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.4-pax/arch/x86/mm/mmap_32.c	2008-02-29 18:07:50.000000000 +0100
++++ linux-2.6.24.4-pax/arch/x86/mm/mmap_32.c	2008-04-08 03:08:58.000000000 +0200
 @@ -35,12 +35,18 @@
   * Leave an at least ~128 MB hole.
   */
  #define MIN_GAP (128*1024*1024)
 -#define MAX_GAP (TASK_SIZE/6*5)
-+#define MAX_GAP (task_size/6*5)
++#define MAX_GAP (pax_task_size/6*5)
  
  static inline unsigned long mmap_base(struct mm_struct *mm)
  {
  	unsigned long gap = current->signal->rlim[RLIMIT_STACK].rlim_cur;
  	unsigned long random_factor = 0;
-+	unsigned long task_size = TASK_SIZE;
++	unsigned long pax_task_size = TASK_SIZE;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
  
  	if (current->flags & PF_RANDOMIZE)
@@ -11570,7 +11570,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/arch/x86/mm
  		gap = MAX_GAP;
  
 -	return PAGE_ALIGN(TASK_SIZE - gap - random_factor);
-+	return PAGE_ALIGN(task_size - gap - random_factor);
++	return PAGE_ALIGN(pax_task_size - gap - random_factor);
  }
  
  /*
@@ -13572,7 +13572,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/drivers/pcm
  
 diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/drivers/pnp/pnpbios/bioscalls.c linux-2.6.24.4-pax/drivers/pnp/pnpbios/bioscalls.c
 --- linux-2.6.24.4/drivers/pnp/pnpbios/bioscalls.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.4-pax/drivers/pnp/pnpbios/bioscalls.c	2008-02-29 18:07:50.000000000 +0100
++++ linux-2.6.24.4-pax/drivers/pnp/pnpbios/bioscalls.c	2008-04-02 21:44:29.000000000 +0200
 @@ -61,7 +61,7 @@ set_base(gdt[(selname) >> 3], (u32)(addr
  set_limit(gdt[(selname) >> 3], size); \
  } while(0)
@@ -13628,7 +13628,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/drivers/pnp
  	put_cpu();
  
  	/* If we get here and this is set then the PnP BIOS faulted on us. */
-@@ -469,16 +491,25 @@ int pnp_bios_read_escd(char *data, u32 n
+@@ -469,14 +491,22 @@ int pnp_bios_read_escd(char *data, u32 n
  	return status;
  }
  
@@ -13645,17 +13645,14 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/drivers/pnp
  	pnp_bios_callpoint.offset = header->fields.pm16offset;
  	pnp_bios_callpoint.segment = PNP_CS16;
  
- 	set_base(bad_bios_desc, __va((unsigned long)0x40 << 4));
- 	_set_limit((char *)&bad_bios_desc, 4095 - (0x40 << 4));
-+
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
 +#endif
 +
+ 	set_base(bad_bios_desc, __va((unsigned long)0x40 << 4));
+ 	_set_limit((char *)&bad_bios_desc, 4095 - (0x40 << 4));
  	for (i = 0; i < NR_CPUS; i++) {
- 		struct desc_struct *gdt = get_cpu_gdt_table(i);
- 		if (!gdt)
-@@ -489,4 +520,9 @@ void pnpbios_calls_init(union pnp_bios_i
+@@ -489,4 +519,9 @@ void pnpbios_calls_init(union pnp_bios_i
  		set_base(gdt[GDT_ENTRY_PNPBIOS_DS],
  			 __va(header->fields.pm16dseg));
  	}
@@ -14415,7 +14412,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_a
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_elf.c linux-2.6.24.4-pax/fs/binfmt_elf.c
 --- linux-2.6.24.4/fs/binfmt_elf.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.4-pax/fs/binfmt_elf.c	2008-03-08 01:49:25.000000000 +0100
++++ linux-2.6.24.4-pax/fs/binfmt_elf.c	2008-04-08 03:10:12.000000000 +0200
 @@ -43,6 +43,10 @@
  #include <asm/param.h>
  #include <asm/page.h>
@@ -14451,7 +14448,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_e
  	struct elf_phdr *eppnt;
 -	unsigned long load_addr = 0;
 -	int load_addr_set = 0;
-+	unsigned long load_addr = 0, min_addr, max_addr, task_size = TASK_SIZE;
++	unsigned long load_addr = 0, min_addr, max_addr, pax_task_size = TASK_SIZE;
  	unsigned long last_bss = 0, elf_bss = 0;
 -	unsigned long error = ~0UL;
 +	unsigned long error = -EINVAL;
@@ -14464,11 +14461,11 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_e
  
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (current->mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
  	eppnt = elf_phdata;
-+	min_addr = task_size;
++	min_addr = pax_task_size;
 +	max_addr = 0;
 +	error = -ENOMEM;
 +
@@ -14536,7 +14533,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_e
 +		if (max_addr < ELF_PAGEALIGN(eppnt->p_vaddr + eppnt->p_memsz))
 +			max_addr = ELF_PAGEALIGN(eppnt->p_vaddr + eppnt->p_memsz);
 +	}
-+	if (min_addr >= max_addr || max_addr > task_size)
++	if (min_addr >= max_addr || max_addr > pax_task_size)
 +		goto out_close;
  
 -			/*
@@ -14550,7 +14547,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_e
 +	if (interp_elf_ex->e_type == ET_DYN) {
 +		load_addr = get_unmapped_area(interpreter, 0, max_addr - min_addr, 0, MAP_PRIVATE | MAP_EXECUTABLE);
 +
-+		if (load_addr >= task_size)
++		if (load_addr >= pax_task_size)
 +			goto out_close;
 +
 +		load_addr -= min_addr;
@@ -14815,7 +14812,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_e
  		struct elfhdr interp_elf_ex;
    		struct exec interp_ex;
  	} *loc;
-+	unsigned long task_size = TASK_SIZE;
++	unsigned long pax_task_size = TASK_SIZE;
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
@@ -14869,7 +14866,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_e
 +	if (current->mm->pax_flags & MF_PAX_SEGMEXEC) {
 +		current->mm->context.user_cs_base = SEGMEXEC_TASK_SIZE;
 +		current->mm->context.user_cs_limit = TASK_SIZE-SEGMEXEC_TASK_SIZE;
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +	}
 +#endif
 +
@@ -14938,9 +14935,9 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/fs/binfmt_e
 -		if (BAD_ADDR(k) || elf_ppnt->p_filesz > elf_ppnt->p_memsz ||
 -		    elf_ppnt->p_memsz > TASK_SIZE ||
 -		    TASK_SIZE - elf_ppnt->p_memsz < k) {
-+		if (k >= task_size || elf_ppnt->p_filesz > elf_ppnt->p_memsz ||
-+		    elf_ppnt->p_memsz > task_size ||
-+		    task_size - elf_ppnt->p_memsz < k) {
++		if (k >= pax_task_size || elf_ppnt->p_filesz > elf_ppnt->p_memsz ||
++		    elf_ppnt->p_memsz > pax_task_size ||
++		    pax_task_size - elf_ppnt->p_memsz < k) {
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
@@ -22970,7 +22967,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/mm/mprotect
  		if (nstart < prev->vm_end)
 diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/mm/mremap.c linux-2.6.24.4-pax/mm/mremap.c
 --- linux-2.6.24.4/mm/mremap.c	2008-01-24 23:58:37.000000000 +0100
-+++ linux-2.6.24.4-pax/mm/mremap.c	2008-02-29 18:07:50.000000000 +0100
++++ linux-2.6.24.4-pax/mm/mremap.c	2008-04-08 03:10:53.000000000 +0200
 @@ -106,6 +106,12 @@ static void move_ptes(struct vm_area_str
  			continue;
  		pte = ptep_clear_flush(vma, old_addr, old_pte);
@@ -22988,7 +22985,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/mm/mremap.c
  	struct vm_area_struct *vma;
  	unsigned long ret = -EINVAL;
  	unsigned long charged = 0;
-+	unsigned long task_size = TASK_SIZE;
++	unsigned long pax_task_size = TASK_SIZE;
  
  	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE))
  		goto out;
@@ -22998,11 +22995,11 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/mm/mremap.c
  
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (current->mm->pax_flags & MF_PAX_SEGMEXEC)
-+		task_size = SEGMEXEC_TASK_SIZE;
++		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (new_len > task_size || addr > task_size-new_len ||
-+	    old_len > task_size || addr > task_size-old_len)
++	if (new_len > pax_task_size || addr > pax_task_size-new_len ||
++	    old_len > pax_task_size || addr > pax_task_size-old_len)
 +		goto out;
 +
  	/* new_addr is only valid if MREMAP_FIXED is specified */
@@ -23013,7 +23010,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/mm/mremap.c
  			goto out;
  
 -		if (new_len > TASK_SIZE || new_addr > TASK_SIZE - new_len)
-+		if (new_addr > task_size - new_len)
++		if (new_addr > pax_task_size - new_len)
  			goto out;
  
  		/* Check if the location we're moving into overlaps the
@@ -23047,7 +23044,7 @@ diff -NurpX linux-2.6.24.4-pax/Documentation/dontdiff linux-2.6.24.4/mm/mremap.c
  	    !((flags & MREMAP_FIXED) && (addr != new_addr)) &&
  	    (old_len != new_len || !(flags & MREMAP_MAYMOVE))) {
 -		unsigned long max_addr = TASK_SIZE;
-+		unsigned long max_addr = task_size;
++		unsigned long max_addr = pax_task_size;
  		if (vma->vm_next)
  			max_addr = vma->vm_next->vm_start;
  		/* can we just expand the current mapping? */
