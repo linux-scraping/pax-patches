@@ -6257,16 +6257,19 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/arch/x86/ke
  
 diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/arch/x86/kernel/smpcommon_32.c linux-2.6.25.4-pax/arch/x86/kernel/smpcommon_32.c
 --- linux-2.6.25.4/arch/x86/kernel/smpcommon_32.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.4-pax/arch/x86/kernel/smpcommon_32.c	2008-05-01 04:53:36.000000000 +0200
-@@ -3,6 +3,7 @@
++++ linux-2.6.25.4-pax/arch/x86/kernel/smpcommon_32.c	2008-05-20 03:38:02.000000000 +0200
+@@ -3,8 +3,9 @@
   */
  #include <linux/module.h>
  #include <asm/smp.h>
 +#include <asm/sections.h>
  
- DEFINE_PER_CPU(unsigned long, this_cpu_off);
+-DEFINE_PER_CPU(unsigned long, this_cpu_off);
++DEFINE_PER_CPU(unsigned long, this_cpu_off) = (unsigned long)__per_cpu_start;
  EXPORT_PER_CPU_SYMBOL(this_cpu_off);
-@@ -12,13 +13,20 @@ EXPORT_PER_CPU_SYMBOL(this_cpu_off);
+ 
+ /* Initialize the CPU's GDT.  This is either the boot CPU doing itself
+@@ -12,15 +13,22 @@ EXPORT_PER_CPU_SYMBOL(this_cpu_off);
     secondary which will soon come up. */
  __cpuinit void init_gdt(int cpu)
  {
@@ -6287,11 +6290,14 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/arch/x86/ke
 +		pack_descriptor(&d, base, limit, 0x80 | DESCTYPE_S | 0x3, 0x4);
 +	else
 +		pack_descriptor(&d, base, limit >> PAGE_SHIFT, 0x80 | DESCTYPE_S | 0x3, 0xC);
-+
-+	write_gdt_entry(gdt, GDT_ENTRY_PERCPU, &d, DESCTYPE_S);
  
- 	per_cpu(this_cpu_off, cpu) = __per_cpu_offset[cpu];
+-	per_cpu(this_cpu_off, cpu) = __per_cpu_offset[cpu];
++	write_gdt_entry(gdt, GDT_ENTRY_PERCPU, &d, DESCTYPE_S);
++
++	per_cpu(this_cpu_off, cpu) = base;
  	per_cpu(cpu_number, cpu) = cpu;
+ }
+ 
 diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/arch/x86/kernel/step.c linux-2.6.25.4-pax/arch/x86/kernel/step.c
 --- linux-2.6.25.4/arch/x86/kernel/step.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.25.4-pax/arch/x86/kernel/step.c	2008-04-30 23:56:13.000000000 +0200
@@ -16702,30 +16708,20 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/include/asm
  	unsigned int __softirq_pending;
 diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/include/asm-x86/percpu.h linux-2.6.25.4-pax/include/asm-x86/percpu.h
 --- linux-2.6.25.4/include/asm-x86/percpu.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.4-pax/include/asm-x86/percpu.h	2008-05-01 05:11:11.000000000 +0200
-@@ -41,6 +41,7 @@ DECLARE_PER_CPU(struct x8664_pda, pda);
- #ifdef CONFIG_SMP
- #define PER_CPU(var, reg)				\
- 	movl %fs:per_cpu__##this_cpu_off, reg;		\
-+	lea __per_cpu_start(reg), reg;			\
- 	lea per_cpu__##var(reg), reg
- #define PER_CPU_VAR(var)	%fs:per_cpu__##var
- #else /* ! SMP */
-@@ -65,7 +66,13 @@ DECLARE_PER_CPU(struct x8664_pda, pda);
-  */
- #ifdef CONFIG_SMP
++++ linux-2.6.25.4-pax/include/asm-x86/percpu.h	2008-05-20 03:32:19.000000000 +0200
+@@ -67,6 +67,12 @@ DECLARE_PER_CPU(struct x8664_pda, pda);
  
--#define __my_cpu_offset x86_read_percpu(this_cpu_off)
-+#define __my_cpu_offset (x86_read_percpu(this_cpu_off) + (unsigned long)__per_cpu_start)
-+
-+#include <linux/threads.h>
+ #define __my_cpu_offset x86_read_percpu(this_cpu_off)
+ 
 +#include <asm-generic/sections.h>
++#include <linux/threads.h>
 +#define __per_cpu_offset __per_cpu_offset
 +extern unsigned long __per_cpu_offset[NR_CPUS];
 +#define per_cpu_offset(x) (__per_cpu_offset[x] + (unsigned long)__per_cpu_start)
- 
++
  /* fs segment starts at (positive) offset == __per_cpu_offset[cpu] */
  #define __percpu_seg "%%fs:"
+ 
 diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/include/asm-x86/pgalloc_32.h linux-2.6.25.4-pax/include/asm-x86/pgalloc_32.h
 --- linux-2.6.25.4/include/asm-x86/pgalloc_32.h	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.25.4-pax/include/asm-x86/pgalloc_32.h	2008-04-30 23:56:13.000000000 +0200
@@ -18273,7 +18269,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/init/initra
  	return 0;
 diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/init/main.c linux-2.6.25.4-pax/init/main.c
 --- linux-2.6.25.4/init/main.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.4-pax/init/main.c	2008-05-16 00:55:21.000000000 +0200
++++ linux-2.6.25.4-pax/init/main.c	2008-05-20 02:30:03.000000000 +0200
 @@ -187,6 +187,17 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -18292,6 +18288,15 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/init/main.c
  static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
+@@ -364,7 +375,7 @@ static inline void smp_prepare_cpus(unsi
+ #else
+ 
+ #ifndef CONFIG_HAVE_SETUP_PER_CPU_AREA
+-unsigned long __per_cpu_offset[NR_CPUS] __read_mostly;
++unsigned long __per_cpu_offset[NR_CPUS] __read_only;
+ 
+ EXPORT_SYMBOL(__per_cpu_offset);
+ 
 @@ -668,7 +679,7 @@ static void __init do_initcalls(void)
  
  	for (call = __initcall_start; call < __initcall_end; call++) {
@@ -18624,7 +18629,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/kpro
  		return 1;
 diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/lockdep.c linux-2.6.25.4-pax/kernel/lockdep.c
 --- linux-2.6.25.4/kernel/lockdep.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.4-pax/kernel/lockdep.c	2008-04-30 23:56:13.000000000 +0200
++++ linux-2.6.25.4-pax/kernel/lockdep.c	2008-05-20 03:30:10.000000000 +0200
 @@ -598,6 +598,10 @@ static int static_obj(void *obj)
  	int i;
  #endif
@@ -18636,9 +18641,24 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/lock
  	/*
  	 * static variable?
  	 */
+@@ -609,9 +613,12 @@ static int static_obj(void *obj)
+ 	 * percpu var?
+ 	 */
+ 	for_each_possible_cpu(i) {
++#ifdef CONFIG_X86_32
++		start = per_cpu_offset(i);
++#else
+ 		start = (unsigned long) &__per_cpu_start + per_cpu_offset(i);
+-		end   = (unsigned long) &__per_cpu_start + PERCPU_ENOUGH_ROOM
+-					+ per_cpu_offset(i);
++#endif
++		end   = start + PERCPU_ENOUGH_ROOM;
+ 
+ 		if ((addr >= start) && (addr < end))
+ 			return 1;
 diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/module.c linux-2.6.25.4-pax/kernel/module.c
 --- linux-2.6.25.4/kernel/module.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.4-pax/kernel/module.c	2008-05-07 19:01:54.000000000 +0200
++++ linux-2.6.25.4-pax/kernel/module.c	2008-05-20 03:31:01.000000000 +0200
 @@ -45,6 +45,11 @@
  #include <asm/uaccess.h>
  #include <asm/semaphore.h>
@@ -18669,7 +18689,19 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  		printk(KERN_WARNING "%s: per-cpu alignment %li > %li\n",
  		       name, align, PAGE_SIZE);
  		align = PAGE_SIZE;
-@@ -1347,16 +1354,19 @@ static void free_module(struct module *m
+@@ -433,7 +440,11 @@ static void percpu_modcopy(void *pcpudes
+ 	int cpu;
+ 
+ 	for_each_possible_cpu(cpu)
++#ifdef CONFIG_X86_32
++		memcpy(pcpudest + __per_cpu_offset[cpu], from, size);
++#else
+ 		memcpy(pcpudest + per_cpu_offset(cpu), from, size);
++#endif
+ }
+ 
+ static int percpu_modinit(void)
+@@ -1347,16 +1358,19 @@ static void free_module(struct module *m
  	module_unload_free(mod);
  
  	/* This may be NULL, but that's OK */
@@ -18692,7 +18724,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  }
  
  void *__symbol_get(const char *symbol)
-@@ -1421,10 +1431,14 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1421,10 +1435,14 @@ static int simplify_symbols(Elf_Shdr *se
  			    struct module *mod)
  {
  	Elf_Sym *sym = (void *)sechdrs[symindex].sh_addr;
@@ -18708,7 +18740,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  	for (i = 1; i < n; i++) {
  		switch (sym[i].st_shndx) {
  		case SHN_COMMON:
-@@ -1443,10 +1457,19 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1443,10 +1461,19 @@ static int simplify_symbols(Elf_Shdr *se
  			break;
  
  		case SHN_UNDEF:
@@ -18730,7 +18762,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  			/* Ok if resolved.  */
  			if (!IS_ERR_VALUE(sym[i].st_value))
  				break;
-@@ -1461,11 +1484,27 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1461,11 +1488,27 @@ static int simplify_symbols(Elf_Shdr *se
  
  		default:
  			/* Divert to percpu allocation if a percpu var. */
@@ -18760,7 +18792,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  			break;
  		}
  	}
-@@ -1517,11 +1556,14 @@ static void layout_sections(struct modul
+@@ -1517,11 +1560,14 @@ static void layout_sections(struct modul
  			    || strncmp(secstrings + s->sh_name,
  				       ".init", 5) == 0)
  				continue;
@@ -18777,7 +18809,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  	}
  
  	DEBUGP("Init section allocation order:\n");
-@@ -1535,12 +1577,15 @@ static void layout_sections(struct modul
+@@ -1535,12 +1581,15 @@ static void layout_sections(struct modul
  			    || strncmp(secstrings + s->sh_name,
  				       ".init", 5) != 0)
  				continue;
@@ -18796,7 +18828,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  	}
  }
  
-@@ -1667,14 +1712,31 @@ static void add_kallsyms(struct module *
+@@ -1667,14 +1716,31 @@ static void add_kallsyms(struct module *
  {
  	unsigned int i;
  
@@ -18831,7 +18863,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  }
  #else
  static inline void add_kallsyms(struct module *mod,
-@@ -1724,6 +1786,10 @@ static struct module *load_module(void _
+@@ -1724,6 +1790,10 @@ static struct module *load_module(void _
  	struct exception_table_entry *extable;
  	mm_segment_t old_fs;
  
@@ -18842,7 +18874,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  	DEBUGP("load_module: umod=%p, len=%lu, uargs=%p\n",
  	       umod, len, uargs);
  	if (len < sizeof(*hdr))
-@@ -1882,21 +1948,57 @@ static struct module *load_module(void _
+@@ -1882,21 +1952,57 @@ static struct module *load_module(void _
  	layout_sections(mod, hdr, sechdrs, secstrings);
  
  	/* Do the allocs. */
@@ -18864,12 +18896,17 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
 +	}
 +	memset(ptr, 0, mod->init_size_rw);
 +	mod->module_init_rw = ptr;
-+
+ 
+-	ptr = module_alloc(mod->init_size);
+-	if (!ptr && mod->init_size) {
 +	ptr = module_alloc_exec(mod->core_size_rx);
 +	if (!ptr) {
-+		err = -ENOMEM;
+ 		err = -ENOMEM;
+-		goto free_core;
 +		goto free_init_rw;
-+	}
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
@@ -18882,17 +18919,12 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
 +#endif
 +
 +	mod->module_core_rx = ptr;
- 
--	ptr = module_alloc(mod->init_size);
--	if (!ptr && mod->init_size) {
++
 +	ptr = module_alloc_exec(mod->init_size_rx);
 +	if (!ptr && mod->init_size_rx) {
- 		err = -ENOMEM;
--		goto free_core;
++		err = -ENOMEM;
 +		goto free_core_rx;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
++	}
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
@@ -18908,7 +18940,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  
  	/* Transfer each section which specifies SHF_ALLOC */
  	DEBUGP("final section addresses:\n");
-@@ -1906,17 +2008,41 @@ static struct module *load_module(void _
+@@ -1906,17 +2012,41 @@ static struct module *load_module(void _
  		if (!(sechdrs[i].sh_flags & SHF_ALLOC))
  			continue;
  
@@ -18959,7 +18991,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  		DEBUGP("\t0x%lx %s\n", sechdrs[i].sh_addr, secstrings + sechdrs[i].sh_name);
  	}
  	/* Module has been moved. */
-@@ -2057,12 +2183,12 @@ static struct module *load_module(void _
+@@ -2057,12 +2187,12 @@ static struct module *load_module(void _
  	 * Do it before processing of module parameters, so the module
  	 * can provide parameter accessor functions of its own.
  	 */
@@ -18978,7 +19010,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  
  	set_fs(old_fs);
  
-@@ -2115,9 +2241,13 @@ static struct module *load_module(void _
+@@ -2115,9 +2245,13 @@ static struct module *load_module(void _
  	kobject_put(&mod->mkobj.kobj);
   free_unload:
  	module_unload_free(mod);
@@ -18995,7 +19027,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
   free_percpu:
  	if (percpu)
  		percpu_modfree(percpu);
-@@ -2195,10 +2325,12 @@ sys_init_module(void __user *umod,
+@@ -2195,10 +2329,12 @@ sys_init_module(void __user *umod,
  	/* Drop initial reference. */
  	module_put(mod);
  	unwind_remove_table(mod->unwind_info, 1);
@@ -19012,7 +19044,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  	mutex_unlock(&module_mutex);
  
  	return 0;
-@@ -2206,6 +2338,13 @@ sys_init_module(void __user *umod,
+@@ -2206,6 +2342,13 @@ sys_init_module(void __user *umod,
  
  static inline int within(unsigned long addr, void *start, unsigned long size)
  {
@@ -19026,7 +19058,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  	return ((void *)addr >= start && (void *)addr < start + size);
  }
  
-@@ -2229,10 +2368,14 @@ static const char *get_ksymbol(struct mo
+@@ -2229,10 +2372,14 @@ static const char *get_ksymbol(struct mo
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -19044,7 +19076,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  
  	/* Scan for closest preceeding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -2277,8 +2420,10 @@ const char *module_address_lookup(unsign
+@@ -2277,8 +2424,10 @@ const char *module_address_lookup(unsign
  
  	preempt_disable();
  	list_for_each_entry(mod, &modules, list) {
@@ -19057,7 +19089,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  			if (modname)
  				*modname = mod->name;
  			ret = get_ksymbol(mod, addr, size, offset);
-@@ -2300,8 +2445,10 @@ int lookup_module_symbol_name(unsigned l
+@@ -2300,8 +2449,10 @@ int lookup_module_symbol_name(unsigned l
  
  	preempt_disable();
  	list_for_each_entry(mod, &modules, list) {
@@ -19070,7 +19102,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  			const char *sym;
  
  			sym = get_ksymbol(mod, addr, NULL, NULL);
-@@ -2324,8 +2471,10 @@ int lookup_module_symbol_attrs(unsigned 
+@@ -2324,8 +2475,10 @@ int lookup_module_symbol_attrs(unsigned 
  
  	preempt_disable();
  	list_for_each_entry(mod, &modules, list) {
@@ -19083,7 +19115,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  			const char *sym;
  
  			sym = get_ksymbol(mod, addr, size, offset);
-@@ -2456,7 +2605,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2456,7 +2609,7 @@ static int m_show(struct seq_file *m, vo
  	char buf[8];
  
  	seq_printf(m, "%s %lu",
@@ -19092,7 +19124,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -2465,7 +2614,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2465,7 +2618,7 @@ static int m_show(struct seq_file *m, vo
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -19101,7 +19133,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  
  	/* Taints info */
  	if (mod->taints)
-@@ -2521,7 +2670,8 @@ int is_module_address(unsigned long addr
+@@ -2521,7 +2674,8 @@ int is_module_address(unsigned long addr
  	preempt_disable();
  
  	list_for_each_entry(mod, &modules, list) {
@@ -19111,7 +19143,7 @@ diff -NurpX linux-2.6.25.4-pax/Documentation/dontdiff linux-2.6.25.4/kernel/modu
  			preempt_enable();
  			return 1;
  		}
-@@ -2539,8 +2689,8 @@ struct module *__module_text_address(uns
+@@ -2539,8 +2693,8 @@ struct module *__module_text_address(uns
  	struct module *mod;
  
  	list_for_each_entry(mod, &modules, list)
