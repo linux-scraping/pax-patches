@@ -4659,7 +4659,7 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
  	reserve_early(__pa_symbol(&_text), __pa_symbol(&_end), "TEXT DATA BSS");
 diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/kernel/head_32.S linux-2.6.25.6-pax/arch/x86/kernel/head_32.S
 --- linux-2.6.25.6/arch/x86/kernel/head_32.S	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.6-pax/arch/x86/kernel/head_32.S	2008-05-01 02:28:22.000000000 +0200
++++ linux-2.6.25.6-pax/arch/x86/kernel/head_32.S	2008-06-15 00:03:38.000000000 +0200
 @@ -20,6 +20,7 @@
  #include <asm/asm-offsets.h>
  #include <asm/setup.h>
@@ -4864,26 +4864,59 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
  #endif /* CONFIG_SMP */
  	jmp start_kernel
  
-@@ -534,8 +576,8 @@ early_page_fault:
+@@ -534,15 +576,15 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
 -	cld
  #ifdef CONFIG_PRINTK
++	cmpl $2,%ss:early_recursion_flag
++	je hlt_loop
++	incl %ss:early_recursion_flag
 +	cld
  	pusha
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
-@@ -561,8 +603,8 @@ hlt_loop:
+ 	movl %eax,%es
+-	cmpl $2,early_recursion_flag
+-	je hlt_loop
+-	incl early_recursion_flag
+ 	movl %cr2,%eax
+ 	pushl %eax
+ 	pushl %edx		/* trapno */
+@@ -552,8 +594,8 @@ early_fault:
+ #else
+ 	call printk
+ #endif
+-#endif
+ 	call dump_stack
++#endif
+ hlt_loop:
+ 	hlt
+ 	jmp hlt_loop
+@@ -561,8 +603,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
 -	cld
  #ifdef CONFIG_PRINTK
++	cmpl $2,%ss:early_recursion_flag
++	je hlt_loop
++	incl %ss:early_recursion_flag
 +	cld
  	pushl %eax
  	pushl %ecx
  	pushl %edx
+@@ -571,9 +616,6 @@ ignore_int:
+ 	movl $(__KERNEL_DS),%eax
+ 	movl %eax,%ds
+ 	movl %eax,%es
+-	cmpl $2,early_recursion_flag
+-	je hlt_loop
+-	incl early_recursion_flag
+ 	pushl 16(%esp)
+ 	pushl 24(%esp)
+ 	pushl 32(%esp)
 @@ -593,36 +635,41 @@ ignore_int:
  #endif
  	iret
@@ -6071,7 +6104,7 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
  	load_idt(&real_mode_idt);
 diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/kernel/setup64.c linux-2.6.25.6-pax/arch/x86/kernel/setup64.c
 --- linux-2.6.25.6/arch/x86/kernel/setup64.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.6-pax/arch/x86/kernel/setup64.c	2008-05-19 21:46:18.000000000 +0200
++++ linux-2.6.25.6-pax/arch/x86/kernel/setup64.c	2008-06-13 17:00:41.000000000 +0200
 @@ -36,15 +36,13 @@ struct x8664_pda *_cpu_pda[NR_CPUS] __re
  EXPORT_SYMBOL(_cpu_pda);
  struct x8664_pda boot_cpu_pda[NR_CPUS] __cacheline_aligned;
@@ -6127,7 +6160,7 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
  	char *estacks = NULL; 
  	struct task_struct *me;
  	int i;
-+	struct desc_ptr cpu_gdt_descr = { .size = GDT_SIZE - 1, .address = (unsigned long)cpu_gdt_table[cpu]};
++	struct desc_ptr cpu_gdt_descr = { .size = GDT_SIZE - 1, .address = (unsigned long)get_cpu_gdt_table(cpu)};
  
  	/* CPU 0 is initialised in head64.c */
  	if (cpu != 0) {
@@ -6140,7 +6173,8 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
 +	 * Initialize the per-CPU GDT with the boot GDT:
  	 */
  	if (cpu)
- 		memcpy(get_cpu_gdt_table(cpu), cpu_gdt_table, GDT_SIZE);
+-		memcpy(get_cpu_gdt_table(cpu), cpu_gdt_table, GDT_SIZE);
++		memcpy(get_cpu_gdt_table(cpu), get_cpu_gdt_table(0), GDT_SIZE);
  
 -	cpu_gdt_descr[cpu].size = GDT_SIZE;
 -	load_gdt((const struct desc_ptr *)&cpu_gdt_descr[cpu]);
@@ -6309,7 +6343,7 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
  
 diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/kernel/smpcommon_32.c linux-2.6.25.6-pax/arch/x86/kernel/smpcommon_32.c
 --- linux-2.6.25.6/arch/x86/kernel/smpcommon_32.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.6-pax/arch/x86/kernel/smpcommon_32.c	2008-05-20 03:38:02.000000000 +0200
++++ linux-2.6.25.6-pax/arch/x86/kernel/smpcommon_32.c	2008-06-13 17:00:17.000000000 +0200
 @@ -3,8 +3,9 @@
   */
  #include <linux/module.h>
@@ -6333,7 +6367,7 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
 -			__per_cpu_offset[cpu], 0xFFFFF,
 -			0x2 | DESCTYPE_S, 0x8);
 +	if (cpu)
-+		memcpy(gdt, cpu_gdt_table, GDT_SIZE);
++		memcpy(gdt, get_cpu_gdt_table(0), GDT_SIZE);
  
 -	gdt[GDT_ENTRY_PERCPU].s = 1;
 +	base = __per_cpu_offset[cpu] + (unsigned long)__per_cpu_start;
@@ -7563,6 +7597,18 @@ diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/ke
  }
  
  static void __cpuinit cpu_vsyscall_init(void *arg)
+diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/kernel/x8664_ksyms_64.c linux-2.6.25.6-pax/arch/x86/kernel/x8664_ksyms_64.c
+--- linux-2.6.25.6/arch/x86/kernel/x8664_ksyms_64.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.25.6-pax/arch/x86/kernel/x8664_ksyms_64.c	2008-06-13 17:05:54.000000000 +0200
+@@ -54,8 +54,3 @@ EXPORT_SYMBOL(init_level4_pgt);
+ EXPORT_SYMBOL(load_gs_index);
+ 
+ EXPORT_SYMBOL(_proxy_pda);
+-
+-#ifdef CONFIG_PARAVIRT
+-/* Virtualized guests may want to use it */
+-EXPORT_SYMBOL_GPL(cpu_gdt_descr);
+-#endif
 diff -NurpX linux-2.6.25.6-pax/Documentation/dontdiff linux-2.6.25.6/arch/x86/kvm/svm.c linux-2.6.25.6-pax/arch/x86/kvm/svm.c
 --- linux-2.6.25.6/arch/x86/kvm/svm.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.25.6-pax/arch/x86/kvm/svm.c	2008-04-30 23:56:13.000000000 +0200
