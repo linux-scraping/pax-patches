@@ -5449,7 +5449,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  #ifdef CONFIG_X86_PAE
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/kernel/module_32.c linux-2.6.25.10-pax/arch/x86/kernel/module_32.c
 --- linux-2.6.25.10/arch/x86/kernel/module_32.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/arch/x86/kernel/module_32.c	2008-06-22 15:46:49.000000000 +0200
++++ linux-2.6.25.10-pax/arch/x86/kernel/module_32.c	2008-07-08 01:11:54.000000000 +0200
 @@ -23,6 +23,8 @@
  #include <linux/kernel.h>
  #include <linux/bug.h>
@@ -5459,7 +5459,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  #if 0
  #define DEBUGP printk
  #else
-@@ -33,9 +35,30 @@ void *module_alloc(unsigned long size)
+@@ -33,9 +35,31 @@ void *module_alloc(unsigned long size)
  {
  	if (size == 0)
  		return NULL;
@@ -5486,11 +5486,12 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
 +
 +	return NULL;
 +}
++EXPORT_SYMBOL(module_alloc_exec);
 +#endif
  
  /* Free memory returned from module_alloc */
  void module_free(struct module *mod, void *module_region)
-@@ -45,6 +68,45 @@ void module_free(struct module *mod, voi
+@@ -45,6 +69,45 @@ void module_free(struct module *mod, voi
             table entries. */
  }
  
@@ -5536,7 +5537,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  /* We don't need anything special. */
  int module_frob_arch_sections(Elf_Ehdr *hdr,
  			      Elf_Shdr *sechdrs,
-@@ -63,14 +125,20 @@ int apply_relocate(Elf32_Shdr *sechdrs,
+@@ -63,14 +126,20 @@ int apply_relocate(Elf32_Shdr *sechdrs,
  	unsigned int i;
  	Elf32_Rel *rel = (void *)sechdrs[relsec].sh_addr;
  	Elf32_Sym *sym;
@@ -5560,7 +5561,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  		/* This is the symbol it is referring to.  Note that all
  		   undefined symbols have been resolved.  */
  		sym = (Elf32_Sym *)sechdrs[symindex].sh_addr
-@@ -78,12 +146,32 @@ int apply_relocate(Elf32_Shdr *sechdrs,
+@@ -78,12 +147,32 @@ int apply_relocate(Elf32_Shdr *sechdrs,
  
  		switch (ELF32_R_TYPE(rel[i].r_info)) {
  		case R_386_32:
@@ -13276,8 +13277,16 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/drivers/v
  
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/drivers/video/uvesafb.c linux-2.6.25.10-pax/drivers/video/uvesafb.c
 --- linux-2.6.25.10/drivers/video/uvesafb.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/drivers/video/uvesafb.c	2008-06-22 15:46:50.000000000 +0200
-@@ -117,7 +117,7 @@ static int uvesafb_helper_start(void)
++++ linux-2.6.25.10-pax/drivers/video/uvesafb.c	2008-07-08 00:50:13.000000000 +0200
+@@ -18,6 +18,7 @@
+ #include <linux/fb.h>
+ #include <linux/io.h>
+ #include <linux/mutex.h>
++#include <linux/moduleloader.h>
+ #include <video/edid.h>
+ #include <video/uvesafb.h>
+ #ifdef CONFIG_X86
+@@ -117,7 +118,7 @@ static int uvesafb_helper_start(void)
  		NULL,
  	};
  
@@ -13286,6 +13295,58 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/drivers/v
  }
  
  /*
+@@ -560,18 +561,46 @@ static int __devinit uvesafb_vbe_getpmi(
+ {
+ 	int i, err;
+ 
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
++	u8 *pmi_code;
++	unsigned long cr0;
++#endif
++
+ 	uvesafb_reset(task);
+ 	task->t.regs.eax = 0x4f0a;
+ 	task->t.regs.ebx = 0x0;
+ 	err = uvesafb_exec(task);
+ 
+-	if ((task->t.regs.eax & 0xffff) != 0x4f || task->t.regs.es < 0xc000) {
+-		par->pmi_setpal = par->ypan = 0;
+-	} else {
++	par->pmi_setpal = par->ypan = 0;
++	if ((task->t.regs.eax & 0xffff) != 0x4f || task->t.regs.es < 0xc000)
++		return 0;
++
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
++	pmi_code = module_alloc_exec((u16)task->t.regs.ecx);
++	if (pmi_code) {
++#elif !defined(CONFIG_PAX_KERNEXEC)
++	if (1) {
++#endif
++
+ 		par->pmi_base = (u16 *)phys_to_virt(((u32)task->t.regs.es << 4)
+ 						+ task->t.regs.edi);
+-		par->pmi_start = (u8 *)par->pmi_base + par->pmi_base[1];
+-		par->pmi_pal = (u8 *)par->pmi_base + par->pmi_base[2];
++
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
++		pax_open_kernel(cr0);
++		memcpy(pmi_code, par->pmi_base, (u16)task->t.regs.ecx);
++		pax_close_kernel(cr0);
++#else
++		pmi_code = par->pmi_base;
++#endif
++
++		par->pmi_start = pmi_code + par->pmi_base[1];
++		par->pmi_pal = pmi_code + par->pmi_base[2];
++
++#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
++		par->pmi_start = ktva_ktla(par->pmi_start);
++		par->pmi_pal = ktva_ktla(par->pmi_pal);
++#endif
++
+ 		printk(KERN_INFO "uvesafb: protected mode interface info at "
+ 				 "%04x:%04x\n",
+ 				 (u16)task->t.regs.es, (u16)task->t.regs.edi);
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/drivers/video/vesafb.c linux-2.6.25.10-pax/drivers/video/vesafb.c
 --- linux-2.6.25.10/drivers/video/vesafb.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.25.10-pax/drivers/video/vesafb.c	2008-06-22 15:46:50.000000000 +0200
