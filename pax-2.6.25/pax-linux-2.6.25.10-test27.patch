@@ -4656,7 +4656,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  	reserve_early(__pa_symbol(&_text), __pa_symbol(&_end), "TEXT DATA BSS");
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/kernel/head_32.S linux-2.6.25.10-pax/arch/x86/kernel/head_32.S
 --- linux-2.6.25.10/arch/x86/kernel/head_32.S	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/arch/x86/kernel/head_32.S	2008-06-22 15:46:49.000000000 +0200
++++ linux-2.6.25.10-pax/arch/x86/kernel/head_32.S	2008-07-05 14:23:02.000000000 +0200
 @@ -20,6 +20,7 @@
  #include <asm/asm-offsets.h>
  #include <asm/setup.h>
@@ -4968,19 +4968,21 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_ATTR),0		/* low identity map */
  # if KPMDS == 3
-@@ -643,9 +690,9 @@ ENTRY(swapper_pg_dir)
- 	.align PAGE_SIZE_asm		/* needs to be page-sized too */
- #endif
+@@ -645,11 +692,12 @@ ENTRY(swapper_pg_dir)
  
--.data
-+.section .rodata,"a",@progbits
+ .data
  ENTRY(stack_start)
 -	.long init_thread_union+THREAD_SIZE
 +	.long init_thread_union+THREAD_SIZE-8
  	.long __BOOT_DS
  
  ready:	.byte 0
-@@ -695,7 +742,7 @@ idt_descr:
+ 
++.section .rodata,"a",@progbits
+ early_recursion_flag:
+ 	.long 0
+ 
+@@ -695,7 +743,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -4989,7 +4991,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -704,5 +751,61 @@ ENTRY(early_gdt_descr)
+@@ -704,5 +752,61 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -6338,7 +6340,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/kernel/smpcommon_32.c linux-2.6.25.10-pax/arch/x86/kernel/smpcommon_32.c
 --- linux-2.6.25.10/arch/x86/kernel/smpcommon_32.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/arch/x86/kernel/smpcommon_32.c	2008-06-22 15:46:49.000000000 +0200
++++ linux-2.6.25.10-pax/arch/x86/kernel/smpcommon_32.c	2008-07-05 09:00:31.000000000 +0200
 @@ -3,8 +3,9 @@
   */
  #include <linux/module.h>
@@ -6350,7 +6352,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  EXPORT_PER_CPU_SYMBOL(this_cpu_off);
  
  /* Initialize the CPU's GDT.  This is either the boot CPU doing itself
-@@ -12,15 +13,22 @@ EXPORT_PER_CPU_SYMBOL(this_cpu_off);
+@@ -12,15 +13,32 @@ EXPORT_PER_CPU_SYMBOL(this_cpu_off);
     secondary which will soon come up. */
  __cpuinit void init_gdt(int cpu)
  {
@@ -6361,18 +6363,28 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
 -	pack_descriptor(&gdt[GDT_ENTRY_PERCPU],
 -			__per_cpu_offset[cpu], 0xFFFFF,
 -			0x2 | DESCTYPE_S, 0x8);
-+	if (cpu)
-+		memcpy(gdt, get_cpu_gdt_table(0), GDT_SIZE);
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
  
 -	gdt[GDT_ENTRY_PERCPU].s = 1;
++	pax_open_kernel(cr0);
++#endif
+ 
+-	per_cpu(this_cpu_off, cpu) = __per_cpu_offset[cpu];
++	if (cpu)
++		memcpy(gdt, get_cpu_gdt_table(0), GDT_SIZE);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
 +	base = __per_cpu_offset[cpu] + (unsigned long)__per_cpu_start;
 +	limit = PERCPU_ENOUGH_ROOM - 1;
 +	if (limit < 64*1024)
 +		pack_descriptor(&d, base, limit, 0x80 | DESCTYPE_S | 0x3, 0x4);
 +	else
 +		pack_descriptor(&d, base, limit >> PAGE_SHIFT, 0x80 | DESCTYPE_S | 0x3, 0xC);
- 
--	per_cpu(this_cpu_off, cpu) = __per_cpu_offset[cpu];
++
 +	write_gdt_entry(gdt, GDT_ENTRY_PERCPU, &d, DESCTYPE_S);
 +
 +	per_cpu(this_cpu_off, cpu) = base;
@@ -7606,8 +7618,8 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
 -#endif
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/kvm/svm.c linux-2.6.25.10-pax/arch/x86/kvm/svm.c
 --- linux-2.6.25.10/arch/x86/kvm/svm.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/arch/x86/kvm/svm.c	2008-06-22 15:46:49.000000000 +0200
-@@ -1329,8 +1329,20 @@ static void reload_tss(struct kvm_vcpu *
++++ linux-2.6.25.10-pax/arch/x86/kvm/svm.c	2008-07-05 15:10:40.000000000 +0200
+@@ -1329,7 +1329,19 @@ static void reload_tss(struct kvm_vcpu *
  	int cpu = raw_smp_processor_id();
  
  	struct svm_cpu_data *svm_data = per_cpu(svm_data, cpu);
@@ -7619,19 +7631,18 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
 +#endif
 +
  	svm_data->tss_desc->type = 9; /* available 32/64-bit TSS */
- 	load_TR_desc();
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_close_kernel(cr0);
 +#endif
 +
+ 	load_TR_desc();
  }
  
- static void pre_svm_run(struct vcpu_svm *svm)
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/kvm/vmx.c linux-2.6.25.10-pax/arch/x86/kvm/vmx.c
 --- linux-2.6.25.10/arch/x86/kvm/vmx.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/arch/x86/kvm/vmx.c	2008-06-22 15:46:49.000000000 +0200
-@@ -355,10 +355,24 @@ static void reload_tss(void)
++++ linux-2.6.25.10-pax/arch/x86/kvm/vmx.c	2008-07-05 15:10:58.000000000 +0200
+@@ -355,9 +355,23 @@ static void reload_tss(void)
  	struct descriptor_table gdt;
  	struct segment_descriptor *descs;
  
@@ -7647,15 +7658,14 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
 +#endif
 +
  	descs[GDT_ENTRY_TSS].type = 9; /* available TSS */
- 	load_TR_desc();
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_close_kernel(cr0);
 +#endif
 +
+ 	load_TR_desc();
  }
  
- static void load_transition_efer(struct vcpu_vmx *vmx)
 @@ -2464,7 +2478,7 @@ static void vmx_vcpu_run(struct kvm_vcpu
  	vcpu->arch.interrupt_window_open =
  		(vmcs_read32(GUEST_INTERRUPTIBILITY_INFO) & 3) == 0;
@@ -11441,33 +11451,20 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
  EXPORT_SYMBOL(pcibios_set_irq_routing);
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/power/cpu_32.c linux-2.6.25.10-pax/arch/x86/power/cpu_32.c
 --- linux-2.6.25.10/arch/x86/power/cpu_32.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/arch/x86/power/cpu_32.c	2008-06-22 15:46:49.000000000 +0200
-@@ -64,10 +64,20 @@ static void do_fpu_end(void)
++++ linux-2.6.25.10-pax/arch/x86/power/cpu_32.c	2008-07-05 15:08:54.000000000 +0200
+@@ -64,7 +64,7 @@ static void do_fpu_end(void)
  static void fix_processor_context(void)
  {
  	int cpu = smp_processor_id();
 -	struct tss_struct * t = &per_cpu(init_tss, cpu);
 +	struct tss_struct *t = init_tss + cpu;
-+
-+#ifdef CONFIG_PAX_KERNEXEC
-+	unsigned long cr0;
-+
-+	pax_open_kernel(cr0);
-+#endif
  
  	set_tss_desc(cpu,t);	/* This just modifies memory; should not be necessary. But... This is necessary, because 386 hardware has concept of busy TSS or some similar stupidity. */
  
-+#ifdef CONFIG_PAX_KERNEXEC
-+	pax_close_kernel(cr0);
-+#endif
-+
- 	load_TR_desc();				/* This does ltr */
- 	load_LDT(&current->active_mm->context);	/* This does lldt */
- 
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/power/cpu_64.c linux-2.6.25.10-pax/arch/x86/power/cpu_64.c
 --- linux-2.6.25.10/arch/x86/power/cpu_64.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/arch/x86/power/cpu_64.c	2008-06-22 15:46:49.000000000 +0200
-@@ -136,7 +136,13 @@ void restore_processor_state(void)
++++ linux-2.6.25.10-pax/arch/x86/power/cpu_64.c	2008-07-05 15:07:11.000000000 +0200
+@@ -136,7 +136,11 @@ void restore_processor_state(void)
  static void fix_processor_context(void)
  {
  	int cpu = smp_processor_id();
@@ -11476,14 +11473,18 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/arch/x86/
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	unsigned long cr0;
-+
-+	pax_open_kernel(cr0);
 +#endif
  
  	/*
  	 * This just modifies memory; should not be necessary. But... This
-@@ -147,6 +153,10 @@ static void fix_processor_context(void)
+@@ -145,8 +149,16 @@ static void fix_processor_context(void)
+ 	 */
+ 	set_tss_desc(cpu, t);
  
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
  	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].type = 9;
  
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -16065,7 +16066,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/include/a
  		*err_ptr = -EFAULT;
 diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/include/asm-x86/desc.h linux-2.6.25.10-pax/include/asm-x86/desc.h
 --- linux-2.6.25.10/include/asm-x86/desc.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.25.10-pax/include/asm-x86/desc.h	2008-06-22 15:46:50.000000000 +0200
++++ linux-2.6.25.10-pax/include/asm-x86/desc.h	2008-07-05 14:38:12.000000000 +0200
 @@ -16,6 +16,7 @@ static inline void fill_ldt(struct desc_
  	desc->base1 = (info->base_addr & 0x00ff0000) >> 16;
  	desc->type = (info->read_exec_only ^ 1) << 1;
@@ -16188,7 +16189,27 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/include/a
  }
  
  static inline void pack_descriptor(struct desc_struct *desc, unsigned long base,
-@@ -236,8 +266,19 @@ static inline void native_load_tls(struc
+@@ -201,7 +231,19 @@ static inline void native_set_ldt(const 
+ 
+ static inline void native_load_tr_desc(void)
+ {
++
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++
++	pax_open_kernel(cr0);
++#endif
++
+ 	asm volatile("ltr %w0"::"q" (GDT_ENTRY_TSS*8));
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
+ }
+ 
+ static inline void native_load_gdt(const struct desc_ptr *dtr)
+@@ -236,8 +278,19 @@ static inline void native_load_tls(struc
  	unsigned int i;
  	struct desc_struct *gdt = get_cpu_gdt_table(cpu);
  
@@ -16208,7 +16229,7 @@ diff -NurpX linux-2.6.25.10-pax/Documentation/dontdiff linux-2.6.25.10/include/a
  }
  
  #define _LDT_empty(info) (\
-@@ -353,6 +394,18 @@ static inline void set_system_gate_ist(i
+@@ -353,6 +406,18 @@ static inline void set_system_gate_ist(i
  	_set_gate(n, GATE_INTERRUPT, addr, 0x3, ist, __KERNEL_CS);
  }
  
