@@ -1106,7 +1106,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/powerp
  		goto fail_mmapsem;
 diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/powerpc/mm/fault.c linux-2.6.26.1-pax/arch/powerpc/mm/fault.c
 --- linux-2.6.26.1/arch/powerpc/mm/fault.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.26.1-pax/arch/powerpc/mm/fault.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.1-pax/arch/powerpc/mm/fault.c	2008-08-05 16:35:52.000000000 +0200
 @@ -29,6 +29,12 @@
  #include <linux/module.h>
  #include <linux/kprobes.h>
@@ -1120,7 +1120,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/powerp
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -62,6 +68,366 @@ static inline int notify_page_fault(stru
+@@ -62,6 +68,363 @@ static inline int notify_page_fault(stru
  }
  #endif
  
@@ -1130,28 +1130,25 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/powerp
 +	vma->vm_mm->call_syscall = 0UL;
 +}
 +
-+static struct page *pax_syscall_nopage(struct vm_area_struct *vma, unsigned long address, int *type)
++static struct page *pax_syscall_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 +{
-+	struct page *page;
 +	unsigned int *kaddr;
 +
-+	page = alloc_page(GFP_HIGHUSER);
-+	if (!page)
-+		return NOPAGE_OOM;
++	vmf->page = alloc_page(GFP_HIGHUSER);
++	if (!vmf->page)
++		return VM_FAULT_OOM;
 +
-+	kaddr = kmap(page);
++	kaddr = kmap(vmf->page);
 +	memset(kaddr, 0, PAGE_SIZE);
 +	kaddr[0] = 0x44000002U; /* sc */
 +	__flush_dcache_icache(kaddr);
-+	kunmap(page);
-+	if (type)
-+		*type = VM_FAULT_MAJOR;
-+	return page;
++	kunmap(vmf->page);
++	return VM_FAULT_MAJOR;
 +}
 +
 +static struct vm_operations_struct pax_vm_ops = {
 +	.close = pax_syscall_close,
-+	.nopage = pax_syscall_nopage,
++	.fault = pax_syscall_fault
 +};
 +
 +static int pax_insert_vma(struct vm_area_struct *vma, unsigned long addr)
@@ -1487,7 +1484,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/powerp
  /*
   * Check whether the instruction at regs->nip is a store using
   * an update addressing form which will update r1.
-@@ -157,7 +523,7 @@ int __kprobes do_page_fault(struct pt_re
+@@ -157,7 +520,7 @@ int __kprobes do_page_fault(struct pt_re
  	 * indicate errors in DSISR but can validly be set in SRR1.
  	 */
  	if (trap == 0x400)
@@ -1496,7 +1493,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/powerp
  	else
  		is_write = error_code & DSISR_ISSTORE;
  #else
-@@ -355,6 +721,37 @@ bad_area:
+@@ -355,6 +718,37 @@ bad_area:
  bad_area_nosemaphore:
  	/* User mode accesses cause a SIGSEGV */
  	if (user_mode(regs)) {
@@ -1562,7 +1559,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/powerp
  	}
 diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/ppc/mm/fault.c linux-2.6.26.1-pax/arch/ppc/mm/fault.c
 --- linux-2.6.26.1/arch/ppc/mm/fault.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.26.1-pax/arch/ppc/mm/fault.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.1-pax/arch/ppc/mm/fault.c	2008-08-05 16:36:15.000000000 +0200
 @@ -25,6 +25,11 @@
  #include <linux/interrupt.h>
  #include <linux/highmem.h>
@@ -1575,7 +1572,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/ppc/mm
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -48,6 +53,366 @@ unsigned long pte_misses;	/* updated by 
+@@ -48,6 +53,363 @@ unsigned long pte_misses;	/* updated by 
  unsigned long pte_errors;	/* updated by do_page_fault() */
  unsigned int probingmem;
  
@@ -1585,28 +1582,25 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/ppc/mm
 +	vma->vm_mm->call_syscall = 0UL;
 +}
 +
-+static struct page *pax_syscall_nopage(struct vm_area_struct *vma, unsigned long address, int *type)
++static struct page *pax_syscall_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 +{
-+	struct page *page;
 +	unsigned int *kaddr;
 +
-+	page = alloc_page(GFP_HIGHUSER);
-+	if (!page)
-+		return NOPAGE_OOM;
++	vmf->page = alloc_page(GFP_HIGHUSER);
++	if (!vmf->page)
++		return VM_FAULT_OOM;
 +
-+	kaddr = kmap(page);
++	kaddr = kmap(vmf->page);
 +	memset(kaddr, 0, PAGE_SIZE);
 +	kaddr[0] = 0x44000002U; /* sc */
 +	__flush_dcache_icache(kaddr);
-+	kunmap(page);
-+	if (type)
-+		*type = VM_FAULT_MAJOR;
-+	return page;
++	kunmap(vmf->page);
++	return VM_FAULT_MAJOR;
 +}
 +
 +static struct vm_operations_struct pax_vm_ops = {
 +	.close = pax_syscall_close,
-+	.nopage = pax_syscall_nopage,
++	.fault = pax_syscall_fault
 +};
 +
 +static int pax_insert_vma(struct vm_area_struct *vma, unsigned long addr)
@@ -1942,7 +1936,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/ppc/mm
  /*
   * Check whether the instruction at regs->nip is a store using
   * an update addressing form which will update r1.
-@@ -109,7 +474,7 @@ int do_page_fault(struct pt_regs *regs, 
+@@ -109,7 +471,7 @@ int do_page_fault(struct pt_regs *regs, 
  	 * indicate errors in DSISR but can validly be set in SRR1.
  	 */
  	if (TRAP(regs) == 0x400)
@@ -1951,7 +1945,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/ppc/mm
  	else
  		is_write = error_code & 0x02000000;
  #endif /* CONFIG_4xx || CONFIG_BOOKE */
-@@ -204,15 +569,14 @@ good_area:
+@@ -204,15 +566,14 @@ good_area:
  		pte_t *ptep;
  		pmd_t *pmdp;
  
@@ -1969,7 +1963,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/ppc/mm
  		/* Since 4xx/Book-E supports per-page execute permission,
  		 * we lazily flush dcache to icache. */
  		ptep = NULL;
-@@ -235,6 +599,7 @@ good_area:
+@@ -235,6 +596,7 @@ good_area:
  			pte_unmap_unlock(ptep, ptl);
  		}
  #endif
@@ -1977,7 +1971,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/ppc/mm
  	/* a read */
  	} else {
  		/* protection fault */
-@@ -278,6 +643,33 @@ bad_area:
+@@ -278,6 +640,33 @@ bad_area:
  
  	/* User mode accesses cause a SIGSEGV */
  	if (user_mode(regs)) {
@@ -2099,7 +2093,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc/
  		addr = COLOUR_ALIGN(addr);
 diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc/mm/fault.c linux-2.6.26.1-pax/arch/sparc/mm/fault.c
 --- linux-2.6.26.1/arch/sparc/mm/fault.c	2008-07-14 03:51:38.000000000 +0200
-+++ linux-2.6.26.1-pax/arch/sparc/mm/fault.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.1-pax/arch/sparc/mm/fault.c	2008-08-05 16:36:46.000000000 +0200
 @@ -21,6 +21,10 @@
  #include <linux/interrupt.h>
  #include <linux/module.h>
@@ -2111,7 +2105,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc/
  
  #include <asm/system.h>
  #include <asm/page.h>
-@@ -167,6 +171,253 @@ static unsigned long compute_si_addr(str
+@@ -167,6 +171,249 @@ static unsigned long compute_si_addr(str
  	return safe_compute_effective_address(regs, insn);
  }
  
@@ -2121,29 +2115,25 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc/
 +	vma->vm_mm->call_dl_resolve = 0UL;
 +}
 +
-+static struct page *pax_emuplt_nopage(struct vm_area_struct *vma, unsigned long address, int *type)
++static struct page *pax_emuplt_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 +{
-+	struct page *page;
 +	unsigned int *kaddr;
 +
-+	page = alloc_page(GFP_HIGHUSER);
-+	if (!page)
-+		return NOPAGE_OOM;
++	vmf->page = alloc_page(GFP_HIGHUSER);
++	if (!vmf->page)
++		return VM_FAULT_OOM;
 +
-+	kaddr = kmap(page);
++	kaddr = kmap(vmf->page);
 +	memset(kaddr, 0, PAGE_SIZE);
 +	kaddr[0] = 0x9DE3BFA8U; /* save */
-+	flush_dcache_page(page);
-+	kunmap(page);
-+	if (type)
-+		*type = VM_FAULT_MAJOR;
-+
-+	return page;
++	flush_dcache_page(vmf->page);
++	kunmap(vmf->page);
++	return VM_FAULT_MAJOR;
 +}
 +
 +static struct vm_operations_struct pax_vm_ops = {
 +	.close = pax_emuplt_close,
-+	.nopage = pax_emuplt_nopage,
++	.fault = pax_emuplt_fault
 +};
 +
 +static int pax_insert_vma(struct vm_area_struct *vma, unsigned long addr)
@@ -2365,7 +2355,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc/
  asmlinkage void do_sparc_fault(struct pt_regs *regs, int text_fault, int write,
  			       unsigned long address)
  {
-@@ -231,6 +482,24 @@ good_area:
+@@ -231,6 +478,24 @@ good_area:
  		if(!(vma->vm_flags & VM_WRITE))
  			goto bad_area;
  	} else {
@@ -2551,7 +2541,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc6
  
 diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc64/mm/fault.c linux-2.6.26.1-pax/arch/sparc64/mm/fault.c
 --- linux-2.6.26.1/arch/sparc64/mm/fault.c	2008-07-14 03:51:38.000000000 +0200
-+++ linux-2.6.26.1-pax/arch/sparc64/mm/fault.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.1-pax/arch/sparc64/mm/fault.c	2008-08-05 16:35:34.000000000 +0200
 @@ -20,6 +20,10 @@
  #include <linux/kprobes.h>
  #include <linux/kallsyms.h>
@@ -2563,7 +2553,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc6
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -262,6 +266,370 @@ cannot_handle:
+@@ -262,6 +266,367 @@ cannot_handle:
  	unhandled_fault (address, current, regs);
  }
  
@@ -2574,28 +2564,25 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc6
 +	vma->vm_mm->call_dl_resolve = 0UL;
 +}
 +
-+static struct page *pax_emuplt_nopage(struct vm_area_struct *vma, unsigned long address, int *type)
++static struct page *pax_emuplt_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 +{
-+	struct page *page;
 +	unsigned int *kaddr;
 +
-+	page = alloc_page(GFP_HIGHUSER);
-+	if (!page)
-+		return NOPAGE_OOM;
++	vmf->page = alloc_page(GFP_HIGHUSER);
++	if (!vmf->page)
++		return VM_FAULT_OOM;
 +
-+	kaddr = kmap(page);
++	kaddr = kmap(vmf->page);
 +	memset(kaddr, 0, PAGE_SIZE);
 +	kaddr[0] = 0x9DE3BFA8U; /* save */
-+	flush_dcache_page(page);
-+	kunmap(page);
-+	if (type)
-+		*type = VM_FAULT_MAJOR;
-+	return page;
++	flush_dcache_page(vmf->page);
++	kunmap(vmf->page);
++	return VM_FAULT_MAJOR;
 +}
 +
 +static struct vm_operations_struct pax_vm_ops = {
 +	.close = pax_emuplt_close,
-+	.nopage = pax_emuplt_nopage,
++	.fault = pax_emuplt_fault
 +};
 +
 +static int pax_insert_vma(struct vm_area_struct *vma, unsigned long addr)
@@ -2934,7 +2921,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc6
  asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
  {
  	struct mm_struct *mm = current->mm;
-@@ -303,8 +671,10 @@ asmlinkage void __kprobes do_sparc64_fau
+@@ -303,8 +668,10 @@ asmlinkage void __kprobes do_sparc64_fau
  		goto intr_or_no_mm;
  
  	if (test_thread_flag(TIF_32BIT)) {
@@ -2946,7 +2933,7 @@ diff -NurpX linux-2.6.26.1-pax/Documentation/dontdiff linux-2.6.26.1/arch/sparc6
  		address &= 0xffffffff;
  	}
  
-@@ -321,6 +691,29 @@ asmlinkage void __kprobes do_sparc64_fau
+@@ -321,6 +688,29 @@ asmlinkage void __kprobes do_sparc64_fau
  	if (!vma)
  		goto bad_area;
  
