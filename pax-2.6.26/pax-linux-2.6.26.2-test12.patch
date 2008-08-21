@@ -5455,23 +5455,24 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  #ifdef CONFIG_X86_PAE
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/kernel/module_32.c linux-2.6.26.2-pax/arch/x86/kernel/module_32.c
 --- linux-2.6.26.2/arch/x86/kernel/module_32.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.26.2-pax/arch/x86/kernel/module_32.c	2008-07-14 03:52:23.000000000 +0200
-@@ -23,6 +23,8 @@
++++ linux-2.6.26.2-pax/arch/x86/kernel/module_32.c	2008-08-18 10:01:47.000000000 +0200
+@@ -23,6 +23,9 @@
  #include <linux/kernel.h>
  #include <linux/bug.h>
  
 +#include <asm/desc.h>
++#include <asm/pgtable.h>
 +
  #if 0
  #define DEBUGP printk
  #else
-@@ -33,9 +35,31 @@ void *module_alloc(unsigned long size)
+@@ -33,9 +36,31 @@ void *module_alloc(unsigned long size)
  {
  	if (size == 0)
  		return NULL;
 +
 +#ifdef CONFIG_PAX_KERNEXEC
-+	return vmalloc(size);
++	return __vmalloc(size, GFP_KERNEL | __GFP_HIGHMEM | __GFP_ZERO, PAGE_KERNEL);
 +#else
  	return vmalloc_exec(size);
 +#endif
@@ -5497,7 +5498,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  
  /* Free memory returned from module_alloc */
  void module_free(struct module *mod, void *module_region)
-@@ -45,6 +69,45 @@ void module_free(struct module *mod, voi
+@@ -45,6 +70,45 @@ void module_free(struct module *mod, voi
             table entries. */
  }
  
@@ -5543,7 +5544,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  /* We don't need anything special. */
  int module_frob_arch_sections(Elf_Ehdr *hdr,
  			      Elf_Shdr *sechdrs,
-@@ -63,14 +126,20 @@ int apply_relocate(Elf32_Shdr *sechdrs,
+@@ -63,14 +127,20 @@ int apply_relocate(Elf32_Shdr *sechdrs,
  	unsigned int i;
  	Elf32_Rel *rel = (void *)sechdrs[relsec].sh_addr;
  	Elf32_Sym *sym;
@@ -5567,7 +5568,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  		/* This is the symbol it is referring to.  Note that all
  		   undefined symbols have been resolved.  */
  		sym = (Elf32_Sym *)sechdrs[symindex].sh_addr
-@@ -78,12 +147,32 @@ int apply_relocate(Elf32_Shdr *sechdrs,
+@@ -78,12 +148,32 @@ int apply_relocate(Elf32_Shdr *sechdrs,
  
  		switch (ELF32_R_TYPE(rel[i].r_info)) {
  		case R_386_32:
@@ -6810,7 +6811,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  	return 0;
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/kernel/traps_32.c linux-2.6.26.2-pax/arch/x86/kernel/traps_32.c
 --- linux-2.6.26.2/arch/x86/kernel/traps_32.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.2-pax/arch/x86/kernel/traps_32.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.2-pax/arch/x86/kernel/traps_32.c	2008-08-21 16:56:53.000000000 +0200
 @@ -31,6 +31,7 @@
  #include <linux/bug.h>
  #include <linux/nmi.h>
@@ -6887,7 +6888,20 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  		die(str, regs, err);
  }
  
-@@ -612,7 +607,7 @@ void __kprobes do_general_protection(str
+@@ -532,6 +527,12 @@ kernel_trap:
+ 		tsk->thread.trap_no = trapnr;
+ 		die(str, regs, error_code);
+ 	}
++
++#ifdef CONFIG_PAX_REFCOUNT
++	if (trapnr == 4)
++		pax_report_refcount_overflow(regs);
++#endif
++
+ 	return;
+ 
+ vm86_trap:
+@@ -612,7 +613,7 @@ void __kprobes do_general_protection(str
  	int cpu;
  
  	cpu = get_cpu();
@@ -6896,7 +6910,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  	thread = &current->thread;
  
  	/*
-@@ -647,9 +642,25 @@ void __kprobes do_general_protection(str
+@@ -647,9 +648,25 @@ void __kprobes do_general_protection(str
  	if (regs->flags & X86_VM_MASK)
  		goto gp_in_vm86;
  
@@ -6923,7 +6937,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  	current->thread.error_code = error_code;
  	current->thread.trap_no = 13;
  
-@@ -678,6 +689,13 @@ gp_in_kernel:
+@@ -678,6 +695,13 @@ gp_in_kernel:
  		if (notify_die(DIE_GPF, "general protection fault", regs,
  				error_code, 13, SIGSEGV) == NOTIFY_STOP)
  			return;
@@ -6937,7 +6951,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  		die("general protection fault", regs, error_code);
  	}
  }
-@@ -779,7 +797,7 @@ void notrace __kprobes die_nmi(struct pt
+@@ -779,7 +803,7 @@ void notrace __kprobes die_nmi(struct pt
  	 * If we are in kernel we are probably nested up pretty bad
  	 * and might aswell get out now while we still can:
  	 */
@@ -6946,7 +6960,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  		current->thread.trap_no = 2;
  		crash_kexec(regs);
  	}
-@@ -941,7 +959,7 @@ void __kprobes do_debug(struct pt_regs *
+@@ -941,7 +965,7 @@ void __kprobes do_debug(struct pt_regs *
  		 * check for kernel mode by just checking the CPL
  		 * of CS.
  		 */
@@ -6955,7 +6969,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  			goto clear_TF_reenable;
  	}
  
-@@ -1117,19 +1135,14 @@ void do_spurious_interrupt_bug(struct pt
+@@ -1117,19 +1141,14 @@ void do_spurious_interrupt_bug(struct pt
  
  unsigned long patch_espfix_desc(unsigned long uesp, unsigned long kesp)
  {
@@ -6978,6 +6992,22 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/ke
  
  	return new_kesp;
  }
+diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/kernel/traps_64.c linux-2.6.26.2-pax/arch/x86/kernel/traps_64.c
+--- linux-2.6.26.2/arch/x86/kernel/traps_64.c	2008-07-14 03:51:39.000000000 +0200
++++ linux-2.6.26.2-pax/arch/x86/kernel/traps_64.c	2008-08-21 17:07:49.000000000 +0200
+@@ -669,6 +669,12 @@ static void __kprobes do_trap(int trapnr
+ 		tsk->thread.trap_no = trapnr;
+ 		die(str, regs, error_code);
+ 	}
++
++#ifdef CONFIG_PAX_REFCOUNT
++	if (trapnr == 4)
++		pax_report_refcount_overflow(regs);
++#endif
++
+ 	return;
+ }
+ 
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/kernel/tsc_32.c linux-2.6.26.2-pax/arch/x86/kernel/tsc_32.c
 --- linux-2.6.26.2/arch/x86/kernel/tsc_32.c	2008-07-14 03:51:39.000000000 +0200
 +++ linux-2.6.26.2-pax/arch/x86/kernel/tsc_32.c	2008-07-14 03:52:23.000000000 +0200
@@ -10351,7 +10381,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  	}
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm/init_32.c linux-2.6.26.2-pax/arch/x86/mm/init_32.c
 --- linux-2.6.26.2/arch/x86/mm/init_32.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.2-pax/arch/x86/mm/init_32.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.2-pax/arch/x86/mm/init_32.c	2008-08-17 14:57:58.000000000 +0200
 @@ -47,6 +47,7 @@
  #include <asm/paravirt.h>
  #include <asm/setup.h>
@@ -10522,7 +10552,18 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  					prot = PAGE_KERNEL_EXEC;
  
  				set_pte(pte, pfn_pte(pfn, prot));
-@@ -320,10 +316,10 @@ static void __init set_highmem_pages_ini
+@@ -239,7 +235,9 @@ static inline int page_kills_ppro(unsign
+  */
+ int devmem_is_allowed(unsigned long pagenr)
+ {
+-	if (pagenr <= 256)
++	if (!pagenr)
++		return 1;
++	if (160 <= pagenr && pagenr <= 256)
+ 		return 1;
+ 	if (!page_is_ram(pagenr))
+ 		return 1;
+@@ -320,10 +318,10 @@ static void __init set_highmem_pages_ini
  # define set_highmem_pages_init(bad_ppro)	do { } while (0)
  #endif /* CONFIG_HIGHMEM */
  
@@ -10535,7 +10576,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  
  void __init native_pagetable_setup_start(pgd_t *base)
  {
-@@ -345,7 +341,7 @@ void __init native_pagetable_setup_start
+@@ -345,7 +343,7 @@ void __init native_pagetable_setup_start
  
  		pud = pud_offset(pgd, va);
  		pmd = pmd_offset(pud, va);
@@ -10544,7 +10585,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  			break;
  
  		pte = pte_offset_kernel(pmd, va);
-@@ -421,12 +417,12 @@ static void __init pagetable_init(void)
+@@ -421,12 +419,12 @@ static void __init pagetable_init(void)
   * ACPI suspend needs this for resume, because things like the intel-agp
   * driver might have split up a kernel 4MB mapping.
   */
@@ -10559,7 +10600,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  }
  #else /* !CONFIG_ACPI_SLEEP */
  static inline void save_pg_dir(void)
-@@ -456,13 +452,11 @@ void zap_low_mappings(void)
+@@ -456,13 +454,11 @@ void zap_low_mappings(void)
  
  int nx_enabled;
  
@@ -10574,7 +10615,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  /*
   * noexec = on|off
   *
-@@ -471,40 +465,33 @@ static int disable_nx __initdata;
+@@ -471,40 +467,33 @@ static int disable_nx __initdata;
   * on      Enable
   * off     Disable
   */
@@ -10628,7 +10669,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  	}
  }
  #endif
-@@ -596,7 +583,7 @@ void __init mem_init(void)
+@@ -596,7 +585,7 @@ void __init mem_init(void)
  	set_highmem_pages_init(bad_ppro);
  
  	codesize =  (unsigned long) &_etext - (unsigned long) &_text;
@@ -10637,7 +10678,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  	initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
  
  	kclist_add(&kcore_mem, __va(0), max_low_pfn << PAGE_SHIFT);
-@@ -643,10 +630,10 @@ void __init mem_init(void)
+@@ -643,10 +632,10 @@ void __init mem_init(void)
  		((unsigned long)&__init_end -
  		 (unsigned long)&__init_begin) >> 10,
  
@@ -10651,7 +10692,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  		((unsigned long)&_etext - (unsigned long)&_text) >> 10);
  
  #ifdef CONFIG_HIGHMEM
-@@ -773,6 +760,46 @@ void free_init_pages(char *what, unsigne
+@@ -773,6 +762,46 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -10700,7 +10741,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  			(unsigned long)(&__init_end));
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm/init_64.c linux-2.6.26.2-pax/arch/x86/mm/init_64.c
 --- linux-2.6.26.2/arch/x86/mm/init_64.c	2008-08-03 19:20:46.000000000 +0200
-+++ linux-2.6.26.2-pax/arch/x86/mm/init_64.c	2008-08-03 19:21:00.000000000 +0200
++++ linux-2.6.26.2-pax/arch/x86/mm/init_64.c	2008-08-17 14:58:07.000000000 +0200
 @@ -143,6 +143,10 @@ set_pte_phys(unsigned long vaddr, unsign
  	pmd_t *pmd;
  	pte_t *pte, new_pte;
@@ -10748,7 +10789,18 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  	/*
  	 * It's enough to flush this one mapping.
  	 * (PGE mappings get flushed as well)
-@@ -755,6 +768,39 @@ void free_init_pages(char *what, unsigne
+@@ -667,7 +680,9 @@ EXPORT_SYMBOL_GPL(memory_add_physaddr_to
+  */
+ int devmem_is_allowed(unsigned long pagenr)
+ {
+-	if (pagenr <= 256)
++	if (!pagenr)
++		return 1;
++	if (160 <= pagenr && pagenr <= 256)
+ 		return 1;
+ 	if (!page_is_ram(pagenr))
+ 		return 1;
+@@ -755,6 +770,39 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -10788,7 +10840,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/arch/x86/mm
  	free_init_pages("unused kernel memory",
  			(unsigned long)(&__init_begin),
  			(unsigned long)(&__init_end));
-@@ -913,7 +959,7 @@ int in_gate_area_no_task(unsigned long a
+@@ -913,7 +961,7 @@ int in_gate_area_no_task(unsigned long a
  
  const char *arch_vma_name(struct vm_area_struct *vma)
  {
@@ -14107,16 +14159,21 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/debugfs/
  }
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c linux-2.6.26.2-pax/fs/exec.c
 --- linux-2.6.26.2/fs/exec.c	2008-07-14 03:51:42.000000000 +0200
-+++ linux-2.6.26.2-pax/fs/exec.c	2008-07-14 03:53:53.000000000 +0200
-@@ -51,6 +51,7 @@
++++ linux-2.6.26.2-pax/fs/exec.c	2008-08-21 17:13:13.000000000 +0200
+@@ -51,6 +51,12 @@
  #include <linux/tsacct_kern.h>
  #include <linux/cn_proc.h>
  #include <linux/audit.h>
 +#include <linux/random.h>
++
++#ifdef CONFIG_PAX_REFCOUNT
++#include <linux/kallsyms.h>
++#include <linux/kprobes.h>
++#endif
  
  #include <asm/uaccess.h>
  #include <asm/mmu_context.h>
-@@ -65,6 +66,11 @@
+@@ -65,6 +71,11 @@
  #include <linux/a.out.h>
  #endif
  
@@ -14128,7 +14185,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  int suid_dumpable = 0;
-@@ -163,18 +169,10 @@ static struct page *get_arg_page(struct 
+@@ -163,18 +174,10 @@ static struct page *get_arg_page(struct 
  		int write)
  {
  	struct page *page;
@@ -14150,7 +14207,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  		return NULL;
  
  	if (write) {
-@@ -247,6 +245,11 @@ static int __bprm_mm_init(struct linux_b
+@@ -247,6 +250,11 @@ static int __bprm_mm_init(struct linux_b
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  
  	vma->vm_flags = VM_STACK_FLAGS;
@@ -14162,7 +14219,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  	err = insert_vm_struct(mm, vma);
  	if (err) {
-@@ -259,6 +262,11 @@ static int __bprm_mm_init(struct linux_b
+@@ -259,6 +267,11 @@ static int __bprm_mm_init(struct linux_b
  
  	bprm->p = vma->vm_end - sizeof(void *);
  
@@ -14174,7 +14231,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  	return 0;
  
  err:
-@@ -382,7 +390,7 @@ static int count(char __user * __user * 
+@@ -382,7 +395,7 @@ static int count(char __user * __user * 
  			if (!p)
  				break;
  			argv++;
@@ -14183,7 +14240,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  				return -E2BIG;
  			cond_resched();
  		}
-@@ -522,6 +530,10 @@ static int shift_arg_pages(struct vm_are
+@@ -522,6 +535,10 @@ static int shift_arg_pages(struct vm_are
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -14194,7 +14251,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -610,6 +622,14 @@ int setup_arg_pages(struct linux_binprm 
+@@ -610,6 +627,14 @@ int setup_arg_pages(struct linux_binprm 
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -14209,7 +14266,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  	vm_flags = VM_STACK_FLAGS;
  
  	/*
-@@ -623,21 +643,24 @@ int setup_arg_pages(struct linux_binprm 
+@@ -623,21 +648,24 @@ int setup_arg_pages(struct linux_binprm 
  		vm_flags &= ~VM_EXEC;
  	vm_flags |= mm->def_flags;
  
@@ -14243,7 +14300,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  #ifdef CONFIG_STACK_GROWSUP
  	stack_base = vma->vm_end + EXTRA_STACK_VM_PAGES * PAGE_SIZE;
  #else
-@@ -649,7 +672,7 @@ int setup_arg_pages(struct linux_binprm 
+@@ -649,7 +677,7 @@ int setup_arg_pages(struct linux_binprm 
  
  out_unlock:
  	up_write(&mm->mmap_sem);
@@ -14252,7 +14309,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  }
  EXPORT_SYMBOL(setup_arg_pages);
  
-@@ -668,7 +691,7 @@ struct file *open_exec(const char *name)
+@@ -668,7 +696,7 @@ struct file *open_exec(const char *name)
  		struct inode *inode = nd.path.dentry->d_inode;
  		file = ERR_PTR(-EACCES);
  		if (S_ISREG(inode->i_mode)) {
@@ -14261,7 +14318,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
  			file = ERR_PTR(err);
  			if (!err) {
  				file = nameidata_to_filp(&nd,
-@@ -1505,6 +1528,113 @@ out:
+@@ -1505,6 +1533,124 @@ out:
  	return ispipe;
  }
  
@@ -14372,10 +14429,21 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/fs/exec.c l
 +}
 +#endif
 +
++#ifdef CONFIG_PAX_REFCOUNT
++void pax_report_refcount_overflow(struct pt_regs *regs)
++{
++	printk(KERN_ERR "PAX: refcount overflow detected in: %s:%d, uid/euid: %u/%u\n",
++			 current->comm, task_pid_nr(current), current->uid, current->euid);
++	print_symbol(KERN_ERR "PAX: refcount overflow occured at: %s\n", instruction_pointer(regs));
++	show_registers(regs);
++	force_sig_specific(SIGKILL, current);
++}
++#endif
++
  static void zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1722,6 +1852,8 @@ int do_coredump(long signr, int exit_cod
+@@ -1722,6 +1868,8 @@ int do_coredump(long signr, int exit_cod
  
   	if (ispipe) {
  		helper_argv = argv_split(GFP_KERNEL, corename+1, &helper_argc);
@@ -15996,6 +16064,519 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm
  
  /*
   * Debugging macros
+diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/atomic_32.h linux-2.6.26.2-pax/include/asm-x86/atomic_32.h
+--- linux-2.6.26.2/include/asm-x86/atomic_32.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.26.2-pax/include/asm-x86/atomic_32.h	2008-08-21 22:01:19.000000000 +0200
+@@ -47,7 +47,15 @@ typedef struct {
+  */
+ static inline void atomic_add(int i, atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "addl %1,%0"
++	asm volatile(LOCK_PREFIX "addl %1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+m" (v->counter)
+ 		     : "ir" (i));
+ }
+@@ -61,7 +69,15 @@ static inline void atomic_add(int i, ato
+  */
+ static inline void atomic_sub(int i, atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "subl %1,%0"
++	asm volatile(LOCK_PREFIX "subl %1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "addl %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+m" (v->counter)
+ 		     : "ir" (i));
+ }
+@@ -79,7 +95,16 @@ static inline int atomic_sub_and_test(in
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "subl %2,%0; sete %1"
++	asm volatile(LOCK_PREFIX "subl %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "addl %2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sete %1\n"
+ 		     : "+m" (v->counter), "=qm" (c)
+ 		     : "ir" (i) : "memory");
+ 	return c;
+@@ -93,7 +118,18 @@ static inline int atomic_sub_and_test(in
+  */
+ static inline void atomic_inc(atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "incl %0"
++	asm volatile(LOCK_PREFIX "incl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1:\n"
++		     LOCK_PREFIX "decl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "+m" (v->counter));
+ }
+ 
+@@ -105,7 +141,18 @@ static inline void atomic_inc(atomic_t *
+  */
+ static inline void atomic_dec(atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "decl %0"
++	asm volatile(LOCK_PREFIX "decl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "incl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "+m" (v->counter));
+ }
+ 
+@@ -121,7 +168,19 @@ static inline int atomic_dec_and_test(at
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "decl %0; sete %1"
++	asm volatile(LOCK_PREFIX "decl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "incl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "+m" (v->counter), "=qm" (c)
+ 		     : : "memory");
+ 	return c != 0;
+@@ -139,7 +198,19 @@ static inline int atomic_inc_and_test(at
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "incl %0; sete %1"
++	asm volatile(LOCK_PREFIX "incl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "decl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "+m" (v->counter), "=qm" (c)
+ 		     : : "memory");
+ 	return c != 0;
+@@ -158,7 +229,16 @@ static inline int atomic_add_negative(in
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "addl %2,%0; sets %1"
++	asm volatile(LOCK_PREFIX "addl %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sets %1\n"
+ 		     : "+m" (v->counter), "=qm" (c)
+ 		     : "ir" (i) : "memory");
+ 	return c;
+@@ -181,7 +261,15 @@ static inline int atomic_add_return(int 
+ #endif
+ 	/* Modern 486+ processor */
+ 	__i = i;
+-	asm volatile(LOCK_PREFIX "xaddl %0, %1"
++	asm volatile(LOCK_PREFIX "xaddl %0, %1\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     "movl %0, %1\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+r" (i), "+m" (v->counter)
+ 		     : : "memory");
+ 	return i + __i;
+diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/atomic_64.h linux-2.6.26.2-pax/include/asm-x86/atomic_64.h
+--- linux-2.6.26.2/include/asm-x86/atomic_64.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.26.2-pax/include/asm-x86/atomic_64.h	2008-08-21 22:07:29.000000000 +0200
+@@ -54,7 +54,15 @@ typedef struct {
+  */
+ static inline void atomic_add(int i, atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "addl %1,%0"
++	asm volatile(LOCK_PREFIX "addl %1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "ir" (i), "m" (v->counter));
+ }
+@@ -68,7 +76,15 @@ static inline void atomic_add(int i, ato
+  */
+ static inline void atomic_sub(int i, atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "subl %1,%0"
++	asm volatile(LOCK_PREFIX "subl %1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "addl %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "ir" (i), "m" (v->counter));
+ }
+@@ -86,7 +102,16 @@ static inline int atomic_sub_and_test(in
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "subl %2,%0; sete %1"
++	asm volatile(LOCK_PREFIX "subl %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "addl %2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sete %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "ir" (i), "m" (v->counter) : "memory");
+ 	return c;
+@@ -100,7 +125,18 @@ static inline int atomic_sub_and_test(in
+  */
+ static inline void atomic_inc(atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "incl %0"
++	asm volatile(LOCK_PREFIX "incl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1:\n"
++		     LOCK_PREFIX "decl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "m" (v->counter));
+ }
+@@ -113,7 +149,18 @@ static inline void atomic_inc(atomic_t *
+  */
+ static inline void atomic_dec(atomic_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "decl %0"
++	asm volatile(LOCK_PREFIX "decl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "incl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "m" (v->counter));
+ }
+@@ -130,7 +177,19 @@ static inline int atomic_dec_and_test(at
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "decl %0; sete %1"
++	asm volatile(LOCK_PREFIX "decl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "incl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "m" (v->counter) : "memory");
+ 	return c != 0;
+@@ -148,7 +207,19 @@ static inline int atomic_inc_and_test(at
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "incl %0; sete %1"
++	asm volatile(LOCK_PREFIX "incl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "decl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "m" (v->counter) : "memory");
+ 	return c != 0;
+@@ -167,7 +238,16 @@ static inline int atomic_add_negative(in
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "addl %2,%0; sets %1"
++	asm volatile(LOCK_PREFIX "addl %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sets %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "ir" (i), "m" (v->counter) : "memory");
+ 	return c;
+@@ -183,7 +263,15 @@ static inline int atomic_add_negative(in
+ static inline int atomic_add_return(int i, atomic_t *v)
+ {
+ 	int __i = i;
+-	asm volatile(LOCK_PREFIX "xaddl %0, %1"
++	asm volatile(LOCK_PREFIX "xaddl %0, %1\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     "movl %0, %1\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+r" (i), "+m" (v->counter)
+ 		     : : "memory");
+ 	return i + __i;
+@@ -232,7 +320,15 @@ typedef struct {
+  */
+ static inline void atomic64_add(long i, atomic64_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "addq %1,%0"
++	asm volatile(LOCK_PREFIX "addq %1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subq %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "ir" (i), "m" (v->counter));
+ }
+@@ -246,7 +342,15 @@ static inline void atomic64_add(long i, 
+  */
+ static inline void atomic64_sub(long i, atomic64_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "subq %1,%0"
++	asm volatile(LOCK_PREFIX "subq %1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "addq %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "ir" (i), "m" (v->counter));
+ }
+@@ -264,7 +368,16 @@ static inline int atomic64_sub_and_test(
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "subq %2,%0; sete %1"
++	asm volatile(LOCK_PREFIX "subq %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "addq %2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sete %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "ir" (i), "m" (v->counter) : "memory");
+ 	return c;
+@@ -278,7 +391,18 @@ static inline int atomic64_sub_and_test(
+  */
+ static inline void atomic64_inc(atomic64_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "incq %0"
++	asm volatile(LOCK_PREFIX "incq %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1:\n"
++		     LOCK_PREFIX "decq %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "m" (v->counter));
+ }
+@@ -291,7 +415,18 @@ static inline void atomic64_inc(atomic64
+  */
+ static inline void atomic64_dec(atomic64_t *v)
+ {
+-	asm volatile(LOCK_PREFIX "decq %0"
++	asm volatile(LOCK_PREFIX "decq %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "incq %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "=m" (v->counter)
+ 		     : "m" (v->counter));
+ }
+@@ -308,7 +443,19 @@ static inline int atomic64_dec_and_test(
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "decq %0; sete %1"
++	asm volatile(LOCK_PREFIX "decq %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "incq %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "m" (v->counter) : "memory");
+ 	return c != 0;
+@@ -326,7 +473,19 @@ static inline int atomic64_inc_and_test(
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "incq %0; sete %1"
++	asm volatile(LOCK_PREFIX "incq %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     LOCK_PREFIX "decq %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "m" (v->counter) : "memory");
+ 	return c != 0;
+@@ -345,7 +504,16 @@ static inline int atomic64_add_negative(
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(LOCK_PREFIX "addq %2,%0; sets %1"
++	asm volatile(LOCK_PREFIX "addq %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subq %2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sets %1\n"
+ 		     : "=m" (v->counter), "=qm" (c)
+ 		     : "ir" (i), "m" (v->counter) : "memory");
+ 	return c;
+@@ -361,7 +529,15 @@ static inline int atomic64_add_negative(
+ static inline long atomic64_add_return(long i, atomic64_t *v)
+ {
+ 	long __i = i;
+-	asm volatile(LOCK_PREFIX "xaddq %0, %1;"
++	asm volatile(LOCK_PREFIX "xaddq %0, %1\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     "movq %0, %1\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+r" (i), "+m" (v->counter)
+ 		     : : "memory");
+ 	return i + __i;
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/boot.h linux-2.6.26.2-pax/include/asm-x86/boot.h
 --- linux-2.6.26.2/include/asm-x86/boot.h	2008-07-14 03:51:43.000000000 +0200
 +++ linux-2.6.26.2-pax/include/asm-x86/boot.h	2008-07-14 03:52:23.000000000 +0200
@@ -16496,6 +17077,173 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm
 -
  #endif
  
+diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/local.h linux-2.6.26.2-pax/include/asm-x86/local.h
+--- linux-2.6.26.2/include/asm-x86/local.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.26.2-pax/include/asm-x86/local.h	2008-08-21 22:19:46.000000000 +0200
+@@ -18,26 +18,64 @@ typedef struct {
+ 
+ static inline void local_inc(local_t *l)
+ {
+-	asm volatile(_ASM_INC "%0"
++	asm volatile(_ASM_INC "%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1:\n"
++		     _ASM_DEC "%0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "+m" (l->a.counter));
+ }
+ 
+ static inline void local_dec(local_t *l)
+ {
+-	asm volatile(_ASM_DEC "%0"
++	asm volatile(_ASM_DEC "%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1:\n"
++		     _ASM_INC "%0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     : "+m" (l->a.counter));
+ }
+ 
+ static inline void local_add(long i, local_t *l)
+ {
+-	asm volatile(_ASM_ADD "%1,%0"
++	asm volatile(_ASM_ADD "%1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     _ASM_SUB "%1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+m" (l->a.counter)
+ 		     : "ir" (i));
+ }
+ 
+ static inline void local_sub(long i, local_t *l)
+ {
+-	asm volatile(_ASM_SUB "%1,%0"
++	asm volatile(_ASM_SUB "%1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     _ASM_ADD "%1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+m" (l->a.counter)
+ 		     : "ir" (i));
+ }
+@@ -55,7 +93,16 @@ static inline int local_sub_and_test(lon
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(_ASM_SUB "%2,%0; sete %1"
++	asm volatile(_ASM_SUB "%2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     _ASM_ADD "%2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sete %1\n"
+ 		     : "+m" (l->a.counter), "=qm" (c)
+ 		     : "ir" (i) : "memory");
+ 	return c;
+@@ -73,7 +120,19 @@ static inline int local_dec_and_test(loc
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(_ASM_DEC "%0; sete %1"
++	asm volatile(_ASM_DEC "%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     _ASM_INC "%0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "+m" (l->a.counter), "=qm" (c)
+ 		     : : "memory");
+ 	return c != 0;
+@@ -91,7 +150,19 @@ static inline int local_inc_and_test(loc
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(_ASM_INC "%0; sete %1"
++	asm volatile(_ASM_INC "%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1: \n"
++		     _ASM_DEC "%0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "sete %1\n"
+ 		     : "+m" (l->a.counter), "=qm" (c)
+ 		     : : "memory");
+ 	return c != 0;
+@@ -110,7 +181,16 @@ static inline int local_add_negative(lon
+ {
+ 	unsigned char c;
+ 
+-	asm volatile(_ASM_ADD "%2,%0; sets %1"
++	asm volatile(_ASM_ADD "%2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     _ASM_SUB "%2,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
++		     "sets %1\n"
+ 		     : "+m" (l->a.counter), "=qm" (c)
+ 		     : "ir" (i) : "memory");
+ 	return c;
+@@ -133,7 +213,15 @@ static inline long local_add_return(long
+ #endif
+ 	/* Modern 486+ processor */
+ 	__i = i;
+-	asm volatile(_ASM_XADD "%0, %1;"
++	asm volatile(_ASM_XADD "%0, %1\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     _ASM_MOV_UL "%0,%1\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+r" (i), "+m" (l->a.counter)
+ 		     : : "memory");
+ 	return i + __i;
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/mach-default/apm.h linux-2.6.26.2-pax/include/asm-x86/mach-default/apm.h
 --- linux-2.6.26.2/include/asm-x86/mach-default/apm.h	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.26.2-pax/include/asm-x86/mach-default/apm.h	2008-07-14 03:52:23.000000000 +0200
@@ -17142,6 +17890,142 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm
  void native_machine_crash_shutdown(struct pt_regs *regs);
  void native_machine_shutdown(void);
  
+diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/rwsem.h linux-2.6.26.2-pax/include/asm-x86/rwsem.h
+--- linux-2.6.26.2/include/asm-x86/rwsem.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.26.2-pax/include/asm-x86/rwsem.h	2008-08-21 22:34:57.000000000 +0200
+@@ -106,10 +106,21 @@ static inline void __down_read(struct rw
+ {
+ 	asm volatile("# beginning down_read\n\t"
+ 		     LOCK_PREFIX "  incl      (%%eax)\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1:\n"
++		     LOCK_PREFIX "decl (%%eax)\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
+ 		     /* adds 0x00000001, returns the old value */
+-		     "  jns        1f\n"
++		     "  jns        2f\n"
+ 		     "  call call_rwsem_down_read_failed\n"
+-		     "1:\n\t"
++		     "2:\n\t"
+ 		     "# ending down_read\n\t"
+ 		     : "+m" (sem->count)
+ 		     : "a" (sem)
+@@ -127,6 +138,14 @@ static inline int __down_read_trylock(st
+ 		     "1:\n\t"
+ 		     "  movl	     %1,%2\n\t"
+ 		     "  addl      %3,%2\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %3,%2\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     "  jle	     2f\n\t"
+ 		     LOCK_PREFIX "  cmpxchgl  %2,%0\n\t"
+ 		     "  jnz	     1b\n\t"
+@@ -148,6 +167,14 @@ static inline void __down_write_nested(s
+ 	tmp = RWSEM_ACTIVE_WRITE_BIAS;
+ 	asm volatile("# beginning down_write\n\t"
+ 		     LOCK_PREFIX "  xadd      %%edx,(%%eax)\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     "movl %%edx,(%%eax)\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     /* subtract 0x0000ffff, returns the old value */
+ 		     "  testl     %%edx,%%edx\n\t"
+ 		     /* was the count 0 before? */
+@@ -186,6 +213,14 @@ static inline void __up_read(struct rw_s
+ 	__s32 tmp = -RWSEM_ACTIVE_READ_BIAS;
+ 	asm volatile("# beginning __up_read\n\t"
+ 		     LOCK_PREFIX "  xadd      %%edx,(%%eax)\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     "movl %%edx,(%%eax)\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     /* subtracts 1, returns the old value */
+ 		     "  jns        1f\n\t"
+ 		     "  call call_rwsem_wake\n"
+@@ -204,6 +239,14 @@ static inline void __up_write(struct rw_
+ 	asm volatile("# beginning __up_write\n\t"
+ 		     "  movl      %2,%%edx\n\t"
+ 		     LOCK_PREFIX "  xaddl     %%edx,(%%eax)\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     "movl %%edx,(%%eax)\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     /* tries to transition
+ 			0xffff0001 -> 0x00000000 */
+ 		     "  jz       1f\n"
+@@ -222,6 +265,14 @@ static inline void __downgrade_write(str
+ {
+ 	asm volatile("# beginning __downgrade_write\n\t"
+ 		     LOCK_PREFIX "  addl      %2,(%%eax)\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %2,(%%eax)\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     /* transitions 0xZZZZ0001 -> 0xYYYY0001 */
+ 		     "  jns       1f\n\t"
+ 		     "  call call_rwsem_downgrade_wake\n"
+@@ -237,7 +288,15 @@ static inline void __downgrade_write(str
+  */
+ static inline void rwsem_atomic_add(int delta, struct rw_semaphore *sem)
+ {
+-	asm volatile(LOCK_PREFIX "addl %1,%0"
++	asm volatile(LOCK_PREFIX "addl %1,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+m" (sem->count)
+ 		     : "ir" (delta));
+ }
+@@ -249,7 +308,15 @@ static inline int rwsem_atomic_update(in
+ {
+ 	int tmp = delta;
+ 
+-	asm volatile(LOCK_PREFIX "xadd %0,%1"
++	asm volatile(LOCK_PREFIX "xadd %0,%1\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     "movl %0,%1\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+r" (tmp), "+m" (sem->count)
+ 		     : : "memory");
+ 
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/segment.h linux-2.6.26.2-pax/include/asm-x86/segment.h
 --- linux-2.6.26.2/include/asm-x86/segment.h	2008-07-14 03:51:43.000000000 +0200
 +++ linux-2.6.26.2-pax/include/asm-x86/segment.h	2008-07-14 03:52:23.000000000 +0200
@@ -17179,6 +18063,81 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm
  
  
  #else
+diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/spinlock.h linux-2.6.26.2-pax/include/asm-x86/spinlock.h
+--- linux-2.6.26.2/include/asm-x86/spinlock.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.26.2-pax/include/asm-x86/spinlock.h	2008-08-21 21:13:13.000000000 +0200
+@@ -227,15 +227,34 @@ static inline int __raw_write_can_lock(r
+ static inline void __raw_read_lock(raw_rwlock_t *rw)
+ {
+ 	asm volatile(LOCK_PREFIX " subl $1,(%0)\n\t"
+-		     "jns 1f\n"
+-		     "call __read_lock_failed\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
+ 		     "1:\n"
++		     LOCK_PREFIX " addl $1,(%0)\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     "jns 2f\n"
++		     "call __read_lock_failed\n\t"
++		     "2:\n"
+ 		     ::LOCK_PTR_REG (rw) : "memory");
+ }
+ 
+ static inline void __raw_write_lock(raw_rwlock_t *rw)
+ {
+ 	asm volatile(LOCK_PREFIX " subl %1,(%0)\n\t"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX " addl %1,(%0)\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     "jz 1f\n"
+ 		     "call __write_lock_failed\n\t"
+ 		     "1:\n"
+@@ -265,12 +284,32 @@ static inline int __raw_write_trylock(ra
+ 
+ static inline void __raw_read_unlock(raw_rwlock_t *rw)
+ {
+-	asm volatile(LOCK_PREFIX "incl %0" :"+m" (rw->lock) : : "memory");
++	asm volatile(LOCK_PREFIX "incl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "into\n0:\n"
++		     ".pushsection .fixup,\"ax\"\n"
++		     "1:\n"
++		     LOCK_PREFIX "decl %0\n"
++		     "jmp 0b\n"
++		     ".popsection\n"
++		     _ASM_EXTABLE(0b, 1b)
++#endif
++
++		     :"+m" (rw->lock) : : "memory");
+ }
+ 
+ static inline void __raw_write_unlock(raw_rwlock_t *rw)
+ {
+-	asm volatile(LOCK_PREFIX "addl %1, %0"
++	asm volatile(LOCK_PREFIX "addl %1, %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++		     "jno 0f\n"
++		     LOCK_PREFIX "subl %1,%0\n"
++		     "into\n0:\n"
++		     _ASM_EXTABLE(0b, 0b)
++#endif
++
+ 		     : "+m" (rw->lock) : "i" (RW_LOCK_BIAS) : "memory");
+ }
+ 
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/asm-x86/system.h linux-2.6.26.2-pax/include/asm-x86/system.h
 --- linux-2.6.26.2/include/asm-x86/system.h	2008-07-14 03:51:43.000000000 +0200
 +++ linux-2.6.26.2-pax/include/asm-x86/system.h	2008-07-14 03:52:23.000000000 +0200
@@ -17382,13 +18341,14 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/lin
  #endif
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/include/linux/binfmts.h linux-2.6.26.2-pax/include/linux/binfmts.h
 --- linux-2.6.26.2/include/linux/binfmts.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.26.2-pax/include/linux/binfmts.h	2008-07-14 03:52:23.000000000 +0200
-@@ -101,5 +101,8 @@ extern int do_coredump(long signr, int e
++++ linux-2.6.26.2-pax/include/linux/binfmts.h	2008-08-21 16:56:40.000000000 +0200
+@@ -101,5 +101,9 @@ extern int do_coredump(long signr, int e
  extern int set_binfmt(struct linux_binfmt *new);
  extern void free_bprm(struct linux_binprm *);
  
 +void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +void pax_report_insns(void *pc, void *sp);
++void pax_report_refcount_overflow(struct pt_regs *regs);
 +
  #endif /* __KERNEL__ */
  #endif /* _LINUX_BINFMTS_H */
@@ -21631,7 +22591,7 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/mm/swap.c l
   * This path almost never happens for VM activity - pages are normally
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/mm/vmalloc.c linux-2.6.26.2-pax/mm/vmalloc.c
 --- linux-2.6.26.2/mm/vmalloc.c	2008-07-14 03:51:44.000000000 +0200
-+++ linux-2.6.26.2-pax/mm/vmalloc.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.2-pax/mm/vmalloc.c	2008-08-18 09:57:38.000000000 +0200
 @@ -248,20 +248,15 @@ __get_vm_area_node(unsigned long size, u
  					     (unsigned long)tmp->addr, align);
  			continue;
@@ -21654,6 +22614,15 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/mm/vmalloc.
  	area->next = *p;
  	*p = area;
  
+@@ -653,7 +648,7 @@ EXPORT_SYMBOL(vmalloc_node);
+ 
+ void *vmalloc_exec(unsigned long size)
+ {
+-	return __vmalloc(size, GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL_EXEC);
++	return __vmalloc(size, GFP_KERNEL | __GFP_HIGHMEM | __GFP_ZERO, PAGE_KERNEL_EXEC);
+ }
+ 
+ #if defined(CONFIG_64BIT) && defined(CONFIG_ZONE_DMA32)
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/net/bridge/br_stp_if.c linux-2.6.26.2-pax/net/bridge/br_stp_if.c
 --- linux-2.6.26.2/net/bridge/br_stp_if.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.26.2-pax/net/bridge/br_stp_if.c	2008-07-14 03:52:23.000000000 +0200
@@ -21801,8 +22770,8 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/scripts/pnm
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/security/Kconfig linux-2.6.26.2-pax/security/Kconfig
 --- linux-2.6.26.2/security/Kconfig	2008-07-14 03:51:46.000000000 +0200
-+++ linux-2.6.26.2-pax/security/Kconfig	2008-07-14 03:52:24.000000000 +0200
-@@ -4,6 +4,427 @@
++++ linux-2.6.26.2-pax/security/Kconfig	2008-08-19 12:38:09.000000000 +0200
+@@ -4,6 +4,445 @@
  
  menu "Security options"
  
@@ -22223,6 +23192,24 @@ diff -NurpX linux-2.6.26.2-pax/Documentation/dontdiff linux-2.6.26.2/security/Kc
 +	  VMs running on CPUs without hardware virtualization support (i.e.,
 +	  the majority of IA-32 CPUs) will likely experience the slowdown.
 +
++config PAX_REFCOUNT
++	bool "Prevent various kernel object reference counter overflows"
++	depends on X86
++	help
++	  By saying Y here the kernel will detect and prevent overflowing
++	  various (but not all) kinds of object reference counters.  Such
++	  overflows can normally occur due to bugs only and are often, if
++	  not always, exploitable.
++
++	  The tradeoff is that data structures protected by an oveflowed
++	  refcount will never be freed and therefore will leak memory.  Note
++	  that this leak also happens even without this protection but in
++	  that case the overflow can eventually trigger the freeing of the
++	  data structure while it is still being used elsewhere, resulting
++	  in the exploitable situation that this feature prevents.
++
++	  Since this has a negligible performance impact, you should enable
++	  this feature.
 +endmenu
 +
 +endmenu
