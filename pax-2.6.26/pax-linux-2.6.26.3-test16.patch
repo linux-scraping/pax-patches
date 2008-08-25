@@ -17929,7 +17929,7 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
  
 diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm-x86/rwsem.h linux-2.6.26.3-pax/include/asm-x86/rwsem.h
 --- linux-2.6.26.3/include/asm-x86/rwsem.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.26.3-pax/include/asm-x86/rwsem.h	2008-08-22 11:18:51.000000000 +0200
++++ linux-2.6.26.3-pax/include/asm-x86/rwsem.h	2008-08-25 08:35:19.000000000 +0200
 @@ -106,10 +106,26 @@ static inline void __down_read(struct rw
  {
  	asm volatile("# beginning down_read\n\t"
@@ -17959,10 +17959,15 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
  		     "# ending down_read\n\t"
  		     : "+m" (sem->count)
  		     : "a" (sem)
-@@ -127,6 +143,22 @@ static inline int __down_read_trylock(st
- 		     "1:\n\t"
+@@ -124,13 +140,29 @@ static inline int __down_read_trylock(st
+ 	__s32 result, tmp;
+ 	asm volatile("# beginning __down_read_trylock\n\t"
+ 		     "  movl      %0,%1\n\t"
+-		     "1:\n\t"
++		     "2:\n\t"
  		     "  movl	     %1,%2\n\t"
  		     "  addl      %3,%2\n\t"
+-		     "  jle	     2f\n\t"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +#ifdef CONFIG_X86_32
@@ -17979,10 +17984,16 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
 +		     _ASM_EXTABLE(0b, 1b)
 +#endif
 +
- 		     "  jle	     2f\n\t"
++		     "  jle	     3f\n\t"
  		     LOCK_PREFIX "  cmpxchgl  %2,%0\n\t"
- 		     "  jnz	     1b\n\t"
-@@ -148,6 +180,22 @@ static inline void __down_write_nested(s
+-		     "  jnz	     1b\n\t"
+-		     "2:\n\t"
++		     "  jnz	     2b\n\t"
++		     "3:\n\t"
+ 		     "# ending __down_read_trylock\n\t"
+ 		     : "+m" (sem->count), "=&a" (result), "=&r" (tmp)
+ 		     : "i" (RWSEM_ACTIVE_READ_BIAS)
+@@ -148,12 +180,28 @@ static inline void __down_write_nested(s
  	tmp = RWSEM_ACTIVE_WRITE_BIAS;
  	asm volatile("# beginning down_write\n\t"
  		     LOCK_PREFIX "  xadd      %%edx,(%%eax)\n\t"
@@ -18005,7 +18016,15 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
  		     /* subtract 0x0000ffff, returns the old value */
  		     "  testl     %%edx,%%edx\n\t"
  		     /* was the count 0 before? */
-@@ -186,6 +234,22 @@ static inline void __up_read(struct rw_s
+-		     "  jz        1f\n"
++		     "  jz        2f\n"
+ 		     "  call call_rwsem_down_write_failed\n"
+-		     "1:\n"
++		     "2:\n"
+ 		     "# ending down_write"
+ 		     : "+m" (sem->count), "=d" (tmp)
+ 		     : "a" (sem), "1" (tmp)
+@@ -186,10 +234,26 @@ static inline void __up_read(struct rw_s
  	__s32 tmp = -RWSEM_ACTIVE_READ_BIAS;
  	asm volatile("# beginning __up_read\n\t"
  		     LOCK_PREFIX "  xadd      %%edx,(%%eax)\n\t"
@@ -18026,9 +18045,15 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
 +#endif
 +
  		     /* subtracts 1, returns the old value */
- 		     "  jns        1f\n\t"
+-		     "  jns        1f\n\t"
++		     "  jns        2f\n\t"
  		     "  call call_rwsem_wake\n"
-@@ -204,6 +268,22 @@ static inline void __up_write(struct rw_
+-		     "1:\n"
++		     "2:\n"
+ 		     "# ending __up_read\n"
+ 		     : "+m" (sem->count), "=d" (tmp)
+ 		     : "a" (sem), "1" (tmp)
+@@ -204,11 +268,27 @@ static inline void __up_write(struct rw_
  	asm volatile("# beginning __up_write\n\t"
  		     "  movl      %2,%%edx\n\t"
  		     LOCK_PREFIX "  xaddl     %%edx,(%%eax)\n\t"
@@ -18050,8 +18075,15 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
 +
  		     /* tries to transition
  			0xffff0001 -> 0x00000000 */
- 		     "  jz       1f\n"
-@@ -222,6 +302,22 @@ static inline void __downgrade_write(str
+-		     "  jz       1f\n"
++		     "  jz       2f\n"
+ 		     "  call call_rwsem_wake\n"
+-		     "1:\n\t"
++		     "2:\n\t"
+ 		     "# ending __up_write\n"
+ 		     : "+m" (sem->count)
+ 		     : "a" (sem), "i" (-RWSEM_ACTIVE_WRITE_BIAS)
+@@ -222,10 +302,26 @@ static inline void __downgrade_write(str
  {
  	asm volatile("# beginning __downgrade_write\n\t"
  		     LOCK_PREFIX "  addl      %2,(%%eax)\n\t"
@@ -18072,8 +18104,14 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
 +#endif
 +
  		     /* transitions 0xZZZZ0001 -> 0xYYYY0001 */
- 		     "  jns       1f\n\t"
+-		     "  jns       1f\n\t"
++		     "  jns       2f\n\t"
  		     "  call call_rwsem_downgrade_wake\n"
+-		     "1:\n\t"
++		     "2:\n\t"
+ 		     "# ending __downgrade_write\n"
+ 		     : "+m" (sem->count)
+ 		     : "a" (sem), "i" (-RWSEM_WAITING_BIAS)
 @@ -237,7 +333,23 @@ static inline void __downgrade_write(str
   */
  static inline void rwsem_atomic_add(int delta, struct rw_semaphore *sem)
@@ -18163,8 +18201,8 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
  #else
 diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm-x86/spinlock.h linux-2.6.26.3-pax/include/asm-x86/spinlock.h
 --- linux-2.6.26.3/include/asm-x86/spinlock.h	2008-08-21 22:47:10.000000000 +0200
-+++ linux-2.6.26.3-pax/include/asm-x86/spinlock.h	2008-08-22 11:11:16.000000000 +0200
-@@ -227,15 +227,47 @@ static inline int __raw_write_can_lock(r
++++ linux-2.6.26.3-pax/include/asm-x86/spinlock.h	2008-08-25 08:33:14.000000000 +0200
+@@ -227,18 +227,50 @@ static inline int __raw_write_can_lock(r
  static inline void __raw_read_lock(raw_rwlock_t *rw)
  {
  	asm volatile(LOCK_PREFIX " subl $1,(%0)\n\t"
@@ -18195,6 +18233,8 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
  static inline void __raw_write_lock(raw_rwlock_t *rw)
  {
  	asm volatile(LOCK_PREFIX " subl %1,(%0)\n\t"
+-		     "jz 1f\n"
+-		     "call __write_lock_failed\n\t"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +#ifdef CONFIG_X86_32
@@ -18204,16 +18244,19 @@ diff -NurpX linux-2.6.26.3-pax/Documentation/dontdiff linux-2.6.26.3/include/asm
 +		     "int $4\n0:\n"
 +#endif
 +		     ".pushsection .fixup,\"ax\"\n"
-+		     "1:\n"
+ 		     "1:\n"
 +		     LOCK_PREFIX " addl %1,(%0)\n"
 +		     "jmp 0b\n"
 +		     ".popsection\n"
 +		     _ASM_EXTABLE(0b, 1b)
 +#endif
 +
- 		     "jz 1f\n"
- 		     "call __write_lock_failed\n\t"
- 		     "1:\n"
++		     "jz 2f\n"
++		     "call __write_lock_failed\n\t"
++		     "2:\n"
+ 		     ::LOCK_PTR_REG (rw), "i" (RW_LOCK_BIAS) : "memory");
+ }
+ 
 @@ -265,12 +297,45 @@ static inline int __raw_write_trylock(ra
  
  static inline void __raw_read_unlock(raw_rwlock_t *rw)
