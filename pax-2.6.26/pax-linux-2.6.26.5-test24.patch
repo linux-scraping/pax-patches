@@ -6423,7 +6423,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  #endif
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/step.c linux-2.6.26.5-pax/arch/x86/kernel/step.c
 --- linux-2.6.26.5/arch/x86/kernel/step.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/step.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/step.c	2008-09-21 22:30:06.000000000 +0200
 @@ -23,22 +23,20 @@ unsigned long convert_ip_to_linear(struc
  	 * and APM bios ones we just ignore here.
  	 */
@@ -6464,6 +6464,15 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	copied = access_process_vm(child, addr, opcode, sizeof(opcode), 0);
  	for (i = 0; i < copied; i++) {
  		switch (opcode[i]) {
+@@ -75,7 +76,7 @@ static int is_setting_trap_flag(struct t
+ 
+ #ifdef CONFIG_X86_64
+ 		case 0x40 ... 0x4f:
+-			if (regs->cs != __USER_CS)
++			if ((regs->cs & 0xffff) != __USER_CS)
+ 				/* 32-bit mode: register increment */
+ 				return 0;
+ 			/* 64-bit mode: REX prefix */
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/sys_i386_32.c linux-2.6.26.5-pax/arch/x86/kernel/sys_i386_32.c
 --- linux-2.6.26.5/arch/x86/kernel/sys_i386_32.c	2008-07-14 03:51:39.000000000 +0200
 +++ linux-2.6.26.5-pax/arch/x86/kernel/sys_i386_32.c	2008-07-14 03:52:23.000000000 +0200
@@ -6851,7 +6860,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	return 0;
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/traps_32.c linux-2.6.26.5-pax/arch/x86/kernel/traps_32.c
 --- linux-2.6.26.5/arch/x86/kernel/traps_32.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/traps_32.c	2008-08-22 10:25:32.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/traps_32.c	2008-09-21 22:00:23.000000000 +0200
 @@ -70,14 +70,6 @@ asmlinkage int system_call(void);
  /* Do we ignore FPU interrupts ? */
  char ignore_fpu_irq;
@@ -6920,6 +6929,15 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  		die(str, regs, err);
  }
  
+@@ -498,7 +492,7 @@ do_trap(int trapnr, int signr, char *str
+ {
+ 	struct task_struct *tsk = current;
+ 
+-	if (regs->flags & X86_VM_MASK) {
++	if (v8086_mode(regs)) {
+ 		if (vm86)
+ 			goto vm86_trap;
+ 		goto trap_signal;
 @@ -532,6 +526,12 @@ kernel_trap:
  		tsk->thread.trap_no = trapnr;
  		die(str, regs, error_code);
@@ -6942,8 +6960,12 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	thread = &current->thread;
  
  	/*
-@@ -647,9 +647,25 @@ void __kprobes do_general_protection(str
- 	if (regs->flags & X86_VM_MASK)
+@@ -644,12 +644,28 @@ void __kprobes do_general_protection(str
+ 	}
+ 	put_cpu();
+ 
+-	if (regs->flags & X86_VM_MASK)
++	if (v8086_mode(regs))
  		goto gp_in_vm86;
  
 -	if (!user_mode(regs))
@@ -6992,6 +7014,15 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  		current->thread.trap_no = 2;
  		crash_kexec(regs);
  	}
+@@ -925,7 +948,7 @@ void __kprobes do_debug(struct pt_regs *
+ 			goto clear_dr7;
+ 	}
+ 
+-	if (regs->flags & X86_VM_MASK)
++	if (v8086_mode(regs))
+ 		goto debug_vm86;
+ 
+ 	/* Save debug status register where ptrace can see it */
 @@ -941,7 +964,7 @@ void __kprobes do_debug(struct pt_regs *
  		 * check for kernel mode by just checking the CPL
  		 * of CS.
@@ -7001,6 +7032,15 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  			goto clear_TF_reenable;
  	}
  
+@@ -1097,7 +1120,7 @@ void do_simd_coprocessor_error(struct pt
+ 	 * Handle strange cache flush from user space exception
+ 	 * in all other cases.  This is undocumented behaviour.
+ 	 */
+-	if (regs->flags & X86_VM_MASK) {
++	if (v8086_mode(regs)) {
+ 		handle_vm86_fault((struct kernel_vm86_regs *)regs, error_code);
+ 		return;
+ 	}
 @@ -1117,19 +1140,14 @@ void do_spurious_interrupt_bug(struct pt
  
  unsigned long patch_espfix_desc(unsigned long uesp, unsigned long kesp)
@@ -9574,7 +9614,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ma
  	if (((1 << cpu) & voyager_extended_vic_processors) == 0)
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm/extable.c linux-2.6.26.5-pax/arch/x86/mm/extable.c
 --- linux-2.6.26.5/arch/x86/mm/extable.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/mm/extable.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/mm/extable.c	2008-09-21 21:58:48.000000000 +0200
 @@ -1,14 +1,62 @@
  #include <linux/module.h>
  #include <linux/spinlock.h>
@@ -9635,13 +9675,13 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
  
  #ifdef CONFIG_PNPBIOS
 -	if (unlikely(SEGMENT_IS_PNP_CODE(regs->cs))) {
-+	if (unlikely(!(regs->flags & X86_VM_MASK) && SEGMENT_IS_PNP_CODE(regs->cs))) {
++	if (unlikely(!v8086_mode(regs) && SEGMENT_IS_PNP_CODE(regs->cs))) {
  		extern u32 pnp_bios_fault_eip, pnp_bios_fault_esp;
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm/fault.c linux-2.6.26.5-pax/arch/x86/mm/fault.c
 --- linux-2.6.26.5/arch/x86/mm/fault.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/mm/fault.c	2008-08-22 10:25:53.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/mm/fault.c	2008-09-21 22:32:17.000000000 +0200
 @@ -25,6 +25,8 @@
  #include <linux/kprobes.h>
  #include <linux/uaccess.h>
@@ -9811,14 +9851,14 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
  	}
  
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_PAGEEXEC)
-+	if (nx_enabled || (error_code & 5) != 5 || (regs->flags & X86_EFLAGS_VM) ||
++	if (nx_enabled || (error_code & (PF_PROT|PF_USER)) != (PF_PROT|PF_USER) || v8086_mode(regs) ||
 +	    !(mm->pax_flags & MF_PAX_PAGEEXEC))
 +		goto not_pax_fault;
 +
 +	/* PaX: it's our fault, let's handle it if we can */
 +
 +	/* PaX: take a look at read faults before acquiring any locks */
-+	if (unlikely(!(error_code & 2) && (regs->ip == address))) {
++	if (unlikely(!(error_code & PF_WRITE) && (regs->ip == address))) {
 +		/* instruction fetch attempt from a protected page in user mode */
 +		up_read(&mm->mmap_sem);
 +
@@ -9843,7 +9883,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
 +		goto not_pax_fault;
 +	}
 +
-+	if (unlikely((error_code & 2) && !pte_write(*pte))) {
++	if (unlikely((error_code & PF_WRITE) && !pte_write(*pte))) {
 +		/* write attempt to a protected page in user mode */
 +		pte_unmap_unlock(pte, ptl);
 +		goto not_pax_fault;
@@ -9862,7 +9902,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
 +		return;
 +	}
 +
-+	pte_mask = _PAGE_ACCESSED | _PAGE_USER | ((error_code & 2) << (_PAGE_BIT_DIRTY-1));
++	pte_mask = _PAGE_ACCESSED | _PAGE_USER | ((error_code & PF_WRITE) << (_PAGE_BIT_DIRTY-1));
 +
 +	/*
 +	 * PaX: fill DTLB with user rights and retry
@@ -9929,13 +9969,18 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
  	switch (error_code & (PF_PROT|PF_WRITE)) {
  	default:	/* 3: write, present */
  		/* fall through */
-@@ -780,6 +922,49 @@ bad_area:
+@@ -780,6 +922,54 @@ bad_area:
  	up_read(&mm->mmap_sem);
  
  bad_area_nosemaphore:
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
-+	if (mm && (error_code & 4) && !(regs->flags & X86_EFLAGS_VM)) {
++	if (mm && (error_code & PF_USER)) {
++		unsigned long ip = regs->ip;
++
++		if (v8086_mode(regs))
++			ip = ((regs->cs & 0xffff) << 4) + (regs->ip & 0xffff);
++
 +		/*
 +		 * It's possible to have interrupts off here.
 +		 */
@@ -9943,7 +9988,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
 +		if ((mm->pax_flags & MF_PAX_PAGEEXEC) &&
-+		    ((nx_enabled && ((error_code & PF_INSTR) || !(error_code & (PF_PROT | PF_WRITE))) && (regs->ip == address)))) {
++		    (nx_enabled && ((error_code & PF_INSTR) || !(error_code & (PF_PROT | PF_WRITE))) && (regs->ip == address))) {
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
 +			switch (pax_handle_fetch_fault(regs)) {
@@ -9979,7 +10024,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -862,7 +1047,7 @@ no_context:
+@@ -862,7 +1052,7 @@ no_context:
  #ifdef CONFIG_X86_32
  	die("Oops", regs, error_code);
  	bust_spinlocks(0);
@@ -9988,7 +10033,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
  #else
  	if (__die("Oops", regs, error_code))
  		regs = NULL;
-@@ -876,17 +1061,17 @@ no_context:
+@@ -876,17 +1066,17 @@ no_context:
   * us unable to handle the page fault gracefully.
   */
  out_of_memory:
@@ -10008,7 +10053,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
  	printk("VM: killing process %s\n", tsk->comm);
  	if (error_code & PF_USER)
  		do_group_exit(SIGKILL);
-@@ -983,3 +1168,174 @@ void vmalloc_sync_all(void)
+@@ -983,3 +1173,174 @@ void vmalloc_sync_all(void)
  	}
  #endif
  }
@@ -10136,7 +10181,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/mm
 + */
 +static int pax_handle_fetch_fault(struct pt_regs *regs)
 +{
-+	if (regs->flags & X86_EFLAGS_VM)
++	if (v8086_mode(regs))
 +		return 1;
 +
 +	if (!(current->mm->pax_flags & MF_PAX_EMUTRAMP))
