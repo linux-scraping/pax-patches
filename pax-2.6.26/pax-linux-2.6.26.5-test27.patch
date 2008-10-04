@@ -4684,7 +4684,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	reserve_early(__pa_symbol(&_text), __pa_symbol(&_end), "TEXT DATA BSS");
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/head_32.S linux-2.6.26.5-pax/arch/x86/kernel/head_32.S
 --- linux-2.6.26.5/arch/x86/kernel/head_32.S	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/head_32.S	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/head_32.S	2008-10-05 00:37:36.000000000 +0200
 @@ -19,6 +19,7 @@
  #include <asm/asm-offsets.h>
  #include <asm/setup.h>
@@ -4734,18 +4734,19 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  ENTRY(startup_32)
  	/* test KEEP_SEGMENTS flag to see if the bootloader is asking
  		us to not reload segments */
-@@ -99,6 +111,43 @@ ENTRY(startup_32)
+@@ -99,6 +111,56 @@ ENTRY(startup_32)
  	movl %eax,%gs
  2:
  
++	movl $pa(cpu_gdt_table),%edi
 +	movl $__per_cpu_start,%eax
-+	movw %ax,(cpu_gdt_table - __PAGE_OFFSET + __KERNEL_PERCPU + 2)
++	movw %ax,__KERNEL_PERCPU + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,(cpu_gdt_table - __PAGE_OFFSET + __KERNEL_PERCPU + 4)
-+	movb %ah,(cpu_gdt_table - __PAGE_OFFSET + __KERNEL_PERCPU + 7)
++	movb %al,__KERNEL_PERCPU + 4(%edi)
++	movb %ah,__KERNEL_PERCPU + 7(%edi)
 +	movl $__per_cpu_end + PERCPU_MODULE_RESERVE - 1,%eax
 +	subl $__per_cpu_start,%eax
-+	movw %ax,(cpu_gdt_table - __PAGE_OFFSET + __KERNEL_PERCPU + 0)
++	movw %ax,__KERNEL_PERCPU + 0(%edi)
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	/* check for VMware */
@@ -4755,30 +4756,42 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
 +	movl $0x5658,%edx
 +	in (%dx),%eax
 +	cmpl $0x564d5868,%ebx
-+	jz 1f
++	jz 2f
 +
-+	movl $((((__PAGE_OFFSET-1) & 0xf0000000) >> 12) | 0x00c09700),%eax
-+	movl %eax,(cpu_gdt_table - __PAGE_OFFSET + GDT_ENTRY_KERNEL_DS * 8 + 4)
++	movl $NR_CPUS,%ecx
++	movl $pa(cpu_gdt_table),%edi
 +1:
++	movl $((((__PAGE_OFFSET-1) & 0xf0000000) >> 12) | 0x00c09700),GDT_ENTRY_KERNEL_DS * 8 + 4(%edi)
++	addl $PAGE_SIZE_asm,%edi
++	loop 1b
++2:
 +#endif
 +
 +#ifdef CONFIG_PAX_KERNEXEC
++	movl $pa(boot_gdt),%edi
 +	movl $KERNEL_TEXT_OFFSET,%eax
-+	movw %ax,(cpu_gdt_table - __PAGE_OFFSET + __KERNEL_CS + 2)
++	movw %ax,__BOOT_CS + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,(cpu_gdt_table - __PAGE_OFFSET + __KERNEL_CS + 4)
-+	movb %ah,(cpu_gdt_table - __PAGE_OFFSET + __KERNEL_CS + 7)
++	movb %al,__BOOT_CS + 4(%edi)
++	movb %ah,__BOOT_CS + 7(%edi)
++	rorl $16,%eax
 +
-+	movb %al,(boot_gdt - __PAGE_OFFSET + __BOOT_CS + 4)
-+	movb %ah,(boot_gdt - __PAGE_OFFSET + __BOOT_CS + 7)
++	movl $NR_CPUS,%ecx
++	movl $pa(cpu_gdt_table),%edi
++1:
++	movw %ax,__KERNEL_CS + 2(%edi)
 +	rorl $16,%eax
-+	movw %ax,(boot_gdt - __PAGE_OFFSET + __BOOT_CS + 2)
++	movb %al,__KERNEL_CS + 4(%edi)
++	movb %ah,__KERNEL_CS + 7(%edi)
++	rorl $16,%eax
++	addl $PAGE_SIZE_asm,%edi
++	loop 1b
 +#endif
 +
  /*
   * Clear BSS first so that there are no surprises...
   */
-@@ -142,9 +191,7 @@ ENTRY(startup_32)
+@@ -142,9 +204,7 @@ ENTRY(startup_32)
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -4789,7 +4802,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -156,9 +203,9 @@ WEAK(xen_entry)
+@@ -156,9 +216,9 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
@@ -4802,7 +4815,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #endif /* CONFIG_PARAVIRT */
-@@ -172,7 +219,7 @@ num_subarch_entries = (. - subarch_entri
+@@ -172,7 +232,7 @@ num_subarch_entries = (. - subarch_entri
   *
   * Note that the stack is not yet set up!
   */
@@ -4811,7 +4824,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  #define PDE_ATTR	0x067		/* PRESENT+RW+USER+DIRTY+ACCESSED */
  #define PGD_ATTR	0x001		/* PRESENT (no other attributes) */
  
-@@ -221,8 +268,7 @@ default_entry:
+@@ -221,8 +281,7 @@ default_entry:
  	movl %edi,pa(init_pg_tables_end)
  
  	/* Do early initialization of the fixmap area */
@@ -4821,7 +4834,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -251,8 +297,7 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -251,8 +310,7 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %edi,pa(init_pg_tables_end)
  
  	/* Do early initialization of the fixmap area */
@@ -4831,7 +4844,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  #endif
  	jmp 3f
  /*
-@@ -316,13 +361,16 @@ ENTRY(startup_32_smp)
+@@ -316,13 +374,16 @@ ENTRY(startup_32_smp)
  	jnc 6f
  
  	/* Setup EFER (Extended Feature Enable Register) */
@@ -4849,7 +4862,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  6:
  
  /*
-@@ -348,9 +396,7 @@ ENTRY(startup_32_smp)
+@@ -348,9 +409,7 @@ ENTRY(startup_32_smp)
  
  #ifdef CONFIG_SMP
  	cmpb $0, ready
@@ -4860,7 +4873,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  #endif /* CONFIG_SMP */
  
  /*
-@@ -427,12 +473,12 @@ is386:	movl $2,%ecx		# set MP
+@@ -427,12 +486,12 @@ is386:	movl $2,%ecx		# set MP
  	ljmp $(__KERNEL_CS),$1f
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
@@ -4876,7 +4889,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	xorl %eax,%eax			# Clear GS and LDT
  	movl %eax,%gs
  	lldt %ax
-@@ -443,11 +489,7 @@ is386:	movl $2,%ecx		# set MP
+@@ -443,11 +502,7 @@ is386:	movl $2,%ecx		# set MP
  	movb ready, %cl
  	movb $1, ready
  	cmpb $0,%cl		# the first CPU calls start_kernel
@@ -4889,7 +4902,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  #endif /* CONFIG_SMP */
  	jmp i386_start_kernel
  
-@@ -533,15 +575,15 @@ early_page_fault:
+@@ -533,15 +588,15 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
@@ -4909,7 +4922,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	movl %cr2,%eax
  	pushl %eax
  	pushl %edx		/* trapno */
-@@ -551,8 +593,8 @@ early_fault:
+@@ -551,8 +606,8 @@ early_fault:
  #else
  	call printk
  #endif
@@ -4919,7 +4932,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -560,8 +602,11 @@ hlt_loop:
+@@ -560,8 +615,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -4932,7 +4945,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -570,9 +615,6 @@ ignore_int:
+@@ -570,9 +628,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -4942,7 +4955,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -592,36 +634,41 @@ ignore_int:
+@@ -592,36 +647,41 @@ ignore_int:
  #endif
  	iret
  
@@ -4996,7 +5009,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_ATTR),0		/* low identity map */
  # if KPMDS == 3
-@@ -644,11 +691,12 @@ ENTRY(swapper_pg_dir)
+@@ -644,11 +704,12 @@ ENTRY(swapper_pg_dir)
  
  .data
  ENTRY(stack_start)
@@ -5010,7 +5023,16 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  early_recursion_flag:
  	.long 0
  
-@@ -695,7 +743,7 @@ idt_descr:
+@@ -684,7 +745,7 @@ fault_msg:
+ 	.word 0				# 32 bit align gdt_desc.address
+ boot_gdt_descr:
+ 	.word __BOOT_DS+7
+-	.long boot_gdt - __PAGE_OFFSET
++	.long pa(boot_gdt)
+ 
+ 	.word 0				# 32-bit align idt_desc.address
+ idt_descr:
+@@ -695,7 +756,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -5019,7 +5041,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -704,5 +752,61 @@ ENTRY(early_gdt_descr)
+@@ -704,5 +765,59 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -5030,6 +5052,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
 +
 +	.align PAGE_SIZE_asm
 +ENTRY(cpu_gdt_table)
++	.rept NR_CPUS
 +	.quad 0x0000000000000000	/* NULL descriptor */
 +	.quad 0x0000000000000000	/* 0x0b reserved */
 +	.quad 0x0000000000000000	/* 0x13 reserved */
@@ -5078,14 +5101,11 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
 +	.quad 0x0000000000000000	/* 0xf8 - GDT entry 31: double-fault TSS */
 +
 +	/* Be sure this is zeroed to avoid false validations in Xen */
-+	.fill PAGE_SIZE_asm - GDT_ENTRIES,1,0
-+
-+#ifdef CONFIG_SMP
-+	.fill (NR_CPUS-1) * (PAGE_SIZE_asm),1,0 /* other CPU's GDT */
-+#endif
++	.fill PAGE_SIZE_asm - GDT_SIZE,1,0
++	.endr
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/head_64.S linux-2.6.26.5-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.26.5/arch/x86/kernel/head_64.S	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/head_64.S	2008-07-25 22:07:43.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/head_64.S	2008-10-04 22:01:42.000000000 +0200
 @@ -181,6 +181,11 @@ ENTRY(secondary_startup_64)
  	btl	$20,%edi		/* No Execute supported? */
  	jnc     1f
@@ -5171,28 +5191,29 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	510,8,0
  	/* (2^48-(2*1024*1024*1024)-((2^39)*511))/(2^30) = 510 */
-@@ -393,19 +413,12 @@ NEXT_PAGE(level2_spare_pgt)
+@@ -393,36 +413,18 @@ NEXT_PAGE(level2_spare_pgt)
  #undef PMDS
  #undef NEXT_PAGE
  
 -	.data
- 	.align 16
- 	.globl cpu_gdt_descr
- cpu_gdt_descr:
+-	.align 16
+-	.globl cpu_gdt_descr
+-cpu_gdt_descr:
 -	.word	gdt_end-cpu_gdt_table-1
-+	.word	GDT_SIZE-1
- gdt:
- 	.quad	cpu_gdt_table
+-gdt:
+-	.quad	cpu_gdt_table
 -#ifdef CONFIG_SMP
 -	.rept	NR_CPUS-1
 -	.word	0
 -	.quad	0
 -	.endr
 -#endif
- 
- ENTRY(phys_base)
- 	/* This must match the first entry in level2_kernel_pgt */
-@@ -415,8 +428,7 @@ ENTRY(phys_base)
+-
+-ENTRY(phys_base)
+-	/* This must match the first entry in level2_kernel_pgt */
+-	.quad   0x0000000000000000
+-
+ /* We need valid kernel segments for data and code in long mode too
   * IRET will check the segment types  kkeil 2000/10/28
   * Also sysret mandates a special GDT layout 
   */
@@ -5202,7 +5223,14 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	.align PAGE_SIZE
  
  /* The TLS descriptors are currently at a different place compared to i386.
-@@ -435,15 +447,15 @@ ENTRY(cpu_gdt_table)
+    Hopefully nobody expects them at a fixed place (Wine?) */
+ 	
+ ENTRY(cpu_gdt_table)
++	.rept NR_CPUS
+ 	.quad	0x0000000000000000	/* NULL descriptor */
+ 	.quad	0x00cf9b000000ffff	/* __KERNEL32_CS */
+ 	.quad	0x00af9b000000ffff	/* __KERNEL_CS */
+@@ -435,15 +437,24 @@ ENTRY(cpu_gdt_table)
  	.quad	0,0			/* LDT */
  	.quad   0,0,0			/* three TLS descriptors */ 
  	.quad	0x0000f40000000000	/* node/CPU stored in limit */
@@ -5213,9 +5241,18 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  
  	/* zero the remaining page */
  	.fill PAGE_SIZE / 8 - GDT_ENTRIES,8,0
-+#ifdef CONFIG_SMP
-+	.fill (NR_CPUS-1) * (PAGE_SIZE),1,0 /* other CPU's GDT */
-+#endif
++	.endr
++
++	.align 16
++	.globl cpu_gdt_descr
++cpu_gdt_descr:
++	.word	GDT_SIZE-1
++gdt:
++	.quad	cpu_gdt_table
++
++ENTRY(phys_base)
++	/* This must match the first entry in level2_kernel_pgt */
++	.quad   0x0000000000000000
  
 -	.section .bss, "aw", @nobits
  	.align L1_CACHE_BYTES
@@ -5847,7 +5884,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	.pagetable_setup_done = native_pagetable_setup_done,
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/process_32.c linux-2.6.26.5-pax/arch/x86/kernel/process_32.c
 --- linux-2.6.26.5/arch/x86/kernel/process_32.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/process_32.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/process_32.c	2008-10-04 21:54:19.000000000 +0200
 @@ -66,8 +66,10 @@ EXPORT_SYMBOL(boot_option_idle_override)
  DEFINE_PER_CPU(struct task_struct *, current_task) = &init_task;
  EXPORT_PER_CPU_SYMBOL(current_task);
@@ -5900,7 +5937,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  {
  	struct task_struct *tsk = current;
  
-+	__asm__("mov %0,%%gs\n" : : "r" (0) : "memory");
++	loadsegment(gs, 0);
  	tsk->thread.debugreg0 = 0;
  	tsk->thread.debugreg1 = 0;
  	tsk->thread.debugreg2 = 0;
@@ -6149,7 +6186,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  	load_idt(&real_mode_idt);
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/setup64.c linux-2.6.26.5-pax/arch/x86/kernel/setup64.c
 --- linux-2.6.26.5/arch/x86/kernel/setup64.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/setup64.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/setup64.c	2008-10-04 22:06:39.000000000 +0200
 @@ -38,15 +38,13 @@ struct x8664_pda *_cpu_pda[NR_CPUS] __re
  EXPORT_SYMBOL(_cpu_pda);
  struct x8664_pda boot_cpu_pda[NR_CPUS] __cacheline_aligned;
@@ -6209,7 +6246,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  
  	/* CPU 0 is initialised in head64.c */
  	if (cpu != 0) {
-@@ -197,14 +194,12 @@ void __cpuinit cpu_init (void)
+@@ -197,14 +194,9 @@ void __cpuinit cpu_init (void)
  	clear_in_cr4(X86_CR4_VME|X86_CR4_PVI|X86_CR4_TSD|X86_CR4_DE);
  
  	/*
@@ -6217,10 +6254,9 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
 -	 * and set up the GDT descriptor:
 +	 * Initialize the per-CPU GDT with the boot GDT:
  	 */
- 	if (cpu)
+-	if (cpu)
 -		memcpy(get_cpu_gdt_table(cpu), cpu_gdt_table, GDT_SIZE);
-+		memcpy(get_cpu_gdt_table(cpu), get_cpu_gdt_table(0), GDT_SIZE);
- 
+-
 -	cpu_gdt_descr[cpu].size = GDT_SIZE;
 -	load_gdt((const struct desc_ptr *)&cpu_gdt_descr[cpu]);
 +	load_gdt(&cpu_gdt_descr);
@@ -6318,13 +6354,13 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/smpboot.c linux-2.6.26.5-pax/arch/x86/kernel/smpboot.c
 --- linux-2.6.26.5/arch/x86/kernel/smpboot.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/smpboot.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/smpboot.c	2008-09-28 13:08:28.000000000 +0200
 @@ -847,15 +847,13 @@ static int __cpuinit do_boot_cpu(int api
  		.cpu = cpu,
  		.done = COMPLETION_INITIALIZER_ONSTACK(c_idle.done),
  	};
 +
-+#ifdef CONFIG_PAX_KERNEXEC
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +	unsigned long cr0;
 +#endif
 +
@@ -6369,7 +6405,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  #endif
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/kernel/smpcommon.c linux-2.6.26.5-pax/arch/x86/kernel/smpcommon.c
 --- linux-2.6.26.5/arch/x86/kernel/smpcommon.c	2008-07-14 03:51:39.000000000 +0200
-+++ linux-2.6.26.5-pax/arch/x86/kernel/smpcommon.c	2008-07-14 03:52:23.000000000 +0200
++++ linux-2.6.26.5-pax/arch/x86/kernel/smpcommon.c	2008-10-05 01:13:34.000000000 +0200
 @@ -3,9 +3,10 @@
   */
  #include <linux/module.h>
@@ -6382,7 +6418,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
  EXPORT_PER_CPU_SYMBOL(this_cpu_off);
  
  /* Initialize the CPU's GDT.  This is either the boot CPU doing itself
-@@ -13,15 +14,32 @@ EXPORT_PER_CPU_SYMBOL(this_cpu_off);
+@@ -13,15 +14,19 @@ EXPORT_PER_CPU_SYMBOL(this_cpu_off);
     secondary which will soon come up. */
  __cpuinit void init_gdt(int cpu)
  {
@@ -6390,32 +6426,20 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/arch/x86/ke
 +	struct desc_struct d, *gdt = get_cpu_gdt_table(cpu);
 +	unsigned long base, limit;
 +  
-+#ifdef CONFIG_PAX_KERNEXEC
-+	unsigned long cr0;
- 
--	pack_descriptor(&gdt[GDT_ENTRY_PERCPU],
--			__per_cpu_offset[cpu], 0xFFFFF,
--			0x2 | DESCTYPE_S, 0x8);
-+	pax_open_kernel(cr0);
-+#endif
-+
-+	if (cpu)
-+		memcpy(gdt, get_cpu_gdt_table(0), GDT_SIZE);
-+
-+#ifdef CONFIG_PAX_KERNEXEC
-+	pax_close_kernel(cr0);
-+#endif
-+
-+	base = __per_cpu_offset[cpu] + (unsigned long)__per_cpu_start;
++	base = per_cpu_offset(cpu);
 +	limit = PERCPU_ENOUGH_ROOM - 1;
 +	if (limit < 64*1024)
 +		pack_descriptor(&d, base, limit, 0x80 | DESCTYPE_S | 0x3, 0x4);
 +	else
 +		pack_descriptor(&d, base, limit >> PAGE_SHIFT, 0x80 | DESCTYPE_S | 0x3, 0xC);
  
--	gdt[GDT_ENTRY_PERCPU].s = 1;
+-	pack_descriptor(&gdt[GDT_ENTRY_PERCPU],
+-			__per_cpu_offset[cpu], 0xFFFFF,
+-			0x2 | DESCTYPE_S, 0x8);
 +	write_gdt_entry(gdt, GDT_ENTRY_PERCPU, &d, DESCTYPE_S);
  
+-	gdt[GDT_ENTRY_PERCPU].s = 1;
+-
 -	per_cpu(this_cpu_off, cpu) = __per_cpu_offset[cpu];
 +	per_cpu(this_cpu_off, cpu) = base;
  	per_cpu(cpu_number, cpu) = cpu;
@@ -14247,7 +14271,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/fs/debugfs/
  }
 diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/fs/exec.c linux-2.6.26.5-pax/fs/exec.c
 --- linux-2.6.26.5/fs/exec.c	2008-07-14 03:51:42.000000000 +0200
-+++ linux-2.6.26.5-pax/fs/exec.c	2008-08-22 13:47:11.000000000 +0200
++++ linux-2.6.26.5-pax/fs/exec.c	2008-10-04 21:51:14.000000000 +0200
 @@ -51,6 +51,12 @@
  #include <linux/tsacct_kern.h>
  #include <linux/cn_proc.h>
@@ -14406,7 +14430,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/fs/exec.c l
  			file = ERR_PTR(err);
  			if (!err) {
  				file = nameidata_to_filp(&nd,
-@@ -1505,6 +1533,124 @@ out:
+@@ -1505,6 +1533,122 @@ out:
  	return ispipe;
  }
  
@@ -14487,8 +14511,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/fs/exec.c l
 +			vma = vma->vm_next;
 +		}
 +		if (vma_exec) {
-+			struct path path = {vma_exec->vm_file->f_path.mnt, vma_exec->vm_file->f_path.dentry};
-+			path_exec = d_path(&path, buffer_exec, PAGE_SIZE);
++			path_exec = d_path(&vma_exec->vm_file->f_path, buffer_exec, PAGE_SIZE);
 +			if (IS_ERR(path_exec))
 +				path_exec = "<path too long>";
 +		}
@@ -14497,8 +14520,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/fs/exec.c l
 +			end = vma_fault->vm_end;
 +			offset = vma_fault->vm_pgoff << PAGE_SHIFT;
 +			if (vma_fault->vm_file) {
-+				struct path path = {vma_fault->vm_file->f_path.mnt, vma_fault->vm_file->f_path.dentry};
-+				path_fault = d_path(&path, buffer_fault, PAGE_SIZE);
++				path_fault = d_path(&vma_fault->vm_file->f_path, buffer_fault, PAGE_SIZE);
 +				if (IS_ERR(path_fault))
 +					path_fault = "<path too long>";
 +			} else
@@ -14531,7 +14553,7 @@ diff -NurpX linux-2.6.26.5-pax/Documentation/dontdiff linux-2.6.26.5/fs/exec.c l
  static void zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1722,6 +1868,8 @@ int do_coredump(long signr, int exit_cod
+@@ -1722,6 +1866,8 @@ int do_coredump(long signr, int exit_cod
  
   	if (ispipe) {
  		helper_argv = argv_split(GFP_KERNEL, corename+1, &helper_argc);
