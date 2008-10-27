@@ -11286,7 +11286,7 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/arch/x86/vd
  	return ret;
 diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/arch/x86/xen/enlighten.c linux-2.6.27.4-pax/arch/x86/xen/enlighten.c
 --- linux-2.6.27.4/arch/x86/xen/enlighten.c	2008-10-10 09:18:48.000000000 +0200
-+++ linux-2.6.27.4-pax/arch/x86/xen/enlighten.c	2008-10-10 09:20:24.000000000 +0200
++++ linux-2.6.27.4-pax/arch/x86/xen/enlighten.c	2008-10-27 10:40:24.000000000 +0100
 @@ -343,7 +343,7 @@ static void xen_set_ldt(const void *addr
  static void xen_load_gdt(const struct desc_ptr *dtr)
  {
@@ -11314,6 +11314,28 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/arch/x86/xe
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
+@@ -1574,6 +1574,8 @@ static __init pgd_t *xen_setup_kernel_pa
+ 	convert_pfn_mfn(init_level4_pgt);
+ 	convert_pfn_mfn(level3_ident_pgt);
+ 	convert_pfn_mfn(level3_kernel_pgt);
++	convert_pfn_mfn(level3_vmalloc_pgt);
++	convert_pfn_mfn(level3_vmemmap_pgt);
+ 
+ 	l3 = m2v(pgd[pgd_index(__START_KERNEL_map)].pgd);
+ 	l2 = m2v(l3[pud_index(__START_KERNEL_map)].pud);
+@@ -1592,9 +1594,12 @@ static __init pgd_t *xen_setup_kernel_pa
+ 	set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
+ 	set_page_prot(level3_ident_pgt, PAGE_KERNEL_RO);
+ 	set_page_prot(level3_kernel_pgt, PAGE_KERNEL_RO);
++	set_page_prot(level3_vmalloc_pgt, PAGE_KERNEL_RO);
++	set_page_prot(level3_vmemmap_pgt, PAGE_KERNEL_RO);
+ 	set_page_prot(level3_user_vsyscall, PAGE_KERNEL_RO);
+ 	set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
+ 	set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
++	set_page_prot(level1_fixmap_pgt, PAGE_KERNEL_RO);
+ 
+ 	/* Pin down new L4 */
+ 	pin_pagetable_pfn(MMUEXT_PIN_L4_TABLE,
 diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/arch/x86/xen/smp.c linux-2.6.27.4-pax/arch/x86/xen/smp.c
 --- linux-2.6.27.4/arch/x86/xen/smp.c	2008-10-10 09:18:48.000000000 +0200
 +++ linux-2.6.27.4-pax/arch/x86/xen/smp.c	2008-10-10 09:20:24.000000000 +0200
@@ -16890,8 +16912,21 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/include/asm
   * SPARSEMEM and DISCONTIGMEM
 diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/include/asm-x86/pgtable_64.h linux-2.6.27.4-pax/include/asm-x86/pgtable_64.h
 --- linux-2.6.27.4/include/asm-x86/pgtable_64.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.4-pax/include/asm-x86/pgtable_64.h	2008-10-10 09:20:24.000000000 +0200
-@@ -106,7 +106,19 @@ static inline pte_t native_ptep_get_and_
++++ linux-2.6.27.4-pax/include/asm-x86/pgtable_64.h	2008-10-27 10:39:18.000000000 +0100
+@@ -15,9 +15,12 @@
+ 
+ extern pud_t level3_kernel_pgt[512];
+ extern pud_t level3_ident_pgt[512];
++extern pud_t level3_vmalloc_pgt[512];
++extern pud_t level3_vmemmap_pgt[512];
+ extern pmd_t level2_kernel_pgt[512];
+ extern pmd_t level2_fixmap_pgt[512];
+ extern pmd_t level2_ident_pgt[512];
++extern pte_t level1_fixmap_pgt[512];
+ extern pgd_t init_level4_pgt[];
+ 
+ #define swapper_pg_dir init_level4_pgt
+@@ -106,7 +109,19 @@ static inline pte_t native_ptep_get_and_
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -16911,7 +16946,7 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/include/asm
  }
  
  static inline void native_pmd_clear(pmd_t *pmd)
-@@ -158,17 +170,17 @@ static inline void native_pgd_clear(pgd_
+@@ -158,17 +173,17 @@ static inline void native_pgd_clear(pgd_
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -22275,8 +22310,47 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/mm/util.c l
  }
 diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/mm/vmalloc.c linux-2.6.27.4-pax/mm/vmalloc.c
 --- linux-2.6.27.4/mm/vmalloc.c	2008-10-10 09:19:25.000000000 +0200
-+++ linux-2.6.27.4-pax/mm/vmalloc.c	2008-10-16 00:04:13.000000000 +0200
-@@ -215,6 +215,16 @@ __get_vm_area_node(unsigned long size, u
++++ linux-2.6.27.4-pax/mm/vmalloc.c	2008-10-27 11:03:28.000000000 +0100
+@@ -98,19 +98,36 @@ static int vmap_pte_range(pmd_t *pmd, un
+ 			unsigned long end, pgprot_t prot, struct page ***pages)
+ {
+ 	pte_t *pte;
++	int ret = -ENOMEM;
++
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++#endif
+ 
+ 	pte = pte_alloc_kernel(pmd, addr);
+ 	if (!pte)
+ 		return -ENOMEM;
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
+ 	do {
+ 		struct page *page = **pages;
+ 		WARN_ON(!pte_none(*pte));
+ 		if (!page)
+-			return -ENOMEM;
++			goto out;
+ 		set_pte_at(&init_mm, addr, pte, mk_pte(page, prot));
+ 		(*pages)++;
+ 	} while (pte++, addr += PAGE_SIZE, addr != end);
+-	return 0;
++	ret = 0;
++out:
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
++	return ret;
+ }
+ 
+ static inline int vmap_pmd_range(pud_t *pud, unsigned long addr,
+@@ -215,6 +232,16 @@ __get_vm_area_node(unsigned long size, u
  	unsigned long addr;
  
  	BUG_ON(in_interrupt());
@@ -22293,7 +22367,7 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/mm/vmalloc.
  	if (flags & VM_IOREMAP) {
  		int bit = fls(size);
  
-@@ -248,20 +258,15 @@ __get_vm_area_node(unsigned long size, u
+@@ -248,20 +275,15 @@ __get_vm_area_node(unsigned long size, u
  					     (unsigned long)tmp->addr, align);
  			continue;
  		}
@@ -22315,7 +22389,7 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/mm/vmalloc.
  	area->next = *p;
  	*p = area;
  
-@@ -466,6 +471,11 @@ void *vmap(struct page **pages, unsigned
+@@ -466,6 +488,11 @@ void *vmap(struct page **pages, unsigned
  	if (count > num_physpages)
  		return NULL;
  
@@ -22327,7 +22401,7 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/mm/vmalloc.
  	area = get_vm_area_caller((count << PAGE_SHIFT), flags,
  					__builtin_return_address(0));
  	if (!area)
-@@ -560,6 +570,13 @@ static void *__vmalloc_node(unsigned lon
+@@ -560,6 +587,13 @@ static void *__vmalloc_node(unsigned lon
  	if (!size || (size >> PAGE_SHIFT) > num_physpages)
  		return NULL;
  
@@ -22341,7 +22415,7 @@ diff -NurpX linux-2.6.27.4-pax/Documentation/dontdiff linux-2.6.27.4/mm/vmalloc.
  	area = __get_vm_area_node(size, VM_ALLOC, VMALLOC_START, VMALLOC_END,
  						node, gfp_mask, caller);
  
-@@ -651,7 +668,7 @@ EXPORT_SYMBOL(vmalloc_node);
+@@ -651,7 +685,7 @@ EXPORT_SYMBOL(vmalloc_node);
  
  void *vmalloc_exec(unsigned long size)
  {
