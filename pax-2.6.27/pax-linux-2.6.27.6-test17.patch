@@ -1,6 +1,6 @@
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/Documentation/dontdiff linux-2.6.27.6-pax/Documentation/dontdiff
 --- linux-2.6.27.6/Documentation/dontdiff	2008-10-10 09:18:32.000000000 +0200
-+++ linux-2.6.27.6-pax/Documentation/dontdiff	2008-10-10 09:20:24.000000000 +0200
++++ linux-2.6.27.6-pax/Documentation/dontdiff	2008-11-18 00:28:24.000000000 +0100
 @@ -3,6 +3,7 @@
  *.bin
  *.cpio
@@ -24,6 +24,15 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/Documentati
  Module.symvers
  PENDING
  SCCS
+@@ -66,7 +72,7 @@ aic7*reg_print.c*
+ aic7*seq.h*
+ aicasm
+ aicdb.h*
+-asm
++asm-x86
+ asm-offsets.h
+ asm_offsets.h
+ autoconf.h*
 @@ -74,6 +80,7 @@ bbootsect
  bin2c
  binkernel.spec
@@ -85,6 +94,57 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/Makefile li
  HOSTCXXFLAGS = -O2
  
  # Decide whether to build built-in, modular, or both.
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/alpha/include/asm/elf.h linux-2.6.27.6-pax/arch/alpha/include/asm/elf.h
+--- linux-2.6.27.6/arch/alpha/include/asm/elf.h	2008-10-10 09:18:33.000000000 +0200
++++ linux-2.6.27.6-pax/arch/alpha/include/asm/elf.h	2008-11-18 00:07:30.000000000 +0100
+@@ -91,6 +91,13 @@ typedef elf_fpreg_t elf_fpregset_t[ELF_N
+ 
+ #define ELF_ET_DYN_BASE		(TASK_UNMAPPED_BASE + 0x1000000)
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	(current->personality & ADDR_LIMIT_32BIT ? 0x10000 : 0x120000000UL)
++
++#define PAX_DELTA_MMAP_LEN	(current->personality & ADDR_LIMIT_32BIT ? 14 : 28)
++#define PAX_DELTA_STACK_LEN	(current->personality & ADDR_LIMIT_32BIT ? 14 : 19)
++#endif
++
+ /* $0 is set by ld.so to a pointer to a function which might be 
+    registered using atexit.  This provides a mean for the dynamic
+    linker to call DT_FINI functions for shared libraries that have
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/alpha/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/alpha/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/alpha/include/asm/kmap_types.h	2008-10-10 09:18:33.000000000 +0200
++++ linux-2.6.27.6-pax/arch/alpha/include/asm/kmap_types.h	2008-11-18 00:07:52.000000000 +0100
+@@ -24,7 +24,8 @@ D(9)	KM_IRQ0,
+ D(10)	KM_IRQ1,
+ D(11)	KM_SOFTIRQ0,
+ D(12)	KM_SOFTIRQ1,
+-D(13)	KM_TYPE_NR
++D(13)  KM_CLEARPAGE,
++D(14)  KM_TYPE_NR
+ };
+ 
+ #undef D
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/alpha/include/asm/pgtable.h linux-2.6.27.6-pax/arch/alpha/include/asm/pgtable.h
+--- linux-2.6.27.6/arch/alpha/include/asm/pgtable.h	2008-10-10 09:18:33.000000000 +0200
++++ linux-2.6.27.6-pax/arch/alpha/include/asm/pgtable.h	2008-11-18 00:08:24.000000000 +0100
+@@ -101,6 +101,17 @@ struct vm_area_struct;
+ #define PAGE_SHARED	__pgprot(_PAGE_VALID | __ACCESS_BITS)
+ #define PAGE_COPY	__pgprot(_PAGE_VALID | __ACCESS_BITS | _PAGE_FOW)
+ #define PAGE_READONLY	__pgprot(_PAGE_VALID | __ACCESS_BITS | _PAGE_FOW)
++
++#ifdef CONFIG_PAX_PAGEEXEC
++# define PAGE_SHARED_NOEXEC	__pgprot(_PAGE_VALID | __ACCESS_BITS | _PAGE_FOE)
++# define PAGE_COPY_NOEXEC	__pgprot(_PAGE_VALID | __ACCESS_BITS | _PAGE_FOW | _PAGE_FOE)
++# define PAGE_READONLY_NOEXEC	__pgprot(_PAGE_VALID | __ACCESS_BITS | _PAGE_FOW | _PAGE_FOE)
++#else
++# define PAGE_SHARED_NOEXEC	PAGE_SHARED
++# define PAGE_COPY_NOEXEC	PAGE_COPY
++# define PAGE_READONLY_NOEXEC	PAGE_READONLY
++#endif
++
+ #define PAGE_KERNEL	__pgprot(_PAGE_VALID | _PAGE_ASM | _PAGE_KRE | _PAGE_KWE)
+ 
+ #define _PAGE_NORMAL(x) __pgprot(_PAGE_VALID | __ACCESS_BITS | (x))
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/alpha/kernel/module.c linux-2.6.27.6-pax/arch/alpha/kernel/module.c
 --- linux-2.6.27.6/arch/alpha/kernel/module.c	2008-07-14 03:51:37.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/alpha/kernel/module.c	2008-10-10 09:20:24.000000000 +0200
@@ -281,6 +341,36 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/alpha/
  	} else if (!cause) {
  		/* Allow reads even for write-only mappings */
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/arm/include/asm/elf.h linux-2.6.27.6-pax/arch/arm/include/asm/elf.h
+--- linux-2.6.27.6/arch/arm/include/asm/elf.h	2008-10-10 09:18:33.000000000 +0200
++++ linux-2.6.27.6-pax/arch/arm/include/asm/elf.h	2008-11-18 00:10:07.000000000 +0100
+@@ -87,7 +87,14 @@ extern char elf_platform[];
+    the loader.  We need to make sure that it is out of the way of the program
+    that it will "exec", and that there is sufficient room for the brk.  */
+ 
+-#define ELF_ET_DYN_BASE	(2 * TASK_SIZE / 3)
++#define ELF_ET_DYN_BASE		(TASK_SIZE / 3 * 2)
++
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	0x00008000UL
++
++#define PAX_DELTA_MMAP_LEN	((current->personality == PER_LINUX_32BIT) ? 16 : 10)
++#define PAX_DELTA_STACK_LEN	((current->personality == PER_LINUX_32BIT) ? 16 : 10)
++#endif
+ 
+ /* When the program starts, a1 contains a pointer to a function to be 
+    registered with atexit, as per the SVR4 ABI.  A value of 0 means we 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/arm/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/arm/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/arm/include/asm/kmap_types.h	2008-10-10 09:18:33.000000000 +0200
++++ linux-2.6.27.6-pax/arch/arm/include/asm/kmap_types.h	2008-11-18 00:10:23.000000000 +0100
+@@ -18,6 +18,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/arm/mm/mmap.c linux-2.6.27.6-pax/arch/arm/mm/mmap.c
 --- linux-2.6.27.6/arch/arm/mm/mmap.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/arm/mm/mmap.c	2008-10-10 09:20:24.000000000 +0200
@@ -320,6 +410,38 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/arm/mm
  				mm->cached_hole_size = 0;
  				goto full_search;
  			}
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/avr32/include/asm/elf.h linux-2.6.27.6-pax/arch/avr32/include/asm/elf.h
+--- linux-2.6.27.6/arch/avr32/include/asm/elf.h	2008-10-10 09:18:36.000000000 +0200
++++ linux-2.6.27.6-pax/arch/avr32/include/asm/elf.h	2008-11-18 00:11:46.000000000 +0100
+@@ -85,8 +85,14 @@ typedef struct user_fpu_struct elf_fpreg
+    the loader.  We need to make sure that it is out of the way of the program
+    that it will "exec", and that there is sufficient room for the brk.  */
+ 
+-#define ELF_ET_DYN_BASE         (2 * TASK_SIZE / 3)
++#define ELF_ET_DYN_BASE		(TASK_SIZE / 3 * 2)
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	0x00001000UL
++
++#define PAX_DELTA_MMAP_LEN	15
++#define PAX_DELTA_STACK_LEN	15
++#endif
+ 
+ /* This yields a mask that user programs can use to figure out what
+    instruction set this CPU supports.  This could be done in user space,
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/avr32/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/avr32/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/avr32/include/asm/kmap_types.h	2008-10-10 09:18:36.000000000 +0200
++++ linux-2.6.27.6-pax/arch/avr32/include/asm/kmap_types.h	2008-11-18 00:12:10.000000000 +0100
+@@ -22,7 +22,8 @@ D(10)	KM_IRQ0,
+ D(11)	KM_IRQ1,
+ D(12)	KM_SOFTIRQ0,
+ D(13)	KM_SOFTIRQ1,
+-D(14)	KM_TYPE_NR
++D(14)	KM_CLEARPAGE,
++D(15)	KM_TYPE_NR
+ };
+ 
+ #undef D
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/avr32/mm/fault.c linux-2.6.27.6-pax/arch/avr32/mm/fault.c
 --- linux-2.6.27.6/arch/avr32/mm/fault.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/avr32/mm/fault.c	2008-10-10 09:20:24.000000000 +0200
@@ -364,6 +486,28 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/avr32/
  		if (exception_trace && printk_ratelimit())
  			printk("%s%s[%d]: segfault at %08lx pc %08lx "
  			       "sp %08lx ecr %lu\n",
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/blackfin/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/blackfin/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/blackfin/include/asm/kmap_types.h	2008-10-10 09:18:36.000000000 +0200
++++ linux-2.6.27.6-pax/arch/blackfin/include/asm/kmap_types.h	2008-11-18 00:12:35.000000000 +0100
+@@ -15,6 +15,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/h8300/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/h8300/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/h8300/include/asm/kmap_types.h	2008-10-10 09:18:39.000000000 +0200
++++ linux-2.6.27.6-pax/arch/h8300/include/asm/kmap_types.h	2008-11-18 00:13:02.000000000 +0100
+@@ -15,6 +15,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/ia64/ia32/binfmt_elf32.c linux-2.6.27.6-pax/arch/ia64/ia32/binfmt_elf32.c
 --- linux-2.6.27.6/arch/ia64/ia32/binfmt_elf32.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/ia64/ia32/binfmt_elf32.c	2008-10-10 09:20:24.000000000 +0200
@@ -400,6 +544,57 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/ia64/i
  #define IA32_GATE_OFFSET	IA32_PAGE_OFFSET
  #define IA32_GATE_END		IA32_PAGE_OFFSET + PAGE_SIZE
  
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/ia64/include/asm/elf.h linux-2.6.27.6-pax/arch/ia64/include/asm/elf.h
+--- linux-2.6.27.6/arch/ia64/include/asm/elf.h	2008-10-10 09:18:40.000000000 +0200
++++ linux-2.6.27.6-pax/arch/ia64/include/asm/elf.h	2008-11-18 00:13:47.000000000 +0100
+@@ -43,6 +43,13 @@
+  */
+ #define ELF_ET_DYN_BASE		(TASK_UNMAPPED_BASE + 0x800000000UL)
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	(current->personality == PER_LINUX32 ? 0x08048000UL : 0x4000000000000000UL)
++
++#define PAX_DELTA_MMAP_LEN	(current->personality == PER_LINUX32 ? 16 : 3*PAGE_SHIFT - 13)
++#define PAX_DELTA_STACK_LEN	(current->personality == PER_LINUX32 ? 16 : 3*PAGE_SHIFT - 13)
++#endif
++
+ #define PT_IA_64_UNWIND		0x70000001
+ 
+ /* IA-64 relocations: */
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/ia64/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/ia64/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/ia64/include/asm/kmap_types.h	2008-10-10 09:18:40.000000000 +0200
++++ linux-2.6.27.6-pax/arch/ia64/include/asm/kmap_types.h	2008-11-18 00:14:59.000000000 +0100
+@@ -22,7 +22,8 @@ D(9)	KM_IRQ0,
+ D(10)	KM_IRQ1,
+ D(11)	KM_SOFTIRQ0,
+ D(12)	KM_SOFTIRQ1,
+-D(13)	KM_TYPE_NR
++D(13)	KM_CLEARPAGE,
++D(14)	KM_TYPE_NR
+ };
+ 
+ #undef D
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/ia64/include/asm/pgtable.h linux-2.6.27.6-pax/arch/ia64/include/asm/pgtable.h
+--- linux-2.6.27.6/arch/ia64/include/asm/pgtable.h	2008-10-10 09:18:40.000000000 +0200
++++ linux-2.6.27.6-pax/arch/ia64/include/asm/pgtable.h	2008-11-18 00:15:31.000000000 +0100
+@@ -143,6 +143,17 @@
+ #define PAGE_READONLY	__pgprot(__ACCESS_BITS | _PAGE_PL_3 | _PAGE_AR_R)
+ #define PAGE_COPY	__pgprot(__ACCESS_BITS | _PAGE_PL_3 | _PAGE_AR_R)
+ #define PAGE_COPY_EXEC	__pgprot(__ACCESS_BITS | _PAGE_PL_3 | _PAGE_AR_RX)
++
++#ifdef CONFIG_PAX_PAGEEXEC
++# define PAGE_SHARED_NOEXEC	__pgprot(__ACCESS_BITS | _PAGE_PL_3 | _PAGE_AR_RW)
++# define PAGE_READONLY_NOEXEC	__pgprot(__ACCESS_BITS | _PAGE_PL_3 | _PAGE_AR_R)
++# define PAGE_COPY_NOEXEC	__pgprot(__ACCESS_BITS | _PAGE_PL_3 | _PAGE_AR_R)
++#else
++# define PAGE_SHARED_NOEXEC	PAGE_SHARED
++# define PAGE_READONLY_NOEXEC	PAGE_READONLY
++# define PAGE_COPY_NOEXEC	PAGE_COPY
++#endif
++
+ #define PAGE_GATE	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_X_RX)
+ #define PAGE_KERNEL	__pgprot(__DIRTY_BITS  | _PAGE_PL_0 | _PAGE_AR_RWX)
+ #define PAGE_KERNELRX	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_RX)
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/ia64/kernel/module.c linux-2.6.27.6-pax/arch/ia64/kernel/module.c
 --- linux-2.6.27.6/arch/ia64/kernel/module.c	2008-10-10 09:18:40.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/ia64/kernel/module.c	2008-10-10 09:20:24.000000000 +0200
@@ -595,6 +790,17 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/ia64/m
  		vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  		down_write(&current->mm->mmap_sem);
  		if (insert_vm_struct(current->mm, vma)) {
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/m68knommu/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/m68knommu/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/m68knommu/include/asm/kmap_types.h	2008-10-10 09:18:40.000000000 +0200
++++ linux-2.6.27.6-pax/arch/m68knommu/include/asm/kmap_types.h	2008-11-18 00:16:08.000000000 +0100
+@@ -15,6 +15,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/mips/kernel/binfmt_elfn32.c linux-2.6.27.6-pax/arch/mips/kernel/binfmt_elfn32.c
 --- linux-2.6.27.6/arch/mips/kernel/binfmt_elfn32.c	2008-07-14 03:51:38.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/mips/kernel/binfmt_elfn32.c	2008-10-23 12:56:13.000000000 +0200
@@ -1031,6 +1237,79 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/parisc
  
  	/*
  	 * If for any reason at all we couldn't handle the fault, make
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/powerpc/include/asm/elf.h linux-2.6.27.6-pax/arch/powerpc/include/asm/elf.h
+--- linux-2.6.27.6/arch/powerpc/include/asm/elf.h	2008-10-10 09:18:42.000000000 +0200
++++ linux-2.6.27.6-pax/arch/powerpc/include/asm/elf.h	2008-11-17 16:00:27.000000000 +0100
+@@ -180,6 +180,18 @@ typedef elf_fpreg_t elf_vsrreghalf_t32[E
+ 
+ #define ELF_ET_DYN_BASE         (0x20000000)
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	(0x10000000UL)
++
++#ifdef __powerpc64__
++#define PAX_DELTA_MMAP_LEN	(test_thread_flag(TIF_32BIT) ? 16 : 28)
++#define PAX_DELTA_STACK_LEN	(test_thread_flag(TIF_32BIT) ? 16 : 28)
++#else
++#define PAX_DELTA_MMAP_LEN	15
++#define PAX_DELTA_STACK_LEN	15
++#endif
++#endif
++
+ /*
+  * Our registers are always unsigned longs, whether we're a 32 bit
+  * process or 64 bit, on either a 64 bit or 32 bit kernel.
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/powerpc/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/powerpc/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/powerpc/include/asm/kmap_types.h	2008-10-10 09:18:42.000000000 +0200
++++ linux-2.6.27.6-pax/arch/powerpc/include/asm/kmap_types.h	2008-11-17 15:59:18.000000000 +0100
+@@ -26,6 +26,7 @@ enum km_type {
+ 	KM_SOFTIRQ1,
+ 	KM_PPC_SYNC_PAGE,
+ 	KM_PPC_SYNC_ICACHE,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/powerpc/include/asm/page.h linux-2.6.27.6-pax/arch/powerpc/include/asm/page.h
+--- linux-2.6.27.6/arch/powerpc/include/asm/page.h	2008-10-10 09:18:43.000000000 +0200
++++ linux-2.6.27.6-pax/arch/powerpc/include/asm/page.h	2008-11-18 00:19:29.000000000 +0100
+@@ -100,8 +100,9 @@ extern phys_addr_t kernstart_addr;
+  * and needs to be executable.  This means the whole heap ends
+  * up being executable.
+  */
+-#define VM_DATA_DEFAULT_FLAGS32	(VM_READ | VM_WRITE | VM_EXEC | \
+-				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
++#define VM_DATA_DEFAULT_FLAGS32 \
++	(((current->personality & READ_IMPLIES_EXEC) ? VM_EXEC : 0) | \
++	 VM_READ | VM_WRITE | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+ 
+ #define VM_DATA_DEFAULT_FLAGS64	(VM_READ | VM_WRITE | \
+ 				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/powerpc/include/asm/page_64.h linux-2.6.27.6-pax/arch/powerpc/include/asm/page_64.h
+--- linux-2.6.27.6/arch/powerpc/include/asm/page_64.h	2008-10-10 09:18:43.000000000 +0200
++++ linux-2.6.27.6-pax/arch/powerpc/include/asm/page_64.h	2008-11-18 00:19:49.000000000 +0100
+@@ -170,15 +170,21 @@ do {						\
+  * stack by default, so in the absense of a PT_GNU_STACK program header
+  * we turn execute permission off.
+  */
++#define VM_STACK_DEFAULT_FLAGS32 \
++	(((current->personality & READ_IMPLIES_EXEC) ? VM_EXEC : 0) | \
++	 VM_READ | VM_WRITE | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
++
+ #define VM_STACK_DEFAULT_FLAGS32	(VM_READ | VM_WRITE | VM_EXEC | \
+ 					 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+ 
+ #define VM_STACK_DEFAULT_FLAGS64	(VM_READ | VM_WRITE | \
+ 					 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+ 
++#ifndef CONFIG_PAX_PAGEEXEC
+ #define VM_STACK_DEFAULT_FLAGS \
+ 	(test_thread_flag(TIF_32BIT) ? \
+ 	 VM_STACK_DEFAULT_FLAGS32 : VM_STACK_DEFAULT_FLAGS64)
++#endif
+ 
+ #include <asm-generic/page.h>
+ 
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/powerpc/kernel/module_32.c linux-2.6.27.6-pax/arch/powerpc/kernel/module_32.c
 --- linux-2.6.27.6/arch/powerpc/kernel/module_32.c	2008-10-10 09:18:43.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/powerpc/kernel/module_32.c	2008-10-10 09:20:24.000000000 +0200
@@ -1559,6 +1838,17 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/powerp
  		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/s390/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/s390/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/s390/include/asm/kmap_types.h	2008-10-10 09:18:44.000000000 +0200
++++ linux-2.6.27.6-pax/arch/s390/include/asm/kmap_types.h	2008-11-18 00:20:27.000000000 +0100
+@@ -16,6 +16,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,	
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/s390/kernel/module.c linux-2.6.27.6-pax/arch/s390/kernel/module.c
 --- linux-2.6.27.6/arch/s390/kernel/module.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/s390/kernel/module.c	2008-10-10 09:20:24.000000000 +0200
@@ -1633,6 +1923,114 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/s390/k
  			rela->r_addend - loc;
  		if (r_type == R_390_GOTPC)
  			*(unsigned int *) loc = val;
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/sh/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/sh/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/sh/include/asm/kmap_types.h	2008-10-10 09:18:45.000000000 +0200
++++ linux-2.6.27.6-pax/arch/sh/include/asm/kmap_types.h	2008-11-18 00:21:36.000000000 +0100
+@@ -24,7 +24,8 @@ D(9)	KM_IRQ0,
+ D(10)	KM_IRQ1,
+ D(11)	KM_SOFTIRQ0,
+ D(12)	KM_SOFTIRQ1,
+-D(13)	KM_TYPE_NR
++D(13)	KM_CLEARPAGE,
++D(14)	KM_TYPE_NR
+ };
+ 
+ #undef D
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/sparc/include/asm/elf_32.h linux-2.6.27.6-pax/arch/sparc/include/asm/elf_32.h
+--- linux-2.6.27.6/arch/sparc/include/asm/elf_32.h	2008-10-10 09:18:46.000000000 +0200
++++ linux-2.6.27.6-pax/arch/sparc/include/asm/elf_32.h	2008-11-18 00:22:27.000000000 +0100
+@@ -119,6 +119,13 @@ typedef struct {
+ 
+ #define ELF_ET_DYN_BASE         (TASK_UNMAPPED_BASE)
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	0x10000UL
++
++#define PAX_DELTA_MMAP_LEN	16
++#define PAX_DELTA_STACK_LEN	16
++#endif
++
+ /* This yields a mask that user programs can use to figure out what
+    instruction set this cpu supports.  This can NOT be done in userspace
+    on Sparc.  */
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/sparc/include/asm/elf_64.h linux-2.6.27.6-pax/arch/sparc/include/asm/elf_64.h
+--- linux-2.6.27.6/arch/sparc/include/asm/elf_64.h	2008-10-10 09:18:46.000000000 +0200
++++ linux-2.6.27.6-pax/arch/sparc/include/asm/elf_64.h	2008-11-18 00:26:30.000000000 +0100
+@@ -163,6 +163,12 @@ typedef struct {
+ #define ELF_ET_DYN_BASE		0x0000010000000000UL
+ #define COMPAT_ELF_ET_DYN_BASE	0x0000000070000000UL
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	(test_thread_flag(TIF_32BIT) ? 0x10000UL : 0x100000UL)
++
++#define PAX_DELTA_MMAP_LEN	(test_thread_flag(TIF_32BIT) ? 14 : 28 )
++#define PAX_DELTA_STACK_LEN	(test_thread_flag(TIF_32BIT) ? 15 : 29 )
++#endif
+ 
+ /* This yields a mask that user programs can use to figure out what
+    instruction set this cpu supports.  */
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/sparc/include/asm/kmap_types.h linux-2.6.27.6-pax/arch/sparc/include/asm/kmap_types.h
+--- linux-2.6.27.6/arch/sparc/include/asm/kmap_types.h	2008-10-10 09:18:46.000000000 +0200
++++ linux-2.6.27.6-pax/arch/sparc/include/asm/kmap_types.h	2008-11-18 00:22:42.000000000 +0100
+@@ -19,6 +19,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/sparc/include/asm/pgtable_32.h linux-2.6.27.6-pax/arch/sparc/include/asm/pgtable_32.h
+--- linux-2.6.27.6/arch/sparc/include/asm/pgtable_32.h	2008-10-10 09:18:46.000000000 +0200
++++ linux-2.6.27.6-pax/arch/sparc/include/asm/pgtable_32.h	2008-11-18 00:23:58.000000000 +0100
+@@ -47,6 +47,13 @@ BTFIXUPDEF_SIMM13(user_ptrs_per_pgd)
+ BTFIXUPDEF_INT(page_none)
+ BTFIXUPDEF_INT(page_copy)
+ BTFIXUPDEF_INT(page_readonly)
++
++#ifdef CONFIG_PAX_PAGEEXEC
++BTFIXUPDEF_INT(page_shared_noexec)
++BTFIXUPDEF_INT(page_copy_noexec)
++BTFIXUPDEF_INT(page_readonly_noexec)
++#endif
++
+ BTFIXUPDEF_INT(page_kernel)
+ 
+ #define PMD_SHIFT		SUN4C_PMD_SHIFT
+@@ -68,6 +75,16 @@ extern pgprot_t PAGE_SHARED;
+ #define PAGE_COPY      __pgprot(BTFIXUP_INT(page_copy))
+ #define PAGE_READONLY  __pgprot(BTFIXUP_INT(page_readonly))
+ 
++#ifdef CONFIG_PAX_PAGEEXEC
++extern pgprot_t PAGE_SHARED_NOEXEC;
++# define PAGE_COPY_NOEXEC	__pgprot(BTFIXUP_INT(page_copy_noexec))
++# define PAGE_READONLY_NOEXEC	__pgprot(BTFIXUP_INT(page_readonly_noexec))
++#else
++# define PAGE_SHARED_NOEXEC	PAGE_SHARED
++# define PAGE_COPY_NOEXEC	PAGE_COPY
++# define PAGE_READONLY_NOEXEC	PAGE_READONLY
++#endif
++
+ extern unsigned long page_kernel;
+ 
+ #ifdef MODULE
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/sparc/include/asm/pgtsrmmu.h linux-2.6.27.6-pax/arch/sparc/include/asm/pgtsrmmu.h
+--- linux-2.6.27.6/arch/sparc/include/asm/pgtsrmmu.h	2008-10-10 09:18:46.000000000 +0200
++++ linux-2.6.27.6-pax/arch/sparc/include/asm/pgtsrmmu.h	2008-11-18 00:24:55.000000000 +0100
+@@ -115,6 +115,13 @@
+ 				    SRMMU_EXEC | SRMMU_REF)
+ #define SRMMU_PAGE_RDONLY  __pgprot(SRMMU_VALID | SRMMU_CACHE | \
+ 				    SRMMU_EXEC | SRMMU_REF)
++
++#ifdef CONFIG_PAX_PAGEEXEC
++#define SRMMU_PAGE_SHARED_NOEXEC	__pgprot(SRMMU_VALID | SRMMU_CACHE | SRMMU_WRITE | SRMMU_REF)
++#define SRMMU_PAGE_COPY_NOEXEC	__pgprot(SRMMU_VALID | SRMMU_CACHE | SRMMU_REF)
++#define SRMMU_PAGE_RDONLY_NOEXEC	__pgprot(SRMMU_VALID | SRMMU_CACHE | SRMMU_REF)
++#endif
++
+ #define SRMMU_PAGE_KERNEL  __pgprot(SRMMU_VALID | SRMMU_CACHE | SRMMU_PRIV | \
+ 				    SRMMU_DIRTY | SRMMU_REF)
+ 
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/arch/sparc/kernel/sys_sparc.c linux-2.6.27.6-pax/arch/sparc/kernel/sys_sparc.c
 --- linux-2.6.27.6/arch/sparc/kernel/sys_sparc.c	2008-10-10 09:18:46.000000000 +0200
 +++ linux-2.6.27.6-pax/arch/sparc/kernel/sys_sparc.c	2008-10-10 09:20:24.000000000 +0200
@@ -15033,213 +15431,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/fs/xfs/xfs_
  #endif /* DEBUG */
  
  #if defined(XFS_RW_TRACE)
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-cris/kmap_types.h linux-2.6.27.6-pax/include/asm-cris/kmap_types.h
---- linux-2.6.27.6/include/asm-cris/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-cris/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
-@@ -19,6 +19,7 @@ enum km_type {
- 	KM_IRQ1,
- 	KM_SOFTIRQ0,
- 	KM_SOFTIRQ1,
-+	KM_CLEARPAGE,
- 	KM_TYPE_NR
- };
- 
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-frv/kmap_types.h linux-2.6.27.6-pax/include/asm-frv/kmap_types.h
---- linux-2.6.27.6/include/asm-frv/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-frv/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
-@@ -23,6 +23,7 @@ enum km_type {
- 	KM_IRQ1,
- 	KM_SOFTIRQ0,
- 	KM_SOFTIRQ1,
-+	KM_CLEARPAGE,
- 	KM_TYPE_NR
- };
- 
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-generic/futex.h linux-2.6.27.6-pax/include/asm-generic/futex.h
---- linux-2.6.27.6/include/asm-generic/futex.h	2008-07-14 03:51:42.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-generic/futex.h	2008-10-10 09:20:24.000000000 +0200
-@@ -6,7 +6,7 @@
- #include <asm/errno.h>
- 
- static inline int
--futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
-+futex_atomic_op_inuser (int encoded_op, u32 __user *uaddr)
- {
- 	int op = (encoded_op >> 28) & 7;
- 	int cmp = (encoded_op >> 24) & 15;
-@@ -48,7 +48,7 @@ futex_atomic_op_inuser (int encoded_op, 
- }
- 
- static inline int
--futex_atomic_cmpxchg_inatomic(int __user *uaddr, int oldval, int newval)
-+futex_atomic_cmpxchg_inatomic(u32 __user *uaddr, int oldval, int newval)
- {
- 	return -ENOSYS;
- }
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-generic/vmlinux.lds.h linux-2.6.27.6-pax/include/asm-generic/vmlinux.lds.h
---- linux-2.6.27.6/include/asm-generic/vmlinux.lds.h	2008-10-10 09:19:19.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-generic/vmlinux.lds.h	2008-10-10 09:20:24.000000000 +0200
-@@ -59,6 +59,7 @@
- 	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
- 		VMLINUX_SYMBOL(__start_rodata) = .;			\
- 		*(.rodata) *(.rodata.*)					\
-+		*(.data.read_only)					\
- 		*(__vermagic)		/* Kernel version magic */	\
- 		*(__markers_strings)	/* Markers: strings */		\
- 	}								\
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-m32r/kmap_types.h linux-2.6.27.6-pax/include/asm-m32r/kmap_types.h
---- linux-2.6.27.6/include/asm-m32r/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-m32r/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
-@@ -21,7 +21,8 @@ D(9)	KM_IRQ0,
- D(10)	KM_IRQ1,
- D(11)	KM_SOFTIRQ0,
- D(12)	KM_SOFTIRQ1,
--D(13)	KM_TYPE_NR
-+D(13)	KM_CLEARPAGE,
-+D(14)	KM_TYPE_NR
- };
- 
- #undef D
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-m68k/kmap_types.h linux-2.6.27.6-pax/include/asm-m68k/kmap_types.h
---- linux-2.6.27.6/include/asm-m68k/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-m68k/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
-@@ -15,6 +15,7 @@ enum km_type {
- 	KM_IRQ1,
- 	KM_SOFTIRQ0,
- 	KM_SOFTIRQ1,
-+	KM_CLEARPAGE,
- 	KM_TYPE_NR
- };
- 
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/elf.h linux-2.6.27.6-pax/include/asm-mips/elf.h
---- linux-2.6.27.6/include/asm-mips/elf.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-mips/elf.h	2008-10-23 12:56:13.000000000 +0200
-@@ -368,4 +368,11 @@ extern int dump_task_fpu(struct task_str
- #define ELF_ET_DYN_BASE         (TASK_SIZE / 3 * 2)
- #endif
- 
-+#ifdef CONFIG_PAX_ASLR
-+#define PAX_ELF_ET_DYN_BASE	(test_thread_flag(TIF_32BIT_ADDR) ? 0x00400000UL : 0x00400000UL)
-+
-+#define PAX_DELTA_MMAP_LEN	(test_thread_flag(TIF_32BIT_ADDR) ? 27-PAGE_SHIFT : 36-PAGE_SHIFT)
-+#define PAX_DELTA_STACK_LEN	(test_thread_flag(TIF_32BIT_ADDR) ? 27-PAGE_SHIFT : 36-PAGE_SHIFT)
-+#endif
-+
- #endif /* _ASM_ELF_H */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/kmap_types.h linux-2.6.27.6-pax/include/asm-mips/kmap_types.h
---- linux-2.6.27.6/include/asm-mips/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-mips/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
-@@ -22,7 +22,8 @@ D(9)	KM_IRQ0,
- D(10)	KM_IRQ1,
- D(11)	KM_SOFTIRQ0,
- D(12)	KM_SOFTIRQ1,
--D(13)	KM_TYPE_NR
-+D(13)	KM_CLEARPAGE,
-+D(14)	KM_TYPE_NR
- };
- 
- #undef D
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/page.h linux-2.6.27.6-pax/include/asm-mips/page.h
---- linux-2.6.27.6/include/asm-mips/page.h	2008-10-10 09:19:20.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-mips/page.h	2008-10-10 09:20:24.000000000 +0200
-@@ -82,7 +82,7 @@ extern void copy_user_highpage(struct pa
-   #ifdef CONFIG_CPU_MIPS32
-     typedef struct { unsigned long pte_low, pte_high; } pte_t;
-     #define pte_val(x)    ((x).pte_low | ((unsigned long long)(x).pte_high << 32))
--    #define __pte(x)      ({ pte_t __pte = {(x), ((unsigned long long)(x)) >> 32}; __pte; })
-+    #define __pte(x)      ({ pte_t __pte = {(x), (x) >> 32}; __pte; })
-   #else
-      typedef struct { unsigned long long pte; } pte_t;
-      #define pte_val(x)	((x).pte)
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/system.h linux-2.6.27.6-pax/include/asm-mips/system.h
---- linux-2.6.27.6/include/asm-mips/system.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-mips/system.h	2008-10-23 12:56:13.000000000 +0200
-@@ -215,6 +215,6 @@ extern void per_cpu_trap_init(void);
-  */
- #define __ARCH_WANT_UNLOCKED_CTXSW
- 
--extern unsigned long arch_align_stack(unsigned long sp);
-+#define arch_align_stack(x) ((x) & ALMASK)
- 
- #endif /* _ASM_SYSTEM_H */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-parisc/elf.h linux-2.6.27.6-pax/include/asm-parisc/elf.h
---- linux-2.6.27.6/include/asm-parisc/elf.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-parisc/elf.h	2008-10-10 09:20:24.000000000 +0200
-@@ -333,6 +333,13 @@ struct pt_regs;	/* forward declaration..
- 
- #define ELF_ET_DYN_BASE         (TASK_UNMAPPED_BASE + 0x01000000)
- 
-+#ifdef CONFIG_PAX_ASLR
-+#define PAX_ELF_ET_DYN_BASE	0x10000UL
-+
-+#define PAX_DELTA_MMAP_LEN	16
-+#define PAX_DELTA_STACK_LEN	16
-+#endif
-+
- /* This yields a mask that user programs can use to figure out what
-    instruction set this CPU supports.  This could be done in user space,
-    but it's not easy, and we've already done it here.  */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-parisc/kmap_types.h linux-2.6.27.6-pax/include/asm-parisc/kmap_types.h
---- linux-2.6.27.6/include/asm-parisc/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-parisc/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
-@@ -22,7 +22,8 @@ D(9)	KM_IRQ0,
- D(10)	KM_IRQ1,
- D(11)	KM_SOFTIRQ0,
- D(12)	KM_SOFTIRQ1,
--D(13)	KM_TYPE_NR
-+D(13)	KM_CLEARPAGE,
-+D(14)	KM_TYPE_NR
- };
- 
- #undef D
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-parisc/pgtable.h linux-2.6.27.6-pax/include/asm-parisc/pgtable.h
---- linux-2.6.27.6/include/asm-parisc/pgtable.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-parisc/pgtable.h	2008-10-10 09:20:24.000000000 +0200
-@@ -202,6 +202,17 @@
- #define PAGE_EXECREAD   __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_EXEC |_PAGE_ACCESSED)
- #define PAGE_COPY       PAGE_EXECREAD
- #define PAGE_RWX        __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_WRITE | _PAGE_EXEC |_PAGE_ACCESSED)
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+# define PAGE_SHARED_NOEXEC	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_WRITE | _PAGE_ACCESSED)
-+# define PAGE_COPY_NOEXEC	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_ACCESSED)
-+# define PAGE_READONLY_NOEXEC	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_ACCESSED)
-+#else
-+# define PAGE_SHARED_NOEXEC	PAGE_SHARED
-+# define PAGE_COPY_NOEXEC	PAGE_COPY
-+# define PAGE_READONLY_NOEXEC	PAGE_READONLY
-+#endif
-+
- #define PAGE_KERNEL	__pgprot(_PAGE_KERNEL)
- #define PAGE_KERNEL_RO	__pgprot(_PAGE_KERNEL & ~_PAGE_WRITE)
- #define PAGE_KERNEL_UNC	__pgprot(_PAGE_KERNEL | _PAGE_NO_CACHE)
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-um/kmap_types.h linux-2.6.27.6-pax/include/asm-um/kmap_types.h
---- linux-2.6.27.6/include/asm-um/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-um/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
-@@ -23,6 +23,7 @@ enum km_type {
- 	KM_IRQ1,
- 	KM_SOFTIRQ0,
- 	KM_SOFTIRQ1,
-+	KM_CLEARPAGE,
- 	KM_TYPE_NR
- };
- 
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-um/page.h linux-2.6.27.6-pax/include/asm-um/page.h
---- linux-2.6.27.6/include/asm-um/page.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-um/page.h	2008-10-10 09:20:24.000000000 +0200
-@@ -14,6 +14,9 @@
- #define PAGE_SIZE	(_AC(1, UL) << PAGE_SHIFT)
- #define PAGE_MASK	(~(PAGE_SIZE-1))
- 
-+#define ktla_ktva(addr)			(addr)
-+#define ktva_ktla(addr)			(addr)
-+
- #ifndef __ASSEMBLY__
- 
- struct page;
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/alternative.h linux-2.6.27.6-pax/include/asm-x86/alternative.h
---- linux-2.6.27.6/include/asm-x86/alternative.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/alternative.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/alternative.h linux-2.6.27.6-pax/include/asm/alternative.h
+--- linux-2.6.27.6/include/asm/alternative.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/alternative.h	2008-10-10 09:20:24.000000000 +0200
 @@ -96,7 +96,7 @@ const unsigned char *const *find_nop_tab
  		      "	 .byte 662b-661b\n"	/* sourcelen */		\
  		      "	 .byte 664f-663f\n"	/* replacementlen */	\
@@ -15267,9 +15461,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		      "663:\n\t" newinstr "\n664:\n"  /* replacement */ \
  		      ".previous" : output : [feat] "i" (feature), ##input)
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/atomic_32.h linux-2.6.27.6-pax/include/asm-x86/atomic_32.h
---- linux-2.6.27.6/include/asm-x86/atomic_32.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/atomic_32.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/atomic_32.h linux-2.6.27.6-pax/include/asm/atomic_32.h
+--- linux-2.6.27.6/include/asm/atomic_32.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/atomic_32.h	2008-10-10 09:20:24.000000000 +0200
 @@ -47,7 +47,15 @@ typedef struct {
   */
  static inline void atomic_add(int i, atomic_t *v)
@@ -15439,9 +15633,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/atomic_64.h linux-2.6.27.6-pax/include/asm-x86/atomic_64.h
---- linux-2.6.27.6/include/asm-x86/atomic_64.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/atomic_64.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/atomic_64.h linux-2.6.27.6-pax/include/asm/atomic_64.h
+--- linux-2.6.27.6/include/asm/atomic_64.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/atomic_64.h	2008-10-10 09:20:24.000000000 +0200
 @@ -48,7 +48,15 @@ typedef struct {
   */
  static inline void atomic_add(int i, atomic_t *v)
@@ -15788,9 +15982,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/boot.h linux-2.6.27.6-pax/include/asm-x86/boot.h
---- linux-2.6.27.6/include/asm-x86/boot.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/boot.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/boot.h linux-2.6.27.6-pax/include/asm/boot.h
+--- linux-2.6.27.6/include/asm/boot.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/boot.h	2008-10-10 09:20:24.000000000 +0200
 @@ -13,10 +13,15 @@
  #define ASK_VGA		0xfffd		/* ask for it at bootup */
  
@@ -15808,9 +16002,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #ifdef CONFIG_X86_64
  #define BOOT_HEAP_SIZE	0x7000
  #define BOOT_STACK_SIZE	0x4000
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/cache.h linux-2.6.27.6-pax/include/asm-x86/cache.h
---- linux-2.6.27.6/include/asm-x86/cache.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/cache.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/cache.h linux-2.6.27.6-pax/include/asm/cache.h
+--- linux-2.6.27.6/include/asm/cache.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/cache.h	2008-10-10 09:20:24.000000000 +0200
 @@ -6,6 +6,7 @@
  #define L1_CACHE_BYTES	(1 << L1_CACHE_SHIFT)
  
@@ -15819,9 +16013,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  
  #ifdef CONFIG_X86_VSMP
  /* vSMP Internode cacheline shift */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/checksum_32.h linux-2.6.27.6-pax/include/asm-x86/checksum_32.h
---- linux-2.6.27.6/include/asm-x86/checksum_32.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/checksum_32.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/checksum_32.h linux-2.6.27.6-pax/include/asm/checksum_32.h
+--- linux-2.6.27.6/include/asm/checksum_32.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/checksum_32.h	2008-10-10 09:20:24.000000000 +0200
 @@ -31,6 +31,14 @@ asmlinkage __wsum csum_partial_copy_gene
  					    int len, __wsum sum,
  					    int *src_err_ptr, int *dst_err_ptr);
@@ -15855,9 +16049,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  						 len, sum, NULL, err_ptr);
  
  	if (len)
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/desc.h linux-2.6.27.6-pax/include/asm-x86/desc.h
---- linux-2.6.27.6/include/asm-x86/desc.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/desc.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/desc.h linux-2.6.27.6-pax/include/asm/desc.h
+--- linux-2.6.27.6/include/asm/desc.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/desc.h	2008-10-10 09:20:24.000000000 +0200
 @@ -16,6 +16,7 @@ static inline void fill_ldt(struct desc_
  	desc->base1 = (info->base_addr & 0x00ff0000) >> 16;
  	desc->type = (info->read_exec_only ^ 1) << 1;
@@ -16020,9 +16214,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #else
  /*
   * GET_DESC_BASE reads the descriptor base of the specified segment.
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/e820.h linux-2.6.27.6-pax/include/asm-x86/e820.h
---- linux-2.6.27.6/include/asm-x86/e820.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/e820.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/e820.h linux-2.6.27.6-pax/include/asm/e820.h
+--- linux-2.6.27.6/include/asm/e820.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/e820.h	2008-10-10 09:20:24.000000000 +0200
 @@ -131,7 +131,7 @@ extern char *memory_setup(void);
  #define ISA_END_ADDRESS		0x100000
  #define is_ISA_range(s, e) ((s) >= ISA_START_ADDRESS && (e) < ISA_END_ADDRESS)
@@ -16032,9 +16226,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #define BIOS_END		0x00100000
  
  #ifdef __KERNEL__
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/elf.h linux-2.6.27.6-pax/include/asm-x86/elf.h
---- linux-2.6.27.6/include/asm-x86/elf.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/elf.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/elf.h linux-2.6.27.6-pax/include/asm/elf.h
+--- linux-2.6.27.6/include/asm/elf.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/elf.h	2008-10-10 09:20:24.000000000 +0200
 @@ -251,7 +251,25 @@ extern int force_personality32;
     the loader.  We need to make sure that it is out of the way of the program
     that it will "exec", and that there is sufficient room for the brk.  */
@@ -16088,9 +16282,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
 -#define arch_randomize_brk arch_randomize_brk
 -
  #endif
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/futex.h linux-2.6.27.6-pax/include/asm-x86/futex.h
---- linux-2.6.27.6/include/asm-x86/futex.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/futex.h	2008-10-10 09:40:41.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/futex.h linux-2.6.27.6-pax/include/asm/futex.h
+--- linux-2.6.27.6/include/asm/futex.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/futex.h	2008-10-10 09:40:41.000000000 +0200
 @@ -11,6 +11,40 @@
  #include <asm/processor.h>
  #include <asm/system.h>
@@ -16202,9 +16396,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		     : "memory"
  	);
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/i387.h linux-2.6.27.6-pax/include/asm-x86/i387.h
---- linux-2.6.27.6/include/asm-x86/i387.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/i387.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/i387.h linux-2.6.27.6-pax/include/asm/i387.h
+--- linux-2.6.27.6/include/asm/i387.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/i387.h	2008-10-10 09:20:24.000000000 +0200
 @@ -159,13 +159,8 @@ static inline void restore_fpu(struct ta
  }
  
@@ -16221,9 +16415,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  
  /*
   * These must be called with preempt disabled
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/io_64.h linux-2.6.27.6-pax/include/asm-x86/io_64.h
---- linux-2.6.27.6/include/asm-x86/io_64.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/io_64.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/io_64.h linux-2.6.27.6-pax/include/asm/io_64.h
+--- linux-2.6.27.6/include/asm/io_64.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/io_64.h	2008-10-10 09:20:24.000000000 +0200
 @@ -158,6 +158,17 @@ static inline void *phys_to_virt(unsigne
  }
  #endif
@@ -16242,9 +16436,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  /*
   * Change "struct page" to physical address.
   */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/irqflags.h linux-2.6.27.6-pax/include/asm-x86/irqflags.h
---- linux-2.6.27.6/include/asm-x86/irqflags.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/irqflags.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/irqflags.h linux-2.6.27.6-pax/include/asm/irqflags.h
+--- linux-2.6.27.6/include/asm/irqflags.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/irqflags.h	2008-10-10 09:20:24.000000000 +0200
 @@ -141,6 +141,8 @@ static inline unsigned long __raw_local_
  #define INTERRUPT_RETURN		iret
  #define ENABLE_INTERRUPTS_SYSEXIT	sti; sysexit
@@ -16254,9 +16448,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #endif
  
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/kmap_types.h linux-2.6.27.6-pax/include/asm-x86/kmap_types.h
---- linux-2.6.27.6/include/asm-x86/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/kmap_types.h linux-2.6.27.6-pax/include/asm/kmap_types.h
+--- linux-2.6.27.6/include/asm/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
 @@ -21,7 +21,8 @@ D(9)	KM_IRQ0,
  D(10)	KM_IRQ1,
  D(11)	KM_SOFTIRQ0,
@@ -16267,9 +16461,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  };
  
  #undef D
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/linkage.h linux-2.6.27.6-pax/include/asm-x86/linkage.h
---- linux-2.6.27.6/include/asm-x86/linkage.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/linkage.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/linkage.h linux-2.6.27.6-pax/include/asm/linkage.h
+--- linux-2.6.27.6/include/asm/linkage.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/linkage.h	2008-10-10 09:20:24.000000000 +0200
 @@ -7,6 +7,11 @@
  #ifdef CONFIG_X86_64
  #define __ALIGN .p2align 4,,15
@@ -16293,9 +16487,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
 -
  #endif
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/local.h linux-2.6.27.6-pax/include/asm-x86/local.h
---- linux-2.6.27.6/include/asm-x86/local.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/local.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/local.h linux-2.6.27.6-pax/include/asm/local.h
+--- linux-2.6.27.6/include/asm/local.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/local.h	2008-10-10 09:20:24.000000000 +0200
 @@ -18,26 +18,90 @@ typedef struct {
  
  static inline void local_inc(local_t *l)
@@ -16520,9 +16714,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		     : "+r" (i), "+m" (l->a.counter)
  		     : : "memory");
  	return i + __i;
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/mach-default/apm.h linux-2.6.27.6-pax/include/asm-x86/mach-default/apm.h
---- linux-2.6.27.6/include/asm-x86/mach-default/apm.h	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/mach-default/apm.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/mach-default/apm.h linux-2.6.27.6-pax/include/asm/mach-default/apm.h
+--- linux-2.6.27.6/include/asm/mach-default/apm.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/mach-default/apm.h	2008-10-10 09:20:24.000000000 +0200
 @@ -34,7 +34,7 @@ static inline void apm_bios_call_asm(u32
  	__asm__ __volatile__(APM_DO_ZERO_SEGS
  		"pushl %%edi\n\t"
@@ -16541,9 +16735,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		"setc %%bl\n\t"
  		"popl %%ebp\n\t"
  		"popl %%edi\n\t"
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/mman.h linux-2.6.27.6-pax/include/asm-x86/mman.h
---- linux-2.6.27.6/include/asm-x86/mman.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/mman.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/mman.h linux-2.6.27.6-pax/include/asm/mman.h
+--- linux-2.6.27.6/include/asm/mman.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/mman.h	2008-10-10 09:20:24.000000000 +0200
 @@ -17,4 +17,14 @@
  #define MCL_CURRENT	1		/* lock all current mappings */
  #define MCL_FUTURE	2		/* lock all future mappings */
@@ -16559,9 +16753,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
 +#endif
 +
  #endif /* _ASM_X86_MMAN_H */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/mmu.h linux-2.6.27.6-pax/include/asm-x86/mmu.h
---- linux-2.6.27.6/include/asm-x86/mmu.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/mmu.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/mmu.h linux-2.6.27.6-pax/include/asm/mmu.h
+--- linux-2.6.27.6/include/asm/mmu.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/mmu.h	2008-10-10 09:20:24.000000000 +0200
 @@ -11,13 +11,26 @@
   * cpu_vm_mask is used to optimize ldt flushing.
   */
@@ -16591,9 +16785,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  } mm_context_t;
  
  #ifdef CONFIG_SMP
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/mmu_context_32.h linux-2.6.27.6-pax/include/asm-x86/mmu_context_32.h
---- linux-2.6.27.6/include/asm-x86/mmu_context_32.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/mmu_context_32.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/mmu_context_32.h linux-2.6.27.6-pax/include/asm/mmu_context_32.h
+--- linux-2.6.27.6/include/asm/mmu_context_32.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/mmu_context_32.h	2008-10-10 09:20:24.000000000 +0200
 @@ -33,6 +33,22 @@ static inline void switch_mm(struct mm_s
  		 */
  		if (unlikely(prev->context.ldt != next->context.ldt))
@@ -16637,9 +16831,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		}
  	}
  #endif
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/page_32.h linux-2.6.27.6-pax/include/asm-x86/page_32.h
---- linux-2.6.27.6/include/asm-x86/page_32.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/page_32.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/page_32.h linux-2.6.27.6-pax/include/asm/page_32.h
+--- linux-2.6.27.6/include/asm/page_32.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/page_32.h	2008-10-10 09:20:24.000000000 +0200
 @@ -13,6 +13,23 @@
   */
  #define __PAGE_OFFSET		_AC(CONFIG_PAGE_OFFSET, UL)
@@ -16664,9 +16858,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #ifdef CONFIG_4KSTACKS
  #define THREAD_ORDER	0
  #else
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/page_64.h linux-2.6.27.6-pax/include/asm-x86/page_64.h
---- linux-2.6.27.6/include/asm-x86/page_64.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/page_64.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/page_64.h linux-2.6.27.6-pax/include/asm/page_64.h
+--- linux-2.6.27.6/include/asm/page_64.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/page_64.h	2008-10-10 09:20:24.000000000 +0200
 @@ -49,6 +49,9 @@
  #define __START_KERNEL		(__START_KERNEL_map + __PHYSICAL_START)
  #define __START_KERNEL_map	_AC(0xffffffff80000000, UL)
@@ -16684,9 +16878,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
 +#define nx_enabled (1)
  
  #endif /* _X86_64_PAGE_H */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/paravirt.h linux-2.6.27.6-pax/include/asm-x86/paravirt.h
---- linux-2.6.27.6/include/asm-x86/paravirt.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/paravirt.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/paravirt.h linux-2.6.27.6-pax/include/asm/paravirt.h
+--- linux-2.6.27.6/include/asm/paravirt.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/paravirt.h	2008-10-10 09:20:24.000000000 +0200
 @@ -1557,7 +1557,7 @@ static inline unsigned long __raw_local_
  #define PV_RESTORE_REGS popl %edx; popl %ecx; popl %edi; popl %eax
  #define PARA_PATCH(struct, off)        ((PARAVIRT_PATCH_##struct + (off)) / 4)
@@ -16696,9 +16890,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #endif
  
  #define INTERRUPT_RETURN						\
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/pda.h linux-2.6.27.6-pax/include/asm-x86/pda.h
---- linux-2.6.27.6/include/asm-x86/pda.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/pda.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/pda.h linux-2.6.27.6-pax/include/asm/pda.h
+--- linux-2.6.27.6/include/asm/pda.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/pda.h	2008-10-10 09:20:24.000000000 +0200
 @@ -16,11 +16,9 @@ struct x8664_pda {
  	unsigned long oldrsp;		/* 24 user rsp for system call */
  	int irqcount;			/* 32 Irq nesting counter. Starts -1 */
@@ -16711,9 +16905,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  	char *irqstackptr;
  	short nodenumber;		/* number of current node (32k max) */
  	short in_bootmem;		/* pda lives in bootmem */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/percpu.h linux-2.6.27.6-pax/include/asm-x86/percpu.h
---- linux-2.6.27.6/include/asm-x86/percpu.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/percpu.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/percpu.h linux-2.6.27.6-pax/include/asm/percpu.h
+--- linux-2.6.27.6/include/asm/percpu.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/percpu.h	2008-10-10 09:20:24.000000000 +0200
 @@ -93,6 +93,12 @@ DECLARE_PER_CPU(struct x8664_pda, pda);
  
  #define __my_cpu_offset x86_read_percpu(this_cpu_off)
@@ -16727,9 +16921,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  /* fs segment starts at (positive) offset == __per_cpu_offset[cpu] */
  #define __percpu_seg "%%fs:"
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/pgalloc.h linux-2.6.27.6-pax/include/asm-x86/pgalloc.h
---- linux-2.6.27.6/include/asm-x86/pgalloc.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/pgalloc.h	2008-10-11 22:51:07.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/pgalloc.h linux-2.6.27.6-pax/include/asm/pgalloc.h
+--- linux-2.6.27.6/include/asm/pgalloc.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/pgalloc.h	2008-10-11 22:51:07.000000000 +0200
 @@ -51,7 +51,7 @@ static inline void pmd_populate_kernel(s
  				       pmd_t *pmd, pte_t *pte)
  {
@@ -16739,9 +16933,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  }
  
  static inline void pmd_populate(struct mm_struct *mm, pmd_t *pmd,
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/pgtable-2level.h linux-2.6.27.6-pax/include/asm-x86/pgtable-2level.h
---- linux-2.6.27.6/include/asm-x86/pgtable-2level.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/pgtable-2level.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/pgtable-2level.h linux-2.6.27.6-pax/include/asm/pgtable-2level.h
+--- linux-2.6.27.6/include/asm/pgtable-2level.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/pgtable-2level.h	2008-10-10 09:20:24.000000000 +0200
 @@ -18,7 +18,19 @@ static inline void native_set_pte(pte_t 
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
@@ -16762,9 +16956,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  }
  
  static inline void native_set_pte_atomic(pte_t *ptep, pte_t pte)
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/pgtable-3level.h linux-2.6.27.6-pax/include/asm-x86/pgtable-3level.h
---- linux-2.6.27.6/include/asm-x86/pgtable-3level.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/pgtable-3level.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/pgtable-3level.h linux-2.6.27.6-pax/include/asm/pgtable-3level.h
+--- linux-2.6.27.6/include/asm/pgtable-3level.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/pgtable-3level.h	2008-10-10 09:20:24.000000000 +0200
 @@ -70,12 +70,36 @@ static inline void native_set_pte_atomic
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
@@ -16802,9 +16996,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  }
  
  /*
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/pgtable.h linux-2.6.27.6-pax/include/asm-x86/pgtable.h
---- linux-2.6.27.6/include/asm-x86/pgtable.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/pgtable.h	2008-11-03 17:01:42.000000000 +0100
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/pgtable.h linux-2.6.27.6-pax/include/asm/pgtable.h
+--- linux-2.6.27.6/include/asm/pgtable.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/pgtable.h	2008-11-03 17:01:42.000000000 +0100
 @@ -41,7 +41,7 @@
  #if defined(CONFIG_X86_64) || defined(CONFIG_X86_PAE)
  #define _PAGE_NX	(_AT(pteval_t, 1) << _PAGE_BIT_NX)
@@ -16912,9 +17106,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  }
  
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/pgtable_32.h linux-2.6.27.6-pax/include/asm-x86/pgtable_32.h
---- linux-2.6.27.6/include/asm-x86/pgtable_32.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/pgtable_32.h	2008-10-15 23:38:57.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/pgtable_32.h linux-2.6.27.6-pax/include/asm/pgtable_32.h
+--- linux-2.6.27.6/include/asm/pgtable_32.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/pgtable_32.h	2008-10-15 23:38:57.000000000 +0200
 @@ -25,8 +25,6 @@
  struct mm_struct;
  struct vm_area_struct;
@@ -16955,9 +17149,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  /*
   * kern_addr_valid() is (1) for FLATMEM and (0) for
   * SPARSEMEM and DISCONTIGMEM
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/pgtable_64.h linux-2.6.27.6-pax/include/asm-x86/pgtable_64.h
---- linux-2.6.27.6/include/asm-x86/pgtable_64.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/pgtable_64.h	2008-10-27 10:39:18.000000000 +0100
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/pgtable_64.h linux-2.6.27.6-pax/include/asm/pgtable_64.h
+--- linux-2.6.27.6/include/asm/pgtable_64.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/pgtable_64.h	2008-10-27 10:39:18.000000000 +0100
 @@ -15,9 +15,12 @@
  
  extern pud_t level3_kernel_pgt[512];
@@ -17012,9 +17206,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  }
  
  #define pte_none(x)	(!pte_val((x)))
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/processor.h linux-2.6.27.6-pax/include/asm-x86/processor.h
---- linux-2.6.27.6/include/asm-x86/processor.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/processor.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/processor.h linux-2.6.27.6-pax/include/asm/processor.h
+--- linux-2.6.27.6/include/asm/processor.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/processor.h	2008-10-10 09:20:24.000000000 +0200
 @@ -269,7 +269,7 @@ struct tss_struct {
  
  } ____cacheline_aligned;
@@ -17098,9 +17292,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #define KSTK_EIP(task)		(task_pt_regs(task)->ip)
  
  /* Get/set a process' ability to use the timestamp counter instruction */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/ptrace.h linux-2.6.27.6-pax/include/asm-x86/ptrace.h
---- linux-2.6.27.6/include/asm-x86/ptrace.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/ptrace.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/ptrace.h linux-2.6.27.6-pax/include/asm/ptrace.h
+--- linux-2.6.27.6/include/asm/ptrace.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/ptrace.h	2008-10-10 09:20:24.000000000 +0200
 @@ -131,6 +131,7 @@ struct pt_regs {
  
  /* the DS BTS struct is used for ptrace as well */
@@ -17145,9 +17339,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  #endif
  }
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/reboot.h linux-2.6.27.6-pax/include/asm-x86/reboot.h
---- linux-2.6.27.6/include/asm-x86/reboot.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/reboot.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/reboot.h linux-2.6.27.6-pax/include/asm/reboot.h
+--- linux-2.6.27.6/include/asm/reboot.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/reboot.h	2008-10-10 09:20:24.000000000 +0200
 @@ -16,6 +16,6 @@ extern struct machine_ops machine_ops;
  
  void native_machine_crash_shutdown(struct pt_regs *regs);
@@ -17156,9 +17350,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
 +void machine_real_restart(const unsigned char *code, unsigned int length);
  
  #endif	/* _ASM_REBOOT_H */
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/rwsem.h linux-2.6.27.6-pax/include/asm-x86/rwsem.h
---- linux-2.6.27.6/include/asm-x86/rwsem.h	2008-07-14 03:51:43.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/rwsem.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/rwsem.h linux-2.6.27.6-pax/include/asm/rwsem.h
+--- linux-2.6.27.6/include/asm/rwsem.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/rwsem.h	2008-10-10 09:20:24.000000000 +0200
 @@ -106,10 +106,26 @@ static inline void __down_read(struct rw
  {
  	asm volatile("# beginning down_read\n\t"
@@ -17391,9 +17585,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		     : "+r" (tmp), "+m" (sem->count)
  		     : : "memory");
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/segment.h linux-2.6.27.6-pax/include/asm-x86/segment.h
---- linux-2.6.27.6/include/asm-x86/segment.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/segment.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/segment.h linux-2.6.27.6-pax/include/asm/segment.h
+--- linux-2.6.27.6/include/asm/segment.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/segment.h	2008-10-10 09:20:24.000000000 +0200
 @@ -88,13 +88,19 @@
  #define GDT_ENTRY_ESPFIX_SS		(GDT_ENTRY_KERNEL_BASE + 14)
  #define __ESPFIX_SS (GDT_ENTRY_ESPFIX_SS * 8)
@@ -17428,9 +17622,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  
  
  #else
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/spinlock.h linux-2.6.27.6-pax/include/asm-x86/spinlock.h
---- linux-2.6.27.6/include/asm-x86/spinlock.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/spinlock.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/spinlock.h linux-2.6.27.6-pax/include/asm/spinlock.h
+--- linux-2.6.27.6/include/asm/spinlock.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/spinlock.h	2008-10-10 09:20:24.000000000 +0200
 @@ -315,18 +315,50 @@ static inline int __raw_write_can_lock(r
  static inline void __raw_read_lock(raw_rwlock_t *rw)
  {
@@ -17534,9 +17728,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  		     : "+m" (rw->lock) : "i" (RW_LOCK_BIAS) : "memory");
  }
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/system.h linux-2.6.27.6-pax/include/asm-x86/system.h
---- linux-2.6.27.6/include/asm-x86/system.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/system.h	2008-10-23 12:56:49.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/system.h linux-2.6.27.6-pax/include/asm/system.h
+--- linux-2.6.27.6/include/asm/system.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/system.h	2008-10-23 12:56:49.000000000 +0200
 @@ -92,6 +92,8 @@ do {									\
  	     ".globl thread_return\n"					  \
  	     "thread_return:\n\t"					  \
@@ -17597,9 +17791,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  extern void free_init_pages(char *what, unsigned long begin, unsigned long end);
  
  void default_idle(void);
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/uaccess.h linux-2.6.27.6-pax/include/asm-x86/uaccess.h
---- linux-2.6.27.6/include/asm-x86/uaccess.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/uaccess.h	2008-10-10 17:08:54.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/uaccess.h linux-2.6.27.6-pax/include/asm/uaccess.h
+--- linux-2.6.27.6/include/asm/uaccess.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/uaccess.h	2008-10-10 17:08:54.000000000 +0200
 @@ -10,6 +10,7 @@
  #include <linux/string.h>
  #include <asm/asm.h>
@@ -17724,9 +17918,9 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  # include "uaccess_64.h"
  #endif
  
-diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-x86/uaccess_64.h linux-2.6.27.6-pax/include/asm-x86/uaccess_64.h
---- linux-2.6.27.6/include/asm-x86/uaccess_64.h	2008-10-10 09:19:22.000000000 +0200
-+++ linux-2.6.27.6-pax/include/asm-x86/uaccess_64.h	2008-10-10 09:20:24.000000000 +0200
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm/uaccess_64.h linux-2.6.27.6-pax/include/asm/uaccess_64.h
+--- linux-2.6.27.6/include/asm/uaccess_64.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm/uaccess_64.h	2008-10-10 09:20:24.000000000 +0200
 @@ -10,6 +10,8 @@
  #include <linux/lockdep.h>
  #include <asm/page.h>
@@ -17736,6 +17930,210 @@ diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm
  /*
   * Copy To/From Userspace
   */
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-cris/kmap_types.h linux-2.6.27.6-pax/include/asm-cris/kmap_types.h
+--- linux-2.6.27.6/include/asm-cris/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-cris/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+@@ -19,6 +19,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-frv/kmap_types.h linux-2.6.27.6-pax/include/asm-frv/kmap_types.h
+--- linux-2.6.27.6/include/asm-frv/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-frv/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+@@ -23,6 +23,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-generic/futex.h linux-2.6.27.6-pax/include/asm-generic/futex.h
+--- linux-2.6.27.6/include/asm-generic/futex.h	2008-07-14 03:51:42.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-generic/futex.h	2008-10-10 09:20:24.000000000 +0200
+@@ -6,7 +6,7 @@
+ #include <asm/errno.h>
+ 
+ static inline int
+-futex_atomic_op_inuser (int encoded_op, int __user *uaddr)
++futex_atomic_op_inuser (int encoded_op, u32 __user *uaddr)
+ {
+ 	int op = (encoded_op >> 28) & 7;
+ 	int cmp = (encoded_op >> 24) & 15;
+@@ -48,7 +48,7 @@ futex_atomic_op_inuser (int encoded_op, 
+ }
+ 
+ static inline int
+-futex_atomic_cmpxchg_inatomic(int __user *uaddr, int oldval, int newval)
++futex_atomic_cmpxchg_inatomic(u32 __user *uaddr, int oldval, int newval)
+ {
+ 	return -ENOSYS;
+ }
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-generic/vmlinux.lds.h linux-2.6.27.6-pax/include/asm-generic/vmlinux.lds.h
+--- linux-2.6.27.6/include/asm-generic/vmlinux.lds.h	2008-10-10 09:19:19.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-generic/vmlinux.lds.h	2008-10-10 09:20:24.000000000 +0200
+@@ -59,6 +59,7 @@
+ 	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
+ 		VMLINUX_SYMBOL(__start_rodata) = .;			\
+ 		*(.rodata) *(.rodata.*)					\
++		*(.data.read_only)					\
+ 		*(__vermagic)		/* Kernel version magic */	\
+ 		*(__markers_strings)	/* Markers: strings */		\
+ 	}								\
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-m32r/kmap_types.h linux-2.6.27.6-pax/include/asm-m32r/kmap_types.h
+--- linux-2.6.27.6/include/asm-m32r/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-m32r/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+@@ -21,7 +21,8 @@ D(9)	KM_IRQ0,
+ D(10)	KM_IRQ1,
+ D(11)	KM_SOFTIRQ0,
+ D(12)	KM_SOFTIRQ1,
+-D(13)	KM_TYPE_NR
++D(13)	KM_CLEARPAGE,
++D(14)	KM_TYPE_NR
+ };
+ 
+ #undef D
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-m68k/kmap_types.h linux-2.6.27.6-pax/include/asm-m68k/kmap_types.h
+--- linux-2.6.27.6/include/asm-m68k/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-m68k/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+@@ -15,6 +15,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/elf.h linux-2.6.27.6-pax/include/asm-mips/elf.h
+--- linux-2.6.27.6/include/asm-mips/elf.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-mips/elf.h	2008-10-23 12:56:13.000000000 +0200
+@@ -368,4 +368,11 @@ extern int dump_task_fpu(struct task_str
+ #define ELF_ET_DYN_BASE         (TASK_SIZE / 3 * 2)
+ #endif
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	(test_thread_flag(TIF_32BIT_ADDR) ? 0x00400000UL : 0x00400000UL)
++
++#define PAX_DELTA_MMAP_LEN	(test_thread_flag(TIF_32BIT_ADDR) ? 27-PAGE_SHIFT : 36-PAGE_SHIFT)
++#define PAX_DELTA_STACK_LEN	(test_thread_flag(TIF_32BIT_ADDR) ? 27-PAGE_SHIFT : 36-PAGE_SHIFT)
++#endif
++
+ #endif /* _ASM_ELF_H */
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/kmap_types.h linux-2.6.27.6-pax/include/asm-mips/kmap_types.h
+--- linux-2.6.27.6/include/asm-mips/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-mips/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+@@ -22,7 +22,8 @@ D(9)	KM_IRQ0,
+ D(10)	KM_IRQ1,
+ D(11)	KM_SOFTIRQ0,
+ D(12)	KM_SOFTIRQ1,
+-D(13)	KM_TYPE_NR
++D(13)	KM_CLEARPAGE,
++D(14)	KM_TYPE_NR
+ };
+ 
+ #undef D
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/page.h linux-2.6.27.6-pax/include/asm-mips/page.h
+--- linux-2.6.27.6/include/asm-mips/page.h	2008-10-10 09:19:20.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-mips/page.h	2008-10-10 09:20:24.000000000 +0200
+@@ -82,7 +82,7 @@ extern void copy_user_highpage(struct pa
+   #ifdef CONFIG_CPU_MIPS32
+     typedef struct { unsigned long pte_low, pte_high; } pte_t;
+     #define pte_val(x)    ((x).pte_low | ((unsigned long long)(x).pte_high << 32))
+-    #define __pte(x)      ({ pte_t __pte = {(x), ((unsigned long long)(x)) >> 32}; __pte; })
++    #define __pte(x)      ({ pte_t __pte = {(x), (x) >> 32}; __pte; })
+   #else
+      typedef struct { unsigned long long pte; } pte_t;
+      #define pte_val(x)	((x).pte)
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-mips/system.h linux-2.6.27.6-pax/include/asm-mips/system.h
+--- linux-2.6.27.6/include/asm-mips/system.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-mips/system.h	2008-10-23 12:56:13.000000000 +0200
+@@ -215,6 +215,6 @@ extern void per_cpu_trap_init(void);
+  */
+ #define __ARCH_WANT_UNLOCKED_CTXSW
+ 
+-extern unsigned long arch_align_stack(unsigned long sp);
++#define arch_align_stack(x) ((x) & ALMASK)
+ 
+ #endif /* _ASM_SYSTEM_H */
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-parisc/elf.h linux-2.6.27.6-pax/include/asm-parisc/elf.h
+--- linux-2.6.27.6/include/asm-parisc/elf.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-parisc/elf.h	2008-10-10 09:20:24.000000000 +0200
+@@ -333,6 +333,13 @@ struct pt_regs;	/* forward declaration..
+ 
+ #define ELF_ET_DYN_BASE         (TASK_UNMAPPED_BASE + 0x01000000)
+ 
++#ifdef CONFIG_PAX_ASLR
++#define PAX_ELF_ET_DYN_BASE	0x10000UL
++
++#define PAX_DELTA_MMAP_LEN	16
++#define PAX_DELTA_STACK_LEN	16
++#endif
++
+ /* This yields a mask that user programs can use to figure out what
+    instruction set this CPU supports.  This could be done in user space,
+    but it's not easy, and we've already done it here.  */
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-parisc/kmap_types.h linux-2.6.27.6-pax/include/asm-parisc/kmap_types.h
+--- linux-2.6.27.6/include/asm-parisc/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-parisc/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+@@ -22,7 +22,8 @@ D(9)	KM_IRQ0,
+ D(10)	KM_IRQ1,
+ D(11)	KM_SOFTIRQ0,
+ D(12)	KM_SOFTIRQ1,
+-D(13)	KM_TYPE_NR
++D(13)	KM_CLEARPAGE,
++D(14)	KM_TYPE_NR
+ };
+ 
+ #undef D
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-parisc/pgtable.h linux-2.6.27.6-pax/include/asm-parisc/pgtable.h
+--- linux-2.6.27.6/include/asm-parisc/pgtable.h	2008-07-14 03:51:43.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-parisc/pgtable.h	2008-10-10 09:20:24.000000000 +0200
+@@ -202,6 +202,17 @@
+ #define PAGE_EXECREAD   __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_EXEC |_PAGE_ACCESSED)
+ #define PAGE_COPY       PAGE_EXECREAD
+ #define PAGE_RWX        __pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_WRITE | _PAGE_EXEC |_PAGE_ACCESSED)
++
++#ifdef CONFIG_PAX_PAGEEXEC
++# define PAGE_SHARED_NOEXEC	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_WRITE | _PAGE_ACCESSED)
++# define PAGE_COPY_NOEXEC	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_ACCESSED)
++# define PAGE_READONLY_NOEXEC	__pgprot(_PAGE_PRESENT | _PAGE_USER | _PAGE_READ | _PAGE_ACCESSED)
++#else
++# define PAGE_SHARED_NOEXEC	PAGE_SHARED
++# define PAGE_COPY_NOEXEC	PAGE_COPY
++# define PAGE_READONLY_NOEXEC	PAGE_READONLY
++#endif
++
+ #define PAGE_KERNEL	__pgprot(_PAGE_KERNEL)
+ #define PAGE_KERNEL_RO	__pgprot(_PAGE_KERNEL & ~_PAGE_WRITE)
+ #define PAGE_KERNEL_UNC	__pgprot(_PAGE_KERNEL | _PAGE_NO_CACHE)
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-um/kmap_types.h linux-2.6.27.6-pax/include/asm-um/kmap_types.h
+--- linux-2.6.27.6/include/asm-um/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-um/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
+@@ -23,6 +23,7 @@ enum km_type {
+ 	KM_IRQ1,
+ 	KM_SOFTIRQ0,
+ 	KM_SOFTIRQ1,
++	KM_CLEARPAGE,
+ 	KM_TYPE_NR
+ };
+ 
+diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-um/page.h linux-2.6.27.6-pax/include/asm-um/page.h
+--- linux-2.6.27.6/include/asm-um/page.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.6-pax/include/asm-um/page.h	2008-10-10 09:20:24.000000000 +0200
+@@ -14,6 +14,9 @@
+ #define PAGE_SIZE	(_AC(1, UL) << PAGE_SHIFT)
+ #define PAGE_MASK	(~(PAGE_SIZE-1))
+ 
++#define ktla_ktva(addr)			(addr)
++#define ktva_ktla(addr)			(addr)
++
+ #ifndef __ASSEMBLY__
+ 
+ struct page;
 diff -NurpX linux-2.6.27.6-pax/Documentation/dontdiff linux-2.6.27.6/include/asm-xtensa/kmap_types.h linux-2.6.27.6-pax/include/asm-xtensa/kmap_types.h
 --- linux-2.6.27.6/include/asm-xtensa/kmap_types.h	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.27.6-pax/include/asm-xtensa/kmap_types.h	2008-10-10 09:20:24.000000000 +0200
