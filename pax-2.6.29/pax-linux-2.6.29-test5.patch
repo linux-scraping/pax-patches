@@ -3682,7 +3682,7 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/arch/x86/includ
  
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/arch/x86/include/asm/atomic_32.h linux-2.6.29-pax/arch/x86/include/asm/atomic_32.h
 --- linux-2.6.29/arch/x86/include/asm/atomic_32.h	2009-03-24 08:35:02.000000000 +0100
-+++ linux-2.6.29-pax/arch/x86/include/asm/atomic_32.h	2009-03-24 08:46:37.000000000 +0100
++++ linux-2.6.29-pax/arch/x86/include/asm/atomic_32.h	2009-03-28 11:29:05.000000000 +0100
 @@ -39,7 +39,29 @@
   */
  static inline void atomic_add(int i, atomic_t *v)
@@ -3866,9 +3866,42 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/arch/x86/includ
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
+@@ -214,17 +316,28 @@ static inline int atomic_sub_return(int 
+  */
+ static inline int atomic_add_unless(atomic_t *v, int a, int u)
+ {
+-	int c, old;
++	int c, old, new;
+ 	c = atomic_read(v);
+ 	for (;;) {
+-		if (unlikely(c == (u)))
++		if (unlikely(c == u))
+ 			break;
+-		old = atomic_cmpxchg((v), c, c + (a));
++
++		asm volatile("addl %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++			     "into\n0:\n"
++			     _ASM_EXTABLE(0b, 0b)
++#endif
++
++			     : "=r" (new)
++			     : "0" (c), "ir" (a));
++
++		old = atomic_cmpxchg(v, c, new);
+ 		if (likely(old == c))
+ 			break;
+ 		c = old;
+ 	}
+-	return c != (u);
++	return c != u;
+ }
+ 
+ #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/arch/x86/include/asm/atomic_64.h linux-2.6.29-pax/arch/x86/include/asm/atomic_64.h
 --- linux-2.6.29/arch/x86/include/asm/atomic_64.h	2009-03-24 08:35:02.000000000 +0100
-+++ linux-2.6.29-pax/arch/x86/include/asm/atomic_64.h	2009-03-24 08:46:37.000000000 +0100
++++ linux-2.6.29-pax/arch/x86/include/asm/atomic_64.h	2009-03-28 11:29:11.000000000 +0100
 @@ -38,7 +38,29 @@
   */
  static inline void atomic_add(int i, atomic_t *v)
@@ -4229,6 +4262,73 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/arch/x86/includ
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
+@@ -372,17 +570,28 @@ static inline long atomic64_sub_return(l
+  */
+ static inline int atomic_add_unless(atomic_t *v, int a, int u)
+ {
+-	int c, old;
++	int c, old, new;
+ 	c = atomic_read(v);
+ 	for (;;) {
+-		if (unlikely(c == (u)))
++		if (unlikely(c == u))
+ 			break;
+-		old = atomic_cmpxchg((v), c, c + (a));
++
++		asm volatile("addl %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++			     "into\n0:\n"
++			     _ASM_EXTABLE(0b, 0b)
++#endif
++
++			     : "=r" (new)
++			     : "0" (c), "ir" (a));
++
++		old = atomic_cmpxchg(v, c, new);
+ 		if (likely(old == c))
+ 			break;
+ 		c = old;
+ 	}
+-	return c != (u);
++	return c != u;
+ }
+ 
+ #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
+@@ -398,17 +607,29 @@ static inline int atomic_add_unless(atom
+  */
+ static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
+ {
+-	long c, old;
++	long c, old, new;
+ 	c = atomic64_read(v);
+ 	for (;;) {
+-		if (unlikely(c == (u)))
++		if (unlikely(c == u))
+ 			break;
+-		old = atomic64_cmpxchg((v), c, c + (a));
++
++		asm volatile("addq %2,%0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++			     "jno 0f\n"
++			     "int $4\n0:\n"
++			     _ASM_EXTABLE(0b, 0b)
++#endif
++
++			     : "=r" (new)
++			     : "0" (c), "er" (a));
++
++		old = atomic64_cmpxchg((v), c, new);
+ 		if (likely(old == c))
+ 			break;
+ 		c = old;
+ 	}
+-	return c != (u);
++	return c != u;
+ }
+ 
+ /**
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/arch/x86/include/asm/boot.h linux-2.6.29-pax/arch/x86/include/asm/boot.h
 --- linux-2.6.29/arch/x86/include/asm/boot.h	2008-12-25 12:13:18.000000000 +0100
 +++ linux-2.6.29-pax/arch/x86/include/asm/boot.h	2009-03-24 08:46:37.000000000 +0100
@@ -14768,6 +14868,129 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/drivers/char/ra
  static int max_write_thresh = INPUT_POOL_WORDS * 32;
  static char sysctl_bootid[16];
  
+diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/drivers/char/tty_ldisc.c linux-2.6.29-pax/drivers/char/tty_ldisc.c
+--- linux-2.6.29/drivers/char/tty_ldisc.c	2009-03-24 08:35:08.000000000 +0100
++++ linux-2.6.29-pax/drivers/char/tty_ldisc.c	2009-03-28 11:38:15.000000000 +0100
+@@ -74,7 +74,7 @@ int tty_register_ldisc(int disc, struct 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	tty_ldiscs[disc] = new_ldisc;
+ 	new_ldisc->num = disc;
+-	new_ldisc->refcount = 0;
++	atomic_set(&new_ldisc->refcount, 0);
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ 
+ 	return ret;
+@@ -102,7 +102,7 @@ int tty_unregister_ldisc(int disc)
+ 		return -EINVAL;
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	if (tty_ldiscs[disc]->refcount)
++	if (atomic_read(&tty_ldiscs[disc]->refcount))
+ 		ret = -EBUSY;
+ 	else
+ 		tty_ldiscs[disc] = NULL;
+@@ -139,7 +139,7 @@ static int tty_ldisc_try_get(int disc, s
+ 			err = -EAGAIN;
+ 		else {
+ 			/* lock it */
+-			ldops->refcount++;
++			atomic_inc(&ldops->refcount);
+ 			ld->ops = ldops;
+ 			err = 0;
+ 		}
+@@ -196,8 +196,8 @@ static void tty_ldisc_put(struct tty_ldi
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	ld = tty_ldiscs[disc];
+-	BUG_ON(ld->refcount == 0);
+-	ld->refcount--;
++	BUG_ON(atomic_read(&ld->refcount) == 0);
++	atomic_dec(&ld->refcount);
+ 	module_put(ld->owner);
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ }
+@@ -264,7 +264,7 @@ const struct file_operations tty_ldiscs_
+ 
+ static void tty_ldisc_assign(struct tty_struct *tty, struct tty_ldisc *ld)
+ {
+-	ld->refcount = 0;
++	atomic_set(&ld->refcount, 0);
+ 	tty->ldisc = *ld;
+ }
+ 
+@@ -289,7 +289,7 @@ static int tty_ldisc_try(struct tty_stru
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	ld = &tty->ldisc;
+ 	if (test_bit(TTY_LDISC, &tty->flags)) {
+-		ld->refcount++;
++		atomic_inc(&ld->refcount);
+ 		ret = 1;
+ 	}
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+@@ -316,7 +316,7 @@ struct tty_ldisc *tty_ldisc_ref_wait(str
+ {
+ 	/* wait_event is a macro */
+ 	wait_event(tty_ldisc_wait, tty_ldisc_try(tty));
+-	WARN_ON(tty->ldisc.refcount == 0);
++	WARN_ON(atomic_read(&tty->ldisc.refcount) == 0);
+ 	return &tty->ldisc;
+ }
+ 
+@@ -359,11 +359,9 @@ void tty_ldisc_deref(struct tty_ldisc *l
+ 	BUG_ON(ld == NULL);
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	if (ld->refcount == 0)
++	if (!atomic_add_unless(&ld->refcount, -1, 0))
+ 		printk(KERN_ERR "tty_ldisc_deref: no references.\n");
+-	else
+-		ld->refcount--;
+-	if (ld->refcount == 0)
++	if (atomic_read(&ld->refcount) == 0)
+ 		wake_up(&tty_ldisc_wait);
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ }
+@@ -507,8 +505,8 @@ restart:
+ 		clear_bit(TTY_LDISC, &o_tty->flags);
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	if (tty->ldisc.refcount || (o_tty && o_tty->ldisc.refcount)) {
+-		if (tty->ldisc.refcount) {
++	if (atomic_read(&tty->ldisc.refcount) || (o_tty && atomic_read(&o_tty->ldisc.refcount))) {
++		if (atomic_read(&tty->ldisc.refcount)) {
+ 			/* Free the new ldisc we grabbed. Must drop the lock
+ 			   first. */
+ 			spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+@@ -520,14 +518,14 @@ restart:
+ 			 * and retries if we made tty_ldisc_wait() smarter.
+ 			 * That is up for discussion.
+ 			 */
+-			if (wait_event_interruptible(tty_ldisc_wait, tty->ldisc.refcount == 0) < 0)
++			if (wait_event_interruptible(tty_ldisc_wait, atomic_read(&tty->ldisc.refcount) == 0) < 0)
+ 				return -ERESTARTSYS;
+ 			goto restart;
+ 		}
+-		if (o_tty && o_tty->ldisc.refcount) {
++		if (o_tty && atomic_read(&o_tty->ldisc.refcount)) {
+ 			spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ 			tty_ldisc_put(o_tty->ldisc.ops);
+-			if (wait_event_interruptible(tty_ldisc_wait, o_tty->ldisc.refcount == 0) < 0)
++			if (wait_event_interruptible(tty_ldisc_wait, atomic_read(&o_tty->ldisc.refcount) == 0) < 0)
+ 				return -ERESTARTSYS;
+ 			goto restart;
+ 		}
+@@ -670,9 +668,9 @@ void tty_ldisc_release(struct tty_struct
+ 	 * side is zero.
+ 	 */
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	while (tty->ldisc.refcount) {
++	while (atomic_read(&tty->ldisc.refcount)) {
+ 		spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+-		wait_event(tty_ldisc_wait, tty->ldisc.refcount == 0);
++		wait_event(tty_ldisc_wait, atomic_read(&tty->ldisc.refcount) == 0);
+ 		spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	}
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/drivers/edac/edac_core.h linux-2.6.29-pax/drivers/edac/edac_core.h
 --- linux-2.6.29/drivers/edac/edac_core.h	2008-10-10 09:18:51.000000000 +0200
 +++ linux-2.6.29-pax/drivers/edac/edac_core.h	2009-03-24 08:46:38.000000000 +0100
@@ -19022,6 +19245,18 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/include/linux/s
  
  /*
   * struct kmem_cache related prototypes
+diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/include/linux/slub_def.h linux-2.6.29-pax/include/linux/slub_def.h
+--- linux-2.6.29/include/linux/slub_def.h	2008-10-10 09:19:23.000000000 +0200
++++ linux-2.6.29-pax/include/linux/slub_def.h	2009-03-28 09:59:20.000000000 +0100
+@@ -85,7 +85,7 @@ struct kmem_cache {
+ 	struct kmem_cache_order_objects max;
+ 	struct kmem_cache_order_objects min;
+ 	gfp_t allocflags;	/* gfp flags to use on each alloc */
+-	int refcount;		/* Refcount for slab cache destroy */
++	atomic_t refcount;	/* Refcount for slab cache destroy */
+ 	void (*ctor)(void *);
+ 	int inuse;		/* Offset to metadata */
+ 	int align;		/* Alignment */
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/include/linux/sysctl.h linux-2.6.29-pax/include/linux/sysctl.h
 --- linux-2.6.29/include/linux/sysctl.h	2008-12-25 12:13:53.000000000 +0100
 +++ linux-2.6.29-pax/include/linux/sysctl.h	2009-03-24 08:46:39.000000000 +0100
@@ -19050,6 +19285,24 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/include/linux/t
  			u32 val;
  			u32 flags;
  			u32 bitset;
+diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/include/linux/tty_ldisc.h linux-2.6.29-pax/include/linux/tty_ldisc.h
+--- linux-2.6.29/include/linux/tty_ldisc.h	2008-10-10 09:19:24.000000000 +0200
++++ linux-2.6.29-pax/include/linux/tty_ldisc.h	2009-03-28 11:09:36.000000000 +0100
+@@ -139,12 +139,12 @@ struct tty_ldisc_ops {
+ 
+ 	struct  module *owner;
+ 	
+-	int refcount;
++	atomic_t refcount;
+ };
+ 
+ struct tty_ldisc {
+ 	struct tty_ldisc_ops *ops;
+-	int refcount;
++	atomic_t refcount;
+ };
+ 
+ #define TTY_LDISC_MAGIC	0x5403
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/include/linux/uaccess.h linux-2.6.29-pax/include/linux/uaccess.h
 --- linux-2.6.29/include/linux/uaccess.h	2009-03-24 08:35:49.000000000 +0100
 +++ linux-2.6.29-pax/include/linux/uaccess.h	2009-03-24 08:46:39.000000000 +0100
@@ -22790,6 +23043,73 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/mm/slab.c linux
  
  /* internal cache of cache description objs */
  static struct kmem_cache cache_cache = {
+diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/mm/slub.c linux-2.6.29-pax/mm/slub.c
+--- linux-2.6.29/mm/slub.c	2009-03-24 08:35:51.000000000 +0100
++++ linux-2.6.29-pax/mm/slub.c	2009-03-28 12:59:48.000000000 +0100
+@@ -2319,7 +2319,7 @@ static int kmem_cache_open(struct kmem_c
+ 	if (!calculate_sizes(s, -1))
+ 		goto error;
+ 
+-	s->refcount = 1;
++	atomic_set(&s->refcount, 1);
+ #ifdef CONFIG_NUMA
+ 	s->remote_node_defrag_ratio = 1000;
+ #endif
+@@ -2456,8 +2456,7 @@ static inline int kmem_cache_close(struc
+ void kmem_cache_destroy(struct kmem_cache *s)
+ {
+ 	down_write(&slub_lock);
+-	s->refcount--;
+-	if (!s->refcount) {
++	if (atomic_dec_and_test(&s->refcount)) {
+ 		list_del(&s->list);
+ 		up_write(&slub_lock);
+ 		if (kmem_cache_close(s)) {
+@@ -2967,7 +2966,7 @@ void __init kmem_cache_init(void)
+ 	 */
+ 	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
+ 		sizeof(struct kmem_cache_node), GFP_KERNEL);
+-	kmalloc_caches[0].refcount = -1;
++	atomic_set(&kmalloc_caches[0].refcount, -1);
+ 	caches++;
+ 
+ 	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
+@@ -3057,7 +3056,7 @@ static int slab_unmergeable(struct kmem_
+ 	/*
+ 	 * We may have set a slab to be unmergeable during bootstrap.
+ 	 */
+-	if (s->refcount < 0)
++	if (atomic_read(&s->refcount) < 0)
+ 		return 1;
+ 
+ 	return 0;
+@@ -3114,7 +3113,7 @@ struct kmem_cache *kmem_cache_create(con
+ 	if (s) {
+ 		int cpu;
+ 
+-		s->refcount++;
++		atomic_inc(&s->refcount);
+ 		/*
+ 		 * Adjust the object sizes so that we clear
+ 		 * the complete object on kzalloc.
+@@ -3133,7 +3132,7 @@ struct kmem_cache *kmem_cache_create(con
+ 
+ 		if (sysfs_slab_alias(s, name)) {
+ 			down_write(&slub_lock);
+-			s->refcount--;
++			atomic_dec(&s->refcount);
+ 			up_write(&slub_lock);
+ 			goto err;
+ 		}
+@@ -3849,7 +3848,7 @@ SLAB_ATTR_RO(ctor);
+ 
+ static ssize_t aliases_show(struct kmem_cache *s, char *buf)
+ {
+-	return sprintf(buf, "%d\n", s->refcount - 1);
++	return sprintf(buf, "%d\n", atomic_read(&s->refcount) - 1);
+ }
+ SLAB_ATTR_RO(aliases);
+ 
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/mm/util.c linux-2.6.29-pax/mm/util.c
 --- linux-2.6.29/mm/util.c	2009-03-24 08:35:51.000000000 +0100
 +++ linux-2.6.29-pax/mm/util.c	2009-03-24 08:46:40.000000000 +0100
@@ -23025,6 +23345,45 @@ diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/net/sctp/socket
  		SCTP_DEBUG_PRINTK("sctp_get_port() found a possible match\n");
  		if (pp->fastreuse && sk->sk_reuse &&
 Files linux-2.6.29/scripts/basic/hash and linux-2.6.29-pax/scripts/basic/hash differ
+diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/scripts/mod/modpost.c linux-2.6.29-pax/scripts/mod/modpost.c
+--- linux-2.6.29/scripts/mod/modpost.c	2008-12-25 12:13:56.000000000 +0100
++++ linux-2.6.29-pax/scripts/mod/modpost.c	2009-03-28 11:34:51.000000000 +0100
+@@ -830,6 +830,7 @@ enum mismatch {
+ 	INIT_TO_EXIT,
+ 	EXIT_TO_INIT,
+ 	EXPORT_TO_INIT_EXIT,
++	DATA_TO_TEXT
+ };
+ 
+ struct sectioncheck {
+@@ -891,6 +892,12 @@ const struct sectioncheck sectioncheck[]
+ 	.fromsec = { "__ksymtab*", NULL },
+ 	.tosec   = { INIT_SECTIONS, EXIT_SECTIONS, NULL },
+ 	.mismatch = EXPORT_TO_INIT_EXIT
++},
++/* Do not reference code from writable data */
++{
++	.fromsec = { DATA_SECTIONS, NULL },
++	.tosec   = { TEXT_SECTIONS, NULL },
++	.mismatch = DATA_TO_TEXT
+ }
+ };
+ 
+@@ -1249,6 +1256,14 @@ static void report_sec_mismatch(const ch
+ 		"Fix this by removing the %sannotation of %s "
+ 		"or drop the export.\n",
+ 		tosym, sec2annotation(tosec), sec2annotation(tosec), tosym);
++	case DATA_TO_TEXT:
++/*
++		fprintf(stderr,
++		"The variable %s references\n"
++		"the %s %s%s%s\n"
++		fromsym, to, sec2annotation(tosec), tosym, to_p);
++*/
++		break;
+ 	case NO_MISMATCH:
+ 		/* To get warnings on missing members */
+ 		break;
 diff -NurpX linux-2.6.29-pax/Documentation/dontdiff linux-2.6.29/scripts/pnmtologo.c linux-2.6.29-pax/scripts/pnmtologo.c
 --- linux-2.6.29/scripts/pnmtologo.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.29-pax/scripts/pnmtologo.c	2009-03-24 08:46:40.000000000 +0100
