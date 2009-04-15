@@ -19835,7 +19835,7 @@ diff -NurpX linux-2.6.27.9-pax/Documentation/dontdiff linux-2.6.27.9/kernel/lock
  			return 1;
 diff -NurpX linux-2.6.27.9-pax/Documentation/dontdiff linux-2.6.27.9/kernel/module.c linux-2.6.27.9-pax/kernel/module.c
 --- linux-2.6.27.9/kernel/module.c	2008-10-23 12:58:56.000000000 +0200
-+++ linux-2.6.27.9-pax/kernel/module.c	2008-11-19 15:00:22.000000000 +0100
++++ linux-2.6.27.9-pax/kernel/module.c	2008-12-14 23:29:47.000000000 +0100
 @@ -44,6 +44,11 @@
  #include <linux/unwind.h>
  #include <asm/uaccess.h>
@@ -20132,21 +20132,21 @@ diff -NurpX linux-2.6.27.9-pax/Documentation/dontdiff linux-2.6.27.9/kernel/modu
 -	if (!ptr && mod->init_size) {
 +	ptr = module_alloc_update_bounds_rw(mod->init_size_rw);
 +	if (!ptr && mod->init_size_rw) {
-+		err = -ENOMEM;
+ 		err = -ENOMEM;
+-		goto free_core;
 +		goto free_core_rw;
-+	}
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
 +	memset(ptr, 0, mod->init_size_rw);
 +	mod->module_init_rw = ptr;
 +
 +	ptr = module_alloc_update_bounds_rx(mod->core_size_rx);
 +	if (!ptr) {
- 		err = -ENOMEM;
--		goto free_core;
++		err = -ENOMEM;
 +		goto free_init_rw;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
- 
++	}
++
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
 +#endif
@@ -20168,7 +20168,7 @@ diff -NurpX linux-2.6.27.9-pax/Documentation/dontdiff linux-2.6.27.9/kernel/modu
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
 +#endif
-+
+ 
 +	memset(ptr, 0, mod->init_size_rx);
 +
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -20203,7 +20203,10 @@ diff -NurpX linux-2.6.27.9-pax/Documentation/dontdiff linux-2.6.27.9/kernel/modu
 +		}
 +
 +		if (sechdrs[i].sh_type != SHT_NOBITS) {
-+
+ 
+-		if (sechdrs[i].sh_type != SHT_NOBITS)
+-			memcpy(dest, (void *)sechdrs[i].sh_addr,
+-			       sechdrs[i].sh_size);
 +#ifdef CONFIG_PAX_KERNEXEC
 +			if (!(sechdrs[i].sh_flags & SHF_WRITE) && (sechdrs[i].sh_flags & SHF_ALLOC)) {
 +				pax_open_kernel(cr0);
@@ -20211,10 +20214,7 @@ diff -NurpX linux-2.6.27.9-pax/Documentation/dontdiff linux-2.6.27.9/kernel/modu
 +				pax_close_kernel(cr0);
 +			} else
 +#endif
- 
--		if (sechdrs[i].sh_type != SHT_NOBITS)
--			memcpy(dest, (void *)sechdrs[i].sh_addr,
--			       sechdrs[i].sh_size);
++
 +			memcpy(dest, (void *)sechdrs[i].sh_addr, sechdrs[i].sh_size);
 +		}
  		/* Update sh_addr to point to copy in image. */
@@ -20392,11 +20392,15 @@ diff -NurpX linux-2.6.27.9-pax/Documentation/dontdiff linux-2.6.27.9/kernel/modu
  			preempt_enable();
  			return 1;
  		}
-@@ -2663,12 +2827,12 @@ struct module *__module_text_address(uns
+@@ -2663,12 +2827,16 @@ struct module *__module_text_address(uns
  {
  	struct module *mod;
  
 -	if (addr < module_addr_min || addr > module_addr_max)
++#ifdef CONFIG_X86_32
++	addr = ktla_ktva(addr);
++#endif
++
 +	if (addr < module_addr_min_rx || addr > module_addr_max_rx)
  		return NULL;
  
