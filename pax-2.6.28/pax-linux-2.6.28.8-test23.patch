@@ -9982,7 +9982,7 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/ke
  	 * to convert VMI_IRET to a call instead of a jump; so we have
 diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/kernel/vmlinux_32.lds.S linux-2.6.28.8-pax/arch/x86/kernel/vmlinux_32.lds.S
 --- linux-2.6.28.8/arch/x86/kernel/vmlinux_32.lds.S	2008-12-25 12:13:19.000000000 +0100
-+++ linux-2.6.28.8-pax/arch/x86/kernel/vmlinux_32.lds.S	2008-12-25 12:20:08.000000000 +0100
++++ linux-2.6.28.8-pax/arch/x86/kernel/vmlinux_32.lds.S	2009-03-18 15:29:00.000000000 +0100
 @@ -15,6 +15,20 @@
  #include <asm/page.h>
  #include <asm/cache.h>
@@ -10023,8 +10023,7 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/ke
  {
 -  . = LOAD_OFFSET + LOAD_PHYSICAL_ADDR;
 -  phys_startup_32 = startup_32 - LOAD_OFFSET;
-+  . = LOAD_OFFSET + ____LOAD_PHYSICAL_ADDR;
- 
+-
 -  .text.head : AT(ADDR(.text.head) - LOAD_OFFSET) {
 -  	_text = .;			/* Text and read-only data */
 -	*(.text.head)
@@ -10068,7 +10067,8 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/ke
 -  	. = ALIGN(PAGE_SIZE);
 -  	__nosave_end = .;
 -  }
--
++  . = LOAD_OFFSET + ____LOAD_PHYSICAL_ADDR;
+ 
 -  . = ALIGN(PAGE_SIZE);
 -  .data.page_aligned : AT(ADDR(.data.page_aligned) - LOAD_OFFSET) {
 -	*(.data.page_aligned)
@@ -10192,14 +10192,15 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/ke
 +
 +  . += __KERNEL_TEXT_OFFSET;
 +
-+  . = ALIGN(4096);		/* Exception table */
++  . = ALIGN(4096);
++  NOTES :rodata :note
++
++  . = ALIGN(16);		/* Exception table */
 +  __ex_table : AT(ADDR(__ex_table) - LOAD_OFFSET) {
 +  	__start___ex_table = .;
 +	 *(__ex_table)
 +  	__stop___ex_table = .;
 +  } :rodata
-+
-+  NOTES :rodata :note
 +
 +  RO_DATA(PAGE_SIZE)
 +
@@ -10210,23 +10211,22 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/ke
 +	*(.empty_zero_page)
 +	*(.swapper_pg_pmd)
 +	*(.swapper_pg_dir)
++
++#if defined(CONFIG_PAX_KERNEXEC) && !defined(CONFIG_MODULES)
++	. = ALIGN(PMD_SIZE);
++#endif
++
 +	}
 +
-+#ifdef CONFIG_PAX_KERNEXEC
-+
-+#ifdef CONFIG_MODULES
++#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_MODULES)
 +  . = ALIGN(PAGE_SIZE);
 +  .module.text : AT(ADDR(.module.text) - LOAD_OFFSET) {
 +	MODULES_VADDR = .;
 +	BYTE(0)
 +	. += (6 * 1024 * 1024);
-+	. = ALIGN( PMD_SIZE) - 1;
-+	MODULES_END = .;
++	. = ALIGN(PMD_SIZE);
++	MODULES_END = . - 1;
 +  }
-+#else
-+  . = ALIGN(PMD_SIZE) - 1;
-+#endif
-+
 +#endif
 +
 +  /* writeable */
@@ -13891,6 +13891,18 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/mm
  extern unsigned long highend_pfn, highstart_pfn;
  
  #define LARGE_PAGE_BYTES (PTRS_PER_PTE * PAGE_SIZE)
+diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/mm/pageattr-test.c linux-2.6.28.8-pax/arch/x86/mm/pageattr-test.c
+--- linux-2.6.28.8/arch/x86/mm/pageattr-test.c	2008-12-25 12:13:19.000000000 +0100
++++ linux-2.6.28.8-pax/arch/x86/mm/pageattr-test.c	2009-03-18 11:24:44.000000000 +0100
+@@ -36,7 +36,7 @@ enum {
+ 
+ static int pte_testbit(pte_t pte)
+ {
+-	return pte_flags(pte) & _PAGE_UNUSED1;
++	return pte_flags(pte) & _PAGE_CPA_TEST;
+ }
+ 
+ struct split_state {
 diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/arch/x86/mm/pageattr.c linux-2.6.28.8-pax/arch/x86/mm/pageattr.c
 --- linux-2.6.28.8/arch/x86/mm/pageattr.c	2009-02-21 14:25:21.000000000 +0100
 +++ linux-2.6.28.8-pax/arch/x86/mm/pageattr.c	2009-02-21 14:26:57.000000000 +0100
@@ -18684,16 +18696,21 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/include/lin
  
 diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/include/linux/highmem.h linux-2.6.28.8-pax/include/linux/highmem.h
 --- linux-2.6.28.8/include/linux/highmem.h	2008-12-25 12:13:52.000000000 +0100
-+++ linux-2.6.28.8-pax/include/linux/highmem.h	2008-12-25 12:20:09.000000000 +0100
-@@ -124,6 +124,13 @@ static inline void clear_highpage(struct
++++ linux-2.6.28.8-pax/include/linux/highmem.h	2009-03-18 13:05:01.000000000 +0100
+@@ -124,6 +124,18 @@ static inline void clear_highpage(struct
  	kunmap_atomic(kaddr, KM_USER0);
  }
  
 +static inline void sanitize_highpage(struct page *page)
 +{
-+	void *kaddr = kmap_atomic(page, KM_CLEARPAGE);
++	void *kaddr;
++	unsigned long flags;
++
++	local_irq_save(flags);
++	kaddr = kmap_atomic(page, KM_CLEARPAGE);
 +	clear_page(kaddr);
 +	kunmap_atomic(kaddr, KM_CLEARPAGE);
++	local_irq_restore(flags);
 +}
 +
  static inline void zero_user_segments(struct page *page,
@@ -22914,7 +22931,7 @@ diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/mm/nommu.c 
  	return -ENOMEM;
 diff -NurpX linux-2.6.28.8-pax/Documentation/dontdiff linux-2.6.28.8/mm/page_alloc.c linux-2.6.28.8-pax/mm/page_alloc.c
 --- linux-2.6.28.8/mm/page_alloc.c	2009-03-17 09:39:34.000000000 +0100
-+++ linux-2.6.28.8-pax/mm/page_alloc.c	2009-03-17 09:42:09.000000000 +0100
++++ linux-2.6.28.8-pax/mm/page_alloc.c	2009-03-18 13:08:01.000000000 +0100
 @@ -525,6 +525,10 @@ static void __free_pages_ok(struct page 
  	int i;
  	int reserved = 0;
