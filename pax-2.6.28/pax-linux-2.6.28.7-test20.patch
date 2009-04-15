@@ -3177,7 +3177,7 @@ diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/arch/x86/bo
  }
 diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/arch/x86/boot/compressed/head_32.S linux-2.6.28.7-pax/arch/x86/boot/compressed/head_32.S
 --- linux-2.6.28.7/arch/x86/boot/compressed/head_32.S	2008-12-25 12:13:18.000000000 +0100
-+++ linux-2.6.28.7-pax/arch/x86/boot/compressed/head_32.S	2008-12-25 12:20:08.000000000 +0100
++++ linux-2.6.28.7-pax/arch/x86/boot/compressed/head_32.S	2009-03-11 23:55:13.000000000 +0100
 @@ -70,7 +70,7 @@ startup_32:
  	addl    $(CONFIG_PHYSICAL_ALIGN - 1), %ebx
  	andl    $(~(CONFIG_PHYSICAL_ALIGN - 1)), %ebx
@@ -3187,6 +3187,17 @@ diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/arch/x86/bo
  #endif
  
  	/* Replace the compressed data size with the uncompressed size */
+@@ -80,8 +80,8 @@ startup_32:
+ 	/* Add 8 bytes for every 32K input block */
+ 	shrl $12, %eax
+ 	addl %eax, %ebx
+-	/* Add 32K + 18 bytes of extra slack */
+-	addl $(32768 + 18), %ebx
++	/* Add 64K of extra slack */
++	addl $65536, %ebx
+ 	/* Align on a 4K boundary */
+ 	addl $4095, %ebx
+ 	andl $~4095, %ebx
 @@ -105,7 +105,7 @@ startup_32:
  	addl    $(CONFIG_PHYSICAL_ALIGN - 1), %ebp
  	andl    $(~(CONFIG_PHYSICAL_ALIGN - 1)), %ebp
@@ -13923,29 +13934,16 @@ diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/arch/x86/mm
  		struct page *page;
 diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/arch/x86/mm/pat.c linux-2.6.28.7-pax/arch/x86/mm/pat.c
 --- linux-2.6.28.7/arch/x86/mm/pat.c	2009-02-03 14:19:02.000000000 +0100
-+++ linux-2.6.28.7-pax/arch/x86/mm/pat.c	2009-02-03 14:21:20.000000000 +0100
-@@ -491,13 +491,6 @@ pgprot_t phys_mem_access_prot(struct fil
++++ linux-2.6.28.7-pax/arch/x86/mm/pat.c	2009-02-27 21:44:50.000000000 +0100
+@@ -491,7 +491,7 @@ pgprot_t phys_mem_access_prot(struct fil
  	return vma_prot;
  }
  
 -#ifdef CONFIG_STRICT_DEVMEM
--/* This check is done in drivers/char/mem.c in case of STRICT_DEVMEM*/
--static inline int range_is_allowed(unsigned long pfn, unsigned long size)
--{
--	return 1;
--}
--#else
- /* This check is needed to avoid cache aliasing when PAT is enabled */
++#ifndef CONFIG_STRICT_DEVMEM
+ /* This check is done in drivers/char/mem.c in case of STRICT_DEVMEM*/
  static inline int range_is_allowed(unsigned long pfn, unsigned long size)
  {
-@@ -520,7 +513,6 @@ static inline int range_is_allowed(unsig
- 	}
- 	return 1;
- }
--#endif /* CONFIG_STRICT_DEVMEM */
- 
- int phys_mem_access_prot_allowed(struct file *file, unsigned long pfn,
- 				unsigned long size, pgprot_t *vma_prot)
 diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/arch/x86/mm/pgtable_32.c linux-2.6.28.7-pax/arch/x86/mm/pgtable_32.c
 --- linux-2.6.28.7/arch/x86/mm/pgtable_32.c	2008-12-25 12:13:19.000000000 +0100
 +++ linux-2.6.28.7-pax/arch/x86/mm/pgtable_32.c	2008-12-25 12:20:08.000000000 +0100
@@ -15268,6 +15266,27 @@ diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/drivers/inp
  };
  
  MODULE_DEVICE_TABLE(serio, serio_raw_serio_ids);
+diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/drivers/lguest/core.c linux-2.6.28.7-pax/drivers/lguest/core.c
+--- linux-2.6.28.7/drivers/lguest/core.c	2008-10-10 09:18:55.000000000 +0200
++++ linux-2.6.28.7-pax/drivers/lguest/core.c	2009-03-01 00:28:34.000000000 +0100
+@@ -80,9 +80,17 @@ static __init int map_switcher(void)
+ 	 * (SWITCHER_ADDR).  We might not get it in theory, but in practice
+ 	 * it's worked so far.  The end address needs +1 because __get_vm_area
+ 	 * allocates an extra guard page, so we need space for that. */
++
++#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++	switcher_vma = __get_vm_area(TOTAL_SWITCHER_PAGES * PAGE_SIZE,
++				     VM_ALLOC | VM_KERNEXEC, SWITCHER_ADDR, SWITCHER_ADDR
++				     + (TOTAL_SWITCHER_PAGES+1) * PAGE_SIZE);
++#else
+ 	switcher_vma = __get_vm_area(TOTAL_SWITCHER_PAGES * PAGE_SIZE,
+ 				     VM_ALLOC, SWITCHER_ADDR, SWITCHER_ADDR
+ 				     + (TOTAL_SWITCHER_PAGES+1) * PAGE_SIZE);
++#endif
++
+ 	if (!switcher_vma) {
+ 		err = -ENOMEM;
+ 		printk("lguest: could not map switcher pages high\n");
 diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/drivers/md/bitmap.c linux-2.6.28.7-pax/drivers/md/bitmap.c
 --- linux-2.6.28.7/drivers/md/bitmap.c	2009-01-19 10:47:30.000000000 +0100
 +++ linux-2.6.28.7-pax/drivers/md/bitmap.c	2009-01-19 10:47:54.000000000 +0100
@@ -19520,7 +19539,7 @@ diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/init/initra
  	next_state = Reset;
 diff -NurpX linux-2.6.28.7-pax/Documentation/dontdiff linux-2.6.28.7/init/main.c linux-2.6.28.7-pax/init/main.c
 --- linux-2.6.28.7/init/main.c	2008-12-25 12:13:54.000000000 +0100
-+++ linux-2.6.28.7-pax/init/main.c	2008-12-25 12:20:09.000000000 +0100
++++ linux-2.6.28.7-pax/init/main.c	2009-02-25 15:19:45.000000000 +0100
 @@ -190,6 +190,40 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
