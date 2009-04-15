@@ -13683,7 +13683,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_a
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_elf.c linux-2.6.27.8-pax/fs/binfmt_elf.c
 --- linux-2.6.27.8/fs/binfmt_elf.c	2008-10-10 09:19:11.000000000 +0200
-+++ linux-2.6.27.8-pax/fs/binfmt_elf.c	2008-10-10 09:20:24.000000000 +0200
++++ linux-2.6.27.8-pax/fs/binfmt_elf.c	2008-12-13 18:25:01.000000000 +0100
 @@ -42,6 +42,10 @@
  #include <asm/param.h>
  #include <asm/page.h>
@@ -13695,7 +13695,30 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  static int load_elf_binary(struct linux_binprm *bprm, struct pt_regs *regs);
  static int load_elf_library(struct file *);
  static unsigned long elf_map(struct file *, unsigned long, struct elf_phdr *,
-@@ -84,6 +88,8 @@ static struct linux_binfmt elf_format = 
+@@ -57,6 +61,10 @@ static int elf_core_dump(long signr, str
+ #define elf_core_dump	NULL
+ #endif
+ 
++#ifdef CONFIG_PAX_MPROTECT
++static void elf_handle_mprotect(struct vm_area_struct *vma, unsigned long newflags);
++#endif
++
+ #if ELF_EXEC_PAGESIZE > PAGE_SIZE
+ #define ELF_MIN_ALIGN	ELF_EXEC_PAGESIZE
+ #else
+@@ -76,6 +84,11 @@ static struct linux_binfmt elf_format = 
+ 		.load_binary	= load_elf_binary,
+ 		.load_shlib	= load_elf_library,
+ 		.core_dump	= elf_core_dump,
++
++#ifdef CONFIG_PAX_MPROTECT
++		.handle_mprotect= elf_handle_mprotect,
++#endif
++
+ 		.min_coredump	= ELF_EXEC_PAGESIZE,
+ 		.hasvdso	= 1
+ };
+@@ -84,6 +97,8 @@ static struct linux_binfmt elf_format = 
  
  static int set_brk(unsigned long start, unsigned long end)
  {
@@ -13704,7 +13727,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	start = ELF_PAGEALIGN(start);
  	end = ELF_PAGEALIGN(end);
  	if (end > start) {
-@@ -94,7 +100,7 @@ static int set_brk(unsigned long start, 
+@@ -94,7 +109,7 @@ static int set_brk(unsigned long start, 
  		if (BAD_ADDR(addr))
  			return addr;
  	}
@@ -13713,7 +13736,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	return 0;
  }
  
-@@ -380,10 +386,10 @@ static unsigned long load_elf_interp(str
+@@ -380,10 +395,10 @@ static unsigned long load_elf_interp(str
  {
  	struct elf_phdr *elf_phdata;
  	struct elf_phdr *eppnt;
@@ -13726,7 +13749,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	unsigned long total_size;
  	int retval, i, size;
  
-@@ -429,6 +435,11 @@ static unsigned long load_elf_interp(str
+@@ -429,6 +444,11 @@ static unsigned long load_elf_interp(str
  		goto out_close;
  	}
  
@@ -13738,7 +13761,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	eppnt = elf_phdata;
  	for (i = 0; i < interp_elf_ex->e_phnum; i++, eppnt++) {
  		if (eppnt->p_type == PT_LOAD) {
-@@ -472,8 +483,8 @@ static unsigned long load_elf_interp(str
+@@ -472,8 +492,8 @@ static unsigned long load_elf_interp(str
  			k = load_addr + eppnt->p_vaddr;
  			if (BAD_ADDR(k) ||
  			    eppnt->p_filesz > eppnt->p_memsz ||
@@ -13749,7 +13772,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -527,6 +538,177 @@ out:
+@@ -527,6 +547,177 @@ out:
  	return error;
  }
  
@@ -13927,7 +13950,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -543,6 +725,11 @@ static unsigned long randomize_stack_top
+@@ -543,6 +734,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -13939,7 +13962,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -561,7 +748,7 @@ static int load_elf_binary(struct linux_
+@@ -561,7 +757,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -13948,7 +13971,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int elf_exec_fileno;
-@@ -572,11 +759,11 @@ static int load_elf_binary(struct linux_
+@@ -572,11 +768,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -13961,7 +13984,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -744,11 +931,80 @@ static int load_elf_binary(struct linux_
+@@ -744,11 +940,80 @@ static int load_elf_binary(struct linux_
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -14043,7 +14066,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -829,6 +1085,20 @@ static int load_elf_binary(struct linux_
+@@ -829,6 +1094,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -14064,7 +14087,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -861,9 +1131,9 @@ static int load_elf_binary(struct linux_
+@@ -861,9 +1140,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -14077,7 +14100,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -891,6 +1161,11 @@ static int load_elf_binary(struct linux_
+@@ -891,6 +1170,11 @@ static int load_elf_binary(struct linux_
  	start_data += load_bias;
  	end_data += load_bias;
  
@@ -14089,7 +14112,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	/* Calling set_brk effectively mmaps the pages that we need
  	 * for the bss and break sections.  We must do this before
  	 * mapping in the interpreter, to make sure it doesn't wind
-@@ -902,9 +1177,11 @@ static int load_elf_binary(struct linux_
+@@ -902,9 +1186,11 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -14104,7 +14127,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  	}
  
  	if (elf_interpreter) {
-@@ -1141,8 +1418,10 @@ static int dump_seek(struct file *file, 
+@@ -1141,8 +1427,10 @@ static int dump_seek(struct file *file, 
  			unsigned long n = off;
  			if (n > PAGE_SIZE)
  				n = PAGE_SIZE;
@@ -14116,7 +14139,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  			off -= n;
  		}
  		free_page((unsigned long)buf);
-@@ -1154,7 +1433,7 @@ static int dump_seek(struct file *file, 
+@@ -1154,7 +1442,7 @@ static int dump_seek(struct file *file, 
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -14125,7 +14148,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  {
  	/* The vma can be set up to tell us the answer directly.  */
  	if (vma->vm_flags & VM_ALWAYSDUMP)
-@@ -1180,7 +1459,7 @@ static unsigned long vma_dump_size(struc
+@@ -1180,7 +1468,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -14134,7 +14157,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  		goto whole;
  
  	/*
-@@ -1973,7 +2252,7 @@ static int elf_core_dump(long signr, str
+@@ -1973,7 +2261,7 @@ static int elf_core_dump(long signr, str
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -14143,7 +14166,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2005,7 +2284,7 @@ static int elf_core_dump(long signr, str
+@@ -2005,7 +2293,7 @@ static int elf_core_dump(long signr, str
  		unsigned long addr;
  		unsigned long end;
  
@@ -14152,6 +14175,105 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_e
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
+@@ -2055,6 +2343,98 @@ out:
+ 
+ #endif		/* USE_ELF_CORE_DUMP */
+ 
++#ifdef CONFIG_PAX_MPROTECT
++/* PaX: non-PIC ELF libraries need relocations on their executable segments
++ * therefore we'll grant them VM_MAYWRITE once during their life. Similarly
++ * we'll remove VM_MAYWRITE for good on RELRO segments.
++ *
++ * The checks favour ld-linux.so behaviour which operates on a per ELF segment
++ * basis because we want to allow the common case and not the special ones.
++ */
++static void elf_handle_mprotect(struct vm_area_struct *vma, unsigned long newflags)
++{
++	struct elfhdr elf_h;
++	struct elf_phdr elf_p;
++	unsigned long i;
++	unsigned long oldflags;
++	bool is_textrel_rw, is_textrel_rx, is_relro;
++
++	if (!(vma->vm_mm->pax_flags & MF_PAX_MPROTECT))
++		return;
++
++	oldflags = vma->vm_flags & (VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_EXEC | VM_WRITE | VM_READ);
++	newflags &= VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_EXEC | VM_WRITE | VM_READ;
++
++#ifdef CONFIG_PAX_NOELFRELOCS
++	is_textrel_rw = false;
++	is_textrel_rx = false;
++#else
++	/* possible TEXTREL */
++	is_textrel_rw = vma->vm_file && !vma->anon_vma && !vma->vm_pgoff && oldflags == (VM_MAYEXEC | VM_MAYREAD | VM_EXEC | VM_READ) && newflags == (VM_WRITE | VM_READ);
++	is_textrel_rx = vma->vm_file && vma->anon_vma && !vma->vm_pgoff && oldflags == (VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_WRITE | VM_READ) && newflags == (VM_EXEC | VM_READ);
++#endif
++
++	/* possible RELRO */
++	is_relro = vma->vm_file && vma->anon_vma && oldflags == (VM_MAYWRITE | VM_MAYREAD | VM_READ) && newflags == (VM_MAYWRITE | VM_MAYREAD | VM_READ);
++
++	if (!is_textrel_rw && !is_textrel_rx && !is_relro)
++		return;
++
++	if (sizeof(elf_h) != kernel_read(vma->vm_file, 0UL, (char *)&elf_h, sizeof(elf_h)) ||
++	    memcmp(elf_h.e_ident, ELFMAG, SELFMAG) ||
++
++#ifdef CONFIG_PAX_ETEXECRELOCS
++	    ((is_textrel_rw || is_textrel_rx) && (elf_h.e_type != ET_DYN && elf_h.e_type != ET_EXEC)) ||
++#else
++	    ((is_textrel_rw || is_textrel_rx) && elf_h.e_type != ET_DYN) ||
++#endif
++
++	    (is_relro && (elf_h.e_type != ET_DYN && elf_h.e_type != ET_EXEC)) ||
++	    !elf_check_arch(&elf_h) ||
++	    elf_h.e_phentsize != sizeof(struct elf_phdr) ||
++	    elf_h.e_phnum > 65536UL / sizeof(struct elf_phdr))
++		return;
++
++	for (i = 0UL; i < elf_h.e_phnum; i++) {
++		if (sizeof(elf_p) != kernel_read(vma->vm_file, elf_h.e_phoff + i*sizeof(elf_p), (char *)&elf_p, sizeof(elf_p)))
++			return;
++		switch (elf_p.p_type) {
++		case PT_DYNAMIC: {
++			elf_addr_t dyn_offset = 0UL;
++			elf_dyn dyn;
++
++			if (!is_textrel_rw && !is_textrel_rx)
++				continue;
++			dyn_offset = elf_p.p_offset;
++			i = 0UL;
++			do {
++				if (sizeof(dyn) != kernel_read(vma->vm_file, dyn_offset + i*sizeof(dyn), (char *)&dyn, sizeof(dyn)))
++					return;
++				if (dyn.d_tag == DT_TEXTREL || (dyn.d_tag == DT_FLAGS && (dyn.d_un.d_val & DF_TEXTREL))) {
++					if (is_textrel_rw)
++						vma->vm_flags |= VM_MAYWRITE;
++					else
++						/* PaX: disallow write access after relocs are done, hopefully noone else needs it... */
++						vma->vm_flags &= ~VM_MAYWRITE;
++					return;
++				}
++				i++;
++			} while (dyn.d_tag != DT_NULL);
++			return;
++		}
++
++		case PT_GNU_RELRO:
++			if (!is_relro)
++				continue;
++			if ((elf_p.p_offset >> PAGE_SHIFT) == vma->vm_pgoff && ELF_PAGEALIGN(elf_p.p_memsz) == vma->vm_end - vma->vm_start) {
++				vma->vm_flags &= ~VM_MAYWRITE;
++			}
++			return;
++		}
++	}
++}
++#endif
++
+ static int __init init_elf_binfmt(void)
+ {
+ 	return register_binfmt(&elf_format);
 diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/fs/binfmt_flat.c linux-2.6.27.8-pax/fs/binfmt_flat.c
 --- linux-2.6.27.8/fs/binfmt_flat.c	2008-10-10 09:19:11.000000000 +0200
 +++ linux-2.6.27.8-pax/fs/binfmt_flat.c	2008-10-10 09:20:24.000000000 +0200
@@ -18325,6 +18447,17 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  #if !defined (N_MAGIC)
  #define N_MAGIC(exec) ((exec).a_info & 0xffff)
  #endif
+diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/linux/binfmts.h linux-2.6.27.8-pax/include/linux/binfmts.h
+--- linux-2.6.27.8/include/linux/binfmts.h	2008-10-10 09:19:22.000000000 +0200
++++ linux-2.6.27.8-pax/include/linux/binfmts.h	2008-12-13 01:05:38.000000000 +0100
+@@ -69,6 +69,7 @@ struct linux_binfmt {
+ 	int (*load_binary)(struct linux_binprm *, struct  pt_regs * regs);
+ 	int (*load_shlib)(struct file *);
+ 	int (*core_dump)(long signr, struct pt_regs *regs, struct file *file, unsigned long limit);
++	void (*handle_mprotect)(struct vm_area_struct *vma, unsigned long newflags);
+ 	unsigned long min_coredump;	/* minimal dump size */
+ 	int hasvdso;
+ };
 diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/linux/cache.h linux-2.6.27.8-pax/include/linux/cache.h
 --- linux-2.6.27.8/include/linux/cache.h	2008-07-14 03:51:43.000000000 +0200
 +++ linux-2.6.27.8-pax/include/linux/cache.h	2008-10-10 09:20:24.000000000 +0200
@@ -18352,11 +18485,13 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  static inline void __cpu_set(int cpu, volatile cpumask_t *dstp)
 diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/linux/elf.h linux-2.6.27.8-pax/include/linux/elf.h
 --- linux-2.6.27.8/include/linux/elf.h	2008-10-10 09:19:23.000000000 +0200
-+++ linux-2.6.27.8-pax/include/linux/elf.h	2008-10-10 09:20:24.000000000 +0200
-@@ -50,6 +50,16 @@ typedef __s64	Elf64_Sxword;
++++ linux-2.6.27.8-pax/include/linux/elf.h	2008-12-13 14:54:39.000000000 +0100
+@@ -49,6 +49,17 @@ typedef __s64	Elf64_Sxword;
+ #define PT_GNU_EH_FRAME		0x6474e550
  
  #define PT_GNU_STACK	(PT_LOOS + 0x474e551)
- 
++#define PT_GNU_RELRO	(PT_LOOS + 0x474e552)
++
 +#define PT_PAX_FLAGS	(PT_LOOS + 0x5041580)
 +
 +/* Constants for the e_flags field */
@@ -18366,11 +18501,10 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
 +#define EF_PAX_RANDMMAP		8	/* Randomize mmap() base */
 +/*#define EF_PAX_RANDEXEC		16*/	/* Randomize ET_EXEC base */
 +#define EF_PAX_SEGMEXEC		32	/* Segmentation based non-executable pages */
-+
+ 
  /* These constants define the different elf file types */
  #define ET_NONE   0
- #define ET_REL    1
-@@ -84,6 +94,8 @@ typedef __s64	Elf64_Sxword;
+@@ -84,6 +95,8 @@ typedef __s64	Elf64_Sxword;
  #define DT_DEBUG	21
  #define DT_TEXTREL	22
  #define DT_JMPREL	23
@@ -18379,7 +18513,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  #define DT_ENCODING	32
  #define OLD_DT_LOOS	0x60000000
  #define DT_LOOS		0x6000000d
-@@ -230,6 +242,19 @@ typedef struct elf64_hdr {
+@@ -230,6 +243,19 @@ typedef struct elf64_hdr {
  #define PF_W		0x2
  #define PF_X		0x1
  
@@ -18399,7 +18533,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  typedef struct elf32_phdr{
    Elf32_Word	p_type;
    Elf32_Off	p_offset;
-@@ -322,6 +347,8 @@ typedef struct elf64_shdr {
+@@ -322,6 +348,8 @@ typedef struct elf64_shdr {
  #define	EI_OSABI	7
  #define	EI_PAD		8
  
@@ -18408,7 +18542,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  #define	ELFMAG0		0x7f		/* EI_MAG */
  #define	ELFMAG1		'E'
  #define	ELFMAG2		'L'
-@@ -383,6 +410,7 @@ extern Elf32_Dyn _DYNAMIC [];
+@@ -383,6 +411,7 @@ extern Elf32_Dyn _DYNAMIC [];
  #define elf_phdr	elf32_phdr
  #define elf_note	elf32_note
  #define elf_addr_t	Elf32_Off
@@ -18416,7 +18550,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  
  #else
  
-@@ -391,6 +419,7 @@ extern Elf64_Dyn _DYNAMIC [];
+@@ -391,6 +420,7 @@ extern Elf64_Dyn _DYNAMIC [];
  #define elf_phdr	elf64_phdr
  #define elf_note	elf64_note
  #define elf_addr_t	Elf64_Off
@@ -18485,7 +18619,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  #define BPRINTK(fmt, args...) if (ap->flags & ATA_FLAG_DEBUGMSG) printk(KERN_ERR "%s: " fmt, __func__, ## args)
 diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/linux/mm.h linux-2.6.27.8-pax/include/linux/mm.h
 --- linux-2.6.27.8/include/linux/mm.h	2008-10-10 09:19:23.000000000 +0200
-+++ linux-2.6.27.8-pax/include/linux/mm.h	2008-10-10 09:20:24.000000000 +0200
++++ linux-2.6.27.8-pax/include/linux/mm.h	2008-12-12 23:32:07.000000000 +0100
 @@ -38,6 +38,7 @@ extern unsigned long mmap_min_addr;
  #include <asm/page.h>
  #include <asm/pgtable.h>
@@ -18494,7 +18628,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  
  #define nth_page(page,n) pfn_to_page(page_to_pfn((page)) + (n))
  
-@@ -114,6 +115,14 @@ extern unsigned int kobjsize(const void 
+@@ -114,6 +115,10 @@ extern unsigned int kobjsize(const void 
  #define VM_MIXEDMAP	0x10000000	/* Can contain "struct page" and pure PFN pages */
  #define VM_SAO		0x20000000	/* Strong Access Ordering (powerpc) */
  
@@ -18502,14 +18636,10 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
 +#define VM_PAGEEXEC	0x40000000	/* vma->vm_page_prot needs special handling */
 +#endif
 +
-+#ifdef CONFIG_PAX_MPROTECT
-+#define VM_MAYNOTWRITE	0x80000000	/* vma cannot be granted VM_WRITE any more */
-+#endif
-+
  #ifndef VM_STACK_DEFAULT_FLAGS		/* arch can override this */
  #define VM_STACK_DEFAULT_FLAGS VM_DATA_DEFAULT_FLAGS
  #endif
-@@ -874,6 +883,8 @@ struct shrinker {
+@@ -874,6 +879,8 @@ struct shrinker {
  extern void register_shrinker(struct shrinker *);
  extern void unregister_shrinker(struct shrinker *);
  
@@ -18518,7 +18648,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  int vma_wants_writenotify(struct vm_area_struct *vma);
  
  extern pte_t *get_locked_pte(struct mm_struct *mm, unsigned long addr, spinlock_t **ptl);
-@@ -1129,6 +1140,7 @@ out:
+@@ -1129,6 +1136,7 @@ out:
  }
  
  extern int do_munmap(struct mm_struct *, unsigned long, size_t);
@@ -18526,7 +18656,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  
  extern unsigned long do_brk(unsigned long, unsigned long);
  
-@@ -1181,6 +1193,10 @@ extern struct vm_area_struct * find_vma(
+@@ -1181,6 +1189,10 @@ extern struct vm_area_struct * find_vma(
  extern struct vm_area_struct * find_vma_prev(struct mm_struct * mm, unsigned long addr,
  					     struct vm_area_struct **pprev);
  
@@ -18537,7 +18667,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  /* Look up the first VMA which intersects the interval start_addr..end_addr-1,
     NULL if none.  Assume start_addr < end_addr. */
  static inline struct vm_area_struct * find_vma_intersection(struct mm_struct * mm, unsigned long start_addr, unsigned long end_addr)
-@@ -1197,7 +1213,6 @@ static inline unsigned long vma_pages(st
+@@ -1197,7 +1209,6 @@ static inline unsigned long vma_pages(st
  	return (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
  }
  
@@ -18545,7 +18675,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/include/lin
  struct vm_area_struct *find_extend_vma(struct mm_struct *, unsigned long addr);
  int remap_pfn_range(struct vm_area_struct *, unsigned long addr,
  			unsigned long pfn, unsigned long size, pgprot_t);
-@@ -1286,5 +1301,11 @@ int vmemmap_populate_basepages(struct pa
+@@ -1286,5 +1297,11 @@ int vmemmap_populate_basepages(struct pa
  int vmemmap_populate(struct page *start_page, unsigned long pages, int node);
  void vmemmap_populate_print_last(void);
  
@@ -21224,7 +21354,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mlock.c 
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c linux-2.6.27.8-pax/mm/mmap.c
 --- linux-2.6.27.8/mm/mmap.c	2008-10-10 09:19:25.000000000 +0200
-+++ linux-2.6.27.8-pax/mm/mmap.c	2008-11-25 00:11:17.000000000 +0100
++++ linux-2.6.27.8-pax/mm/mmap.c	2008-12-12 23:32:37.000000000 +0100
 @@ -43,6 +43,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -21730,7 +21860,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  }
  
  unsigned long
-@@ -1530,6 +1711,33 @@ out:
+@@ -1530,6 +1711,27 @@ out:
  	return prev ? prev->vm_next : vma;
  }
  
@@ -21750,13 +21880,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
 +	BUG_ON(vma->vm_file != vma_m->vm_file);
 +	BUG_ON(vma->vm_end - vma->vm_start != vma_m->vm_end - vma_m->vm_start);
 +	BUG_ON(vma->vm_pgoff != vma_m->vm_pgoff || vma->anon_vma != vma_m->anon_vma);
-+
-+#ifdef CONFIG_PAX_MPROTECT
-+	BUG_ON((vma->vm_flags ^ vma_m->vm_flags) & ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED | VM_MAYNOTWRITE));
-+#else
 +	BUG_ON((vma->vm_flags ^ vma_m->vm_flags) & ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED));
-+#endif
-+
 +	return vma_m;
 +}
 +#endif
@@ -21764,7 +21888,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -1569,7 +1777,7 @@ static int acct_stack_growth(struct vm_a
+@@ -1569,7 +1771,7 @@ static int acct_stack_growth(struct vm_a
  	 * Overcommit..  This must be the final test, as it will
  	 * update security statistics.
  	 */
@@ -21773,7 +21897,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  		return -ENOMEM;
  
  	/* Ok, everything looks good - let it rip */
-@@ -1590,35 +1798,40 @@ static inline
+@@ -1590,35 +1792,40 @@ static inline
  #endif
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
@@ -21824,7 +21948,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1628,6 +1841,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1628,6 +1835,8 @@ int expand_upwards(struct vm_area_struct
  		if (!error)
  			vma->vm_end = address;
  	}
@@ -21833,7 +21957,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	anon_vma_unlock(vma);
  	return error;
  }
-@@ -1639,7 +1854,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1639,7 +1848,8 @@ int expand_upwards(struct vm_area_struct
  static inline int expand_downwards(struct vm_area_struct *vma,
  				   unsigned long address)
  {
@@ -21843,7 +21967,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1653,6 +1869,15 @@ static inline int expand_downwards(struc
+@@ -1653,6 +1863,15 @@ static inline int expand_downwards(struc
  	if (error)
  		return error;
  
@@ -21859,7 +21983,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	anon_vma_lock(vma);
  
  	/*
-@@ -1662,9 +1887,15 @@ static inline int expand_downwards(struc
+@@ -1662,9 +1881,15 @@ static inline int expand_downwards(struc
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -21876,7 +22000,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1672,9 +1903,20 @@ static inline int expand_downwards(struc
+@@ -1672,9 +1897,20 @@ static inline int expand_downwards(struc
  		if (!error) {
  			vma->vm_start = address;
  			vma->vm_pgoff -= grow;
@@ -21897,7 +22021,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	return error;
  }
  
-@@ -1746,6 +1988,13 @@ static void remove_vma_list(struct mm_st
+@@ -1746,6 +1982,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -21911,7 +22035,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  		mm->total_vm -= nrpages;
  		if (vma->vm_flags & VM_LOCKED)
  			mm->locked_vm -= nrpages;
-@@ -1792,6 +2041,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1792,6 +2035,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	do {
@@ -21928,7 +22052,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1811,6 +2070,108 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1811,6 +2064,108 @@ detach_vmas_to_be_unmapped(struct mm_str
   * Split a vma into two pieces at address 'addr', a new vma is allocated
   * either for the first part or the tail.
   */
@@ -22037,7 +22161,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
  	      unsigned long addr, int new_below)
  {
-@@ -1862,17 +2223,37 @@ int split_vma(struct mm_struct * mm, str
+@@ -1862,17 +2217,37 @@ int split_vma(struct mm_struct * mm, str
  
  	return 0;
  }
@@ -22075,7 +22199,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -1922,6 +2303,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -1922,6 +2297,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -22084,7 +22208,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	return 0;
  }
  
-@@ -1934,22 +2317,18 @@ asmlinkage long sys_munmap(unsigned long
+@@ -1934,22 +2311,18 @@ asmlinkage long sys_munmap(unsigned long
  
  	profile_munmap(addr);
  
@@ -22113,7 +22237,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -1963,6 +2342,11 @@ unsigned long do_brk(unsigned long addr,
+@@ -1963,6 +2336,11 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -22125,7 +22249,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -1980,16 +2364,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -1980,16 +2358,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -22157,7 +22281,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2006,22 +2404,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2006,22 +2398,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -22184,7 +22308,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2034,10 +2432,21 @@ unsigned long do_brk(unsigned long addr,
+@@ -2034,10 +2426,21 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -22207,7 +22331,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	vma->vm_mm = mm;
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
-@@ -2045,12 +2454,19 @@ unsigned long do_brk(unsigned long addr,
+@@ -2045,12 +2448,19 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_flags = flags;
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
@@ -22229,7 +22353,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	return addr;
  }
  
-@@ -2082,8 +2498,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2082,8 +2492,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -22241,7 +22365,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2097,6 +2515,10 @@ int insert_vm_struct(struct mm_struct * 
+@@ -2097,6 +2509,10 @@ int insert_vm_struct(struct mm_struct * 
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -22252,7 +22376,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2119,7 +2541,22 @@ int insert_vm_struct(struct mm_struct * 
+@@ -2119,7 +2535,22 @@ int insert_vm_struct(struct mm_struct * 
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -22275,7 +22399,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	return 0;
  }
  
-@@ -2137,6 +2574,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2137,6 +2568,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -22284,7 +22408,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2180,6 +2619,35 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2180,6 +2613,35 @@ struct vm_area_struct *copy_vma(struct v
  	return new_vma;
  }
  
@@ -22320,7 +22444,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2259,6 +2727,15 @@ int install_special_mapping(struct mm_st
+@@ -2259,6 +2721,15 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -22338,7 +22462,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mmap.c l
  
 diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mprotect.c linux-2.6.27.8-pax/mm/mprotect.c
 --- linux-2.6.27.8/mm/mprotect.c	2008-10-10 09:19:25.000000000 +0200
-+++ linux-2.6.27.8-pax/mm/mprotect.c	2008-10-10 09:20:24.000000000 +0200
++++ linux-2.6.27.8-pax/mm/mprotect.c	2008-12-13 18:22:42.000000000 +0100
 @@ -22,10 +22,16 @@
  #include <linux/swap.h>
  #include <linux/swapops.h>
@@ -22459,77 +22583,23 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mprotect
  	/*
  	 * First try to merge with previous and/or next vma.
  	 */
-@@ -219,6 +307,69 @@ fail:
- 	return error;
- }
- 
+@@ -196,8 +284,14 @@ success:
+ 	 * held in write mode.
+ 	 */
+ 	vma->vm_flags = newflags;
++
 +#ifdef CONFIG_PAX_MPROTECT
-+/* PaX: non-PIC ELF libraries need relocations on their executable segments
-+ * therefore we'll grant them VM_MAYWRITE once during their life.
-+ *
-+ * The checks favour ld-linux.so behaviour which operates on a per ELF segment
-+ * basis because we want to allow the common case and not the special ones.
-+ */
-+static inline void pax_handle_maywrite(struct vm_area_struct *vma, unsigned long start)
-+{
-+	struct elfhdr elf_h;
-+	struct elf_phdr elf_p;
-+	elf_addr_t dyn_offset = 0UL;
-+	elf_dyn dyn;
-+	unsigned long i, j = 65536UL / sizeof(struct elf_phdr);
-+
-+#ifndef CONFIG_PAX_NOELFRELOCS
-+	if ((vma->vm_start != start) ||
-+	    !vma->vm_file ||
-+	    !(vma->vm_flags & VM_MAYEXEC) ||
-+	    (vma->vm_flags & VM_MAYNOTWRITE))
++	if (current->binfmt && current->binfmt->handle_mprotect)
++		current->binfmt->handle_mprotect(vma, newflags);
 +#endif
 +
-+		return;
-+
-+	if (sizeof(elf_h) != kernel_read(vma->vm_file, 0UL, (char *)&elf_h, sizeof(elf_h)) ||
-+	    memcmp(elf_h.e_ident, ELFMAG, SELFMAG) ||
-+
-+#ifdef CONFIG_PAX_ETEXECRELOCS
-+	    (elf_h.e_type != ET_DYN && elf_h.e_type != ET_EXEC) ||
-+#else
-+	    elf_h.e_type != ET_DYN ||
-+#endif
-+
-+	    !elf_check_arch(&elf_h) ||
-+	    elf_h.e_phentsize != sizeof(struct elf_phdr) ||
-+	    elf_h.e_phnum > j)
-+		return;
-+
-+	for (i = 0UL; i < elf_h.e_phnum; i++) {
-+		if (sizeof(elf_p) != kernel_read(vma->vm_file, elf_h.e_phoff + i*sizeof(elf_p), (char *)&elf_p, sizeof(elf_p)))
-+			return;
-+		if (elf_p.p_type == PT_DYNAMIC) {
-+			dyn_offset = elf_p.p_offset;
-+			j = i;
-+		}
-+	}
-+	if (elf_h.e_phnum <= j)
-+		return;
-+
-+	i = 0UL;
-+	do {
-+		if (sizeof(dyn) != kernel_read(vma->vm_file, dyn_offset + i*sizeof(dyn), (char *)&dyn, sizeof(dyn)))
-+			return;
-+		if (dyn.d_tag == DT_TEXTREL || (dyn.d_tag == DT_FLAGS && (dyn.d_un.d_val & DF_TEXTREL))) {
-+			vma->vm_flags |= VM_MAYWRITE | VM_MAYNOTWRITE;
-+			return;
-+		}
-+		i++;
-+	} while (dyn.d_tag != DT_NULL);
-+	return;
-+}
-+#endif
-+
- asmlinkage long
- sys_mprotect(unsigned long start, size_t len, unsigned long prot)
- {
-@@ -238,6 +389,17 @@ sys_mprotect(unsigned long start, size_t
+ 	vma->vm_page_prot = pgprot_modify(vma->vm_page_prot,
+-					  vm_get_page_prot(newflags));
++					  vm_get_page_prot(vma->vm_flags));
+ 
+ 	if (vma_wants_writenotify(vma)) {
+ 		vma->vm_page_prot = vm_get_page_prot(newflags & ~VM_SHARED);
+@@ -238,6 +332,17 @@ sys_mprotect(unsigned long start, size_t
  	end = start + len;
  	if (end <= start)
  		return -ENOMEM;
@@ -22547,7 +22617,7 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mprotect
  	if (!arch_validate_prot(prot))
  		return -EINVAL;
  
-@@ -245,7 +407,7 @@ sys_mprotect(unsigned long start, size_t
+@@ -245,7 +350,7 @@ sys_mprotect(unsigned long start, size_t
  	/*
  	 * Does the application expect PROT_READ to imply PROT_EXEC:
  	 */
@@ -22556,32 +22626,19 @@ diff -NurpX linux-2.6.27.8-pax/Documentation/dontdiff linux-2.6.27.8/mm/mprotect
  		prot |= PROT_EXEC;
  
  	vm_flags = calc_vm_prot_bits(prot);
-@@ -277,6 +439,11 @@ sys_mprotect(unsigned long start, size_t
+@@ -277,6 +382,11 @@ sys_mprotect(unsigned long start, size_t
  	if (start > vma->vm_start)
  		prev = vma;
  
 +#ifdef CONFIG_PAX_MPROTECT
-+	if ((vma->vm_mm->pax_flags & MF_PAX_MPROTECT) && (prot & PROT_WRITE))
-+		pax_handle_maywrite(vma, start);
++	if (current->binfmt && current->binfmt->handle_mprotect)
++		current->binfmt->handle_mprotect(vma, vm_flags);
 +#endif
 +
  	for (nstart = start ; ; ) {
  		unsigned long newflags;
  
-@@ -290,6 +457,12 @@ sys_mprotect(unsigned long start, size_t
- 			goto out;
- 		}
- 
-+#ifdef CONFIG_PAX_MPROTECT
-+		/* PaX: disallow write access after relocs are done, hopefully noone else needs it... */
-+		if ((vma->vm_mm->pax_flags & MF_PAX_MPROTECT) && !(prot & PROT_WRITE) && (vma->vm_flags & VM_MAYNOTWRITE))
-+			newflags &= ~VM_MAYWRITE;
-+#endif
-+
- 		error = security_file_mprotect(vma, reqprot, prot);
- 		if (error)
- 			goto out;
-@@ -300,6 +473,9 @@ sys_mprotect(unsigned long start, size_t
+@@ -300,6 +410,9 @@ sys_mprotect(unsigned long start, size_t
  		error = mprotect_fixup(vma, &prev, nstart, tmp, newflags);
  		if (error)
  			goto out;
