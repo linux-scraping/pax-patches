@@ -4720,25 +4720,31 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/ke
  	.if \irqtrace
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/kernel/ftrace.c linux-2.6.27.7-pax/arch/x86/kernel/ftrace.c
 --- linux-2.6.27.7/arch/x86/kernel/ftrace.c	2008-10-10 09:18:47.000000000 +0200
-+++ linux-2.6.27.7-pax/arch/x86/kernel/ftrace.c	2008-10-10 09:20:24.000000000 +0200
-@@ -103,7 +103,7 @@ notrace int ftrace_update_ftrace_func(ft
++++ linux-2.6.27.7-pax/arch/x86/kernel/ftrace.c	2008-12-04 00:10:33.000000000 +0100
+@@ -103,9 +103,9 @@ notrace int ftrace_update_ftrace_func(ft
  	unsigned char old[MCOUNT_INSN_SIZE], *new;
  	int ret;
  
 -	memcpy(old, &ftrace_call, MCOUNT_INSN_SIZE);
 +	memcpy(old, (void *)ktla_ktva((unsigned long)ftrace_call), MCOUNT_INSN_SIZE);
  	new = ftrace_call_replace(ip, (unsigned long)func);
- 	ret = ftrace_modify_code(ip, old, new);
+-	ret = ftrace_modify_code(ip, old, new);
++	ret = ftrace_modify_code(ktla_ktva(ip), old, new);
  
-@@ -120,7 +120,7 @@ notrace int ftrace_mcount_set(unsigned l
+ 	return ret;
+ }
+@@ -120,9 +120,9 @@ notrace int ftrace_mcount_set(unsigned l
  	 * Replace the mcount stub with a pointer to the
  	 * ip recorder function.
  	 */
 -	memcpy(old, &mcount_call, MCOUNT_INSN_SIZE);
 +	memcpy(old, ktla_ktva(mcount_call), MCOUNT_INSN_SIZE);
  	new = ftrace_call_replace(ip, *addr);
- 	*addr = ftrace_modify_code(ip, old, new);
+-	*addr = ftrace_modify_code(ip, old, new);
++	*addr = ftrace_modify_code(ktla_ktva(ip), old, new);
  
+ 	return 0;
+ }
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/kernel/head32.c linux-2.6.27.7-pax/arch/x86/kernel/head32.c
 --- linux-2.6.27.7/arch/x86/kernel/head32.c	2008-10-10 09:18:47.000000000 +0200
 +++ linux-2.6.27.7-pax/arch/x86/kernel/head32.c	2008-10-10 09:20:24.000000000 +0200
@@ -6910,7 +6916,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/ke
  	return 0;
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/kernel/traps_32.c linux-2.6.27.7-pax/arch/x86/kernel/traps_32.c
 --- linux-2.6.27.7/arch/x86/kernel/traps_32.c	2008-10-10 09:18:48.000000000 +0200
-+++ linux-2.6.27.7-pax/arch/x86/kernel/traps_32.c	2008-10-10 09:20:24.000000000 +0200
++++ linux-2.6.27.7-pax/arch/x86/kernel/traps_32.c	2008-12-04 11:10:27.000000000 +0100
 @@ -70,14 +70,6 @@ asmlinkage int system_call(void);
  /* Do we ignore FPU interrupts ? */
  char ignore_fpu_irq;
@@ -6978,7 +6984,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/ke
  		die(str, regs, err);
  }
  
-@@ -479,7 +473,7 @@ do_trap(int trapnr, int signr, char *str
+@@ -479,13 +473,13 @@ do_trap(int trapnr, int signr, char *str
  {
  	struct task_struct *tsk = current;
  
@@ -6987,6 +6993,13 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/ke
  		if (vm86)
  			goto vm86_trap;
  		goto trap_signal;
+ 	}
+ 
+-	if (!user_mode(regs))
++	if (!user_mode_novm(regs))
+ 		goto kernel_trap;
+ 
+ trap_signal:
 @@ -513,6 +507,12 @@ kernel_trap:
  		tsk->thread.trap_no = trapnr;
  		die(str, regs, error_code);
@@ -9742,7 +9755,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm/fault.c linux-2.6.27.7-pax/arch/x86/mm/fault.c
 --- linux-2.6.27.7/arch/x86/mm/fault.c	2008-10-10 09:18:48.000000000 +0200
-+++ linux-2.6.27.7-pax/arch/x86/mm/fault.c	2008-11-25 00:13:34.000000000 +0100
++++ linux-2.6.27.7-pax/arch/x86/mm/fault.c	2008-12-03 23:36:06.000000000 +0100
 @@ -26,6 +26,8 @@
  #include <linux/kprobes.h>
  #include <linux/uaccess.h>
@@ -9752,15 +9765,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  
  #include <asm/system.h>
  #include <asm/desc.h>
-@@ -35,6 +37,7 @@
- #include <asm/tlbflush.h>
- #include <asm/proto.h>
- #include <asm-generic/sections.h>
-+#include <asm/tlbflush.h>
- 
- /*
-  * Page fault error code bits
-@@ -66,7 +69,7 @@ static inline int notify_page_fault(stru
+@@ -66,7 +68,7 @@ static inline int notify_page_fault(stru
  	int ret = 0;
  
  	/* kprobe_running() needs smp_processor_id() */
@@ -9769,7 +9774,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  		preempt_disable();
  		if (kprobe_running() && kprobe_fault_handler(regs, 14))
  			ret = 1;
-@@ -264,6 +267,30 @@ bad:
+@@ -264,6 +266,30 @@ bad:
  #endif
  }
  
@@ -9800,7 +9805,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  #ifdef CONFIG_X86_32
  static inline pmd_t *vmalloc_sync_one(pgd_t *pgd, unsigned long address)
  {
-@@ -350,7 +377,7 @@ static int is_errata93(struct pt_regs *r
+@@ -350,7 +376,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -9809,7 +9814,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	    (address >> 32))
  		return 1;
  #endif
-@@ -387,17 +414,28 @@ static void show_fault_oops(struct pt_re
+@@ -387,17 +413,28 @@ static void show_fault_oops(struct pt_re
  #endif
  
  #ifdef CONFIG_X86_PAE
@@ -9840,7 +9845,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -586,13 +624,22 @@ void __kprobes do_page_fault(struct pt_r
+@@ -586,13 +623,22 @@ void __kprobes do_page_fault(struct pt_r
  	struct task_struct *tsk;
  	struct mm_struct *mm;
  	struct vm_area_struct *vma;
@@ -9864,7 +9869,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	/*
  	 * We can fault from pretty much anywhere, with unknown IRQ state.
  	 */
-@@ -602,9 +649,6 @@ void __kprobes do_page_fault(struct pt_r
+@@ -602,9 +648,6 @@ void __kprobes do_page_fault(struct pt_r
  	mm = tsk->mm;
  	prefetchw(&mm->mmap_sem);
  
@@ -9874,7 +9879,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	si_code = SEGV_MAPERR;
  
  	if (notify_page_fault(regs))
-@@ -657,7 +701,7 @@ void __kprobes do_page_fault(struct pt_r
+@@ -657,7 +700,7 @@ void __kprobes do_page_fault(struct pt_r
  	 * atomic region then we must not take the fault.
  	 */
  	if (in_atomic() || !mm)
@@ -9883,7 +9888,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  #else /* CONFIG_X86_64 */
  	if (likely(regs->flags & X86_EFLAGS_IF))
  		local_irq_enable();
-@@ -670,13 +714,13 @@ void __kprobes do_page_fault(struct pt_r
+@@ -670,13 +713,13 @@ void __kprobes do_page_fault(struct pt_r
  	 * atomic region then we must not take the fault.
  	 */
  	if (unlikely(in_atomic() || !mm))
@@ -9899,7 +9904,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  		error_code |= PF_USER;
  again:
  #endif
-@@ -698,10 +742,104 @@ again:
+@@ -698,10 +741,104 @@ again:
  	if (!down_read_trylock(&mm->mmap_sem)) {
  		if ((error_code & PF_USER) == 0 &&
  		    !search_exception_tables(regs->ip))
@@ -10005,7 +10010,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	vma = find_vma(mm, address);
  	if (!vma)
  		goto bad_area;
-@@ -709,16 +847,20 @@ again:
+@@ -709,16 +846,20 @@ again:
  		goto good_area;
  	if (!(vma->vm_flags & VM_GROWSDOWN))
  		goto bad_area;
@@ -10036,7 +10041,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	if (expand_stack(vma, address))
  		goto bad_area;
  /*
-@@ -728,6 +870,8 @@ again:
+@@ -728,6 +869,8 @@ again:
  good_area:
  	si_code = SEGV_ACCERR;
  	write = 0;
@@ -10045,7 +10050,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	switch (error_code & (PF_PROT|PF_WRITE)) {
  	default:	/* 3: write, present */
  		/* fall through */
-@@ -785,6 +929,54 @@ bad_area:
+@@ -785,6 +928,54 @@ bad_area:
  	up_read(&mm->mmap_sem);
  
  bad_area_nosemaphore:
@@ -10100,7 +10105,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -863,7 +1055,7 @@ no_context:
+@@ -863,7 +1054,7 @@ no_context:
  #ifdef CONFIG_X86_32
  	die("Oops", regs, error_code);
  	bust_spinlocks(0);
@@ -10109,7 +10114,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  #else
  	if (__die("Oops", regs, error_code))
  		regs = NULL;
-@@ -877,17 +1069,17 @@ no_context:
+@@ -877,17 +1068,17 @@ no_context:
   * us unable to handle the page fault gracefully.
   */
  out_of_memory:
@@ -10129,7 +10134,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	printk("VM: killing process %s\n", tsk->comm);
  	if (error_code & PF_USER)
  		do_group_exit(SIGKILL);
-@@ -959,3 +1151,174 @@ void vmalloc_sync_all(void)
+@@ -959,3 +1150,174 @@ void vmalloc_sync_all(void)
  	}
  #endif
  }
@@ -19433,7 +19438,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/exit
  		read_unlock(&tasklist_lock);
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork.c linux-2.6.27.7-pax/kernel/fork.c
 --- linux-2.6.27.7/kernel/fork.c	2008-10-10 09:19:24.000000000 +0200
-+++ linux-2.6.27.7-pax/kernel/fork.c	2008-11-24 17:35:48.000000000 +0100
++++ linux-2.6.27.7-pax/kernel/fork.c	2008-12-04 01:29:05.000000000 +0100
 @@ -40,6 +40,7 @@
  #include <linux/jiffies.h>
  #include <linux/tracehook.h>
@@ -19502,7 +19507,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -518,6 +545,16 @@ void mm_release(struct task_struct *tsk,
+@@ -518,6 +545,18 @@ void mm_release(struct task_struct *tsk,
  {
  	struct completion *vfork_done = tsk->vfork_done;
  
@@ -19510,16 +19515,18 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
 +#ifdef CONFIG_FUTEX
 +	if (unlikely(tsk->robust_list))
 +		exit_robust_list(tsk);
++	tsk->robust_list = NULL;
 +#ifdef CONFIG_COMPAT
 +	if (unlikely(tsk->compat_robust_list))
 +		compat_exit_robust_list(tsk);
++	tsk->compat_robust_list = NULL;
 +#endif
 +#endif
 +
  	/* Get rid of any cached register state */
  	deactivate_mm(tsk, mm);
  
-@@ -536,7 +573,7 @@ void mm_release(struct task_struct *tsk,
+@@ -536,7 +575,7 @@ void mm_release(struct task_struct *tsk,
  	if (tsk->clear_child_tid
  	    && !(tsk->flags & PF_SIGNALED)
  	    && atomic_read(&mm->mm_users) > 1) {
@@ -19528,7 +19535,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
  		tsk->clear_child_tid = NULL;
  
  		/*
-@@ -544,7 +581,7 @@ void mm_release(struct task_struct *tsk,
+@@ -544,7 +583,7 @@ void mm_release(struct task_struct *tsk,
  		 * not set up a proper pointer then tough luck.
  		 */
  		put_user(0, tidptr);
