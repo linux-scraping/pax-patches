@@ -9742,7 +9742,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm/fault.c linux-2.6.27.7-pax/arch/x86/mm/fault.c
 --- linux-2.6.27.7/arch/x86/mm/fault.c	2008-10-10 09:18:48.000000000 +0200
-+++ linux-2.6.27.7-pax/arch/x86/mm/fault.c	2008-11-11 14:40:07.000000000 +0100
++++ linux-2.6.27.7-pax/arch/x86/mm/fault.c	2008-11-25 00:13:34.000000000 +0100
 @@ -26,6 +26,8 @@
  #include <linux/kprobes.h>
  #include <linux/uaccess.h>
@@ -10005,10 +10005,28 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	vma = find_vma(mm, address);
  	if (!vma)
  		goto bad_area;
-@@ -719,6 +857,12 @@ again:
- 		if (address + 65536 + 32 * sizeof(unsigned long) < regs->sp)
- 			goto bad_area;
- 	}
+@@ -709,16 +847,20 @@ again:
+ 		goto good_area;
+ 	if (!(vma->vm_flags & VM_GROWSDOWN))
+ 		goto bad_area;
+-	if (error_code & PF_USER) {
+-		/*
+-		 * Accessing the stack below %sp is always a bug.
+-		 * The large cushion allows instructions like enter
+-		 * and pusha to work.  ("enter $65535,$31" pushes
+-		 * 32 pointers and then decrements %sp by 65535.)
+-		 */
+-		if (address + 65536 + 32 * sizeof(unsigned long) < regs->sp)
+-			goto bad_area;
+-	}
++	/*
++	 * Accessing the stack below %sp is always a bug.
++	 * The large cushion allows instructions like enter
++	 * and pusha to work.  ("enter $65535,$31" pushes
++	 * 32 pointers and then decrements %sp by 65535.)
++	 */
++	if (address + 65536 + 32 * sizeof(unsigned long) < regs->sp)
++		goto bad_area;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)
@@ -10018,7 +10036,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	if (expand_stack(vma, address))
  		goto bad_area;
  /*
-@@ -728,6 +872,8 @@ again:
+@@ -728,6 +870,8 @@ again:
  good_area:
  	si_code = SEGV_ACCERR;
  	write = 0;
@@ -10027,7 +10045,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	switch (error_code & (PF_PROT|PF_WRITE)) {
  	default:	/* 3: write, present */
  		/* fall through */
-@@ -785,6 +931,54 @@ bad_area:
+@@ -785,6 +929,54 @@ bad_area:
  	up_read(&mm->mmap_sem);
  
  bad_area_nosemaphore:
@@ -10082,7 +10100,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -863,7 +1057,7 @@ no_context:
+@@ -863,7 +1055,7 @@ no_context:
  #ifdef CONFIG_X86_32
  	die("Oops", regs, error_code);
  	bust_spinlocks(0);
@@ -10091,7 +10109,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  #else
  	if (__die("Oops", regs, error_code))
  		regs = NULL;
-@@ -877,17 +1071,17 @@ no_context:
+@@ -877,17 +1069,17 @@ no_context:
   * us unable to handle the page fault gracefully.
   */
  out_of_memory:
@@ -10111,7 +10129,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/arch/x86/mm
  	printk("VM: killing process %s\n", tsk->comm);
  	if (error_code & PF_USER)
  		do_group_exit(SIGKILL);
-@@ -959,3 +1153,174 @@ void vmalloc_sync_all(void)
+@@ -959,3 +1151,174 @@ void vmalloc_sync_all(void)
  	}
  #endif
  }
@@ -19380,8 +19398,31 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/cpu.
   * Should always be manipulated under cpu_add_remove_lock
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/exit.c linux-2.6.27.7-pax/kernel/exit.c
 --- linux-2.6.27.7/kernel/exit.c	2008-10-10 09:19:24.000000000 +0200
-+++ linux-2.6.27.7-pax/kernel/exit.c	2008-10-10 09:20:24.000000000 +0200
-@@ -1272,7 +1272,7 @@ static int wait_task_zombie(struct task_
++++ linux-2.6.27.7-pax/kernel/exit.c	2008-11-24 17:35:53.000000000 +0100
+@@ -40,7 +40,6 @@
+ #include <linux/cn_proc.h>
+ #include <linux/mutex.h>
+ #include <linux/futex.h>
+-#include <linux/compat.h>
+ #include <linux/pipe_fs_i.h>
+ #include <linux/audit.h> /* for audit_free() */
+ #include <linux/resource.h>
+@@ -1054,14 +1053,6 @@ NORET_TYPE void do_exit(long code)
+ 		exit_itimers(tsk->signal);
+ 	}
+ 	acct_collect(code, group_dead);
+-#ifdef CONFIG_FUTEX
+-	if (unlikely(tsk->robust_list))
+-		exit_robust_list(tsk);
+-#ifdef CONFIG_COMPAT
+-	if (unlikely(tsk->compat_robust_list))
+-		compat_exit_robust_list(tsk);
+-#endif
+-#endif
+ 	if (group_dead)
+ 		tty_audit_exit();
+ 	if (unlikely(tsk->audit_context))
+@@ -1272,7 +1263,7 @@ static int wait_task_zombie(struct task_
  	if (unlikely(options & WNOWAIT)) {
  		uid_t uid = p->uid;
  		int exit_code = p->exit_code;
@@ -19392,8 +19433,16 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/exit
  		read_unlock(&tasklist_lock);
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork.c linux-2.6.27.7-pax/kernel/fork.c
 --- linux-2.6.27.7/kernel/fork.c	2008-10-10 09:19:24.000000000 +0200
-+++ linux-2.6.27.7-pax/kernel/fork.c	2008-10-10 09:20:24.000000000 +0200
-@@ -234,7 +234,7 @@ static struct task_struct *dup_task_stru
++++ linux-2.6.27.7-pax/kernel/fork.c	2008-11-24 17:35:48.000000000 +0100
+@@ -40,6 +40,7 @@
+ #include <linux/jiffies.h>
+ #include <linux/tracehook.h>
+ #include <linux/futex.h>
++#include <linux/compat.h>
+ #include <linux/task_io_accounting_ops.h>
+ #include <linux/rcupdate.h>
+ #include <linux/ptrace.h>
+@@ -234,7 +235,7 @@ static struct task_struct *dup_task_stru
  	setup_thread_stack(tsk, orig);
  
  #ifdef CONFIG_CC_STACKPROTECTOR
@@ -19402,7 +19451,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
  #endif
  
  	/* One for us, one for whoever does the "release_task()" (usually parent) */
-@@ -271,8 +271,8 @@ static int dup_mmap(struct mm_struct *mm
+@@ -271,8 +272,8 @@ static int dup_mmap(struct mm_struct *mm
  	mm->locked_vm = 0;
  	mm->mmap = NULL;
  	mm->mmap_cache = NULL;
@@ -19413,7 +19462,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
  	mm->map_count = 0;
  	cpus_clear(mm->cpu_vm_mask);
  	mm->mm_rb = RB_ROOT;
-@@ -309,6 +309,7 @@ static int dup_mmap(struct mm_struct *mm
+@@ -309,6 +310,7 @@ static int dup_mmap(struct mm_struct *mm
  		tmp->vm_flags &= ~VM_LOCKED;
  		tmp->vm_mm = mm;
  		tmp->vm_next = NULL;
@@ -19421,7 +19470,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
  		anon_vma_link(tmp);
  		file = tmp->vm_file;
  		if (file) {
-@@ -353,6 +354,31 @@ static int dup_mmap(struct mm_struct *mm
+@@ -353,6 +355,31 @@ static int dup_mmap(struct mm_struct *mm
  		if (retval)
  			goto out;
  	}
@@ -19453,7 +19502,24 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -536,7 +562,7 @@ void mm_release(struct task_struct *tsk,
+@@ -518,6 +545,16 @@ void mm_release(struct task_struct *tsk,
+ {
+ 	struct completion *vfork_done = tsk->vfork_done;
+ 
++	/* Get rid of any futexes when releasing the mm */
++#ifdef CONFIG_FUTEX
++	if (unlikely(tsk->robust_list))
++		exit_robust_list(tsk);
++#ifdef CONFIG_COMPAT
++	if (unlikely(tsk->compat_robust_list))
++		compat_exit_robust_list(tsk);
++#endif
++#endif
++
+ 	/* Get rid of any cached register state */
+ 	deactivate_mm(tsk, mm);
+ 
+@@ -536,7 +573,7 @@ void mm_release(struct task_struct *tsk,
  	if (tsk->clear_child_tid
  	    && !(tsk->flags & PF_SIGNALED)
  	    && atomic_read(&mm->mm_users) > 1) {
@@ -19462,7 +19528,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/kernel/fork
  		tsk->clear_child_tid = NULL;
  
  		/*
-@@ -544,7 +570,7 @@ void mm_release(struct task_struct *tsk,
+@@ -544,7 +581,7 @@ void mm_release(struct task_struct *tsk,
  		 * not set up a proper pointer then tough luck.
  		 */
  		put_user(0, tidptr);
@@ -21151,7 +21217,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/mm/mlock.c 
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/mm/mmap.c linux-2.6.27.7-pax/mm/mmap.c
 --- linux-2.6.27.7/mm/mmap.c	2008-10-10 09:19:25.000000000 +0200
-+++ linux-2.6.27.7-pax/mm/mmap.c	2008-10-10 09:20:24.000000000 +0200
++++ linux-2.6.27.7-pax/mm/mmap.c	2008-11-25 00:11:17.000000000 +0100
 @@ -43,6 +43,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -21671,7 +21737,7 @@ diff -NurpX linux-2.6.27.7-pax/Documentation/dontdiff linux-2.6.27.7/mm/mmap.c l
 +		BUG_ON(vma->vm_mirror);
 +		return NULL;
 +	}
-+	BUG_ON(vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < vma->vm_start - SEGMEXEC_TASK_SIZE - 1);
++	BUG_ON(vma->vm_start < SEGMEXEC_TASK_SIZE && SEGMEXEC_TASK_SIZE < vma->vm_end);
 +	vma_m = vma->vm_mirror;
 +	BUG_ON(!vma_m || vma_m->vm_mirror != vma);
 +	BUG_ON(vma->vm_file != vma_m->vm_file);
