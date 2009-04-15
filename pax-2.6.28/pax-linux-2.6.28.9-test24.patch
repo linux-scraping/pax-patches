@@ -14981,6 +14981,129 @@ diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/drivers/cha
  static int max_write_thresh = INPUT_POOL_WORDS * 32;
  static char sysctl_bootid[16];
  
+diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/drivers/char/tty_ldisc.c linux-2.6.28.9-pax/drivers/char/tty_ldisc.c
+--- linux-2.6.28.9/drivers/char/tty_ldisc.c	2008-10-10 09:18:51.000000000 +0200
++++ linux-2.6.28.9-pax/drivers/char/tty_ldisc.c	2009-03-28 12:53:25.000000000 +0100
+@@ -74,7 +74,7 @@ int tty_register_ldisc(int disc, struct 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	tty_ldiscs[disc] = new_ldisc;
+ 	new_ldisc->num = disc;
+-	new_ldisc->refcount = 0;
++	atomic_set(&new_ldisc->refcount, 0);
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ 
+ 	return ret;
+@@ -102,7 +102,7 @@ int tty_unregister_ldisc(int disc)
+ 		return -EINVAL;
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	if (tty_ldiscs[disc]->refcount)
++	if (atomic_read(&tty_ldiscs[disc]->refcount))
+ 		ret = -EBUSY;
+ 	else
+ 		tty_ldiscs[disc] = NULL;
+@@ -139,7 +139,7 @@ static int tty_ldisc_try_get(int disc, s
+ 			err = -EAGAIN;
+ 		else {
+ 			/* lock it */
+-			ldops->refcount++;
++			atomic_inc(&ldops->refcount);
+ 			ld->ops = ldops;
+ 			err = 0;
+ 		}
+@@ -196,8 +196,8 @@ static void tty_ldisc_put(struct tty_ldi
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	ld = tty_ldiscs[disc];
+-	BUG_ON(ld->refcount == 0);
+-	ld->refcount--;
++	BUG_ON(atomic_read(&ld->refcount) == 0);
++	atomic_dec(&ld->refcount);
+ 	module_put(ld->owner);
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ }
+@@ -264,7 +264,7 @@ const struct file_operations tty_ldiscs_
+ 
+ static void tty_ldisc_assign(struct tty_struct *tty, struct tty_ldisc *ld)
+ {
+-	ld->refcount = 0;
++	atomic_set(&ld->refcount, 0);
+ 	tty->ldisc = *ld;
+ }
+ 
+@@ -289,7 +289,7 @@ static int tty_ldisc_try(struct tty_stru
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	ld = &tty->ldisc;
+ 	if (test_bit(TTY_LDISC, &tty->flags)) {
+-		ld->refcount++;
++		atomic_inc(&ld->refcount);
+ 		ret = 1;
+ 	}
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+@@ -316,7 +316,7 @@ struct tty_ldisc *tty_ldisc_ref_wait(str
+ {
+ 	/* wait_event is a macro */
+ 	wait_event(tty_ldisc_wait, tty_ldisc_try(tty));
+-	if (tty->ldisc.refcount == 0)
++	if (atomic_read(&tty->ldisc.refcount) == 0)
+ 		printk(KERN_ERR "tty_ldisc_ref_wait\n");
+ 	return &tty->ldisc;
+ }
+@@ -360,11 +360,9 @@ void tty_ldisc_deref(struct tty_ldisc *l
+ 	BUG_ON(ld == NULL);
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	if (ld->refcount == 0)
++	if (!atomic_add_unless(&ld->refcount, -1, 0))
+ 		printk(KERN_ERR "tty_ldisc_deref: no references.\n");
+-	else
+-		ld->refcount--;
+-	if (ld->refcount == 0)
++	if (atomic_read(&ld->refcount) == 0)
+ 		wake_up(&tty_ldisc_wait);
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ }
+@@ -499,8 +497,8 @@ restart:
+ 	 */
+ 
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	if (tty->ldisc.refcount || (o_tty && o_tty->ldisc.refcount)) {
+-		if (tty->ldisc.refcount) {
++	if (atomic_read(&tty->ldisc.refcount) || (o_tty && atomic_read(&o_tty->ldisc.refcount))) {
++		if (atomic_read(&tty->ldisc.refcount)) {
+ 			/* Free the new ldisc we grabbed. Must drop the lock
+ 			   first. */
+ 			spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+@@ -512,14 +510,14 @@ restart:
+ 			 * and retries if we made tty_ldisc_wait() smarter.
+ 			 * That is up for discussion.
+ 			 */
+-			if (wait_event_interruptible(tty_ldisc_wait, tty->ldisc.refcount == 0) < 0)
++			if (wait_event_interruptible(tty_ldisc_wait, atomic_read(&tty->ldisc.refcount) == 0) < 0)
+ 				return -ERESTARTSYS;
+ 			goto restart;
+ 		}
+-		if (o_tty && o_tty->ldisc.refcount) {
++		if (o_tty && atomic_read(&o_tty->ldisc.refcount)) {
+ 			spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+ 			tty_ldisc_put(o_tty->ldisc.ops);
+-			if (wait_event_interruptible(tty_ldisc_wait, o_tty->ldisc.refcount == 0) < 0)
++			if (wait_event_interruptible(tty_ldisc_wait, atomic_read(&o_tty->ldisc.refcount) == 0) < 0)
+ 				return -ERESTARTSYS;
+ 			goto restart;
+ 		}
+@@ -658,9 +656,9 @@ void tty_ldisc_release(struct tty_struct
+ 	 * side is zero.
+ 	 */
+ 	spin_lock_irqsave(&tty_ldisc_lock, flags);
+-	while (tty->ldisc.refcount) {
++	while (atomic_read(&tty->ldisc.refcount)) {
+ 		spin_unlock_irqrestore(&tty_ldisc_lock, flags);
+-		wait_event(tty_ldisc_wait, tty->ldisc.refcount == 0);
++		wait_event(tty_ldisc_wait, atomic_read(&tty->ldisc.refcount) == 0);
+ 		spin_lock_irqsave(&tty_ldisc_lock, flags);
+ 	}
+ 	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
 diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/drivers/edac/edac_core.h linux-2.6.28.9-pax/drivers/edac/edac_core.h
 --- linux-2.6.28.9/drivers/edac/edac_core.h	2008-10-10 09:18:51.000000000 +0200
 +++ linux-2.6.28.9-pax/drivers/edac/edac_core.h	2008-12-25 12:20:08.000000000 +0100
@@ -19283,6 +19406,18 @@ diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/include/lin
  
  /*
   * struct kmem_cache related prototypes
+diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/include/linux/slub_def.h linux-2.6.28.9-pax/include/linux/slub_def.h
+--- linux-2.6.28.9/include/linux/slub_def.h	2008-10-10 09:19:23.000000000 +0200
++++ linux-2.6.28.9-pax/include/linux/slub_def.h	2009-03-28 12:16:16.000000000 +0100
+@@ -85,7 +85,7 @@ struct kmem_cache {
+ 	struct kmem_cache_order_objects max;
+ 	struct kmem_cache_order_objects min;
+ 	gfp_t allocflags;	/* gfp flags to use on each alloc */
+-	int refcount;		/* Refcount for slab cache destroy */
++	atomic_t refcount;	/* Refcount for slab cache destroy */
+ 	void (*ctor)(void *);
+ 	int inuse;		/* Offset to metadata */
+ 	int align;		/* Alignment */
 diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/include/linux/sysctl.h linux-2.6.28.9-pax/include/linux/sysctl.h
 --- linux-2.6.28.9/include/linux/sysctl.h	2008-12-25 12:13:53.000000000 +0100
 +++ linux-2.6.28.9-pax/include/linux/sysctl.h	2008-12-25 12:20:09.000000000 +0100
@@ -19311,6 +19446,24 @@ diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/include/lin
  			u32 val;
  			u32 flags;
  			u32 bitset;
+diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/include/linux/tty_ldisc.h linux-2.6.28.9-pax/include/linux/tty_ldisc.h
+--- linux-2.6.28.9/include/linux/tty_ldisc.h	2008-10-10 09:19:24.000000000 +0200
++++ linux-2.6.28.9-pax/include/linux/tty_ldisc.h	2009-03-28 12:16:16.000000000 +0100
+@@ -139,12 +139,12 @@ struct tty_ldisc_ops {
+ 
+ 	struct  module *owner;
+ 	
+-	int refcount;
++	atomic_t refcount;
+ };
+ 
+ struct tty_ldisc {
+ 	struct tty_ldisc_ops *ops;
+-	int refcount;
++	atomic_t refcount;
+ };
+ 
+ #define TTY_LDISC_MAGIC	0x5403
 diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/include/linux/uaccess.h linux-2.6.28.9-pax/include/linux/uaccess.h
 --- linux-2.6.28.9/include/linux/uaccess.h	2008-07-14 03:51:43.000000000 +0200
 +++ linux-2.6.28.9-pax/include/linux/uaccess.h	2008-12-25 12:20:09.000000000 +0100
@@ -23149,6 +23302,93 @@ diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/mm/slab.c l
  
  		while (slabp->inuse < cachep->num && batchcount--) {
  			STATS_INC_ALLOCED(cachep);
+diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/mm/slub.c linux-2.6.28.9-pax/mm/slub.c
+--- linux-2.6.28.9/mm/slub.c	2008-12-25 12:13:54.000000000 +0100
++++ linux-2.6.28.9-pax/mm/slub.c	2009-03-28 14:35:15.000000000 +0100
+@@ -2312,7 +2312,7 @@ static int kmem_cache_open(struct kmem_c
+ 	if (!calculate_sizes(s, -1))
+ 		goto error;
+ 
+-	s->refcount = 1;
++	atomic_set(&s->refcount, 1);
+ #ifdef CONFIG_NUMA
+ 	s->remote_node_defrag_ratio = 1000;
+ #endif
+@@ -2449,8 +2449,7 @@ static inline int kmem_cache_close(struc
+ void kmem_cache_destroy(struct kmem_cache *s)
+ {
+ 	down_write(&slub_lock);
+-	s->refcount--;
+-	if (!s->refcount) {
++	if (atomic_dec_and_test(&s->refcount)) {
+ 		list_del(&s->list);
+ 		up_write(&slub_lock);
+ 		if (kmem_cache_close(s)) {
+@@ -2959,7 +2958,7 @@ void __init kmem_cache_init(void)
+ 	 */
+ 	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
+ 		sizeof(struct kmem_cache_node), GFP_KERNEL);
+-	kmalloc_caches[0].refcount = -1;
++	atomic_set(&kmalloc_caches[0].refcount, -1);
+ 	caches++;
+ 
+ 	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
+@@ -3049,7 +3048,7 @@ static int slab_unmergeable(struct kmem_
+ 	/*
+ 	 * We may have set a slab to be unmergeable during bootstrap.
+ 	 */
+-	if (s->refcount < 0)
++	if (atomic_read(&s->refcount) < 0)
+ 		return 1;
+ 
+ 	return 0;
+@@ -3106,7 +3105,7 @@ struct kmem_cache *kmem_cache_create(con
+ 	if (s) {
+ 		int cpu;
+ 
+-		s->refcount++;
++		atomic_inc(&s->refcount);
+ 		/*
+ 		 * Adjust the object sizes so that we clear
+ 		 * the complete object on kzalloc.
+@@ -3123,8 +3122,12 @@ struct kmem_cache *kmem_cache_create(con
+ 		s->inuse = max_t(int, s->inuse, ALIGN(size, sizeof(void *)));
+ 		up_write(&slub_lock);
+ 
+-		if (sysfs_slab_alias(s, name))
++		if (sysfs_slab_alias(s, name)) {
++			down_write(&slub_lock);
++			atomic_dec(&s->refcount);
++			up_write(&slub_lock);
+ 			goto err;
++		}
+ 		return s;
+ 	}
+ 
+@@ -3134,8 +3137,13 @@ struct kmem_cache *kmem_cache_create(con
+ 				size, align, flags, ctor)) {
+ 			list_add(&s->list, &slab_caches);
+ 			up_write(&slub_lock);
+-			if (sysfs_slab_add(s))
++			if (sysfs_slab_add(s)) {
++				down_write(&slub_lock);
++				list_del(&s->list);
++				up_write(&slub_lock);
++				kfree(s);
+ 				goto err;
++			}
+ 			return s;
+ 		}
+ 		kfree(s);
+@@ -3830,7 +3838,7 @@ SLAB_ATTR_RO(ctor);
+ 
+ static ssize_t aliases_show(struct kmem_cache *s, char *buf)
+ {
+-	return sprintf(buf, "%d\n", s->refcount - 1);
++	return sprintf(buf, "%d\n", atomic_read(&s->refcount) - 1);
+ }
+ SLAB_ATTR_RO(aliases);
+ 
 diff -NurpX linux-2.6.28.9-pax/Documentation/dontdiff linux-2.6.28.9/mm/util.c linux-2.6.28.9-pax/mm/util.c
 --- linux-2.6.28.9/mm/util.c	2008-10-10 09:19:25.000000000 +0200
 +++ linux-2.6.28.9-pax/mm/util.c	2008-12-25 12:20:09.000000000 +0100
