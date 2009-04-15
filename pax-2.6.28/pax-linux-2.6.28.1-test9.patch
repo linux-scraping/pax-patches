@@ -12384,7 +12384,7 @@ diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm/fault.c linux-2.6.28.1-pax/arch/x86/mm/fault.c
 --- linux-2.6.28.1/arch/x86/mm/fault.c	2009-01-19 10:47:30.000000000 +0100
-+++ linux-2.6.28.1-pax/arch/x86/mm/fault.c	2009-01-19 10:47:54.000000000 +0100
++++ linux-2.6.28.1-pax/arch/x86/mm/fault.c	2009-01-21 15:08:41.000000000 +0100
 @@ -26,6 +26,8 @@
  #include <linux/kprobes.h>
  #include <linux/uaccess.h>
@@ -12629,7 +12629,7 @@ diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm
  	vma = find_vma(mm, address);
  	if (!vma)
  		goto bad_area;
-@@ -696,16 +833,20 @@ again:
+@@ -696,16 +833,24 @@ again:
  		goto good_area;
  	if (!(vma->vm_flags & VM_GROWSDOWN))
  		goto bad_area;
@@ -12641,16 +12641,18 @@ diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm
 -		 * 32 pointers and then decrements %sp by 65535.)
 -		 */
 -		if (address + 65536 + 32 * sizeof(unsigned long) < regs->sp)
--			goto bad_area;
--	}
 +	/*
 +	 * Accessing the stack below %sp is always a bug.
 +	 * The large cushion allows instructions like enter
 +	 * and pusha to work.  ("enter $65535,$31" pushes
 +	 * 32 pointers and then decrements %sp by 65535.)
 +	 */
-+	if (address + 65536 + 32 * sizeof(unsigned long) < regs->sp)
-+		goto bad_area;
++	if (address + 65536 + 32 * sizeof(unsigned long) < regs->sp) {
++		if (error_code & PF_USER)
+ 			goto bad_area;
++		printk(KERN_ERR "PAX: abnormal kernel stack expansion: %s(%d) %lx %lx-%lx\n", tsk->comm, task_pid_nr(tsk), address, vma->vm_start, vma->vm_end);
++		dump_stack();
+ 	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)
@@ -12660,7 +12662,7 @@ diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm
  	if (expand_stack(vma, address))
  		goto bad_area;
  /*
-@@ -715,6 +856,8 @@ again:
+@@ -715,6 +860,8 @@ again:
  good_area:
  	si_code = SEGV_ACCERR;
  	write = 0;
@@ -12669,7 +12671,7 @@ diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm
  	switch (error_code & (PF_PROT|PF_WRITE)) {
  	default:	/* 3: write, present */
  		/* fall through */
-@@ -769,6 +912,54 @@ bad_area:
+@@ -769,6 +916,54 @@ bad_area:
  	up_read(&mm->mmap_sem);
  
  bad_area_nosemaphore:
@@ -12724,7 +12726,7 @@ diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -847,7 +1038,7 @@ no_context:
+@@ -847,7 +1042,7 @@ no_context:
  #ifdef CONFIG_X86_32
  	die("Oops", regs, error_code);
  	bust_spinlocks(0);
@@ -12733,7 +12735,7 @@ diff -NurpX linux-2.6.28.1-pax/Documentation/dontdiff linux-2.6.28.1/arch/x86/mm
  #else
  	if (__die("Oops", regs, error_code))
  		regs = NULL;
-@@ -940,3 +1131,174 @@ void vmalloc_sync_all(void)
+@@ -940,3 +1135,174 @@ void vmalloc_sync_all(void)
  	}
  #endif
  }
