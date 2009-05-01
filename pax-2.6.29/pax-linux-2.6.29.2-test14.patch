@@ -3657,7 +3657,16 @@ diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/bo
  	    "movw %%es, %1 ; "
 diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/ia32/ia32_signal.c linux-2.6.29.2-pax/arch/x86/ia32/ia32_signal.c
 --- linux-2.6.29.2/arch/x86/ia32/ia32_signal.c	2009-03-24 08:35:02.000000000 +0100
-+++ linux-2.6.29.2-pax/arch/x86/ia32/ia32_signal.c	2009-04-26 19:24:05.000000000 +0200
++++ linux-2.6.29.2-pax/arch/x86/ia32/ia32_signal.c	2009-04-30 08:12:29.000000000 +0200
+@@ -387,7 +387,7 @@ static void __user *get_sigframe(struct 
+ 	sp -= frame_size;
+ 	/* Align the stack pointer according to the i386 ABI,
+ 	 * i.e. so that on function entry ((sp + 4) & 15) == 0. */
+-	sp = ((sp + 4) & -16ul) - 4;
++	sp = ((sp - 12) & -16ul) - 4;
+ 	return (void __user *) sp;
+ }
+ 
 @@ -464,7 +464,7 @@ int ia32_setup_frame(int sig, struct k_s
  
  #if DEBUG_SIG
@@ -6423,8 +6432,22 @@ diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/ke
  
 diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/kernel/acpi/sleep.c linux-2.6.29.2-pax/arch/x86/kernel/acpi/sleep.c
 --- linux-2.6.29.2/arch/x86/kernel/acpi/sleep.c	2009-03-24 08:35:02.000000000 +0100
-+++ linux-2.6.29.2-pax/arch/x86/kernel/acpi/sleep.c	2009-03-24 08:46:37.000000000 +0100
-@@ -37,6 +37,10 @@ int acpi_save_state_mem(void)
++++ linux-2.6.29.2-pax/arch/x86/kernel/acpi/sleep.c	2009-05-01 15:19:07.000000000 +0200
+@@ -11,11 +11,12 @@
+ #include <linux/cpumask.h>
+ #include <asm/segment.h>
+ #include <asm/desc.h>
++#include <asm/e820.h>
+ 
+ #include "realmode/wakeup.h"
+ #include "sleep.h"
+ 
+-unsigned long acpi_wakeup_address;
++unsigned long acpi_wakeup_address = 0x2000;
+ unsigned long acpi_realmode_flags;
+ 
+ /* address in low memory of the wakeup routine. */
+@@ -37,6 +38,10 @@ int acpi_save_state_mem(void)
  {
  	struct wakeup_header *header;
  
@@ -6435,7 +6458,7 @@ diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/ke
  	if (!acpi_realmode) {
  		printk(KERN_ERR "Could not allocate memory during boot, "
  		       "S3 disabled\n");
-@@ -99,8 +103,18 @@ int acpi_save_state_mem(void)
+@@ -99,8 +104,18 @@ int acpi_save_state_mem(void)
  	header->trampoline_segment = setup_trampoline() >> 4;
  #ifdef CONFIG_SMP
  	stack_start.sp = temp_stack + sizeof(temp_stack);
@@ -6454,6 +6477,23 @@ diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/ke
  #endif
  	initial_code = (unsigned long)wakeup_long64;
  	saved_magic = 0x123456789abcdef0;
+@@ -133,14 +148,8 @@ void __init acpi_reserve_bootmem(void)
+ 		return;
+ 	}
+ 
+-	acpi_realmode = (unsigned long)alloc_bootmem_low(WAKEUP_SIZE);
+-
+-	if (!acpi_realmode) {
+-		printk(KERN_ERR "ACPI: Cannot allocate lowmem, S3 disabled.\n");
+-		return;
+-	}
+-
+-	acpi_wakeup_address = virt_to_phys((void *)acpi_realmode);
++	reserve_early(acpi_wakeup_address, acpi_wakeup_address + WAKEUP_SIZE, "ACPI Wakeup Code");
++	acpi_realmode = (unsigned long)__va(acpi_wakeup_address);;
+ }
+ 
+ 
 diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/kernel/acpi/wakeup_32.S linux-2.6.29.2-pax/arch/x86/kernel/acpi/wakeup_32.S
 --- linux-2.6.29.2/arch/x86/kernel/acpi/wakeup_32.S	2008-07-14 03:51:38.000000000 +0200
 +++ linux-2.6.29.2-pax/arch/x86/kernel/acpi/wakeup_32.S	2009-03-24 08:46:37.000000000 +0100
@@ -9276,7 +9316,16 @@ diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/ke
  
 diff -NurpX linux-2.6.29.2-pax/Documentation/dontdiff linux-2.6.29.2/arch/x86/kernel/signal.c linux-2.6.29.2-pax/arch/x86/kernel/signal.c
 --- linux-2.6.29.2/arch/x86/kernel/signal.c	2009-03-24 08:35:03.000000000 +0100
-+++ linux-2.6.29.2-pax/arch/x86/kernel/signal.c	2009-03-24 08:46:38.000000000 +0100
++++ linux-2.6.29.2-pax/arch/x86/kernel/signal.c	2009-04-30 08:12:37.000000000 +0200
+@@ -255,7 +255,7 @@ get_sigframe(struct k_sigaction *ka, str
+ 	 * Align the stack pointer according to the i386 ABI,
+ 	 * i.e. so that on function entry ((sp + 4) & 15) == 0.
+ 	 */
+-	sp = ((sp + 4) & -16ul) - 4;
++	sp = ((sp - 12) & -16ul) - 4;
+ 
+ 	return (void __user *) sp;
+ }
 @@ -287,9 +287,9 @@ __setup_frame(int sig, struct k_sigactio
  	}
  
