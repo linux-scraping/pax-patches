@@ -3673,7 +3673,25 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	    "movw %%es, %1 ; "
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/ia32/ia32_signal.c linux-2.6.28.10-pax/arch/x86/ia32/ia32_signal.c
 --- linux-2.6.28.10/arch/x86/ia32/ia32_signal.c	2008-12-25 12:13:18.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/ia32/ia32_signal.c	2008-12-25 12:20:08.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/ia32/ia32_signal.c	2009-05-05 00:01:37.000000000 +0200
+@@ -413,7 +413,7 @@ static void __user *get_sigframe(struct 
+ 	sp -= frame_size;
+ 	/* Align the stack pointer according to the i386 ABI,
+ 	 * i.e. so that on function entry ((sp + 4) & 15) == 0. */
+-	sp = ((sp + 4) & -16ul) - 4;
++	sp = ((sp - 12) & -16ul) - 4;
+ 	return (void __user *) sp;
+ }
+ 
+@@ -492,7 +492,7 @@ int ia32_setup_frame(int sig, struct k_s
+ 
+ #if DEBUG_SIG
+ 	printk(KERN_DEBUG "SIG deliver (%s:%d): sp=%p pc=%lx ra=%u\n",
+-	       current->comm, current->pid, frame, regs->ip, frame->pretcode);
++	       current->comm, task_pid_nr(current), frame, regs->ip, frame->pretcode);
+ #endif
+ 
+ 	return 0;
 @@ -518,6 +518,7 @@ int ia32_setup_rt_frame(int sig, struct 
  		__NR_ia32_rt_sigreturn,
  		0x80cd,
@@ -3682,6 +3700,15 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	};
  
  	frame = get_sigframe(ka, regs, sizeof(*frame), &fpstate);
+@@ -585,7 +586,7 @@ int ia32_setup_rt_frame(int sig, struct 
+ 
+ #if DEBUG_SIG
+ 	printk(KERN_DEBUG "SIG deliver (%s:%d): sp=%p pc=%lx ra=%u\n",
+-	       current->comm, current->pid, frame, regs->ip, frame->pretcode);
++	       current->comm, task_pid_nr(current), frame, regs->ip, frame->pretcode);
+ #endif
+ 
+ 	return 0;
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/include/asm/alternative.h linux-2.6.28.10-pax/arch/x86/include/asm/alternative.h
 --- linux-2.6.28.10/arch/x86/include/asm/alternative.h	2008-12-25 12:13:18.000000000 +0100
 +++ linux-2.6.28.10-pax/arch/x86/include/asm/alternative.h	2008-12-25 12:20:08.000000000 +0100
@@ -3714,7 +3741,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/include/asm/atomic_32.h linux-2.6.28.10-pax/arch/x86/include/asm/atomic_32.h
 --- linux-2.6.28.10/arch/x86/include/asm/atomic_32.h	2008-12-25 12:13:18.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/include/asm/atomic_32.h	2009-03-21 19:37:31.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/include/asm/atomic_32.h	2009-05-04 23:06:58.000000000 +0200
 @@ -47,7 +47,29 @@ typedef struct {
   */
  static inline void atomic_add(int i, atomic_t *v)
@@ -3781,7 +3808,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+m" (v->counter), "=qm" (c)
  		     : "ir" (i) : "memory");
  	return c;
-@@ -93,7 +132,18 @@ static inline int atomic_sub_and_test(in
+@@ -93,7 +132,30 @@ static inline int atomic_sub_and_test(in
   */
  static inline void atomic_inc(atomic_t *v)
  {
@@ -3798,10 +3825,22 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
 +		     _ASM_EXTABLE(0b, 1b)
 +#endif
 +
++		     : "+m" (v->counter));
++}
++
++/**
++ * atomic_inc_unchecked - increment atomic variable
++ * @v: pointer of type atomic_t
++ *
++ * Atomically increments @v by 1.
++ */
++static inline void atomic_inc_unchecked(atomic_t *v)
++{
++	asm volatile(LOCK_PREFIX "incl %0\n"
  		     : "+m" (v->counter));
  }
  
-@@ -105,7 +155,18 @@ static inline void atomic_inc(atomic_t *
+@@ -105,7 +167,18 @@ static inline void atomic_inc(atomic_t *
   */
  static inline void atomic_dec(atomic_t *v)
  {
@@ -3821,7 +3860,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+m" (v->counter));
  }
  
-@@ -121,7 +182,19 @@ static inline int atomic_dec_and_test(at
+@@ -121,7 +194,19 @@ static inline int atomic_dec_and_test(at
  {
  	unsigned char c;
  
@@ -3842,7 +3881,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+m" (v->counter), "=qm" (c)
  		     : : "memory");
  	return c != 0;
-@@ -139,7 +212,19 @@ static inline int atomic_inc_and_test(at
+@@ -139,7 +224,19 @@ static inline int atomic_inc_and_test(at
  {
  	unsigned char c;
  
@@ -3863,7 +3902,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+m" (v->counter), "=qm" (c)
  		     : : "memory");
  	return c != 0;
-@@ -158,7 +243,16 @@ static inline int atomic_add_negative(in
+@@ -158,7 +255,16 @@ static inline int atomic_add_negative(in
  {
  	unsigned char c;
  
@@ -3881,7 +3920,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+m" (v->counter), "=qm" (c)
  		     : "ir" (i) : "memory");
  	return c;
-@@ -181,7 +275,15 @@ static inline int atomic_add_return(int 
+@@ -181,7 +287,15 @@ static inline int atomic_add_return(int 
  #endif
  	/* Modern 486+ processor */
  	__i = i;
@@ -3898,7 +3937,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-@@ -222,17 +324,28 @@ static inline int atomic_sub_return(int 
+@@ -222,17 +336,28 @@ static inline int atomic_sub_return(int 
   */
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -3933,7 +3972,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/include/asm/atomic_64.h linux-2.6.28.10-pax/arch/x86/include/asm/atomic_64.h
 --- linux-2.6.28.10/arch/x86/include/asm/atomic_64.h	2008-12-25 12:13:18.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/include/asm/atomic_64.h	2009-03-21 19:39:51.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/include/asm/atomic_64.h	2009-05-04 23:06:47.000000000 +0200
 @@ -48,7 +48,29 @@ typedef struct {
   */
  static inline void atomic_add(int i, atomic_t *v)
@@ -4000,7 +4039,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "ir" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -94,7 +133,19 @@ static inline int atomic_sub_and_test(in
+@@ -94,7 +133,32 @@ static inline int atomic_sub_and_test(in
   */
  static inline void atomic_inc(atomic_t *v)
  {
@@ -4018,10 +4057,23 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
 +		     _ASM_EXTABLE(0b, 1b)
 +#endif
 +
++		     : "=m" (v->counter)
++		     : "m" (v->counter));
++}
++
++/**
++ * atomic_inc_unchecked - increment atomic variable
++ * @v: pointer of type atomic_t
++ *
++ * Atomically increments @v by 1.
++ */
++static inline void atomic_inc_unchecked(atomic_t *v)
++{
++	asm volatile(LOCK_PREFIX "incl %0\n"
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -107,7 +158,19 @@ static inline void atomic_inc(atomic_t *
+@@ -107,7 +171,19 @@ static inline void atomic_inc(atomic_t *
   */
  static inline void atomic_dec(atomic_t *v)
  {
@@ -4042,7 +4094,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -124,7 +187,20 @@ static inline int atomic_dec_and_test(at
+@@ -124,7 +200,20 @@ static inline int atomic_dec_and_test(at
  {
  	unsigned char c;
  
@@ -4064,7 +4116,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -142,7 +218,20 @@ static inline int atomic_inc_and_test(at
+@@ -142,7 +231,20 @@ static inline int atomic_inc_and_test(at
  {
  	unsigned char c;
  
@@ -4086,7 +4138,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -161,7 +250,16 @@ static inline int atomic_add_negative(in
+@@ -161,7 +263,16 @@ static inline int atomic_add_negative(in
  {
  	unsigned char c;
  
@@ -4104,7 +4156,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "ir" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -177,7 +275,15 @@ static inline int atomic_add_negative(in
+@@ -177,7 +288,15 @@ static inline int atomic_add_negative(in
  static inline int atomic_add_return(int i, atomic_t *v)
  {
  	int __i = i;
@@ -4121,7 +4173,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-@@ -226,7 +332,15 @@ typedef struct {
+@@ -226,7 +345,15 @@ typedef struct {
   */
  static inline void atomic64_add(long i, atomic64_t *v)
  {
@@ -4138,7 +4190,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter)
  		     : "er" (i), "m" (v->counter));
  }
-@@ -240,7 +354,15 @@ static inline void atomic64_add(long i, 
+@@ -240,7 +367,15 @@ static inline void atomic64_add(long i, 
   */
  static inline void atomic64_sub(long i, atomic64_t *v)
  {
@@ -4155,7 +4207,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter)
  		     : "er" (i), "m" (v->counter));
  }
-@@ -258,7 +380,16 @@ static inline int atomic64_sub_and_test(
+@@ -258,7 +393,16 @@ static inline int atomic64_sub_and_test(
  {
  	unsigned char c;
  
@@ -4173,7 +4225,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "er" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -272,7 +403,19 @@ static inline int atomic64_sub_and_test(
+@@ -272,7 +416,19 @@ static inline int atomic64_sub_and_test(
   */
  static inline void atomic64_inc(atomic64_t *v)
  {
@@ -4194,7 +4246,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -285,7 +428,19 @@ static inline void atomic64_inc(atomic64
+@@ -285,7 +441,19 @@ static inline void atomic64_inc(atomic64
   */
  static inline void atomic64_dec(atomic64_t *v)
  {
@@ -4215,7 +4267,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -302,7 +457,20 @@ static inline int atomic64_dec_and_test(
+@@ -302,7 +470,20 @@ static inline int atomic64_dec_and_test(
  {
  	unsigned char c;
  
@@ -4237,7 +4289,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -320,7 +488,20 @@ static inline int atomic64_inc_and_test(
+@@ -320,7 +501,20 @@ static inline int atomic64_inc_and_test(
  {
  	unsigned char c;
  
@@ -4259,7 +4311,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -339,7 +520,16 @@ static inline int atomic64_add_negative(
+@@ -339,7 +533,16 @@ static inline int atomic64_add_negative(
  {
  	unsigned char c;
  
@@ -4277,7 +4329,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "er" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -355,7 +545,15 @@ static inline int atomic64_add_negative(
+@@ -355,7 +558,15 @@ static inline int atomic64_add_negative(
  static inline long atomic64_add_return(long i, atomic64_t *v)
  {
  	long __i = i;
@@ -4294,7 +4346,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-@@ -386,17 +584,29 @@ static inline long atomic64_sub_return(l
+@@ -386,17 +597,29 @@ static inline long atomic64_sub_return(l
   */
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -4328,7 +4380,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -412,17 +622,29 @@ static inline int atomic_add_unless(atom
+@@ -412,17 +635,29 @@ static inline int atomic_add_unless(atom
   */
  static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -5179,8 +5231,24 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  #ifdef CONFIG_SMP
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/include/asm/mmu_context_32.h linux-2.6.28.10-pax/arch/x86/include/asm/mmu_context_32.h
 --- linux-2.6.28.10/arch/x86/include/asm/mmu_context_32.h	2008-12-25 12:13:18.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/include/asm/mmu_context_32.h	2008-12-25 12:20:08.000000000 +0100
-@@ -33,6 +33,22 @@ static inline void switch_mm(struct mm_s
++++ linux-2.6.28.10-pax/arch/x86/include/asm/mmu_context_32.h	2009-05-04 23:10:49.000000000 +0200
+@@ -15,11 +15,15 @@ static inline void switch_mm(struct mm_s
+ 			     struct task_struct *tsk)
+ {
+ 	int cpu = smp_processor_id();
++#ifdef CONFIG_SMP
++	int tlbstate = TLBSTATE_OK;
++#endif
+ 
+ 	if (likely(prev != next)) {
+ 		/* stop flush ipis for the previous mm */
+ 		cpu_clear(cpu, prev->cpu_vm_mask);
+ #ifdef CONFIG_SMP
++		tlbstate = x86_read_percpu(cpu_tlbstate.state);
+ 		per_cpu(cpu_tlbstate, cpu).state = TLBSTATE_OK;
+ 		per_cpu(cpu_tlbstate, cpu).active_mm = next;
+ #endif
+@@ -33,6 +37,26 @@ static inline void switch_mm(struct mm_s
  		 */
  		if (unlikely(prev->context.ldt != next->context.ldt))
  			load_LDT_nolock(&next->context);
@@ -5196,14 +5264,18 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
 +		if (unlikely(prev->context.user_cs_base != next->context.user_cs_base ||
-+			     prev->context.user_cs_limit != next->context.user_cs_limit))
++			     prev->context.user_cs_limit != next->context.user_cs_limit
++#ifdef CONFIG_SMP
++			     || tlbstate != TLBSTATE_OK
++#endif
++			    ))
 +			set_user_cs(next->context.user_cs_base, next->context.user_cs_limit, cpu);
 +#endif
 +
  	}
  #ifdef CONFIG_SMP
  	else {
-@@ -45,6 +61,19 @@ static inline void switch_mm(struct mm_s
+@@ -45,6 +69,19 @@ static inline void switch_mm(struct mm_s
  			 */
  			load_cr3(next->pgd);
  			load_LDT_nolock(&next->context);
@@ -6361,8 +6433,22 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/acpi/sleep.c linux-2.6.28.10-pax/arch/x86/kernel/acpi/sleep.c
 --- linux-2.6.28.10/arch/x86/kernel/acpi/sleep.c	2008-12-25 12:13:18.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/kernel/acpi/sleep.c	2008-12-25 12:20:08.000000000 +0100
-@@ -37,6 +37,10 @@ int acpi_save_state_mem(void)
++++ linux-2.6.28.10-pax/arch/x86/kernel/acpi/sleep.c	2009-05-05 00:04:36.000000000 +0200
+@@ -11,11 +11,12 @@
+ #include <linux/cpumask.h>
+ #include <asm/segment.h>
+ #include <asm/desc.h>
++#include <asm/e820.h>
+ 
+ #include "realmode/wakeup.h"
+ #include "sleep.h"
+ 
+-unsigned long acpi_wakeup_address;
++unsigned long acpi_wakeup_address = 0x2000;
+ unsigned long acpi_realmode_flags;
+ 
+ /* address in low memory of the wakeup routine. */
+@@ -37,6 +38,10 @@ int acpi_save_state_mem(void)
  {
  	struct wakeup_header *header;
  
@@ -6373,7 +6459,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	if (!acpi_realmode) {
  		printk(KERN_ERR "Could not allocate memory during boot, "
  		       "S3 disabled\n");
-@@ -99,8 +103,18 @@ int acpi_save_state_mem(void)
+@@ -99,8 +104,18 @@ int acpi_save_state_mem(void)
  	header->trampoline_segment = setup_trampoline() >> 4;
  #ifdef CONFIG_SMP
  	stack_start.sp = temp_stack + sizeof(temp_stack);
@@ -6392,6 +6478,23 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  #endif
  	initial_code = (unsigned long)wakeup_long64;
  	saved_magic = 0x123456789abcdef0;
+@@ -133,14 +148,8 @@ void __init acpi_reserve_bootmem(void)
+ 		return;
+ 	}
+ 
+-	acpi_realmode = (unsigned long)alloc_bootmem_low(WAKEUP_SIZE);
+-
+-	if (!acpi_realmode) {
+-		printk(KERN_ERR "ACPI: Cannot allocate lowmem, S3 disabled.\n");
+-		return;
+-	}
+-
+-	acpi_wakeup_address = virt_to_phys((void *)acpi_realmode);
++	reserve_early(acpi_wakeup_address, acpi_wakeup_address + WAKEUP_SIZE, "ACPI Wakeup Code");
++	acpi_realmode = (unsigned long)__va(acpi_wakeup_address);;
+ }
+ 
+ 
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/acpi/wakeup_32.S linux-2.6.28.10-pax/arch/x86/kernel/acpi/wakeup_32.S
 --- linux-2.6.28.10/arch/x86/kernel/acpi/wakeup_32.S	2008-07-14 03:51:38.000000000 +0200
 +++ linux-2.6.28.10-pax/arch/x86/kernel/acpi/wakeup_32.S	2008-12-25 12:20:08.000000000 +0100
@@ -6949,7 +7052,16 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		.__cr3		= __pa_nodebug(swapper_pg_dir),
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/dumpstack_32.c linux-2.6.28.10-pax/arch/x86/kernel/dumpstack_32.c
 --- linux-2.6.28.10/arch/x86/kernel/dumpstack_32.c	2008-12-25 12:13:18.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/kernel/dumpstack_32.c	2008-12-25 12:20:08.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/kernel/dumpstack_32.c	2009-05-04 23:17:08.000000000 +0200
+@@ -215,7 +215,7 @@ void dump_stack(void)
+ #endif
+ 
+ 	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
+-		current->pid, current->comm, print_tainted(),
++		task_pid_nr(current), current->comm, print_tainted(),
+ 		init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version);
 @@ -238,11 +238,12 @@ void show_registers(struct pt_regs *regs
  	 * When in-kernel, we also print out the stack and code at the
  	 * time of the fault..
@@ -7003,6 +7115,33 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		current->thread.trap_no = 2;
  		crash_kexec(regs);
  	}
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/dumpstack_64.c linux-2.6.28.10-pax/arch/x86/kernel/dumpstack_64.c
+--- linux-2.6.28.10/arch/x86/kernel/dumpstack_64.c	2008-12-25 12:13:18.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/kernel/dumpstack_64.c	2009-05-04 23:16:59.000000000 +0200
+@@ -361,7 +361,7 @@ void dump_stack(void)
+ #endif
+ 
+ 	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
+-		current->pid, current->comm, print_tainted(),
++		task_pid_nr(current), current->comm, print_tainted(),
+ 		init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version);
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/e820.c linux-2.6.28.10-pax/arch/x86/kernel/e820.c
+--- linux-2.6.28.10/arch/x86/kernel/e820.c	2008-12-25 12:13:18.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/kernel/e820.c	2009-05-04 23:38:03.000000000 +0200
+@@ -693,7 +693,10 @@ static struct early_res early_res[MAX_EA
+ 	 */
+ 	{ TRAMPOLINE_BASE, TRAMPOLINE_BASE + PAGE_SIZE, "TRAMPOLINE" },
+ #endif
+-	{}
++#ifdef CONFIG_VM86
++	{ PAGE_SIZE, ISA_START_ADDRESS, "V86 mode memory", 1 },
++#endif
++	{ 0, 0, {0}, 0 }
+ };
+ 
+ static int __init find_overlapped_early(u64 start, u64 end)
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/efi_32.c linux-2.6.28.10-pax/arch/x86/kernel/efi_32.c
 --- linux-2.6.28.10/arch/x86/kernel/efi_32.c	2008-10-10 09:18:47.000000000 +0200
 +++ linux-2.6.28.10-pax/arch/x86/kernel/efi_32.c	2008-12-25 12:20:08.000000000 +0100
@@ -8986,7 +9125,16 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
 +#endif
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/process_64.c linux-2.6.28.10-pax/arch/x86/kernel/process_64.c
 --- linux-2.6.28.10/arch/x86/kernel/process_64.c	2008-12-25 12:13:19.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/kernel/process_64.c	2008-12-25 12:20:08.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/kernel/process_64.c	2009-05-04 23:16:40.000000000 +0200
+@@ -88,7 +88,7 @@ static void __exit_idle(void)
+ void exit_idle(void)
+ {
+ 	/* idle loop has pid 0 */
+-	if (current->pid)
++	if (task_pid_nr(current))
+ 		return;
+ 	__exit_idle();
+ }
 @@ -109,6 +109,8 @@ static inline void play_dead(void)
  void cpu_idle(void)
  {
@@ -8996,6 +9144,15 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	/* endless idle loop with no priority at all */
  	while (1) {
  		tick_nohz_stop_sched_tick(1);
+@@ -153,7 +155,7 @@ void __show_regs(struct pt_regs *regs, i
+ 	printk("\n");
+ 	print_modules();
+ 	printk(KERN_INFO "Pid: %d, comm: %.20s %s %s %.*s\n",
+-		current->pid, current->comm, print_tainted(),
++		task_pid_nr(current), current->comm, print_tainted(),
+ 		init_utsname()->release,
+ 		(int)strcspn(init_utsname()->version, " "),
+ 		init_utsname()->version);
 @@ -223,7 +225,7 @@ void exit_thread(void)
  	struct thread_struct *t = &me->thread;
  
@@ -9205,7 +9362,16 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/signal_32.c linux-2.6.28.10-pax/arch/x86/kernel/signal_32.c
 --- linux-2.6.28.10/arch/x86/kernel/signal_32.c	2008-12-25 12:13:19.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/kernel/signal_32.c	2008-12-25 12:20:08.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/kernel/signal_32.c	2009-05-05 00:02:22.000000000 +0200
+@@ -335,7 +335,7 @@ get_sigframe(struct k_sigaction *ka, str
+ 	 * Align the stack pointer according to the i386 ABI,
+ 	 * i.e. so that on function entry ((sp + 4) & 15) == 0.
+ 	 */
+-	sp = ((sp + 4) & -16ul) - 4;
++	sp = ((sp - 12) & -16ul) - 4;
+ 
+ 	return (void __user *) sp;
+ }
 @@ -367,9 +367,9 @@ __setup_frame(int sig, struct k_sigactio
  	}
  
@@ -9779,7 +9945,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	return 0;
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/kernel/traps.c linux-2.6.28.10-pax/arch/x86/kernel/traps.c
 --- linux-2.6.28.10/arch/x86/kernel/traps.c	2009-03-17 09:39:29.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/kernel/traps.c	2009-03-17 09:42:09.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/kernel/traps.c	2009-05-04 23:18:48.000000000 +0200
 @@ -79,14 +79,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -9831,6 +9997,15 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		goto kernel_trap;
  
  #ifdef CONFIG_X86_32
+@@ -208,7 +200,7 @@ trap_signal:
+ 	    printk_ratelimit()) {
+ 		printk(KERN_INFO
+ 		       "%s[%d] trap %s ip:%lx sp:%lx error:%lx",
+-		       tsk->comm, tsk->pid, str,
++		       tsk->comm, task_pid_nr(tsk), str,
+ 		       regs->ip, regs->sp, error_code);
+ 		print_vma_addr(" in ", regs->ip);
+ 		printk("\n");
 @@ -227,6 +219,12 @@ kernel_trap:
  		tsk->thread.trap_no = trapnr;
  		die(str, regs, error_code);
@@ -13364,7 +13539,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	}
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/mm/init_32.c linux-2.6.28.10-pax/arch/x86/mm/init_32.c
 --- linux-2.6.28.10/arch/x86/mm/init_32.c	2008-12-25 12:13:19.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/mm/init_32.c	2009-02-24 00:12:04.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/mm/init_32.c	2009-05-04 23:19:45.000000000 +0200
 @@ -49,6 +49,7 @@
  #include <asm/setup.h>
  #include <asm/cacheflush.h>
@@ -13548,18 +13723,22 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  					prot = PAGE_KERNEL_EXEC;
  
  				pages_4k++;
-@@ -327,7 +322,9 @@ repeat:
+@@ -327,7 +322,13 @@ repeat:
   */
  int devmem_is_allowed(unsigned long pagenr)
  {
 -	if (pagenr <= 256)
 +	if (!pagenr)
 +		return 1;
++#ifdef CONFIG_VM86
++	if (pagenr < (ISA_START_ADDRESS >> PAGE_SHIFT))
++		return 1;
++#endif
 +	if ((ISA_START_ADDRESS >> PAGE_SHIFT) <= pagenr && pagenr < (ISA_END_ADDRESS >> PAGE_SHIFT))
  		return 1;
  	if (!page_is_ram(pagenr))
  		return 1;
-@@ -460,7 +457,7 @@ void __init native_pagetable_setup_start
+@@ -460,7 +461,7 @@ void __init native_pagetable_setup_start
  
  		pud = pud_offset(pgd, va);
  		pmd = pmd_offset(pud, va);
@@ -13568,7 +13747,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  			break;
  
  		pte = pte_offset_kernel(pmd, va);
-@@ -512,9 +509,7 @@ static void __init early_ioremap_page_ta
+@@ -512,9 +513,7 @@ static void __init early_ioremap_page_ta
  
  static void __init pagetable_init(void)
  {
@@ -13579,7 +13758,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  }
  
  #ifdef CONFIG_ACPI_SLEEP
-@@ -522,12 +517,12 @@ static void __init pagetable_init(void)
+@@ -522,12 +521,12 @@ static void __init pagetable_init(void)
   * ACPI suspend needs this for resume, because things like the intel-agp
   * driver might have split up a kernel 4MB mapping.
   */
@@ -13594,7 +13773,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  }
  #else /* !CONFIG_ACPI_SLEEP */
  static inline void save_pg_dir(void)
-@@ -557,13 +552,11 @@ void zap_low_mappings(void)
+@@ -557,13 +556,11 @@ void zap_low_mappings(void)
  
  int nx_enabled;
  
@@ -13609,7 +13788,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  /*
   * noexec = on|off
   *
-@@ -572,40 +565,33 @@ static int disable_nx __initdata;
+@@ -572,40 +569,33 @@ static int disable_nx __initdata;
   * on      Enable
   * off     Disable
   */
@@ -13643,12 +13822,12 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  static void __init set_nx(void)
  {
 -	unsigned int v[4], l, h;
--
--	if (cpu_has_pae && (cpuid_eax(0x80000000) > 0x80000001)) {
--		cpuid(0x80000001, &v[0], &v[1], &v[2], &v[3]);
 +	if (!nx_enabled && cpu_has_nx) {
 +		unsigned l, h;
  
+-	if (cpu_has_pae && (cpuid_eax(0x80000000) > 0x80000001)) {
+-		cpuid(0x80000001, &v[0], &v[1], &v[2], &v[3]);
+-
 -		if ((v[3] & (1 << 20)) && !disable_nx) {
 -			rdmsr(MSR_EFER, l, h);
 -			l |= EFER_NX;
@@ -13663,7 +13842,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	}
  }
  #endif
-@@ -988,7 +974,7 @@ void __init mem_init(void)
+@@ -988,7 +978,7 @@ void __init mem_init(void)
  	set_highmem_pages_init();
  
  	codesize =  (unsigned long) &_etext - (unsigned long) &_text;
@@ -13672,7 +13851,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
  
  	kclist_add(&kcore_mem, __va(0), max_low_pfn << PAGE_SHIFT);
-@@ -1034,10 +1020,10 @@ void __init mem_init(void)
+@@ -1034,10 +1024,10 @@ void __init mem_init(void)
  		((unsigned long)&__init_end -
  		 (unsigned long)&__init_begin) >> 10,
  
@@ -13686,7 +13865,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		((unsigned long)&_etext - (unsigned long)&_text) >> 10);
  
  #ifdef CONFIG_HIGHMEM
-@@ -1166,6 +1152,46 @@ void free_init_pages(char *what, unsigne
+@@ -1166,6 +1156,46 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -14006,7 +14185,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  struct split_state {
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/mm/pageattr.c linux-2.6.28.10-pax/arch/x86/mm/pageattr.c
 --- linux-2.6.28.10/arch/x86/mm/pageattr.c	2009-02-21 14:25:21.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/mm/pageattr.c	2009-02-21 14:26:57.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/mm/pageattr.c	2009-05-04 23:20:30.000000000 +0200
 @@ -20,6 +20,7 @@
  #include <asm/pgalloc.h>
  #include <asm/proto.h>
@@ -14015,7 +14194,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  
  /*
   * The current flushing context - we pass it instead of 5 arguments:
-@@ -259,7 +260,7 @@ static inline pgprot_t static_protection
+@@ -259,9 +260,10 @@ static inline pgprot_t static_protection
  	 * Does not cover __inittext since that is gone later on. On
  	 * 64bit we do not enforce !NX on the low mapping
  	 */
@@ -14023,8 +14202,19 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
 +	if (within(address, ktla_ktva((unsigned long)_text), ktla_ktva((unsigned long)_etext)))
  		pgprot_val(forbidden) |= _PAGE_NX;
  
++#ifdef CONFIG_DEBUG_RODATA
  	/*
-@@ -321,8 +322,20 @@ EXPORT_SYMBOL_GPL(lookup_address);
+ 	 * The .rodata section needs to be read-only. Using the pfn
+ 	 * catches all aliases.
+@@ -269,6 +271,7 @@ static inline pgprot_t static_protection
+ 	if (within(pfn, __pa((unsigned long)__start_rodata) >> PAGE_SHIFT,
+ 		   __pa((unsigned long)__end_rodata) >> PAGE_SHIFT))
+ 		pgprot_val(forbidden) |= _PAGE_RW;
++#endif
+ 
+ 	prot = __pgprot(pgprot_val(prot) & ~pgprot_val(forbidden));
+ 
+@@ -321,8 +324,20 @@ EXPORT_SYMBOL_GPL(lookup_address);
   */
  static void __set_pmd_pte(pte_t *kpte, unsigned long address, pte_t pte)
  {
@@ -14047,16 +14237,43 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		struct page *page;
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/mm/pat.c linux-2.6.28.10-pax/arch/x86/mm/pat.c
 --- linux-2.6.28.10/arch/x86/mm/pat.c	2009-02-03 14:19:02.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/mm/pat.c	2009-02-27 21:44:50.000000000 +0100
-@@ -491,7 +491,7 @@ pgprot_t phys_mem_access_prot(struct fil
- 	return vma_prot;
- }
++++ linux-2.6.28.10-pax/arch/x86/mm/pat.c	2009-05-04 23:21:17.000000000 +0200
+@@ -203,7 +203,7 @@ chk_conflict(struct memtype *new, struct
  
--#ifdef CONFIG_STRICT_DEVMEM
-+#ifndef CONFIG_STRICT_DEVMEM
- /* This check is done in drivers/char/mem.c in case of STRICT_DEVMEM*/
- static inline int range_is_allowed(unsigned long pfn, unsigned long size)
- {
+  conflict:
+ 	printk(KERN_INFO "%s:%d conflicting memory types "
+-	       "%Lx-%Lx %s<->%s\n", current->comm, current->pid, new->start,
++	       "%Lx-%Lx %s<->%s\n", current->comm, task_pid_nr(current), new->start,
+ 	       new->end, cattr_name(new->type), cattr_name(entry->type));
+ 	return -EBUSY;
+ }
+@@ -476,7 +476,7 @@ int free_memtype(u64 start, u64 end)
+ 
+ 	if (err) {
+ 		printk(KERN_INFO "%s:%d freeing invalid memtype %Lx-%Lx\n",
+-			current->comm, current->pid, start, end);
++			current->comm, task_pid_nr(current), start, end);
+ 	}
+ 
+ 	dprintk("free_memtype request 0x%Lx-0x%Lx\n", start, end);
+@@ -578,7 +578,7 @@ int phys_mem_access_prot_allowed(struct 
+ 		free_memtype(offset, offset + size);
+ 		printk(KERN_INFO
+ 		"%s:%d /dev/mem ioremap_change_attr failed %s for %Lx-%Lx\n",
+-			current->comm, current->pid,
++			current->comm, task_pid_nr(current),
+ 			cattr_name(flags),
+ 			offset, (unsigned long long)(offset + size));
+ 		return 0;
+@@ -599,7 +599,7 @@ void map_devmem(unsigned long pfn, unsig
+ 	if (flags != want_flags) {
+ 		printk(KERN_INFO
+ 		"%s:%d /dev/mem expected mapping type %s for %Lx-%Lx, got %s\n",
+-			current->comm, current->pid,
++			current->comm, task_pid_nr(current),
+ 			cattr_name(want_flags),
+ 			addr, (unsigned long long)(addr + size),
+ 			cattr_name(flags));
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/mm/pgtable_32.c linux-2.6.28.10-pax/arch/x86/mm/pgtable_32.c
 --- linux-2.6.28.10/arch/x86/mm/pgtable_32.c	2008-12-25 12:13:19.000000000 +0100
 +++ linux-2.6.28.10-pax/arch/x86/mm/pgtable_32.c	2008-12-25 12:20:08.000000000 +0100
@@ -14906,6 +15123,869 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/a
  };
  
  static int strn_pattern_cmp(const char *patt, const char *name, int wildchar)
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/adummy.c linux-2.6.28.10-pax/drivers/atm/adummy.c
+--- linux-2.6.28.10/drivers/atm/adummy.c	2008-10-10 09:18:49.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/adummy.c	2009-05-04 23:58:39.000000000 +0200
+@@ -77,7 +77,7 @@ adummy_send(struct atm_vcc *vcc, struct 
+ 		vcc->pop(vcc, skb);
+ 	else
+ 		dev_kfree_skb_any(skb);
+-	atomic_inc(&vcc->stats->tx);
++	atomic_inc_unchecked(&vcc->stats->tx);
+ 
+ 	return 0;
+ }
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/ambassador.c linux-2.6.28.10-pax/drivers/atm/ambassador.c
+--- linux-2.6.28.10/drivers/atm/ambassador.c	2008-10-10 09:18:49.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/ambassador.c	2009-05-04 23:58:39.000000000 +0200
+@@ -453,7 +453,7 @@ static void tx_complete (amb_dev * dev, 
+   PRINTD (DBG_FLOW|DBG_TX, "tx_complete %p %p", dev, tx);
+   
+   // VC layer stats
+-  atomic_inc(&ATM_SKB(skb)->vcc->stats->tx);
++  atomic_inc_unchecked(&ATM_SKB(skb)->vcc->stats->tx);
+   
+   // free the descriptor
+   kfree (tx_descr);
+@@ -494,7 +494,7 @@ static void rx_complete (amb_dev * dev, 
+ 	  dump_skb ("<<<", vc, skb);
+ 	  
+ 	  // VC layer stats
+-	  atomic_inc(&atm_vcc->stats->rx);
++	  atomic_inc_unchecked(&atm_vcc->stats->rx);
+ 	  __net_timestamp(skb);
+ 	  // end of our responsability
+ 	  atm_vcc->push (atm_vcc, skb);
+@@ -509,7 +509,7 @@ static void rx_complete (amb_dev * dev, 
+       } else {
+       	PRINTK (KERN_INFO, "dropped over-size frame");
+ 	// should we count this?
+-	atomic_inc(&atm_vcc->stats->rx_drop);
++	atomic_inc_unchecked(&atm_vcc->stats->rx_drop);
+       }
+       
+     } else {
+@@ -1349,7 +1349,7 @@ static int amb_send (struct atm_vcc * at
+   }
+   
+   if (check_area (skb->data, skb->len)) {
+-    atomic_inc(&atm_vcc->stats->tx_err);
++    atomic_inc_unchecked(&atm_vcc->stats->tx_err);
+     return -ENOMEM; // ?
+   }
+   
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/atmtcp.c linux-2.6.28.10-pax/drivers/atm/atmtcp.c
+--- linux-2.6.28.10/drivers/atm/atmtcp.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/atmtcp.c	2009-05-04 23:58:39.000000000 +0200
+@@ -206,7 +206,7 @@ static int atmtcp_v_send(struct atm_vcc 
+ 		if (vcc->pop) vcc->pop(vcc,skb);
+ 		else dev_kfree_skb(skb);
+ 		if (dev_data) return 0;
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		return -ENOLINK;
+ 	}
+ 	size = skb->len+sizeof(struct atmtcp_hdr);
+@@ -214,7 +214,7 @@ static int atmtcp_v_send(struct atm_vcc 
+ 	if (!new_skb) {
+ 		if (vcc->pop) vcc->pop(vcc,skb);
+ 		else dev_kfree_skb(skb);
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		return -ENOBUFS;
+ 	}
+ 	hdr = (void *) skb_put(new_skb,sizeof(struct atmtcp_hdr));
+@@ -225,8 +225,8 @@ static int atmtcp_v_send(struct atm_vcc 
+ 	if (vcc->pop) vcc->pop(vcc,skb);
+ 	else dev_kfree_skb(skb);
+ 	out_vcc->push(out_vcc,new_skb);
+-	atomic_inc(&vcc->stats->tx);
+-	atomic_inc(&out_vcc->stats->rx);
++	atomic_inc_unchecked(&vcc->stats->tx);
++	atomic_inc_unchecked(&out_vcc->stats->rx);
+ 	return 0;
+ }
+ 
+@@ -300,7 +300,7 @@ static int atmtcp_c_send(struct atm_vcc 
+ 	out_vcc = find_vcc(dev, ntohs(hdr->vpi), ntohs(hdr->vci));
+ 	read_unlock(&vcc_sklist_lock);
+ 	if (!out_vcc) {
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		goto done;
+ 	}
+ 	skb_pull(skb,sizeof(struct atmtcp_hdr));
+@@ -312,8 +312,8 @@ static int atmtcp_c_send(struct atm_vcc 
+ 	__net_timestamp(new_skb);
+ 	skb_copy_from_linear_data(skb, skb_put(new_skb, skb->len), skb->len);
+ 	out_vcc->push(out_vcc,new_skb);
+-	atomic_inc(&vcc->stats->tx);
+-	atomic_inc(&out_vcc->stats->rx);
++	atomic_inc_unchecked(&vcc->stats->tx);
++	atomic_inc_unchecked(&out_vcc->stats->rx);
+ done:
+ 	if (vcc->pop) vcc->pop(vcc,skb);
+ 	else dev_kfree_skb(skb);
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/eni.c linux-2.6.28.10-pax/drivers/atm/eni.c
+--- linux-2.6.28.10/drivers/atm/eni.c	2008-12-25 12:13:20.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/atm/eni.c	2009-05-04 23:58:39.000000000 +0200
+@@ -525,7 +525,7 @@ static int rx_aal0(struct atm_vcc *vcc)
+ 		DPRINTK(DEV_LABEL "(itf %d): trashing empty cell\n",
+ 		    vcc->dev->number);
+ 		length = 0;
+-		atomic_inc(&vcc->stats->rx_err);
++		atomic_inc_unchecked(&vcc->stats->rx_err);
+ 	}
+ 	else {
+ 		length = ATM_CELL_SIZE-1; /* no HEC */
+@@ -580,7 +580,7 @@ static int rx_aal5(struct atm_vcc *vcc)
+ 			    size);
+ 		}
+ 		eff = length = 0;
+-		atomic_inc(&vcc->stats->rx_err);
++		atomic_inc_unchecked(&vcc->stats->rx_err);
+ 	}
+ 	else {
+ 		size = (descr & MID_RED_COUNT)*(ATM_CELL_PAYLOAD >> 2);
+@@ -597,7 +597,7 @@ static int rx_aal5(struct atm_vcc *vcc)
+ 			    "(VCI=%d,length=%ld,size=%ld (descr 0x%lx))\n",
+ 			    vcc->dev->number,vcc->vci,length,size << 2,descr);
+ 			length = eff = 0;
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 		}
+ 	}
+ 	skb = eff ? atm_alloc_charge(vcc,eff << 2,GFP_ATOMIC) : NULL;
+@@ -770,7 +770,7 @@ rx_dequeued++;
+ 			vcc->push(vcc,skb);
+ 			pushed++;
+ 		}
+-		atomic_inc(&vcc->stats->rx);
++		atomic_inc_unchecked(&vcc->stats->rx);
+ 	}
+ 	wake_up(&eni_dev->rx_wait);
+ }
+@@ -1227,7 +1227,7 @@ static void dequeue_tx(struct atm_dev *d
+ 		    PCI_DMA_TODEVICE);
+ 		if (vcc->pop) vcc->pop(vcc,skb);
+ 		else dev_kfree_skb_irq(skb);
+-		atomic_inc(&vcc->stats->tx);
++		atomic_inc_unchecked(&vcc->stats->tx);
+ 		wake_up(&eni_dev->tx_wait);
+ dma_complete++;
+ 	}
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/firestream.c linux-2.6.28.10-pax/drivers/atm/firestream.c
+--- linux-2.6.28.10/drivers/atm/firestream.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/firestream.c	2009-05-04 23:58:39.000000000 +0200
+@@ -748,7 +748,7 @@ static void process_txdone_queue (struct
+ 				}
+ 			}
+ 
+-			atomic_inc(&ATM_SKB(skb)->vcc->stats->tx);
++			atomic_inc_unchecked(&ATM_SKB(skb)->vcc->stats->tx);
+ 
+ 			fs_dprintk (FS_DEBUG_TXMEM, "i");
+ 			fs_dprintk (FS_DEBUG_ALLOC, "Free t-skb: %p\n", skb);
+@@ -815,7 +815,7 @@ static void process_incoming (struct fs_
+ #endif
+ 				skb_put (skb, qe->p1 & 0xffff); 
+ 				ATM_SKB(skb)->vcc = atm_vcc;
+-				atomic_inc(&atm_vcc->stats->rx);
++				atomic_inc_unchecked(&atm_vcc->stats->rx);
+ 				__net_timestamp(skb);
+ 				fs_dprintk (FS_DEBUG_ALLOC, "Free rec-skb: %p (pushed)\n", skb);
+ 				atm_vcc->push (atm_vcc, skb);
+@@ -836,12 +836,12 @@ static void process_incoming (struct fs_
+ 				kfree (pe);
+ 			}
+ 			if (atm_vcc)
+-				atomic_inc(&atm_vcc->stats->rx_drop);
++				atomic_inc_unchecked(&atm_vcc->stats->rx_drop);
+ 			break;
+ 		case 0x1f: /*  Reassembly abort: no buffers. */
+ 			/* Silently increment error counter. */
+ 			if (atm_vcc)
+-				atomic_inc(&atm_vcc->stats->rx_drop);
++				atomic_inc_unchecked(&atm_vcc->stats->rx_drop);
+ 			break;
+ 		default: /* Hmm. Haven't written the code to handle the others yet... -- REW */
+ 			printk (KERN_WARNING "Don't know what to do with RX status %x: %s.\n", 
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/fore200e.c linux-2.6.28.10-pax/drivers/atm/fore200e.c
+--- linux-2.6.28.10/drivers/atm/fore200e.c	2009-03-17 09:39:32.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/atm/fore200e.c	2009-05-04 23:58:39.000000000 +0200
+@@ -931,9 +931,9 @@ fore200e_tx_irq(struct fore200e* fore200
+ #endif
+ 		/* check error condition */
+ 		if (*entry->status & STATUS_ERROR)
+-		    atomic_inc(&vcc->stats->tx_err);
++		    atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		else
+-		    atomic_inc(&vcc->stats->tx);
++		    atomic_inc_unchecked(&vcc->stats->tx);
+ 	    }
+ 	}
+ 
+@@ -1082,7 +1082,7 @@ fore200e_push_rpd(struct fore200e* fore2
+     if (skb == NULL) {
+ 	DPRINTK(2, "unable to alloc new skb, rx PDU length = %d\n", pdu_len);
+ 
+-	atomic_inc(&vcc->stats->rx_drop);
++	atomic_inc_unchecked(&vcc->stats->rx_drop);
+ 	return -ENOMEM;
+     } 
+ 
+@@ -1125,14 +1125,14 @@ fore200e_push_rpd(struct fore200e* fore2
+ 
+ 	dev_kfree_skb_any(skb);
+ 
+-	atomic_inc(&vcc->stats->rx_drop);
++	atomic_inc_unchecked(&vcc->stats->rx_drop);
+ 	return -ENOMEM;
+     }
+ 
+     ASSERT(atomic_read(&sk_atm(vcc)->sk_wmem_alloc) >= 0);
+ 
+     vcc->push(vcc, skb);
+-    atomic_inc(&vcc->stats->rx);
++    atomic_inc_unchecked(&vcc->stats->rx);
+ 
+     ASSERT(atomic_read(&sk_atm(vcc)->sk_wmem_alloc) >= 0);
+ 
+@@ -1210,7 +1210,7 @@ fore200e_rx_irq(struct fore200e* fore200
+ 		DPRINTK(2, "damaged PDU on %d.%d.%d\n",
+ 			fore200e->atm_dev->number,
+ 			entry->rpd->atm_header.vpi, entry->rpd->atm_header.vci);
+-		atomic_inc(&vcc->stats->rx_err);
++		atomic_inc_unchecked(&vcc->stats->rx_err);
+ 	    }
+ 	}
+ 
+@@ -1655,7 +1655,7 @@ fore200e_send(struct atm_vcc *vcc, struc
+ 		goto retry_here;
+ 	    }
+ 
+-	    atomic_inc(&vcc->stats->tx_err);
++	    atomic_inc_unchecked(&vcc->stats->tx_err);
+ 
+ 	    fore200e->tx_sat++;
+ 	    DPRINTK(2, "tx queue of device %s is saturated, PDU dropped - heartbeat is %08x\n",
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/he.c linux-2.6.28.10-pax/drivers/atm/he.c
+--- linux-2.6.28.10/drivers/atm/he.c	2008-10-10 09:18:49.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/he.c	2009-05-04 23:58:39.000000000 +0200
+@@ -1728,7 +1728,7 @@ he_service_rbrq(struct he_dev *he_dev, i
+ 
+ 		if (RBRQ_HBUF_ERR(he_dev->rbrq_head)) {
+ 			hprintk("HBUF_ERR!  (cid 0x%x)\n", cid);
+-				atomic_inc(&vcc->stats->rx_drop);
++				atomic_inc_unchecked(&vcc->stats->rx_drop);
+ 			goto return_host_buffers;
+ 		}
+ 
+@@ -1761,7 +1761,7 @@ he_service_rbrq(struct he_dev *he_dev, i
+ 				RBRQ_LEN_ERR(he_dev->rbrq_head)
+ 							? "LEN_ERR" : "",
+ 							vcc->vpi, vcc->vci);
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			goto return_host_buffers;
+ 		}
+ 
+@@ -1820,7 +1820,7 @@ he_service_rbrq(struct he_dev *he_dev, i
+ 		vcc->push(vcc, skb);
+ 		spin_lock(&he_dev->global_lock);
+ 
+-		atomic_inc(&vcc->stats->rx);
++		atomic_inc_unchecked(&vcc->stats->rx);
+ 
+ return_host_buffers:
+ 		++pdus_assembled;
+@@ -2673,7 +2673,7 @@ he_send(struct atm_vcc *vcc, struct sk_b
+ 	__enqueue_tpd(he_dev, tpd, cid);
+ 	spin_unlock_irqrestore(&he_dev->global_lock, flags);
+ 
+-	atomic_inc(&vcc->stats->tx);
++	atomic_inc_unchecked(&vcc->stats->tx);
+ 
+ 	return 0;
+ }
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/horizon.c linux-2.6.28.10-pax/drivers/atm/horizon.c
+--- linux-2.6.28.10/drivers/atm/horizon.c	2008-12-25 12:13:20.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/atm/horizon.c	2009-05-04 23:58:39.000000000 +0200
+@@ -1033,7 +1033,7 @@ static void rx_schedule (hrz_dev * dev, 
+ 	{
+ 	  struct atm_vcc * vcc = ATM_SKB(skb)->vcc;
+ 	  // VC layer stats
+-	  atomic_inc(&vcc->stats->rx);
++	  atomic_inc_unchecked(&vcc->stats->rx);
+ 	  __net_timestamp(skb);
+ 	  // end of our responsability
+ 	  vcc->push (vcc, skb);
+@@ -1185,7 +1185,7 @@ static void tx_schedule (hrz_dev * const
+ 	dev->tx_iovec = NULL;
+ 	
+ 	// VC layer stats
+-	atomic_inc(&ATM_SKB(skb)->vcc->stats->tx);
++	atomic_inc_unchecked(&ATM_SKB(skb)->vcc->stats->tx);
+ 	
+ 	// free the skb
+ 	hrz_kfree_skb (skb);
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/idt77252.c linux-2.6.28.10-pax/drivers/atm/idt77252.c
+--- linux-2.6.28.10/drivers/atm/idt77252.c	2008-12-25 12:13:20.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/atm/idt77252.c	2009-05-04 23:58:39.000000000 +0200
+@@ -810,7 +810,7 @@ drain_scq(struct idt77252_dev *card, str
+ 		else
+ 			dev_kfree_skb(skb);
+ 
+-		atomic_inc(&vcc->stats->tx);
++		atomic_inc_unchecked(&vcc->stats->tx);
+ 	}
+ 
+ 	atomic_dec(&scq->used);
+@@ -1073,13 +1073,13 @@ dequeue_rx(struct idt77252_dev *card, st
+ 			if ((sb = dev_alloc_skb(64)) == NULL) {
+ 				printk("%s: Can't allocate buffers for aal0.\n",
+ 				       card->name);
+-				atomic_add(i, &vcc->stats->rx_drop);
++				atomic_add_unchecked(i, &vcc->stats->rx_drop);
+ 				break;
+ 			}
+ 			if (!atm_charge(vcc, sb->truesize)) {
+ 				RXPRINTK("%s: atm_charge() dropped aal0 packets.\n",
+ 					 card->name);
+-				atomic_add(i - 1, &vcc->stats->rx_drop);
++				atomic_add_unchecked(i - 1, &vcc->stats->rx_drop);
+ 				dev_kfree_skb(sb);
+ 				break;
+ 			}
+@@ -1096,7 +1096,7 @@ dequeue_rx(struct idt77252_dev *card, st
+ 			ATM_SKB(sb)->vcc = vcc;
+ 			__net_timestamp(sb);
+ 			vcc->push(vcc, sb);
+-			atomic_inc(&vcc->stats->rx);
++			atomic_inc_unchecked(&vcc->stats->rx);
+ 
+ 			cell += ATM_CELL_PAYLOAD;
+ 		}
+@@ -1133,13 +1133,13 @@ dequeue_rx(struct idt77252_dev *card, st
+ 			         "(CDC: %08x)\n",
+ 			         card->name, len, rpp->len, readl(SAR_REG_CDC));
+ 			recycle_rx_pool_skb(card, rpp);
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			return;
+ 		}
+ 		if (stat & SAR_RSQE_CRC) {
+ 			RXPRINTK("%s: AAL5 CRC error.\n", card->name);
+ 			recycle_rx_pool_skb(card, rpp);
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			return;
+ 		}
+ 		if (skb_queue_len(&rpp->queue) > 1) {
+@@ -1150,7 +1150,7 @@ dequeue_rx(struct idt77252_dev *card, st
+ 				RXPRINTK("%s: Can't alloc RX skb.\n",
+ 					 card->name);
+ 				recycle_rx_pool_skb(card, rpp);
+-				atomic_inc(&vcc->stats->rx_err);
++				atomic_inc_unchecked(&vcc->stats->rx_err);
+ 				return;
+ 			}
+ 			if (!atm_charge(vcc, skb->truesize)) {
+@@ -1169,7 +1169,7 @@ dequeue_rx(struct idt77252_dev *card, st
+ 			__net_timestamp(skb);
+ 
+ 			vcc->push(vcc, skb);
+-			atomic_inc(&vcc->stats->rx);
++			atomic_inc_unchecked(&vcc->stats->rx);
+ 
+ 			return;
+ 		}
+@@ -1191,7 +1191,7 @@ dequeue_rx(struct idt77252_dev *card, st
+ 		__net_timestamp(skb);
+ 
+ 		vcc->push(vcc, skb);
+-		atomic_inc(&vcc->stats->rx);
++		atomic_inc_unchecked(&vcc->stats->rx);
+ 
+ 		if (skb->truesize > SAR_FB_SIZE_3)
+ 			add_rx_skb(card, 3, SAR_FB_SIZE_3, 1);
+@@ -1303,14 +1303,14 @@ idt77252_rx_raw(struct idt77252_dev *car
+ 		if (vcc->qos.aal != ATM_AAL0) {
+ 			RPRINTK("%s: raw cell for non AAL0 vc %u.%u\n",
+ 				card->name, vpi, vci);
+-			atomic_inc(&vcc->stats->rx_drop);
++			atomic_inc_unchecked(&vcc->stats->rx_drop);
+ 			goto drop;
+ 		}
+ 	
+ 		if ((sb = dev_alloc_skb(64)) == NULL) {
+ 			printk("%s: Can't allocate buffers for AAL0.\n",
+ 			       card->name);
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			goto drop;
+ 		}
+ 
+@@ -1329,7 +1329,7 @@ idt77252_rx_raw(struct idt77252_dev *car
+ 		ATM_SKB(sb)->vcc = vcc;
+ 		__net_timestamp(sb);
+ 		vcc->push(vcc, sb);
+-		atomic_inc(&vcc->stats->rx);
++		atomic_inc_unchecked(&vcc->stats->rx);
+ 
+ drop:
+ 		skb_pull(queue, 64);
+@@ -1954,13 +1954,13 @@ idt77252_send_skb(struct atm_vcc *vcc, s
+ 
+ 	if (vc == NULL) {
+ 		printk("%s: NULL connection in send().\n", card->name);
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		dev_kfree_skb(skb);
+ 		return -EINVAL;
+ 	}
+ 	if (!test_bit(VCF_TX, &vc->flags)) {
+ 		printk("%s: Trying to transmit on a non-tx VC.\n", card->name);
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		dev_kfree_skb(skb);
+ 		return -EINVAL;
+ 	}
+@@ -1972,14 +1972,14 @@ idt77252_send_skb(struct atm_vcc *vcc, s
+ 		break;
+ 	default:
+ 		printk("%s: Unsupported AAL: %d\n", card->name, vcc->qos.aal);
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		dev_kfree_skb(skb);
+ 		return -EINVAL;
+ 	}
+ 
+ 	if (skb_shinfo(skb)->nr_frags != 0) {
+ 		printk("%s: No scatter-gather yet.\n", card->name);
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		dev_kfree_skb(skb);
+ 		return -EINVAL;
+ 	}
+@@ -1987,7 +1987,7 @@ idt77252_send_skb(struct atm_vcc *vcc, s
+ 
+ 	err = queue_skb(card, vc, skb, oam);
+ 	if (err) {
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		dev_kfree_skb(skb);
+ 		return err;
+ 	}
+@@ -2010,7 +2010,7 @@ idt77252_send_oam(struct atm_vcc *vcc, v
+ 	skb = dev_alloc_skb(64);
+ 	if (!skb) {
+ 		printk("%s: Out of memory in send_oam().\n", card->name);
+-		atomic_inc(&vcc->stats->tx_err);
++		atomic_inc_unchecked(&vcc->stats->tx_err);
+ 		return -ENOMEM;
+ 	}
+ 	atomic_add(skb->truesize, &sk_atm(vcc)->sk_wmem_alloc);
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/iphase.c linux-2.6.28.10-pax/drivers/atm/iphase.c
+--- linux-2.6.28.10/drivers/atm/iphase.c	2008-10-10 09:18:49.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/iphase.c	2009-05-04 23:58:39.000000000 +0200
+@@ -1125,7 +1125,7 @@ static int rx_pkt(struct atm_dev *dev)  
+ 	status = (u_short) (buf_desc_ptr->desc_mode);  
+ 	if (status & (RX_CER | RX_PTE | RX_OFL))  
+ 	{  
+-                atomic_inc(&vcc->stats->rx_err);
++                atomic_inc_unchecked(&vcc->stats->rx_err);
+ 		IF_ERR(printk("IA: bad packet, dropping it");)  
+                 if (status & RX_CER) { 
+                     IF_ERR(printk(" cause: packet CRC error\n");)
+@@ -1148,7 +1148,7 @@ static int rx_pkt(struct atm_dev *dev)  
+ 	len = dma_addr - buf_addr;  
+         if (len > iadev->rx_buf_sz) {
+            printk("Over %d bytes sdu received, dropped!!!\n", iadev->rx_buf_sz);
+-           atomic_inc(&vcc->stats->rx_err);
++           atomic_inc_unchecked(&vcc->stats->rx_err);
+ 	   goto out_free_desc;
+         }
+ 		  
+@@ -1298,7 +1298,7 @@ static void rx_dle_intr(struct atm_dev *
+           ia_vcc = INPH_IA_VCC(vcc);
+           if (ia_vcc == NULL)
+           {
+-             atomic_inc(&vcc->stats->rx_err);
++             atomic_inc_unchecked(&vcc->stats->rx_err);
+              dev_kfree_skb_any(skb);
+              atm_return(vcc, atm_guess_pdu2truesize(len));
+              goto INCR_DLE;
+@@ -1310,7 +1310,7 @@ static void rx_dle_intr(struct atm_dev *
+           if ((length > iadev->rx_buf_sz) || (length > 
+                               (skb->len - sizeof(struct cpcs_trailer))))
+           {
+-             atomic_inc(&vcc->stats->rx_err);
++             atomic_inc_unchecked(&vcc->stats->rx_err);
+              IF_ERR(printk("rx_dle_intr: Bad  AAL5 trailer %d (skb len %d)", 
+                                                             length, skb->len);)
+              dev_kfree_skb_any(skb);
+@@ -1326,7 +1326,7 @@ static void rx_dle_intr(struct atm_dev *
+ 
+ 	  IF_RX(printk("rx_dle_intr: skb push");)  
+ 	  vcc->push(vcc,skb);  
+-	  atomic_inc(&vcc->stats->rx);
++	  atomic_inc_unchecked(&vcc->stats->rx);
+           iadev->rx_pkt_cnt++;
+       }  
+ INCR_DLE:
+@@ -2921,7 +2921,7 @@ static int ia_pkt_tx (struct atm_vcc *vc
+ 	if ((desc == 0) || (desc > iadev->num_tx_desc))  
+ 	{  
+ 		IF_ERR(printk(DEV_LABEL "invalid desc for send: %d\n", desc);) 
+-                atomic_inc(&vcc->stats->tx);
++                atomic_inc_unchecked(&vcc->stats->tx);
+ 		if (vcc->pop)   
+ 		    vcc->pop(vcc, skb);   
+ 		else  
+@@ -3026,7 +3026,7 @@ static int ia_pkt_tx (struct atm_vcc *vc
+         ATM_DESC(skb) = vcc->vci;
+         skb_queue_tail(&iadev->tx_dma_q, skb);
+ 
+-        atomic_inc(&vcc->stats->tx);
++        atomic_inc_unchecked(&vcc->stats->tx);
+         iadev->tx_pkt_cnt++;
+ 	/* Increment transaction counter */  
+ 	writel(2, iadev->dma+IPHASE5575_TX_COUNTER);  
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/lanai.c linux-2.6.28.10-pax/drivers/atm/lanai.c
+--- linux-2.6.28.10/drivers/atm/lanai.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/lanai.c	2009-05-04 23:58:39.000000000 +0200
+@@ -1305,7 +1305,7 @@ static void lanai_send_one_aal5(struct l
+ 	vcc_tx_add_aal5_trailer(lvcc, skb->len, 0, 0);
+ 	lanai_endtx(lanai, lvcc);
+ 	lanai_free_skb(lvcc->tx.atmvcc, skb);
+-	atomic_inc(&lvcc->tx.atmvcc->stats->tx);
++	atomic_inc_unchecked(&lvcc->tx.atmvcc->stats->tx);
+ }
+ 
+ /* Try to fill the buffer - don't call unless there is backlog */
+@@ -1428,7 +1428,7 @@ static void vcc_rx_aal5(struct lanai_vcc
+ 	ATM_SKB(skb)->vcc = lvcc->rx.atmvcc;
+ 	__net_timestamp(skb);
+ 	lvcc->rx.atmvcc->push(lvcc->rx.atmvcc, skb);
+-	atomic_inc(&lvcc->rx.atmvcc->stats->rx);
++	atomic_inc_unchecked(&lvcc->rx.atmvcc->stats->rx);
+     out:
+ 	lvcc->rx.buf.ptr = end;
+ 	cardvcc_write(lvcc, endptr, vcc_rxreadptr);
+@@ -1670,7 +1670,7 @@ static int handle_service(struct lanai_d
+ 		DPRINTK("(itf %d) got RX service entry 0x%X for non-AAL5 "
+ 		    "vcc %d\n", lanai->number, (unsigned int) s, vci);
+ 		lanai->stats.service_rxnotaal5++;
+-		atomic_inc(&lvcc->rx.atmvcc->stats->rx_err);
++		atomic_inc_unchecked(&lvcc->rx.atmvcc->stats->rx_err);
+ 		return 0;
+ 	}
+ 	if (likely(!(s & (SERVICE_TRASH | SERVICE_STREAM | SERVICE_CRCERR)))) {
+@@ -1682,7 +1682,7 @@ static int handle_service(struct lanai_d
+ 		int bytes;
+ 		read_unlock(&vcc_sklist_lock);
+ 		DPRINTK("got trashed rx pdu on vci %d\n", vci);
+-		atomic_inc(&lvcc->rx.atmvcc->stats->rx_err);
++		atomic_inc_unchecked(&lvcc->rx.atmvcc->stats->rx_err);
+ 		lvcc->stats.x.aal5.service_trash++;
+ 		bytes = (SERVICE_GET_END(s) * 16) -
+ 		    (((unsigned long) lvcc->rx.buf.ptr) -
+@@ -1694,7 +1694,7 @@ static int handle_service(struct lanai_d
+ 	}
+ 	if (s & SERVICE_STREAM) {
+ 		read_unlock(&vcc_sklist_lock);
+-		atomic_inc(&lvcc->rx.atmvcc->stats->rx_err);
++		atomic_inc_unchecked(&lvcc->rx.atmvcc->stats->rx_err);
+ 		lvcc->stats.x.aal5.service_stream++;
+ 		printk(KERN_ERR DEV_LABEL "(itf %d): Got AAL5 stream "
+ 		    "PDU on VCI %d!\n", lanai->number, vci);
+@@ -1702,7 +1702,7 @@ static int handle_service(struct lanai_d
+ 		return 0;
+ 	}
+ 	DPRINTK("got rx crc error on vci %d\n", vci);
+-	atomic_inc(&lvcc->rx.atmvcc->stats->rx_err);
++	atomic_inc_unchecked(&lvcc->rx.atmvcc->stats->rx_err);
+ 	lvcc->stats.x.aal5.service_rxcrc++;
+ 	lvcc->rx.buf.ptr = &lvcc->rx.buf.start[SERVICE_GET_END(s) * 4];
+ 	cardvcc_write(lvcc, SERVICE_GET_END(s), vcc_rxreadptr);
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/nicstar.c linux-2.6.28.10-pax/drivers/atm/nicstar.c
+--- linux-2.6.28.10/drivers/atm/nicstar.c	2008-07-14 03:51:39.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/nicstar.c	2009-05-04 23:58:39.000000000 +0200
+@@ -1723,7 +1723,7 @@ static int ns_send(struct atm_vcc *vcc, 
+    if ((vc = (vc_map *) vcc->dev_data) == NULL)
+    {
+       printk("nicstar%d: vcc->dev_data == NULL on ns_send().\n", card->index);
+-      atomic_inc(&vcc->stats->tx_err);
++      atomic_inc_unchecked(&vcc->stats->tx_err);
+       dev_kfree_skb_any(skb);
+       return -EINVAL;
+    }
+@@ -1731,7 +1731,7 @@ static int ns_send(struct atm_vcc *vcc, 
+    if (!vc->tx)
+    {
+       printk("nicstar%d: Trying to transmit on a non-tx VC.\n", card->index);
+-      atomic_inc(&vcc->stats->tx_err);
++      atomic_inc_unchecked(&vcc->stats->tx_err);
+       dev_kfree_skb_any(skb);
+       return -EINVAL;
+    }
+@@ -1739,7 +1739,7 @@ static int ns_send(struct atm_vcc *vcc, 
+    if (vcc->qos.aal != ATM_AAL5 && vcc->qos.aal != ATM_AAL0)
+    {
+       printk("nicstar%d: Only AAL0 and AAL5 are supported.\n", card->index);
+-      atomic_inc(&vcc->stats->tx_err);
++      atomic_inc_unchecked(&vcc->stats->tx_err);
+       dev_kfree_skb_any(skb);
+       return -EINVAL;
+    }
+@@ -1747,7 +1747,7 @@ static int ns_send(struct atm_vcc *vcc, 
+    if (skb_shinfo(skb)->nr_frags != 0)
+    {
+       printk("nicstar%d: No scatter-gather yet.\n", card->index);
+-      atomic_inc(&vcc->stats->tx_err);
++      atomic_inc_unchecked(&vcc->stats->tx_err);
+       dev_kfree_skb_any(skb);
+       return -EINVAL;
+    }
+@@ -1792,11 +1792,11 @@ static int ns_send(struct atm_vcc *vcc, 
+ 
+    if (push_scqe(card, vc, scq, &scqe, skb) != 0)
+    {
+-      atomic_inc(&vcc->stats->tx_err);
++      atomic_inc_unchecked(&vcc->stats->tx_err);
+       dev_kfree_skb_any(skb);
+       return -EIO;
+    }
+-   atomic_inc(&vcc->stats->tx);
++   atomic_inc_unchecked(&vcc->stats->tx);
+ 
+    return 0;
+ }
+@@ -2111,14 +2111,14 @@ static void dequeue_rx(ns_dev *card, ns_
+          {
+             printk("nicstar%d: Can't allocate buffers for aal0.\n",
+                    card->index);
+-            atomic_add(i,&vcc->stats->rx_drop);
++            atomic_add_unchecked(i,&vcc->stats->rx_drop);
+             break;
+          }
+          if (!atm_charge(vcc, sb->truesize))
+          {
+             RXPRINTK("nicstar%d: atm_charge() dropped aal0 packets.\n",
+                      card->index);
+-            atomic_add(i-1,&vcc->stats->rx_drop); /* already increased by 1 */
++            atomic_add_unchecked(i-1,&vcc->stats->rx_drop); /* already increased by 1 */
+             dev_kfree_skb_any(sb);
+             break;
+          }
+@@ -2133,7 +2133,7 @@ static void dequeue_rx(ns_dev *card, ns_
+          ATM_SKB(sb)->vcc = vcc;
+ 	 __net_timestamp(sb);
+          vcc->push(vcc, sb);
+-         atomic_inc(&vcc->stats->rx);
++         atomic_inc_unchecked(&vcc->stats->rx);
+          cell += ATM_CELL_PAYLOAD;
+       }
+ 
+@@ -2152,7 +2152,7 @@ static void dequeue_rx(ns_dev *card, ns_
+ 	 if (iovb == NULL)
+ 	 {
+ 	    printk("nicstar%d: Out of iovec buffers.\n", card->index);
+-            atomic_inc(&vcc->stats->rx_drop);
++            atomic_inc_unchecked(&vcc->stats->rx_drop);
+             recycle_rx_buf(card, skb);
+             return;
+ 	 }
+@@ -2182,7 +2182,7 @@ static void dequeue_rx(ns_dev *card, ns_
+    else if (NS_SKB(iovb)->iovcnt >= NS_MAX_IOVECS)
+    {
+       printk("nicstar%d: received too big AAL5 SDU.\n", card->index);
+-      atomic_inc(&vcc->stats->rx_err);
++      atomic_inc_unchecked(&vcc->stats->rx_err);
+       recycle_iovec_rx_bufs(card, (struct iovec *) iovb->data, NS_MAX_IOVECS);
+       NS_SKB(iovb)->iovcnt = 0;
+       iovb->len = 0;
+@@ -2202,7 +2202,7 @@ static void dequeue_rx(ns_dev *card, ns_
+          printk("nicstar%d: Expected a small buffer, and this is not one.\n",
+ 	        card->index);
+          which_list(card, skb);
+-         atomic_inc(&vcc->stats->rx_err);
++         atomic_inc_unchecked(&vcc->stats->rx_err);
+          recycle_rx_buf(card, skb);
+          vc->rx_iov = NULL;
+          recycle_iov_buf(card, iovb);
+@@ -2216,7 +2216,7 @@ static void dequeue_rx(ns_dev *card, ns_
+          printk("nicstar%d: Expected a large buffer, and this is not one.\n",
+ 	        card->index);
+          which_list(card, skb);
+-         atomic_inc(&vcc->stats->rx_err);
++         atomic_inc_unchecked(&vcc->stats->rx_err);
+          recycle_iovec_rx_bufs(card, (struct iovec *) iovb->data,
+ 	                       NS_SKB(iovb)->iovcnt);
+          vc->rx_iov = NULL;
+@@ -2240,7 +2240,7 @@ static void dequeue_rx(ns_dev *card, ns_
+             printk(" - PDU size mismatch.\n");
+          else
+             printk(".\n");
+-         atomic_inc(&vcc->stats->rx_err);
++         atomic_inc_unchecked(&vcc->stats->rx_err);
+          recycle_iovec_rx_bufs(card, (struct iovec *) iovb->data,
+ 	   NS_SKB(iovb)->iovcnt);
+ 	 vc->rx_iov = NULL;
+@@ -2256,7 +2256,7 @@ static void dequeue_rx(ns_dev *card, ns_
+          if (!atm_charge(vcc, skb->truesize))
+          {
+             push_rxbufs(card, skb);
+-            atomic_inc(&vcc->stats->rx_drop);
++            atomic_inc_unchecked(&vcc->stats->rx_drop);
+          }
+          else
+ 	 {
+@@ -2268,7 +2268,7 @@ static void dequeue_rx(ns_dev *card, ns_
+             ATM_SKB(skb)->vcc = vcc;
+ 	    __net_timestamp(skb);
+             vcc->push(vcc, skb);
+-            atomic_inc(&vcc->stats->rx);
++            atomic_inc_unchecked(&vcc->stats->rx);
+          }
+       }
+       else if (NS_SKB(iovb)->iovcnt == 2)	/* One small plus one large buffer */
+@@ -2283,7 +2283,7 @@ static void dequeue_rx(ns_dev *card, ns_
+             if (!atm_charge(vcc, sb->truesize))
+             {
+                push_rxbufs(card, sb);
+-               atomic_inc(&vcc->stats->rx_drop);
++               atomic_inc_unchecked(&vcc->stats->rx_drop);
+             }
+             else
+ 	    {
+@@ -2295,7 +2295,7 @@ static void dequeue_rx(ns_dev *card, ns_
+                ATM_SKB(sb)->vcc = vcc;
+ 	       __net_timestamp(sb);
+                vcc->push(vcc, sb);
+-               atomic_inc(&vcc->stats->rx);
++               atomic_inc_unchecked(&vcc->stats->rx);
+             }
+ 
+             push_rxbufs(card, skb);
+@@ -2306,7 +2306,7 @@ static void dequeue_rx(ns_dev *card, ns_
+             if (!atm_charge(vcc, skb->truesize))
+             {
+                push_rxbufs(card, skb);
+-               atomic_inc(&vcc->stats->rx_drop);
++               atomic_inc_unchecked(&vcc->stats->rx_drop);
+             }
+             else
+             {
+@@ -2320,7 +2320,7 @@ static void dequeue_rx(ns_dev *card, ns_
+                ATM_SKB(skb)->vcc = vcc;
+ 	       __net_timestamp(skb);
+                vcc->push(vcc, skb);
+-               atomic_inc(&vcc->stats->rx);
++               atomic_inc_unchecked(&vcc->stats->rx);
+             }
+ 
+             push_rxbufs(card, sb);
+@@ -2342,7 +2342,7 @@ static void dequeue_rx(ns_dev *card, ns_
+             if (hb == NULL)
+             {
+                printk("nicstar%d: Out of huge buffers.\n", card->index);
+-               atomic_inc(&vcc->stats->rx_drop);
++               atomic_inc_unchecked(&vcc->stats->rx_drop);
+                recycle_iovec_rx_bufs(card, (struct iovec *) iovb->data,
+ 	                             NS_SKB(iovb)->iovcnt);
+                vc->rx_iov = NULL;
+@@ -2393,7 +2393,7 @@ static void dequeue_rx(ns_dev *card, ns_
+             }
+ 	    else
+ 	       dev_kfree_skb_any(hb);
+-	    atomic_inc(&vcc->stats->rx_drop);
++	    atomic_inc_unchecked(&vcc->stats->rx_drop);
+          }
+          else
+ 	 {
+@@ -2427,7 +2427,7 @@ static void dequeue_rx(ns_dev *card, ns_
+ #endif /* NS_USE_DESTRUCTORS */
+ 	    __net_timestamp(hb);
+             vcc->push(vcc, hb);
+-            atomic_inc(&vcc->stats->rx);
++            atomic_inc_unchecked(&vcc->stats->rx);
+          }
+       }
+ 
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/suni.c linux-2.6.28.10-pax/drivers/atm/suni.c
+--- linux-2.6.28.10/drivers/atm/suni.c	2008-10-10 09:18:49.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/suni.c	2009-05-04 23:58:39.000000000 +0200
+@@ -49,7 +49,7 @@ static DEFINE_SPINLOCK(sunis_lock);
+ 
+ 
+ #define ADD_LIMITED(s,v) \
+-    atomic_add((v),&stats->s); \
++    atomic_add_unchecked((v),&stats->s); \
+     if (atomic_read(&stats->s) < 0) atomic_set(&stats->s,INT_MAX);
+ 
+ 
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/uPD98402.c linux-2.6.28.10-pax/drivers/atm/uPD98402.c
+--- linux-2.6.28.10/drivers/atm/uPD98402.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.28.10-pax/drivers/atm/uPD98402.c	2009-05-04 23:58:39.000000000 +0200
+@@ -41,7 +41,7 @@ static int fetch_stats(struct atm_dev *d
+ 	struct sonet_stats tmp;
+  	int error = 0;
+ 
+-	atomic_add(GET(HECCT),&PRIV(dev)->sonet_stats.uncorr_hcs);
++	atomic_add_unchecked(GET(HECCT),&PRIV(dev)->sonet_stats.uncorr_hcs);
+ 	sonet_copy_stats(&PRIV(dev)->sonet_stats,&tmp);
+ 	if (arg) error = copy_to_user(arg,&tmp,sizeof(tmp));
+ 	if (zero && !error) {
+@@ -160,7 +160,7 @@ static int uPD98402_ioctl(struct atm_dev
+ 
+ 
+ #define ADD_LIMITED(s,v) \
+-    { atomic_add(GET(v),&PRIV(dev)->sonet_stats.s); \
++    { atomic_add_unchecked(GET(v),&PRIV(dev)->sonet_stats.s); \
+     if (atomic_read(&PRIV(dev)->sonet_stats.s) < 0) \
+ 	atomic_set(&PRIV(dev)->sonet_stats.s,INT_MAX); }
+ 
+@@ -193,7 +193,7 @@ static void uPD98402_int(struct atm_dev 
+ 		if (reason & uPD98402_INT_PFM) stat_event(dev);
+ 		if (reason & uPD98402_INT_PCO) {
+ 			(void) GET(PCOCR); /* clear interrupt cause */
+-			atomic_add(GET(HECCT),
++			atomic_add_unchecked(GET(HECCT),
+ 			    &PRIV(dev)->sonet_stats.uncorr_hcs);
+ 		}
+ 		if ((reason & uPD98402_INT_RFO) && 
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/atm/zatm.c linux-2.6.28.10-pax/drivers/atm/zatm.c
+--- linux-2.6.28.10/drivers/atm/zatm.c	2008-12-25 12:13:20.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/atm/zatm.c	2009-05-04 23:58:39.000000000 +0200
+@@ -458,7 +458,7 @@ printk("dummy: 0x%08lx, 0x%08lx\n",dummy
+ 		}
+ 		if (!size) {
+ 			dev_kfree_skb_irq(skb);
+-			if (vcc) atomic_inc(&vcc->stats->rx_err);
++			if (vcc) atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			continue;
+ 		}
+ 		if (!atm_charge(vcc,skb->truesize)) {
+@@ -468,7 +468,7 @@ printk("dummy: 0x%08lx, 0x%08lx\n",dummy
+ 		skb->len = size;
+ 		ATM_SKB(skb)->vcc = vcc;
+ 		vcc->push(vcc,skb);
+-		atomic_inc(&vcc->stats->rx);
++		atomic_inc_unchecked(&vcc->stats->rx);
+ 	}
+ 	zout(pos & 0xffff,MTA(mbx));
+ #if 0 /* probably a stupid idea */
+@@ -732,7 +732,7 @@ if (*ZATM_PRV_DSC(skb) != (uPD98401_TXPD
+ 			skb_queue_head(&zatm_vcc->backlog,skb);
+ 			break;
+ 		}
+-	atomic_inc(&vcc->stats->tx);
++	atomic_inc_unchecked(&vcc->stats->tx);
+ 	wake_up(&zatm_vcc->tx_wait);
+ }
+ 
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/char/agp/frontend.c linux-2.6.28.10-pax/drivers/char/agp/frontend.c
 --- linux-2.6.28.10/drivers/char/agp/frontend.c	2008-10-10 09:18:49.000000000 +0200
 +++ linux-2.6.28.10-pax/drivers/char/agp/frontend.c	2008-12-25 12:20:08.000000000 +0100
@@ -14942,6 +16022,30 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/c
  
  static int __init hpet_init(void)
  {
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/char/ipmi/ipmi_msghandler.c linux-2.6.28.10-pax/drivers/char/ipmi/ipmi_msghandler.c
+--- linux-2.6.28.10/drivers/char/ipmi/ipmi_msghandler.c	2008-12-25 12:13:21.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/char/ipmi/ipmi_msghandler.c	2009-05-04 23:58:39.000000000 +0200
+@@ -441,7 +441,7 @@ static DEFINE_MUTEX(smi_watchers_mutex);
+ 
+ 
+ #define ipmi_inc_stat(intf, stat) \
+-	atomic_inc(&(intf)->stats[IPMI_STAT_ ## stat])
++	atomic_inc_unchecked(&(intf)->stats[IPMI_STAT_ ## stat])
+ #define ipmi_get_stat(intf, stat) \
+ 	((unsigned int) atomic_read(&(intf)->stats[IPMI_STAT_ ## stat]))
+ 
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/char/ipmi/ipmi_si_intf.c linux-2.6.28.10-pax/drivers/char/ipmi/ipmi_si_intf.c
+--- linux-2.6.28.10/drivers/char/ipmi/ipmi_si_intf.c	2008-12-25 12:13:21.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/char/ipmi/ipmi_si_intf.c	2009-05-04 23:58:39.000000000 +0200
+@@ -288,7 +288,7 @@ struct smi_info {
+ };
+ 
+ #define smi_inc_stat(smi, stat) \
+-	atomic_inc(&(smi)->stats[SI_STAT_ ## stat])
++	atomic_inc_unchecked(&(smi)->stats[SI_STAT_ ## stat])
+ #define smi_get_stat(smi, stat) \
+ 	((unsigned int) atomic_read(&(smi)->stats[SI_STAT_ ## stat]))
+ 
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/char/keyboard.c linux-2.6.28.10-pax/drivers/char/keyboard.c
 --- linux-2.6.28.10/drivers/char/keyboard.c	2008-12-25 12:13:21.000000000 +0100
 +++ linux-2.6.28.10-pax/drivers/char/keyboard.c	2008-12-25 12:20:08.000000000 +0100
@@ -15698,6 +16802,57 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/n
  	}
  
  	ret = 0;
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/oprofile/buffer_sync.c linux-2.6.28.10-pax/drivers/oprofile/buffer_sync.c
+--- linux-2.6.28.10/drivers/oprofile/buffer_sync.c	2008-12-25 12:13:34.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/oprofile/buffer_sync.c	2009-05-04 23:59:37.000000000 +0200
+@@ -361,7 +361,7 @@ static void add_ibs_begin(struct oprofil
+ 		if (ibs_cookie == NO_COOKIE)
+ 			offset = rip;
+ 		if (ibs_cookie == INVALID_COOKIE) {
+-			atomic_inc(&oprofile_stats.sample_lost_no_mapping);
++			atomic_inc_unchecked(&oprofile_stats.sample_lost_no_mapping);
+ 			offset = rip;
+ 		}
+ 		if (ibs_cookie != last_cookie) {
+@@ -408,7 +408,7 @@ static int add_us_sample(struct mm_struc
+ 	cookie = lookup_dcookie(mm, s->eip, &offset);
+ 
+ 	if (cookie == INVALID_COOKIE) {
+-		atomic_inc(&oprofile_stats.sample_lost_no_mapping);
++		atomic_inc_unchecked(&oprofile_stats.sample_lost_no_mapping);
+ 		return 0;
+ 	}
+ 
+@@ -436,7 +436,7 @@ add_sample(struct mm_struct *mm, struct 
+ 	} else if (mm) {
+ 		return add_us_sample(mm, s);
+ 	} else {
+-		atomic_inc(&oprofile_stats.sample_lost_no_mm);
++		atomic_inc_unchecked(&oprofile_stats.sample_lost_no_mm);
+ 	}
+ 	return 0;
+ }
+@@ -619,7 +619,7 @@ void sync_buffer(int cpu)
+ 			   !add_sample(mm, s, in_kernel)) {
+ 			if (state == sb_bt_start) {
+ 				state = sb_bt_ignore;
+-				atomic_inc(&oprofile_stats.bt_lost_no_mapping);
++				atomic_inc_unchecked(&oprofile_stats.bt_lost_no_mapping);
+ 			}
+ 		}
+ 
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/oprofile/event_buffer.c linux-2.6.28.10-pax/drivers/oprofile/event_buffer.c
+--- linux-2.6.28.10/drivers/oprofile/event_buffer.c	2008-12-25 12:13:34.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/oprofile/event_buffer.c	2009-05-04 23:58:39.000000000 +0200
+@@ -42,7 +42,7 @@ static atomic_t buffer_ready = ATOMIC_IN
+ void add_event_entry(unsigned long value)
+ {
+ 	if (buffer_pos == buffer_size) {
+-		atomic_inc(&oprofile_stats.event_lost_overflow);
++		atomic_inc_unchecked(&oprofile_stats.event_lost_overflow);
+ 		return;
+ 	}
+ 
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/pci/hotplug/cpqphp_nvram.c linux-2.6.28.10-pax/drivers/pci/hotplug/cpqphp_nvram.c
 --- linux-2.6.28.10/drivers/pci/hotplug/cpqphp_nvram.c	2008-07-14 03:51:41.000000000 +0200
 +++ linux-2.6.28.10-pax/drivers/pci/hotplug/cpqphp_nvram.c	2008-12-25 12:20:08.000000000 +0100
@@ -15927,6 +17082,71 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/s
  };
  
  static struct pci_driver serial_pci_driver = {
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/usb/atm/usbatm.c linux-2.6.28.10-pax/drivers/usb/atm/usbatm.c
+--- linux-2.6.28.10/drivers/usb/atm/usbatm.c	2008-12-25 12:13:38.000000000 +0100
++++ linux-2.6.28.10-pax/drivers/usb/atm/usbatm.c	2009-05-04 23:58:39.000000000 +0200
+@@ -333,7 +333,7 @@ static void usbatm_extract_one_cell(stru
+ 		if (printk_ratelimit())
+ 			atm_warn(instance, "%s: OAM not supported (vpi %d, vci %d)!\n",
+ 				__func__, vpi, vci);
+-		atomic_inc(&vcc->stats->rx_err);
++		atomic_inc_unchecked(&vcc->stats->rx_err);
+ 		return;
+ 	}
+ 
+@@ -361,7 +361,7 @@ static void usbatm_extract_one_cell(stru
+ 		if (length > ATM_MAX_AAL5_PDU) {
+ 			atm_rldbg(instance, "%s: bogus length %u (vcc: 0x%p)!\n",
+ 				  __func__, length, vcc);
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			goto out;
+ 		}
+ 
+@@ -370,14 +370,14 @@ static void usbatm_extract_one_cell(stru
+ 		if (sarb->len < pdu_length) {
+ 			atm_rldbg(instance, "%s: bogus pdu_length %u (sarb->len: %u, vcc: 0x%p)!\n",
+ 				  __func__, pdu_length, sarb->len, vcc);
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			goto out;
+ 		}
+ 
+ 		if (crc32_be(~0, skb_tail_pointer(sarb) - pdu_length, pdu_length) != 0xc704dd7b) {
+ 			atm_rldbg(instance, "%s: packet failed crc check (vcc: 0x%p)!\n",
+ 				  __func__, vcc);
+-			atomic_inc(&vcc->stats->rx_err);
++			atomic_inc_unchecked(&vcc->stats->rx_err);
+ 			goto out;
+ 		}
+ 
+@@ -387,7 +387,7 @@ static void usbatm_extract_one_cell(stru
+ 			if (printk_ratelimit())
+ 				atm_err(instance, "%s: no memory for skb (length: %u)!\n",
+ 					__func__, length);
+-			atomic_inc(&vcc->stats->rx_drop);
++			atomic_inc_unchecked(&vcc->stats->rx_drop);
+ 			goto out;
+ 		}
+ 
+@@ -412,7 +412,7 @@ static void usbatm_extract_one_cell(stru
+ 
+ 		vcc->push(vcc, skb);
+ 
+-		atomic_inc(&vcc->stats->rx);
++		atomic_inc_unchecked(&vcc->stats->rx);
+ 	out:
+ 		skb_trim(sarb, 0);
+ 	}
+@@ -616,7 +616,7 @@ static void usbatm_tx_process(unsigned l
+ 			struct atm_vcc *vcc = UDSL_SKB(skb)->atm.vcc;
+ 
+ 			usbatm_pop(vcc, skb);
+-			atomic_inc(&vcc->stats->tx);
++			atomic_inc_unchecked(&vcc->stats->tx);
+ 
+ 			skb = skb_dequeue(&instance->sndqueue);
+ 		}
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/drivers/usb/class/cdc-acm.c linux-2.6.28.10-pax/drivers/usb/class/cdc-acm.c
 --- linux-2.6.28.10/drivers/usb/class/cdc-acm.c	2009-03-17 09:39:33.000000000 +0100
 +++ linux-2.6.28.10-pax/drivers/usb/class/cdc-acm.c	2009-03-17 09:42:09.000000000 +0100
@@ -17425,12 +18645,13 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/debugf
  }
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c linux-2.6.28.10-pax/fs/exec.c
 --- linux-2.6.28.10/fs/exec.c	2009-05-04 22:13:19.000000000 +0200
-+++ linux-2.6.28.10-pax/fs/exec.c	2009-05-04 22:13:54.000000000 +0200
-@@ -51,6 +51,12 @@
++++ linux-2.6.28.10-pax/fs/exec.c	2009-05-05 00:21:57.000000000 +0200
+@@ -51,6 +51,13 @@
  #include <linux/audit.h>
  #include <linux/tracehook.h>
  #include <linux/kmod.h>
 +#include <linux/random.h>
++#include <linux/seq_file.h>
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +#include <linux/kallsyms.h>
@@ -17439,7 +18660,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  
  #include <asm/uaccess.h>
  #include <asm/mmu_context.h>
-@@ -61,6 +67,11 @@
+@@ -61,6 +68,11 @@
  #include <linux/a.out.h>
  #endif
  
@@ -17451,7 +18672,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  int suid_dumpable = 0;
-@@ -169,18 +180,10 @@ static struct page *get_arg_page(struct 
+@@ -169,18 +181,10 @@ static struct page *get_arg_page(struct 
  		int write)
  {
  	struct page *page;
@@ -17473,7 +18694,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  		return NULL;
  
  	if (write) {
-@@ -253,6 +256,11 @@ static int __bprm_mm_init(struct linux_b
+@@ -253,6 +257,11 @@ static int __bprm_mm_init(struct linux_b
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  
  	vma->vm_flags = VM_STACK_FLAGS;
@@ -17485,7 +18706,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  	err = insert_vm_struct(mm, vma);
  	if (err) {
-@@ -265,6 +273,11 @@ static int __bprm_mm_init(struct linux_b
+@@ -265,6 +274,11 @@ static int __bprm_mm_init(struct linux_b
  
  	bprm->p = vma->vm_end - sizeof(void *);
  
@@ -17497,7 +18718,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  	return 0;
  
  err:
-@@ -528,6 +541,10 @@ static int shift_arg_pages(struct vm_are
+@@ -528,6 +542,10 @@ static int shift_arg_pages(struct vm_are
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -17508,7 +18729,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -616,6 +633,14 @@ int setup_arg_pages(struct linux_binprm 
+@@ -616,6 +634,14 @@ int setup_arg_pages(struct linux_binprm 
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -17523,7 +18744,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  	vm_flags = VM_STACK_FLAGS;
  
  	/*
-@@ -629,21 +654,24 @@ int setup_arg_pages(struct linux_binprm 
+@@ -629,21 +655,24 @@ int setup_arg_pages(struct linux_binprm 
  		vm_flags &= ~VM_EXEC;
  	vm_flags |= mm->def_flags;
  
@@ -17557,7 +18778,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  #ifdef CONFIG_STACK_GROWSUP
  	stack_base = vma->vm_end + EXTRA_STACK_VM_PAGES * PAGE_SIZE;
  #else
-@@ -655,7 +683,7 @@ int setup_arg_pages(struct linux_binprm 
+@@ -655,7 +684,7 @@ int setup_arg_pages(struct linux_binprm 
  
  out_unlock:
  	up_write(&mm->mmap_sem);
@@ -17566,7 +18787,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  }
  EXPORT_SYMBOL(setup_arg_pages);
  
-@@ -1511,6 +1539,122 @@ out:
+@@ -1511,6 +1540,138 @@ out:
  	return ispipe;
  }
  
@@ -17650,6 +18871,14 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
 +			path_exec = d_path(&vma_exec->vm_file->f_path, buffer_exec, PAGE_SIZE);
 +			if (IS_ERR(path_exec))
 +				path_exec = "<path too long>";
++			else {
++				path_exec = mangle_path(buffer_exec, path_exec, "\t\n\\");
++				if (path_exec) {
++					*path_exec = 0;
++					path_exec = buffer_exec;
++				} else
++					path_exec = "<path too long>";
++			}
 +		}
 +		if (vma_fault) {
 +			start = vma_fault->vm_start;
@@ -17659,6 +18888,14 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
 +				path_fault = d_path(&vma_fault->vm_file->f_path, buffer_fault, PAGE_SIZE);
 +				if (IS_ERR(path_fault))
 +					path_fault = "<path too long>";
++				else {
++					path_fault = mangle_path(buffer_fault, path_fault, "\t\n\\");
++					if (path_fault) {
++						*path_fault = 0;
++						path_fault = buffer_fault;
++					} else
++						path_fault = "<path too long>";
++				}
 +			} else
 +				path_fault = "<anonymous mapping>";
 +		}
@@ -17689,7 +18926,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/exec.c
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1777,6 +1921,8 @@ int do_coredump(long signr, int exit_cod
+@@ -1777,6 +1938,8 @@ int do_coredump(long signr, int exit_cod
  
   	if (ispipe) {
  		helper_argv = argv_split(GFP_KERNEL, corename+1, &helper_argc);
@@ -18332,6 +19569,75 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/ntfs/f
  
 -const struct inode_operations ntfs_empty_inode_ops = {};
 +const struct inode_operations ntfs_empty_inode_ops;
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/ocfs2/localalloc.c linux-2.6.28.10-pax/fs/ocfs2/localalloc.c
+--- linux-2.6.28.10/fs/ocfs2/localalloc.c	2008-12-25 12:13:41.000000000 +0100
++++ linux-2.6.28.10-pax/fs/ocfs2/localalloc.c	2009-05-04 23:50:28.000000000 +0200
+@@ -1270,7 +1270,7 @@ static int ocfs2_local_alloc_slide_windo
+ 		goto bail;
+ 	}
+ 
+-	atomic_inc(&osb->alloc_stats.moves);
++	atomic_inc_unchecked(&osb->alloc_stats.moves);
+ 
+ 	status = 0;
+ bail:
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/ocfs2/suballoc.c linux-2.6.28.10-pax/fs/ocfs2/suballoc.c
+--- linux-2.6.28.10/fs/ocfs2/suballoc.c	2008-12-25 12:13:42.000000000 +0100
++++ linux-2.6.28.10-pax/fs/ocfs2/suballoc.c	2009-05-04 23:50:21.000000000 +0200
+@@ -480,7 +480,7 @@ static int ocfs2_reserve_suballoc_bits(s
+ 				mlog_errno(status);
+ 			goto bail;
+ 		}
+-		atomic_inc(&osb->alloc_stats.bg_extends);
++		atomic_inc_unchecked(&osb->alloc_stats.bg_extends);
+ 
+ 		/* You should never ask for this much metadata */
+ 		BUG_ON(bits_wanted >
+@@ -638,7 +638,7 @@ int ocfs2_reserve_new_inode(struct ocfs2
+ 
+ inode_steal:
+ 	status = ocfs2_steal_inode_from_other_nodes(osb, *ac);
+-	atomic_inc(&osb->s_num_inodes_stolen);
++	atomic_inc_unchecked(&osb->s_num_inodes_stolen);
+ 	if (status < 0) {
+ 		if (status != -ENOSPC)
+ 			mlog_errno(status);
+@@ -1514,7 +1514,7 @@ int ocfs2_claim_metadata(struct ocfs2_su
+ 		mlog_errno(status);
+ 		goto bail;
+ 	}
+-	atomic_inc(&osb->alloc_stats.bg_allocs);
++	atomic_inc_unchecked(&osb->alloc_stats.bg_allocs);
+ 
+ 	*blkno_start = bg_blkno + (u64) *suballoc_bit_start;
+ 	ac->ac_bits_given += (*num_bits);
+@@ -1553,7 +1553,7 @@ int ocfs2_claim_new_inode(struct ocfs2_s
+ 		mlog_errno(status);
+ 		goto bail;
+ 	}
+-	atomic_inc(&osb->alloc_stats.bg_allocs);
++	atomic_inc_unchecked(&osb->alloc_stats.bg_allocs);
+ 
+ 	BUG_ON(num_bits != 1);
+ 
+@@ -1654,7 +1654,7 @@ int __ocfs2_claim_clusters(struct ocfs2_
+ 						      cluster_start,
+ 						      num_clusters);
+ 		if (!status)
+-			atomic_inc(&osb->alloc_stats.local_data);
++			atomic_inc_unchecked(&osb->alloc_stats.local_data);
+ 	} else {
+ 		if (min_clusters > (osb->bitmap_cpg - 1)) {
+ 			/* The only paths asking for contiguousness
+@@ -1682,7 +1682,7 @@ int __ocfs2_claim_clusters(struct ocfs2_
+ 				ocfs2_desc_bitmap_to_cluster_off(ac->ac_inode,
+ 								 bg_blkno,
+ 								 bg_bit_off);
+-			atomic_inc(&osb->alloc_stats.bitmap_data);
++			atomic_inc_unchecked(&osb->alloc_stats.bitmap_data);
+ 		}
+ 	}
+ 	if (status < 0) {
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/proc/array.c linux-2.6.28.10-pax/fs/proc/array.c
 --- linux-2.6.28.10/fs/proc/array.c	2008-12-25 12:13:42.000000000 +0100
 +++ linux-2.6.28.10-pax/fs/proc/array.c	2008-12-25 12:20:08.000000000 +0100
@@ -18451,6 +19757,26 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/proc/t
  					name = "[stack]";
  				}
  			} else {
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/seq_file.c linux-2.6.28.10-pax/fs/seq_file.c
+--- linux-2.6.28.10/fs/seq_file.c	2009-03-17 09:39:30.000000000 +0100
++++ linux-2.6.28.10-pax/fs/seq_file.c	2009-05-05 00:19:50.000000000 +0200
+@@ -386,7 +386,7 @@ int seq_printf(struct seq_file *m, const
+ }
+ EXPORT_SYMBOL(seq_printf);
+ 
+-static char *mangle_path(char *s, char *p, char *esc)
++char *mangle_path(char *s, char *p, char *esc)
+ {
+ 	while (s <= p) {
+ 		char c = *p++;
+@@ -405,6 +405,7 @@ static char *mangle_path(char *s, char *
+ 	}
+ 	return NULL;
+ }
++EXPORT_SYMBOL(mangle_path);
+ 
+ /*
+  * return the absolute path of 'dentry' residing in mount 'mnt'.
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/smbfs/symlink.c linux-2.6.28.10-pax/fs/smbfs/symlink.c
 --- linux-2.6.28.10/fs/smbfs/symlink.c	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.28.10-pax/fs/smbfs/symlink.c	2008-12-25 12:20:08.000000000 +0100
@@ -19390,6 +20716,17 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/include/l
  } __attribute__((packed));
  
  #define VIDEO_TYPE_MDA		0x10	/* Monochrome Text Display	*/
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/include/linux/seq_file.h linux-2.6.28.10-pax/include/linux/seq_file.h
+--- linux-2.6.28.10/include/linux/seq_file.h	2009-03-17 09:39:34.000000000 +0100
++++ linux-2.6.28.10-pax/include/linux/seq_file.h	2009-05-05 00:20:29.000000000 +0200
+@@ -35,6 +35,7 @@ struct seq_operations {
+ 
+ #define SEQ_SKIP 1
+ 
++char *mangle_path(char *s, char *p, char *esc);
+ int seq_open(struct file *, const struct seq_operations *);
+ ssize_t seq_read(struct file *, char __user *, size_t, loff_t *);
+ loff_t seq_lseek(struct file *, loff_t, int);
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/include/linux/slab.h linux-2.6.28.10-pax/include/linux/slab.h
 --- linux-2.6.28.10/include/linux/slab.h	2008-12-25 12:13:53.000000000 +0100
 +++ linux-2.6.28.10-pax/include/linux/slab.h	2008-12-25 12:20:09.000000000 +0100
@@ -23502,6 +24839,27 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/mm/vmallo
  }
  
  #if defined(CONFIG_64BIT) && defined(CONFIG_ZONE_DMA32)
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/net/atm/atm_misc.c linux-2.6.28.10-pax/net/atm/atm_misc.c
+--- linux-2.6.28.10/net/atm/atm_misc.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.28.10-pax/net/atm/atm_misc.c	2009-05-04 23:48:59.000000000 +0200
+@@ -19,7 +19,7 @@ int atm_charge(struct atm_vcc *vcc,int t
+ 	if (atomic_read(&sk_atm(vcc)->sk_rmem_alloc) <= sk_atm(vcc)->sk_rcvbuf)
+ 		return 1;
+ 	atm_return(vcc,truesize);
+-	atomic_inc(&vcc->stats->rx_drop);
++	atomic_inc_unchecked(&vcc->stats->rx_drop);
+ 	return 0;
+ }
+ 
+@@ -41,7 +41,7 @@ struct sk_buff *atm_alloc_charge(struct 
+ 		}
+ 	}
+ 	atm_return(vcc,guess);
+-	atomic_inc(&vcc->stats->rx_drop);
++	atomic_inc_unchecked(&vcc->stats->rx_drop);
+ 	return NULL;
+ }
+ 
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/net/bridge/br_stp_if.c linux-2.6.28.10-pax/net/bridge/br_stp_if.c
 --- linux-2.6.28.10/net/bridge/br_stp_if.c	2008-10-10 09:19:25.000000000 +0200
 +++ linux-2.6.28.10-pax/net/bridge/br_stp_if.c	2008-12-25 12:20:09.000000000 +0100
