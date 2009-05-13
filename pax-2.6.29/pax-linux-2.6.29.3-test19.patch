@@ -25025,7 +25025,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slab.c l
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c linux-2.6.29.3-pax/mm/slob.c
 --- linux-2.6.29.3/mm/slob.c	2009-03-24 08:35:51.000000000 +0100
-+++ linux-2.6.29.3-pax/mm/slob.c	2009-05-13 23:05:47.000000000 +0200
++++ linux-2.6.29.3-pax/mm/slob.c	2009-05-14 01:01:45.000000000 +0200
 @@ -58,6 +58,7 @@
   */
  
@@ -25053,6 +25053,33 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  }
  
  static inline void set_slob_page(struct slob_page *sp)
+@@ -200,7 +202,7 @@ static void set_slob(slob_t *s, slobidx_
+ /*
+  * Return the size of a slob block.
+  */
+-static slobidx_t slob_units(slob_t *s)
++static slobidx_t slob_units(const slob_t *s)
+ {
+ 	if (s->units > 0)
+ 		return s->units;
+@@ -210,7 +212,7 @@ static slobidx_t slob_units(slob_t *s)
+ /*
+  * Return the next free slob block pointer after this one.
+  */
+-static slob_t *slob_next(slob_t *s)
++static slob_t *slob_next(const slob_t *s)
+ {
+ 	slob_t *base = (slob_t *)((unsigned long)s & PAGE_MASK);
+ 	slobidx_t next;
+@@ -225,7 +227,7 @@ static slob_t *slob_next(slob_t *s)
+ /*
+  * Returns true if s is the last free block in its page.
+  */
+-static int slob_last(slob_t *s)
++static int slob_last(const slob_t *s)
+ {
+ 	return !((unsigned long)slob_next(s) & ~PAGE_MASK);
+ }
 @@ -244,6 +246,7 @@ static void *slob_new_page(gfp_t gfp, in
  	if (!page)
  		return NULL;
@@ -25122,7 +25149,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  EXPORT_SYMBOL(__kmalloc_node);
  
  void kfree(const void *block)
-@@ -497,13 +509,74 @@ void kfree(const void *block)
+@@ -497,13 +509,77 @@ void kfree(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -25144,10 +25171,8 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +	struct slob_page *sp;
-+	slob_t *base, *free;
-+	int offset;
-+	int align;
-+	int m;
++	const slob_t *free;
++	const void *base;
 +
 +	if (!n)
 +		return;
@@ -25160,32 +25185,37 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 +		return;
 +
 +	if (sp->size) {
-+		const void *base = page_address(&sp->page);
++		base = page_address(&sp->page);
 +		if (base <= ptr && n <= sp->size - (ptr - base))
 +			return;
 +		goto report;
 +	}
 +
 +	/* some tricky double walking to find the chunk */
-+#if 0
-+	base = (slob_t *)((unsigned long)ptr & PAGE_MASK);
-+	free = sp->free
-+	while (!slob_last(free)) {
-+		if (base != free) {
-+			m = *(unsigned int *)base;
-+			if (base <= ptr < base + m)
-+				break;
-+			continue;
-+		}
-+		
++	base = (void *)((unsigned long)ptr & PAGE_MASK);
++	free = sp->free;
++
++	while (!slob_last(free) && (void *)free <= ptr) {
++		base = free + slob_units(free);
++		free = slob_next(free);
 +	}
 +
-+	m = base[0];
-+	align = base[1];
-+	offset = ptr - base - align;
-+	if (offset <= m && n <= m - offset)
-+		return;
-+#endif
++	while (base < (void *)free) {
++		slobidx_t m = ((slob_t *)base)[0].units, align = ((slob_t *)base)[1].units;
++		int size = SLOB_UNIT * SLOB_UNITS(m + align);
++		int offset;
++
++		if (ptr < base + align)
++			goto report;
++
++		offset = ptr - base - align;
++		if (offset < m) {
++			if (n <= m - offset)
++				return;
++			goto report;
++		}
++		base += size;
++	}
 +
 +report:
 +	if (to)
@@ -25200,7 +25230,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -516,8 +589,8 @@ size_t ksize(const void *block)
+@@ -516,8 +592,8 @@ size_t ksize(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -25211,7 +25241,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  	} else
  		return sp->page.private;
  }
-@@ -570,10 +643,14 @@ void *kmem_cache_alloc_node(struct kmem_
+@@ -570,10 +646,14 @@ void *kmem_cache_alloc_node(struct kmem_
  {
  	void *b;
  
@@ -25226,7 +25256,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -584,10 +661,15 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -584,10 +664,15 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -25244,7 +25274,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -600,14 +682,23 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -600,14 +685,23 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
