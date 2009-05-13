@@ -18875,7 +18875,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/debugfs/
  }
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/exec.c linux-2.6.29.3-pax/fs/exec.c
 --- linux-2.6.29.3/fs/exec.c	2009-05-12 02:21:05.000000000 +0200
-+++ linux-2.6.29.3-pax/fs/exec.c	2009-05-12 02:21:32.000000000 +0200
++++ linux-2.6.29.3-pax/fs/exec.c	2009-05-13 09:08:13.000000000 +0200
 @@ -52,12 +52,24 @@
  #include <linux/tracehook.h>
  #include <linux/kmod.h>
@@ -19017,6 +19017,15 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/exec.c l
  }
  EXPORT_SYMBOL(setup_arg_pages);
  
+@@ -1066,7 +1096,7 @@ int check_unsafe_exec(struct linux_binpr
+ 	}
+ 	rcu_read_unlock();
+ 
+-	if (p->fs->users > n_fs) {
++	if (atomic_read(&p->fs->users) > n_fs) {
+ 		bprm->unsafe |= LSM_UNSAFE_SHARE;
+ 	} else {
+ 		res = -EAGAIN;
 @@ -1520,6 +1550,154 @@ out:
  	return ispipe;
  }
@@ -19210,6 +19219,60 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/ext4/nam
  
  	bh2 = ext4_append (handle, dir, &newblock, &err);
  	if (!(bh2)) {
+diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/fs_struct.c linux-2.6.29.3-pax/fs/fs_struct.c
+--- linux-2.6.29.3/fs/fs_struct.c	2009-05-12 02:21:05.000000000 +0200
++++ linux-2.6.29.3-pax/fs/fs_struct.c	2009-05-13 22:53:46.000000000 +0200
+@@ -88,7 +88,7 @@ void exit_fs(struct task_struct *tsk)
+ 		task_lock(tsk);
+ 		write_lock(&fs->lock);
+ 		tsk->fs = NULL;
+-		kill = !--fs->users;
++		kill = !atomic_dec_return(&fs->users);
+ 		write_unlock(&fs->lock);
+ 		task_unlock(tsk);
+ 		if (kill)
+@@ -101,7 +101,7 @@ struct fs_struct *copy_fs_struct(struct 
+ 	struct fs_struct *fs = kmem_cache_alloc(fs_cachep, GFP_KERNEL);
+ 	/* We don't need to lock fs - think why ;-) */
+ 	if (fs) {
+-		fs->users = 1;
++		atomic_set(&fs->users, 1);
+ 		fs->in_exec = 0;
+ 		rwlock_init(&fs->lock);
+ 		fs->umask = old->umask;
+@@ -126,7 +126,7 @@ int unshare_fs_struct(void)
+ 
+ 	task_lock(current);
+ 	write_lock(&fs->lock);
+-	kill = !--fs->users;
++	kill = !atomic_dec_return(&fs->users);
+ 	current->fs = new_fs;
+ 	write_unlock(&fs->lock);
+ 	task_unlock(current);
+@@ -140,7 +140,7 @@ EXPORT_SYMBOL_GPL(unshare_fs_struct);
+ 
+ /* to be mentioned only in INIT_TASK */
+ struct fs_struct init_fs = {
+-	.users		= 1,
++	.users		= ATOMIC_INIT(1),
+ 	.lock		= __RW_LOCK_UNLOCKED(init_fs.lock),
+ 	.umask		= 0022,
+ };
+@@ -155,12 +155,12 @@ void daemonize_fs_struct(void)
+ 		task_lock(current);
+ 
+ 		write_lock(&init_fs.lock);
+-		init_fs.users++;
++		atomic_inc(&init_fs.users);
+ 		write_unlock(&init_fs.lock);
+ 
+ 		write_lock(&fs->lock);
+ 		current->fs = &init_fs;
+-		kill = !--fs->users;
++		kill = !atomic_dec_return(&fs->users);
+ 		write_unlock(&fs->lock);
+ 
+ 		task_unlock(current);
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/fuse/control.c linux-2.6.29.3-pax/fs/fuse/control.c
 --- linux-2.6.29.3/fs/fuse/control.c	2009-03-24 08:35:42.000000000 +0100
 +++ linux-2.6.29.3-pax/fs/fuse/control.c	2009-03-24 08:46:39.000000000 +0100
@@ -19984,7 +20047,16 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/proc/tas
  			} else {
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/fs/proc/task_nommu.c linux-2.6.29.3-pax/fs/proc/task_nommu.c
 --- linux-2.6.29.3/fs/proc/task_nommu.c	2009-05-12 02:21:05.000000000 +0200
-+++ linux-2.6.29.3-pax/fs/proc/task_nommu.c	2009-05-12 02:21:32.000000000 +0200
++++ linux-2.6.29.3-pax/fs/proc/task_nommu.c	2009-05-13 09:12:23.000000000 +0200
+@@ -49,7 +49,7 @@ void task_mem(struct seq_file *m, struct
+ 	else
+ 		bytes += kobjsize(mm);
+ 	
+-	if (current->fs && current->fs->users > 1)
++	if (current->fs && atomic_read(&current->fs->users) > 1)
+ 		sbytes += kobjsize(current->fs);
+ 	else
+ 		bytes += kobjsize(current->fs);
 @@ -151,7 +151,7 @@ static int nommu_vma_show(struct seq_fil
  		if (len < 1)
  			len = 1;
@@ -20478,6 +20550,18 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/include/lin
  
  #endif
  
+diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/include/linux/fs_struct.h linux-2.6.29.3-pax/include/linux/fs_struct.h
+--- linux-2.6.29.3/include/linux/fs_struct.h	2009-05-12 02:21:05.000000000 +0200
++++ linux-2.6.29.3-pax/include/linux/fs_struct.h	2009-05-13 09:07:30.000000000 +0200
+@@ -4,7 +4,7 @@
+ #include <linux/path.h>
+ 
+ struct fs_struct {
+-	int users;
++	atomic_t users;
+ 	rwlock_t lock;
+ 	int umask;
+ 	int in_exec;
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/include/linux/highmem.h linux-2.6.29.3-pax/include/linux/highmem.h
 --- linux-2.6.29.3/include/linux/highmem.h	2008-12-25 12:13:52.000000000 +0100
 +++ linux-2.6.29.3-pax/include/linux/highmem.h	2009-03-24 08:46:39.000000000 +0100
@@ -21615,7 +21699,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/kernel/exit
  		read_unlock(&tasklist_lock);
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/kernel/fork.c linux-2.6.29.3-pax/kernel/fork.c
 --- linux-2.6.29.3/kernel/fork.c	2009-05-12 02:21:04.000000000 +0200
-+++ linux-2.6.29.3-pax/kernel/fork.c	2009-05-12 02:21:32.000000000 +0200
++++ linux-2.6.29.3-pax/kernel/fork.c	2009-05-13 23:06:31.000000000 +0200
 @@ -239,7 +239,7 @@ static struct task_struct *dup_task_stru
  	setup_thread_stack(tsk, orig);
  
@@ -21706,6 +21790,33 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/kernel/fork
  	}
  }
  
+@@ -686,7 +714,7 @@ static int copy_fs(unsigned long clone_f
+ 			write_unlock(&fs->lock);
+ 			return -EAGAIN;
+ 		}
+-		fs->users++;
++		atomic_inc(&fs->users);
+ 		write_unlock(&fs->lock);
+ 		return 0;
+ 	}
+@@ -1530,7 +1558,7 @@ static int unshare_fs(unsigned long unsh
+ 		return 0;
+ 
+ 	/* don't need lock here; in the worst case we'll do useless copy */
+-	if (fs->users == 1)
++	if (atomic_read(&fs->users) == 1)
+ 		return 0;
+ 
+ 	*new_fsp = copy_fs_struct(fs);
+@@ -1653,7 +1681,7 @@ SYSCALL_DEFINE1(unshare, unsigned long, 
+ 			fs = current->fs;
+ 			write_lock(&fs->lock);
+ 			current->fs = new_fs;
+-			if (--fs->users)
++			if (atomic_dec_return(&fs->users))
+ 				new_fs = NULL;
+ 			else
+ 				new_fs = fs;
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/kernel/futex.c linux-2.6.29.3-pax/kernel/futex.c
 --- linux-2.6.29.3/kernel/futex.c	2009-03-24 08:35:50.000000000 +0100
 +++ linux-2.6.29.3-pax/kernel/futex.c	2009-03-24 08:46:39.000000000 +0100
@@ -24914,7 +25025,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slab.c l
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c linux-2.6.29.3-pax/mm/slob.c
 --- linux-2.6.29.3/mm/slob.c	2009-03-24 08:35:51.000000000 +0100
-+++ linux-2.6.29.3-pax/mm/slob.c	2009-05-13 01:15:13.000000000 +0200
++++ linux-2.6.29.3-pax/mm/slob.c	2009-05-13 23:05:47.000000000 +0200
 @@ -58,6 +58,7 @@
   */
  
@@ -25058,7 +25169,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 +	/* some tricky double walking to find the chunk */
 +#if 0
 +	base = (slob_t *)((unsigned long)ptr & PAGE_MASK);
-+	free = sp->free;
++	free = sp->free
 +	while (!slob_last(free)) {
 +		if (base != free) {
 +			m = *(unsigned int *)base;
