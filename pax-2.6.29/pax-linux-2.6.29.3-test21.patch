@@ -10697,17 +10697,28 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/ke
  	*(.bss)
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S linux-2.6.29.3-pax/arch/x86/kernel/vmlinux_64.lds.S
 --- linux-2.6.29.3/arch/x86/kernel/vmlinux_64.lds.S	2009-03-24 08:35:03.000000000 +0100
-+++ linux-2.6.29.3-pax/arch/x86/kernel/vmlinux_64.lds.S	2009-05-12 02:12:29.000000000 +0200
-@@ -16,7 +16,7 @@ jiffies_64 = jiffies;
++++ linux-2.6.29.3-pax/arch/x86/kernel/vmlinux_64.lds.S	2009-05-17 01:26:45.000000000 +0200
+@@ -16,8 +16,8 @@ jiffies_64 = jiffies;
  _proxy_pda = 1;
  PHDRS {
  	text PT_LOAD FLAGS(5);	/* R_E */
 -	data PT_LOAD FLAGS(7);	/* RWE */
+-	user PT_LOAD FLAGS(7);	/* RWE */
++	user PT_LOAD FLAGS(5);	/* R_E */
 +	data PT_LOAD FLAGS(6);	/* RW_ */
- 	user PT_LOAD FLAGS(7);	/* RWE */
  	data.init PT_LOAD FLAGS(7);	/* RWE */
  	note PT_NOTE FLAGS(0);	/* ___ */
-@@ -50,30 +50,9 @@ SECTIONS
+ }
+@@ -41,6 +41,8 @@ SECTIONS
+ 	_etext = .;		/* End of text section */
+   } :text = 0x9090
+ 
++  RO_DATA(PAGE_SIZE)
++
+   NOTES :text :note
+ 
+   . = ALIGN(16);		/* Exception table */
+@@ -50,30 +52,9 @@ SECTIONS
    	__stop___ex_table = .;
    } :text = 0x9090
  
@@ -10740,12 +10751,10 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/ke
  
  #define VLOAD_OFFSET (VSYSCALL_ADDR - VSYSCALL_PHYS_ADDR)
  #define VLOAD(x) (ADDR(x) - VLOAD_OFFSET)
-@@ -121,23 +100,55 @@ SECTIONS
+@@ -121,23 +102,53 @@ SECTIONS
  #undef VVIRT_OFFSET
  #undef VVIRT
  
-+  RO_DATA(PAGE_SIZE)
-+
 +#ifdef CONFIG_PAX_KERNEXEC
 +  . = ALIGN(2*1024*1024);	/* Align data segment to PMD size boundary */
 +#else
@@ -25025,7 +25034,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slab.c l
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c linux-2.6.29.3-pax/mm/slob.c
 --- linux-2.6.29.3/mm/slob.c	2009-03-24 08:35:51.000000000 +0100
-+++ linux-2.6.29.3-pax/mm/slob.c	2009-05-14 09:10:41.000000000 +0200
++++ linux-2.6.29.3-pax/mm/slob.c	2009-05-16 23:48:56.000000000 +0200
 @@ -58,6 +58,7 @@
   */
  
@@ -25149,7 +25158,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  EXPORT_SYMBOL(__kmalloc_node);
  
  void kfree(const void *block)
-@@ -497,13 +509,77 @@ void kfree(const void *block)
+@@ -497,13 +509,78 @@ void kfree(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -25160,6 +25169,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 +		slob_free(m, m[0].units + align);
 +	} else {
 +		clear_slob_page(sp);
++		free_slob_page(sp);
 +		sp->size = 0;
  		put_page(&sp->page);
 +	}
@@ -25230,7 +25240,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -516,8 +592,8 @@ size_t ksize(const void *block)
+@@ -516,8 +593,8 @@ size_t ksize(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -25241,7 +25251,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  	} else
  		return sp->page.private;
  }
-@@ -570,10 +646,14 @@ void *kmem_cache_alloc_node(struct kmem_
+@@ -570,10 +647,14 @@ void *kmem_cache_alloc_node(struct kmem_
  {
  	void *b;
  
@@ -25256,7 +25266,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -584,10 +664,15 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -584,10 +665,15 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -25274,7 +25284,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -600,14 +685,23 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -600,14 +686,23 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
