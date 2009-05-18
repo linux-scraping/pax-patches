@@ -25034,7 +25034,16 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slab.c l
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c linux-2.6.29.3-pax/mm/slob.c
 --- linux-2.6.29.3/mm/slob.c	2009-03-24 08:35:51.000000000 +0100
-+++ linux-2.6.29.3-pax/mm/slob.c	2009-05-16 23:48:56.000000000 +0200
++++ linux-2.6.29.3-pax/mm/slob.c	2009-05-18 22:24:43.000000000 +0200
+@@ -29,7 +29,7 @@
+  * If kmalloc is asked for objects of PAGE_SIZE or larger, it calls
+  * alloc_pages() directly, allocating compound pages so the page order
+  * does not have to be separately tracked, and also stores the exact
+- * allocation size in page->private so that it can be used to accurately
++ * allocation size in slob_page->size so that it can be used to accurately
+  * provide ksize(). These objects are detected in kfree() because slob_page()
+  * is false for them.
+  *
 @@ -58,6 +58,7 @@
   */
  
@@ -25093,7 +25102,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  	if (!page)
  		return NULL;
  
-+	set_slob_page((struct slob_page *)virt_to_page(page));
++	set_slob_page(page);
  	return page_address(page);
  }
  
@@ -25158,7 +25167,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  EXPORT_SYMBOL(__kmalloc_node);
  
  void kfree(const void *block)
-@@ -497,13 +509,78 @@ void kfree(const void *block)
+@@ -497,13 +509,81 @@ void kfree(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -25189,6 +25198,9 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
 +		goto report;
++
++	if (!virt_addr_valid(ptr))
++		return;
 +
 +	sp = (struct slob_page *)virt_to_head_page(ptr);
 +	if (!PageSlobPage((struct page*)sp))
@@ -25240,7 +25252,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -516,8 +593,8 @@ size_t ksize(const void *block)
+@@ -516,10 +596,10 @@ size_t ksize(const void *block)
  	sp = (struct slob_page *)virt_to_page(block);
  	if (slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -25249,9 +25261,12 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 +		slob_t *m = (slob_t *)(block - align);
 +		return SLOB_UNITS(m[0].units) * SLOB_UNIT;
  	} else
- 		return sp->page.private;
+-		return sp->page.private;
++		return sp->size;
  }
-@@ -570,10 +647,14 @@ void *kmem_cache_alloc_node(struct kmem_
+ EXPORT_SYMBOL(ksize);
+ 
+@@ -570,10 +650,19 @@ void *kmem_cache_alloc_node(struct kmem_
  {
  	void *b;
  
@@ -25260,13 +25275,19 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 +#else
  	if (c->size < PAGE_SIZE)
  		b = slob_alloc(c->size, flags, c->align, node);
- 	else
+-	else
++	else {
++		struct slob_page *sp;
++
  		b = slob_new_page(flags, get_order(c->size), node);
++		sp = (struct slob_page *)virt_to_head_page(b);
++		sp->size = c->size;
++	}
 +#endif
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -584,10 +665,15 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -584,10 +673,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -25278,13 +25299,14 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/mm/slob.c l
 -	else
 +	else {
 +		clear_slob_page(sp);
++		free_slob_page(sp);
 +		sp->size = 0;
  		free_pages((unsigned long)b, get_order(size));
 +	}
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -600,14 +686,23 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -600,14 +695,23 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
