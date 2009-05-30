@@ -13311,7 +13311,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/mm
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/mm/fault.c linux-2.6.29.3-pax/arch/x86/mm/fault.c
 --- linux-2.6.29.3/arch/x86/mm/fault.c	2009-03-24 08:35:03.000000000 +0100
-+++ linux-2.6.29.3-pax/arch/x86/mm/fault.c	2009-05-26 00:56:13.000000000 +0200
++++ linux-2.6.29.3-pax/arch/x86/mm/fault.c	2009-05-30 02:14:13.000000000 +0200
 @@ -26,6 +26,8 @@
  #include <linux/kprobes.h>
  #include <linux/uaccess.h>
@@ -13608,7 +13608,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/mm
 +			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, fallback_gettimeofday);
 +			return;
 +		} else if (regs->ip == (unsigned long)vtime) {
-+			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, fallback_gettime);
++			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, fallback_time);
 +			return;
 +		} else if (regs->ip == (unsigned long)vgetcpu) {
 +			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, getcpu);
@@ -15353,19 +15353,40 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/po
  	syscall_init();                         /* This sets MSR_*STAR and related */
  	load_TR_desc();				/* This does ltr */
  	load_LDT(&current->active_mm->context);	/* This does lldt */
+diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vdso/Makefile linux-2.6.29.3-pax/arch/x86/vdso/Makefile
+--- linux-2.6.29.3/arch/x86/vdso/Makefile	2008-10-10 09:18:48.000000000 +0200
++++ linux-2.6.29.3-pax/arch/x86/vdso/Makefile	2009-05-30 02:14:13.000000000 +0200
+@@ -122,7 +122,7 @@ quiet_cmd_vdso = VDSO    $@
+ 		       $(VDSO_LDFLAGS) $(VDSO_LDFLAGS_$(filter %.lds,$(^F))) \
+ 		       -Wl,-T,$(filter %.lds,$^) $(filter %.o,$^)
+ 
+-VDSO_LDFLAGS = -fPIC -shared $(call ld-option, -Wl$(comma)--hash-style=sysv)
++VDSO_LDFLAGS = -fPIC -shared --no-undefined $(call ld-option, -Wl$(comma)--hash-style=sysv)
+ 
+ #
+ # Install the unstripped copy of vdso*.so listed in $(vdso-install-y).
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vdso/vclock_gettime.c linux-2.6.29.3-pax/arch/x86/vdso/vclock_gettime.c
 --- linux-2.6.29.3/arch/x86/vdso/vclock_gettime.c	2009-03-24 08:35:03.000000000 +0100
-+++ linux-2.6.29.3-pax/arch/x86/vdso/vclock_gettime.c	2009-05-26 23:06:13.000000000 +0200
-@@ -26,7 +26,7 @@
++++ linux-2.6.29.3-pax/arch/x86/vdso/vclock_gettime.c	2009-05-30 02:20:22.000000000 +0200
+@@ -26,20 +26,43 @@
  
  #define gtod vdso_vsyscall_gtod_data
  
--notrace static long vdso_fallback_gettime(long clock, struct timespec *ts)
-+notrace noinline long __vdso_fallback_gettime(long clock, struct timespec *ts)
++notrace noinline long __vdso_fallback_time(long *t)
++{
++	long secs;
++	asm volatile("syscall"
++		: "=a" (secs)
++		: "0" (__NR_time),"D" (t) : "r11", "cx", "memory");
++	return secs;
++}
++
+ notrace static long vdso_fallback_gettime(long clock, struct timespec *ts)
  {
  	long ret;
  	asm("syscall" : "=a" (ret) :
-@@ -34,12 +34,26 @@ notrace static long vdso_fallback_gettim
+-	    "0" (__NR_clock_gettime),"D" (clock), "S" (ts) : "memory");
++	    "0" (__NR_clock_gettime),"D" (clock), "S" (ts) : "r11", "cx", "memory");
  	return ret;
  }
  
@@ -15395,7 +15416,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vd
  	return (v * gtod->clock.mult) >> gtod->clock.shift;
  }
  
-@@ -88,22 +102,34 @@ notrace static noinline int do_monotonic
+@@ -88,7 +111,9 @@ notrace static noinline int do_monotonic
  
  notrace int __vdso_clock_gettime(clockid_t clock, struct timespec *ts)
  {
@@ -15406,12 +15427,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vd
  		switch (clock) {
  		case CLOCK_REALTIME:
  			return do_realtime(ts);
- 		case CLOCK_MONOTONIC:
- 			return do_monotonic(ts);
- 		}
--	return vdso_fallback_gettime(clock, ts);
-+	return __vdso_fallback_gettime(clock, ts);
- }
+@@ -100,10 +125,20 @@ notrace int __vdso_clock_gettime(clockid
  int clock_gettime(clockid_t, struct timespec *)
  	__attribute__((weak, alias("__vdso_clock_gettime")));
  
@@ -15421,7 +15437,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vd
  	long ret;
 -	if (likely(gtod->sysctl_enabled && gtod->clock.vread)) {
 +	asm("syscall" : "=a" (ret) :
-+	    "0" (__NR_gettimeofday), "D" (tv), "S" (tz) : "memory");
++	    "0" (__NR_gettimeofday), "D" (tv), "S" (tz) : "r11", "cx", "memory");
 +	return ret;
 +}
 +
@@ -15434,7 +15450,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vd
  		BUILD_BUG_ON(offsetof(struct timeval, tv_usec) !=
  			     offsetof(struct timespec, tv_nsec) ||
  			     sizeof(*tv) != sizeof(struct timespec));
-@@ -116,9 +142,7 @@ notrace int __vdso_gettimeofday(struct t
+@@ -116,9 +151,7 @@ notrace int __vdso_gettimeofday(struct t
  		}
  		return 0;
  	}
@@ -15447,7 +15463,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vd
  	__attribute__((weak, alias("__vdso_gettimeofday")));
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vdso/vdso.lds.S linux-2.6.29.3-pax/arch/x86/vdso/vdso.lds.S
 --- linux-2.6.29.3/arch/x86/vdso/vdso.lds.S	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.29.3-pax/arch/x86/vdso/vdso.lds.S	2009-05-26 00:56:13.000000000 +0200
++++ linux-2.6.29.3-pax/arch/x86/vdso/vdso.lds.S	2009-05-30 02:14:13.000000000 +0200
 @@ -35,3 +35,9 @@ VDSO64_PRELINK = VDSO_PRELINK;
  #define VEXTERN(x)	VDSO64_ ## x = vdso_ ## x;
  #include "vextern.h"
@@ -15455,7 +15471,7 @@ diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vd
 +
 +#define VEXTERN(x)	VDSO64_ ## x = __vdso_ ## x;
 +VEXTERN(fallback_gettimeofday)
-+VEXTERN(fallback_gettime)
++VEXTERN(fallback_time)
 +VEXTERN(getcpu)
 +#undef	VEXTERN
 diff -NurpX linux-2.6.29.3-pax/Documentation/dontdiff linux-2.6.29.3/arch/x86/vdso/vdso32-setup.c linux-2.6.29.3-pax/arch/x86/vdso/vdso32-setup.c
