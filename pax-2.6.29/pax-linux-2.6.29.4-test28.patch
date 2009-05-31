@@ -10928,7 +10928,7 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/ke
  	*(.bss)
 diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/kernel/vmlinux_64.lds.S linux-2.6.29.4-pax/arch/x86/kernel/vmlinux_64.lds.S
 --- linux-2.6.29.4/arch/x86/kernel/vmlinux_64.lds.S	2009-03-24 08:35:03.000000000 +0100
-+++ linux-2.6.29.4-pax/arch/x86/kernel/vmlinux_64.lds.S	2009-05-31 00:57:02.000000000 +0200
++++ linux-2.6.29.4-pax/arch/x86/kernel/vmlinux_64.lds.S	2009-05-31 18:20:28.000000000 +0200
 @@ -12,12 +12,12 @@
  OUTPUT_FORMAT("elf64-x86-64", "elf64-x86-64", "elf64-x86-64")
  OUTPUT_ARCH(i386:x86-64)
@@ -10945,49 +10945,31 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/ke
  	data.init PT_LOAD FLAGS(7);	/* RWE */
  	note PT_NOTE FLAGS(0);	/* ___ */
  }
-@@ -41,6 +41,8 @@ SECTIONS
- 	_etext = .;		/* End of text section */
-   } :text = 0x9090
- 
-+  RO_DATA(PAGE_SIZE)
-+
-   NOTES :text :note
- 
-   . = ALIGN(16);		/* Exception table */
-@@ -50,30 +52,9 @@ SECTIONS
+@@ -50,17 +50,20 @@ SECTIONS
    	__stop___ex_table = .;
    } :text = 0x9090
  
 -  RODATA
--
--  . = ALIGN(PAGE_SIZE);		/* Align data segment to page size boundary */
--				/* Data */
--  .data : AT(ADDR(.data) - LOAD_OFFSET) {
--	DATA_DATA
--	CONSTRUCTORS
--	} :data
--
++  RO_DATA(PAGE_SIZE)
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++  . = ALIGN(2*1024*1024);	/* Align data segment to PMD size boundary */
++#else
+   . = ALIGN(PAGE_SIZE);		/* Align data segment to page size boundary */
++#endif
+ 				/* Data */
++  _data = .;
+   .data : AT(ADDR(.data) - LOAD_OFFSET) {
+ 	DATA_DATA
+ 	CONSTRUCTORS
+ 	} :data
+ 
 -  _edata = .;			/* End of data section */
 -
--  . = ALIGN(PAGE_SIZE);
--  . = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
--  .data.cacheline_aligned : AT(ADDR(.data.cacheline_aligned) - LOAD_OFFSET) {
--	*(.data.cacheline_aligned)
--  }
--  . = ALIGN(CONFIG_X86_INTERNODE_CACHE_BYTES);
--  .data.read_mostly : AT(ADDR(.data.read_mostly) - LOAD_OFFSET) {
--  	*(.data.read_mostly)
--  }
--
- #define VSYSCALL_ADDR (-10*1024*1024)
--#define VSYSCALL_PHYS_ADDR ((LOADADDR(.data.read_mostly) + SIZEOF(.data.read_mostly) + 4095) & ~(4095))
--#define VSYSCALL_VIRT_ADDR ((ADDR(.data.read_mostly) + SIZEOF(.data.read_mostly) + 4095) & ~(4095))
-+#define VSYSCALL_PHYS_ADDR ((LOADADDR(__ex_table) + SIZEOF(__ex_table) + 4095) & ~(4095))
-+#define VSYSCALL_VIRT_ADDR ((ADDR(__ex_table) + SIZEOF(__ex_table) + 4095) & ~(4095))
- 
- #define VLOAD_OFFSET (VSYSCALL_ADDR - VSYSCALL_PHYS_ADDR)
- #define VLOAD(x) (ADDR(x) - VLOAD_OFFSET)
-@@ -104,10 +85,6 @@ SECTIONS
+   . = ALIGN(PAGE_SIZE);
+   . = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
+   .data.cacheline_aligned : AT(ADDR(.data.cacheline_aligned) - LOAD_OFFSET) {
+@@ -104,10 +107,6 @@ SECTIONS
    .vgetcpu_mode : AT(VLOAD(.vgetcpu_mode)) { *(.vgetcpu_mode) }
    vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -10998,37 +10980,12 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/ke
    .vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3))
  		{ *(.vsyscall_3) }
  
-@@ -121,23 +98,53 @@ SECTIONS
- #undef VVIRT_OFFSET
- #undef VVIRT
- 
-+#ifdef CONFIG_PAX_KERNEXEC
-+  . = ALIGN(2*1024*1024);	/* Align data segment to PMD size boundary */
-+#else
-+  . = ALIGN(PAGE_SIZE);		/* Align data segment to page size boundary */
-+#endif
-+				/* Data */
-+  _data = .;
-+  .data : AT(ADDR(.data) - LOAD_OFFSET) {
-+	DATA_DATA
-+	CONSTRUCTORS
-+	} :data
-+
-+  . = ALIGN(PAGE_SIZE);
-+  . = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
-+  .data.cacheline_aligned : AT(ADDR(.data.cacheline_aligned) - LOAD_OFFSET) {
-+	*(.data.cacheline_aligned)
-+  }
-+  . = ALIGN(CONFIG_X86_INTERNODE_CACHE_BYTES);
-+  .data.read_mostly : AT(ADDR(.data.read_mostly) - LOAD_OFFSET) {
-+  	*(.data.read_mostly)
-+  }
-+
+@@ -124,20 +123,28 @@ SECTIONS
    . = ALIGN(THREAD_SIZE);	/* init_task */
    .data.init_task : AT(ADDR(.data.init_task) - LOAD_OFFSET) {
  	*(.data.init_task)
 -  }:data.init
-+  }
++  }:data
  
    . = ALIGN(PAGE_SIZE);
    .data.page_aligned : AT(ADDR(.data.page_aligned) - LOAD_OFFSET) {
@@ -11050,7 +11007,7 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/ke
    .smp_locks : AT(ADDR(.smp_locks) - LOAD_OFFSET) {
  	*(.smp_locks)
 -  }
-+  } :data.init
++  }:data.init
    __smp_locks_end = .;
    . = ALIGN(PAGE_SIZE);
    __smp_alt_end = .;
@@ -11074,43 +11031,16 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/ke
  
 diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/kernel/vsyscall_64.c linux-2.6.29.4-pax/arch/x86/kernel/vsyscall_64.c
 --- linux-2.6.29.4/arch/x86/kernel/vsyscall_64.c	2009-03-24 08:35:03.000000000 +0100
-+++ linux-2.6.29.4-pax/arch/x86/kernel/vsyscall_64.c	2009-05-31 00:57:02.000000000 +0200
-@@ -65,20 +65,26 @@ struct vsyscall_gtod_data __vsyscall_gto
++++ linux-2.6.29.4-pax/arch/x86/kernel/vsyscall_64.c	2009-05-31 18:20:28.000000000 +0200
+@@ -79,6 +79,7 @@ void update_vsyscall(struct timespec *wa
  
- void update_vsyscall_tz(void)
- {
-+	unsigned long cr0;
- 	unsigned long flags;
- 
-+	pax_open_kernel(cr0);
- 	write_seqlock_irqsave(&vsyscall_gtod_data.lock, flags);
- 	/* sys_tz has changed */
- 	vsyscall_gtod_data.sys_tz = sys_tz;
- 	write_sequnlock_irqrestore(&vsyscall_gtod_data.lock, flags);
-+	pax_close_kernel(cr0);
- }
- 
- void update_vsyscall(struct timespec *wall_time, struct clocksource *clock)
- {
-+	unsigned long cr0;
- 	unsigned long flags;
- 
-+	pax_open_kernel(cr0);
  	write_seqlock_irqsave(&vsyscall_gtod_data.lock, flags);
  	/* copy vsyscall data */
 +	strlcpy(vsyscall_gtod_data.clock.name, clock->name, sizeof vsyscall_gtod_data.clock.name);
  	vsyscall_gtod_data.clock.vread = clock->vread;
  	vsyscall_gtod_data.clock.cycle_last = clock->cycle_last;
  	vsyscall_gtod_data.clock.mask = clock->mask;
-@@ -88,6 +94,7 @@ void update_vsyscall(struct timespec *wa
- 	vsyscall_gtod_data.wall_time_nsec = wall_time->tv_nsec;
- 	vsyscall_gtod_data.wall_to_monotonic = wall_to_monotonic;
- 	write_sequnlock_irqrestore(&vsyscall_gtod_data.lock, flags);
-+	pax_close_kernel(cr0);
- }
- 
- /* RED-PEN may want to readd seq locking, but then the variable should be
-@@ -209,7 +216,7 @@ vgetcpu(unsigned *cpu, unsigned *node, s
+@@ -209,7 +210,7 @@ vgetcpu(unsigned *cpu, unsigned *node, s
  	   We do this here because otherwise user space would do it on
  	   its own in a likely inferior way (no access to jiffies).
  	   If you don't like it pass NULL. */
@@ -11119,43 +11049,7 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/arch/x86/ke
  		p = tcache->blob[1];
  	} else if (__vgetcpu_mode == VGETCPU_RDTSCP) {
  		/* Load per CPU data from RDTSCP */
-@@ -235,12 +242,34 @@ static long __vsyscall(3) venosys_1(void
- }
- 
- #ifdef CONFIG_SYSCTL
-+static int do_proc_dointvec_conv(int *negp, unsigned long *lvalp,
-+				 int *valp,
-+				 int write, void *data)
-+{
-+	if (write) {
-+		unsigned long cr0;
-+
-+		pax_open_kernel(cr0);
-+		*valp = *negp ? -*lvalp : *lvalp;
-+		pax_close_kernel(cr0);
-+	} else {
-+		int val = *valp;
-+		if (val < 0) {
-+			*negp = -1;
-+			*lvalp = (unsigned long)-val;
-+		} else {
-+			*negp = 0;
-+			*lvalp = (unsigned long)val;
-+		}
-+	}
-+	return 0;
-+}
- 
- static int
- vsyscall_sysctl_change(ctl_table *ctl, int write, struct file * filp,
- 		       void __user *buffer, size_t *lenp, loff_t *ppos)
- {
--	return proc_dointvec(ctl, write, filp, buffer, lenp, ppos);
-+	return proc_dointvec_conv(ctl, write, filp, buffer, lenp, ppos, do_proc_dointvec_conv, NULL);
- }
- 
- static ctl_table kernel_table2[] = {
-@@ -248,13 +277,13 @@ static ctl_table kernel_table2[] = {
+@@ -248,13 +249,13 @@ static ctl_table kernel_table2[] = {
  	  .data = &vsyscall_gtod_data.sysctl_enabled, .maxlen = sizeof(int),
  	  .mode = 0644,
  	  .proc_handler = vsyscall_sysctl_change },
@@ -21752,7 +21646,7 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/include/lin
  	int align;		/* Alignment */
 diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/include/linux/sysctl.h linux-2.6.29.4-pax/include/linux/sysctl.h
 --- linux-2.6.29.4/include/linux/sysctl.h	2008-12-25 12:13:53.000000000 +0100
-+++ linux-2.6.29.4-pax/include/linux/sysctl.h	2009-05-22 09:35:13.000000000 +0200
++++ linux-2.6.29.4-pax/include/linux/sysctl.h	2009-05-31 18:20:28.000000000 +0200
 @@ -165,7 +165,11 @@ enum
  	KERN_PANIC_ON_NMI=76, /* int: whether we will panic on an unrecovered */
  };
@@ -21766,17 +21660,6 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/include/lin
  
  /* CTL_VM names: */
  enum
-@@ -981,6 +985,10 @@ typedef int proc_handler (struct ctl_tab
- 
- extern int proc_dostring(struct ctl_table *, int, struct file *,
- 			 void __user *, size_t *, loff_t *);
-+extern int proc_dointvec_conv(struct ctl_table *, int, struct file *,
-+			  void __user *, size_t *, loff_t *,
-+			  int (*conv)(int *, unsigned long *, int *v, int, void *),
-+			  void *);
- extern int proc_dointvec(struct ctl_table *, int, struct file *,
- 			 void __user *, size_t *, loff_t *);
- extern int proc_dointvec_minmax(struct ctl_table *, int, struct file *,
 diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/include/linux/thread_info.h linux-2.6.29.4-pax/include/linux/thread_info.h
 --- linux-2.6.29.4/include/linux/thread_info.h	2008-12-25 12:13:53.000000000 +0100
 +++ linux-2.6.29.4-pax/include/linux/thread_info.h	2009-03-24 08:46:39.000000000 +0100
@@ -23288,7 +23171,7 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/kernel/sys.
  			}
 diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/kernel/sysctl.c linux-2.6.29.4-pax/kernel/sysctl.c
 --- linux-2.6.29.4/kernel/sysctl.c	2009-04-27 21:18:10.000000000 +0200
-+++ linux-2.6.29.4-pax/kernel/sysctl.c	2009-05-22 09:36:49.000000000 +0200
++++ linux-2.6.29.4-pax/kernel/sysctl.c	2009-05-31 18:20:28.000000000 +0200
 @@ -187,6 +187,21 @@ extern struct ctl_table epoll_table[];
  int sysctl_legacy_va_layout;
  #endif
@@ -23328,55 +23211,6 @@ diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/kernel/sysc
  /*
   * NOTE: do not add new entries to this table unless you have read
   * Documentation/sysctl/ctl_unnumbered.txt
-@@ -2315,6 +2340,32 @@ static int do_proc_dointvec(struct ctl_t
-  * @buffer: the user buffer
-  * @lenp: the size of the user buffer
-  * @ppos: file position
-+ * @conv: conversion function
-+ * @data: data for conversion function
-+ *
-+ * Reads/writes up to table->maxlen/sizeof(unsigned int) integer
-+ * values from/to the user buffer, treated as an ASCII string. 
-+ *
-+ * Returns 0 on success.
-+ */
-+int proc_dointvec_conv(struct ctl_table *table, int write, struct file *filp,
-+		  void __user *buffer, size_t *lenp, loff_t *ppos,
-+		  int (*conv)(int *negp, unsigned long *lvalp, int *valp,
-+			      int write, void *data),
-+		  void *data)
-+{
-+	return __do_proc_dointvec(table->data, table, write, filp,
-+			buffer, lenp, ppos, conv, data);
-+}
-+
-+/**
-+ * proc_dointvec - read a vector of integers
-+ * @table: the sysctl table
-+ * @write: %TRUE if this is a write to the sysctl file
-+ * @filp: the file structure
-+ * @buffer: the user buffer
-+ * @lenp: the size of the user buffer
-+ * @ppos: file position
-  *
-  * Reads/writes up to table->maxlen/sizeof(unsigned int) integer
-  * values from/to the user buffer, treated as an ASCII string. 
-@@ -2754,6 +2805,15 @@ int proc_dostring(struct ctl_table *tabl
- 	return -ENOSYS;
- }
- 
-+int proc_dointvec_conv(struct ctl_table *table, int write, struct file *filp,
-+		  void __user *buffer, size_t *lenp, loff_t *ppos,
-+		  int (*conv)(int *negp, unsigned long *lvalp, int *valp,
-+			      int write, void *data),
-+		  void *data)
-+{
-+	return -ENOSYS;
-+}
-+
- int proc_dointvec(struct ctl_table *table, int write, struct file *filp,
- 		  void __user *buffer, size_t *lenp, loff_t *ppos)
- {
 diff -NurpX linux-2.6.29.4-pax/Documentation/dontdiff linux-2.6.29.4/kernel/time/tick-broadcast.c linux-2.6.29.4-pax/kernel/time/tick-broadcast.c
 --- linux-2.6.29.4/kernel/time/tick-broadcast.c	2009-03-24 08:35:51.000000000 +0100
 +++ linux-2.6.29.4-pax/kernel/time/tick-broadcast.c	2009-03-24 08:46:39.000000000 +0100
