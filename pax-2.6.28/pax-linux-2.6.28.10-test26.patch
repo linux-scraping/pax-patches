@@ -14023,7 +14023,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  		return "[vsyscall]";
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/mm/ioremap.c linux-2.6.28.10-pax/arch/x86/mm/ioremap.c
 --- linux-2.6.28.10/arch/x86/mm/ioremap.c	2008-12-25 12:13:19.000000000 +0100
-+++ linux-2.6.28.10-pax/arch/x86/mm/ioremap.c	2008-12-27 04:03:50.000000000 +0100
++++ linux-2.6.28.10-pax/arch/x86/mm/ioremap.c	2009-05-26 20:45:09.000000000 +0200
 @@ -114,8 +114,8 @@ int page_is_ram(unsigned long pagenr)
  	 * Second special case: Some BIOSen report the PC BIOS
  	 * area (640->1Mb) as ram even though it is not.
@@ -14044,16 +14044,18 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  	/*
  	 * Ok, go for it..
  	 */
-@@ -508,7 +510,7 @@ static int __init early_ioremap_debug_se
+@@ -508,7 +510,9 @@ static int __init early_ioremap_debug_se
  early_param("early_ioremap_debug", early_ioremap_debug_setup);
  
  static __initdata int after_paging_init;
 -static pte_t bm_pte[PAGE_SIZE/sizeof(pte_t)] __page_aligned_bss;
-+static __initdata pte_t bm_pte[PAGE_SIZE/sizeof(pte_t)] __aligned(PAGE_SIZE);
++#ifdef CONFIG_X86_32
++static __read_only pte_t bm_pte[PAGE_SIZE/sizeof(pte_t)] __aligned(PAGE_SIZE);
++#endif
  
  static inline pmd_t * __init early_ioremap_pmd(unsigned long addr)
  {
-@@ -523,7 +525,11 @@ static inline pmd_t * __init early_iorem
+@@ -523,7 +527,11 @@ static inline pmd_t * __init early_iorem
  
  static inline pte_t * __init early_ioremap_pte(unsigned long addr)
  {
@@ -14065,13 +14067,17 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/arch/x86/
  }
  
  void __init early_ioremap_init(void)
-@@ -534,8 +540,10 @@ void __init early_ioremap_init(void)
+@@ -534,8 +542,14 @@ void __init early_ioremap_init(void)
  		printk(KERN_INFO "early_ioremap_init()\n");
  
  	pmd = early_ioremap_pmd(fix_to_virt(FIX_BTMAP_BEGIN));
 +#ifdef CONFIG_X86_32
  	memset(bm_pte, 0, sizeof(bm_pte));
++#ifdef CONFIG_COMPAT_VDSO
++	pmd_populate(&init_mm, pmd, bm_pte);
++#else
  	pmd_populate_kernel(&init_mm, pmd, bm_pte);
++#endif
 +#endif
  
  	/*
@@ -19757,6 +19763,21 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/proc/t
  					name = "[stack]";
  				}
  			} else {
+diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/reiserfs/do_balan.c linux-2.6.28.10-pax/fs/reiserfs/do_balan.c
+--- linux-2.6.28.10/fs/reiserfs/do_balan.c	2008-07-14 03:51:42.000000000 +0200
++++ linux-2.6.28.10-pax/fs/reiserfs/do_balan.c	2009-05-26 21:10:25.000000000 +0200
+@@ -2114,7 +2114,11 @@ void do_balance(struct tree_balance *tb,
+ 		return;
+ 	}
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++	atomic_inc_unchecked(&(fs_generation(tb->tb_sb)));
++#else
+ 	atomic_inc(&(fs_generation(tb->tb_sb)));
++#endif
+ 	do_balance_starts(tb);
+ 
+ 	/* balance leaf returns 0 except if combining L R and S into
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/fs/seq_file.c linux-2.6.28.10-pax/fs/seq_file.c
 --- linux-2.6.28.10/fs/seq_file.c	2009-03-17 09:39:30.000000000 +0100
 +++ linux-2.6.28.10-pax/fs/seq_file.c	2009-05-05 00:19:50.000000000 +0200
@@ -22600,7 +22621,7 @@ diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/mm/madvis
  		goto out;
 diff -NurpX linux-2.6.28.10-pax/Documentation/dontdiff linux-2.6.28.10/mm/memory.c linux-2.6.28.10-pax/mm/memory.c
 --- linux-2.6.28.10/mm/memory.c	2009-02-12 20:24:55.000000000 +0100
-+++ linux-2.6.28.10-pax/mm/memory.c	2009-02-12 20:25:40.000000000 +0100
++++ linux-2.6.28.10-pax/mm/memory.c	2009-05-30 03:39:42.000000000 +0200
 @@ -1151,11 +1151,11 @@ int __get_user_pages(struct task_struct 
  	vm_flags &= force ? (VM_MAYREAD | VM_MAYWRITE) : (VM_READ | VM_WRITE);
  	i = 0;
