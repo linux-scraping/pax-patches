@@ -7102,7 +7102,7 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
  #else
 diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/include/asm/uaccess_32.h linux-2.6.29.6-pax/arch/x86/include/asm/uaccess_32.h
 --- linux-2.6.29.6/arch/x86/include/asm/uaccess_32.h	2009-03-24 08:35:02.000000000 +0100
-+++ linux-2.6.29.6-pax/arch/x86/include/asm/uaccess_32.h	2009-06-18 00:03:58.000000000 +0200
++++ linux-2.6.29.6-pax/arch/x86/include/asm/uaccess_32.h	2009-07-26 10:47:19.000000000 +0200
 @@ -44,6 +44,9 @@ unsigned long __must_check __copy_from_u
  static __always_inline unsigned long __must_check
  __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
@@ -7122,7 +7122,17 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
  	return __copy_to_user_ll(to, from, n);
  }
  
-@@ -138,6 +143,10 @@ static __always_inline unsigned long
+@@ -89,6 +94,9 @@ __copy_to_user(void __user *to, const vo
+ static __always_inline unsigned long
+ __copy_from_user_inatomic(void *to, const void __user *from, unsigned long n)
+ {
++	if ((long)n < 0)
++		return n;
++
+ 	/* Avoid zeroing the tail if the copy fails..
+ 	 * If 'n' is constant and 1, 2, or 4, we do still zero on a failure,
+ 	 * but as the zeroing behaviour is only significant when n is not
+@@ -138,6 +146,10 @@ static __always_inline unsigned long
  __copy_from_user(void *to, const void __user *from, unsigned long n)
  {
  	might_fault();
@@ -7133,7 +7143,7 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
  
-@@ -153,6 +162,8 @@ __copy_from_user(void *to, const void __
+@@ -153,6 +165,8 @@ __copy_from_user(void *to, const void __
  			return ret;
  		}
  	}
@@ -7142,15 +7152,28 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
  	return __copy_from_user_ll(to, from, n);
  }
  
-@@ -185,11 +196,56 @@ __copy_from_user_inatomic_nocache(void *
-        return __copy_from_user_ll_nocache_nozero(to, from, n);
- }
+@@ -160,6 +174,10 @@ static __always_inline unsigned long __c
+ 				const void __user *from, unsigned long n)
+ {
+ 	might_fault();
++
++	if ((long)n < 0)
++		return n;
++
+ 	if (__builtin_constant_p(n)) {
+ 		unsigned long ret;
  
--unsigned long __must_check copy_to_user(void __user *to,
--					const void *from, unsigned long n);
--unsigned long __must_check copy_from_user(void *to,
--					  const void __user *from,
--					  unsigned long n);
+@@ -182,14 +200,62 @@ static __always_inline unsigned long
+ __copy_from_user_inatomic_nocache(void *to, const void __user *from,
+ 				  unsigned long n)
+ {
+-       return __copy_from_user_ll_nocache_nozero(to, from, n);
++	if ((long)n < 0)
++		return n;
++
++	return __copy_from_user_ll_nocache_nozero(to, from, n);
++}
++
 +/**
 + * copy_to_user: - Copy a block of data into user space.
 + * @to:   Destination address, in user space.
@@ -7199,14 +7222,19 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
 +		memset(to, 0, n);
 +	}
 +	return n;
-+}
-+
+ }
+ 
+-unsigned long __must_check copy_to_user(void __user *to,
+-					const void *from, unsigned long n);
+-unsigned long __must_check copy_from_user(void *to,
+-					  const void __user *from,
+-					  unsigned long n);
  long __must_check strncpy_from_user(char *dst, const char __user *src,
  				    long count);
  long __must_check __strncpy_from_user(char *dst,
 diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/include/asm/uaccess_64.h linux-2.6.29.6-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-2.6.29.6/arch/x86/include/asm/uaccess_64.h	2009-03-24 08:35:02.000000000 +0100
-+++ linux-2.6.29.6-pax/arch/x86/include/asm/uaccess_64.h	2009-06-18 22:09:17.000000000 +0200
++++ linux-2.6.29.6-pax/arch/x86/include/asm/uaccess_64.h	2009-07-26 10:52:28.000000000 +0200
 @@ -10,6 +10,8 @@
  #include <linux/lockdep.h>
  #include <asm/page.h>
@@ -7269,13 +7297,14 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
  	switch (size) {
  	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
  			      ret, "b", "b", "iq", 1);
-@@ -114,9 +124,33 @@ int __copy_to_user(void __user *dst, con
+@@ -114,11 +124,39 @@ int __copy_to_user(void __user *dst, con
  }
  
  static __always_inline __must_check
 -int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
 +unsigned long copy_to_user(void __user *to, const void *from, unsigned len)
-+{
+ {
+-	int ret = 0;
 +	if (access_ok(VERIFY_WRITE, to, len))
 +		len = __copy_to_user(to, from, len);
 +	return len;
@@ -7299,13 +7328,18 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
 +
 +static __always_inline __must_check
 +unsigned long __copy_in_user(void __user *dst, const void __user *src, unsigned size)
- {
--	int ret = 0;
++{
 +	unsigned ret = 0;
  
  	might_fault();
++
++	if ((int)size < 0)
++		return size;
++
  	if (!__builtin_constant_p(size))
-@@ -179,30 +213,30 @@ __must_check unsigned long __clear_user(
+ 		return copy_user_generic((__force void *)dst,
+ 					 (__force void *)src, size);
+@@ -179,30 +217,40 @@ __must_check unsigned long __clear_user(
  __must_check long __copy_from_user_inatomic(void *dst, const void __user *src,
  					    unsigned size);
  
@@ -7313,6 +7347,9 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
 +static __must_check __always_inline unsigned long
  __copy_to_user_inatomic(void __user *dst, const void *src, unsigned size)
  {
++	if ((int)size < 0)
++		return size;
++
  	return copy_user_generic((__force void *)dst, src, size);
  }
  
@@ -7325,6 +7362,10 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
  					   unsigned size)
  {
  	might_sleep();
++
++	if ((int)size < 0)
++		return size;
++
  	return __copy_user_nocache(dst, src, size, 1);
  }
  
@@ -7333,6 +7374,9 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/arch/x86/in
  						    const void __user *src,
  						    unsigned size)
  {
++	if ((int)size < 0)
++		return size;
++
  	return __copy_user_nocache(dst, src, size, 0);
  }
  
@@ -31354,8 +31398,8 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/scripts/pnm
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/security/Kconfig linux-2.6.29.6-pax/security/Kconfig
 --- linux-2.6.29.6/security/Kconfig	2009-03-24 08:35:59.000000000 +0100
-+++ linux-2.6.29.6-pax/security/Kconfig	2009-05-22 17:46:28.000000000 +0200
-@@ -4,6 +4,459 @@
++++ linux-2.6.29.6-pax/security/Kconfig	2009-07-29 00:10:37.000000000 +0200
+@@ -4,6 +4,462 @@
  
  menu "Security options"
  
@@ -31808,6 +31852,9 @@ diff -NurpX linux-2.6.29.6-pax/Documentation/dontdiff linux-2.6.29.6/security/Kc
 +	  kernel heap during kernel to userland copies (if the kernel heap
 +	  object is otherwise fully initialized) and prevents kernel heap
 +	  overflows during userland to kernel copies.
++
++	  Since this has a negligible performance impact, you should enable
++	  this feature.
 +endmenu
 +
 +endmenu
