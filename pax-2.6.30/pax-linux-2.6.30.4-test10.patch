@@ -16092,8 +16092,17 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/xe
  	.release= xen_array_release,
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/xen/enlighten.c linux-2.6.30.4-pax/arch/x86/xen/enlighten.c
 --- linux-2.6.30.4/arch/x86/xen/enlighten.c	2009-06-10 08:46:22.000000000 +0200
-+++ linux-2.6.30.4-pax/arch/x86/xen/enlighten.c	2009-06-19 21:37:43.000000000 +0200
-@@ -454,7 +454,7 @@ static void xen_write_idt_entry(gate_des
++++ linux-2.6.30.4-pax/arch/x86/xen/enlighten.c	2009-08-02 22:53:45.000000000 +0200
+@@ -67,8 +67,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
+ 
+ struct shared_info xen_dummy_shared_info;
+ 
+-void *xen_initial_gdt;
+-
+ /*
+  * Point at some empty memory to start with. We map the real shared_info
+  * page as soon as fixmap is up and running.
+@@ -454,7 +452,7 @@ static void xen_write_idt_entry(gate_des
  
  	preempt_disable();
  
@@ -16102,6 +16111,19 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/xe
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
+@@ -962,12 +960,6 @@ asmlinkage void __init xen_start_kernel(
+ 	 */
+ 	load_percpu_segment(0);
+ #endif
+-	/*
+-	 * The only reliable way to retain the initial address of the
+-	 * percpu gdt_page is to remember it here, so we can go and
+-	 * mark it RW later, when the initial percpu area is freed.
+-	 */
+-	xen_initial_gdt = &per_cpu(gdt_page, 0);
+ 
+ 	xen_smp_init();
+ 
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/xen/mmu.c linux-2.6.30.4-pax/arch/x86/xen/mmu.c
 --- linux-2.6.30.4/arch/x86/xen/mmu.c	2009-06-10 08:46:22.000000000 +0200
 +++ linux-2.6.30.4-pax/arch/x86/xen/mmu.c	2009-06-19 21:40:23.000000000 +0200
@@ -16153,6 +16175,18 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/xe
  	ctxt->user_regs.ss = __KERNEL_DS;
  #ifdef CONFIG_X86_32
  	ctxt->user_regs.fs = __KERNEL_PERCPU;
+diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/xen/xen-ops.h linux-2.6.30.4-pax/arch/x86/xen/xen-ops.h
+--- linux-2.6.30.4/arch/x86/xen/xen-ops.h	2009-06-10 08:46:22.000000000 +0200
++++ linux-2.6.30.4-pax/arch/x86/xen/xen-ops.h	2009-08-02 22:53:38.000000000 +0200
+@@ -10,8 +10,6 @@
+ extern const char xen_hypervisor_callback[];
+ extern const char xen_failsafe_callback[];
+ 
+-extern void *xen_initial_gdt;
+-
+ struct trap_info;
+ void xen_copy_trap_info(struct trap_info *traps);
+ 
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/xtensa/include/asm/atomic.h linux-2.6.30.4-pax/arch/xtensa/include/asm/atomic.h
 --- linux-2.6.30.4/arch/xtensa/include/asm/atomic.h	2009-03-24 08:35:03.000000000 +0100
 +++ linux-2.6.30.4-pax/arch/xtensa/include/asm/atomic.h	2009-06-18 00:24:59.000000000 +0200
@@ -26741,6 +26775,69 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/mm/fremap.c
  	/*
  	 * Make sure the vma is shared, that it supports prefaulting,
  	 * and that the remapped range is valid and fully within
+diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/mm/highmem.c linux-2.6.30.4-pax/mm/highmem.c
+--- linux-2.6.30.4/mm/highmem.c	2009-06-10 08:47:20.000000000 +0200
++++ linux-2.6.30.4-pax/mm/highmem.c	2009-08-02 23:22:51.000000000 +0200
+@@ -96,6 +96,10 @@ static void flush_all_zero_pkmaps(void)
+ 	for (i = 0; i < LAST_PKMAP; i++) {
+ 		struct page *page;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++		unsigned long cr0;
++#endif
++
+ 		/*
+ 		 * zero means we don't have anything to do,
+ 		 * >1 means that it is still in use. Only
+@@ -117,9 +121,18 @@ static void flush_all_zero_pkmaps(void)
+ 		 * So no dangers, even with speculative execution.
+ 		 */
+ 		page = pte_page(pkmap_page_table[i]);
++
++#ifdef CONFIG_PAX_KERNEXEC
++		pax_open_kernel(cr0);
++#endif
++
+ 		pte_clear(&init_mm, (unsigned long)page_address(page),
+ 			  &pkmap_page_table[i]);
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++		pax_close_kernel(cr0);
++#endif
++
+ 		set_page_address(page, NULL);
+ 		need_flush = 1;
+ 	}
+@@ -142,6 +155,10 @@ static inline unsigned long map_new_virt
+ 	unsigned long vaddr;
+ 	int count;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	unsigned long cr0;
++#endif
++
+ start:
+ 	count = LAST_PKMAP;
+ 	/* Find an empty entry */
+@@ -178,9 +195,18 @@ start:
+ 		}
+ 	}
+ 	vaddr = PKMAP_ADDR(last_pkmap_nr);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
+ 	set_pte_at(&init_mm, vaddr,
+ 		   &(pkmap_page_table[last_pkmap_nr]), mk_pte(page, kmap_prot));
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_close_kernel(cr0);
++#endif
++
+ 	pkmap_count[last_pkmap_nr] = 1;
+ 	set_page_address(page, (void *)vaddr);
+ 
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/mm/hugetlb.c linux-2.6.30.4-pax/mm/hugetlb.c
 --- linux-2.6.30.4/mm/hugetlb.c	2009-06-10 08:47:20.000000000 +0200
 +++ linux-2.6.30.4-pax/mm/hugetlb.c	2009-07-23 23:55:15.000000000 +0200
