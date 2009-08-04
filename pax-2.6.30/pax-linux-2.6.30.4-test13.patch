@@ -3820,7 +3820,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/um/sys
   * calls. Linux/i386 didn't use to be able to handle more than
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/Kconfig linux-2.6.30.4-pax/arch/x86/Kconfig
 --- linux-2.6.30.4/arch/x86/Kconfig	2009-06-10 08:46:14.000000000 +0200
-+++ linux-2.6.30.4-pax/arch/x86/Kconfig	2009-06-18 21:40:16.000000000 +0200
++++ linux-2.6.30.4-pax/arch/x86/Kconfig	2009-08-04 21:43:40.000000000 +0200
 @@ -1058,7 +1058,7 @@ config PAGE_OFFSET
  	hex
  	default 0xB0000000 if VMSPLIT_3G_OPT
@@ -3830,17 +3830,28 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/Kc
  	default 0x40000000 if VMSPLIT_1G
  	default 0xC0000000
  	depends on X86_32
-@@ -1467,8 +1467,7 @@ config KEXEC_JUMP
+@@ -1466,9 +1466,7 @@ config KEXEC_JUMP
+ 
  config PHYSICAL_START
  	hex "Physical address where the kernel is loaded" if (EMBEDDED || CRASH_DUMP)
- 	default "0x1000000" if X86_NUMAQ
+-	default "0x1000000" if X86_NUMAQ
 -	default "0x200000" if X86_64
 -	default "0x100000"
-+	default "0x200000"
++	default "0x1000000"
  	---help---
  	  This gives the physical address where the kernel is loaded.
  
-@@ -1560,7 +1559,7 @@ config HOTPLUG_CPU
+@@ -1527,8 +1525,7 @@ config RELOCATABLE
+ config PHYSICAL_ALIGN
+ 	hex
+ 	prompt "Alignment value to which kernel should be aligned" if X86_32
+-	default "0x100000" if X86_32
+-	default "0x200000" if X86_64
++	default "0x200000"
+ 	range 0x2000 0x400000
+ 	---help---
+ 	  This value puts the alignment restrictions on physical address
+@@ -1560,7 +1557,7 @@ config HOTPLUG_CPU
  	  Say N if you want to disable CPU hotplug.
  
  config COMPAT_VDSO
@@ -10271,7 +10282,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/ke
  	bss_resource.end = virt_to_phys(&__bss_stop)-1;
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/kernel/setup_percpu.c linux-2.6.30.4-pax/arch/x86/kernel/setup_percpu.c
 --- linux-2.6.30.4/arch/x86/kernel/setup_percpu.c	2009-06-10 08:46:21.000000000 +0200
-+++ linux-2.6.30.4-pax/arch/x86/kernel/setup_percpu.c	2009-07-30 08:55:26.000000000 +0200
++++ linux-2.6.30.4-pax/arch/x86/kernel/setup_percpu.c	2009-08-04 22:36:24.000000000 +0200
 @@ -25,19 +25,17 @@
  # define DBG(x...)
  #endif
@@ -10295,13 +10306,17 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/ke
  	[0 ... NR_CPUS-1] = BOOT_PERCPU_OFFSET,
  };
  EXPORT_SYMBOL(__per_cpu_offset);
-@@ -336,13 +334,16 @@ out_free_ar:
- static inline void setup_percpu_segment(int cpu)
+@@ -333,16 +331,18 @@ out_free_ar:
+ 	return ret;
+ }
+ 
+-static inline void setup_percpu_segment(int cpu)
++static inline void setup_percpu_segment(int cpu, size_t size)
  {
  #ifdef CONFIG_X86_32
 -	struct desc_struct gdt;
 +	struct desc_struct d, *gdt = get_cpu_gdt_table(cpu);
-+	unsigned long base, limit;
++	unsigned long base;
  
 -	pack_descriptor(&gdt, per_cpu_offset(cpu), 0xFFFFF,
 -			0x2 | DESCTYPE_S, 0x8);
@@ -10309,16 +10324,15 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/ke
 -	write_gdt_entry(get_cpu_gdt_table(cpu),
 -			GDT_ENTRY_PERCPU, &gdt, DESCTYPE_S);
 +	base = per_cpu_offset(cpu);
-+	limit = PERCPU_ENOUGH_ROOM - 1;
-+	if (limit < 64*1024)
-+		pack_descriptor(&d, base, limit, 0x80 | DESCTYPE_S | 0x3, 0x4);
++	if (size <= 64*1024)
++		pack_descriptor(&d, base, size-1, 0x80 | DESCTYPE_S | 0x3, 0x4);
 +	else
-+		pack_descriptor(&d, base, limit >> PAGE_SHIFT, 0x80 | DESCTYPE_S | 0x3, 0xC);
++		pack_descriptor(&d, base, (size-1) >> PAGE_SHIFT, 0x80 | DESCTYPE_S | 0x3, 0xC);
 +	write_gdt_entry(gdt, GDT_ENTRY_PERCPU, &d, DESCTYPE_S);
  #endif
  }
  
-@@ -381,6 +382,11 @@ void __init setup_per_cpu_areas(void)
+@@ -381,10 +381,15 @@ void __init setup_per_cpu_areas(void)
  	/* alrighty, percpu areas up and running */
  	delta = (unsigned long)pcpu_base_addr - (unsigned long)__per_cpu_start;
  	for_each_possible_cpu(cpu) {
@@ -10330,7 +10344,12 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/arch/x86/ke
  		per_cpu_offset(cpu) = delta + cpu * pcpu_unit_size;
  		per_cpu(this_cpu_off, cpu) = per_cpu_offset(cpu);
  		per_cpu(cpu_number, cpu) = cpu;
-@@ -408,6 +414,12 @@ void __init setup_per_cpu_areas(void)
+-		setup_percpu_segment(cpu);
++		setup_percpu_segment(cpu, static_size + PERCPU_MODULE_RESERVE + PERCPU_DYNAMIC_RESERVE);
+ 		setup_stack_canary_segment(cpu);
+ 		/*
+ 		 * Copy data used in early init routines from the
+@@ -408,6 +413,12 @@ void __init setup_per_cpu_areas(void)
  			early_per_cpu_map(x86_cpu_to_node_map, cpu);
  #endif
  #endif
@@ -23640,21 +23659,9 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/include/asm
  #define S8_C(x)  x
  #define U8_C(x)  x ## U
  #define S16_C(x) x
-diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/include/asm-generic/sections.h linux-2.6.30.4-pax/include/asm-generic/sections.h
---- linux-2.6.30.4/include/asm-generic/sections.h	2009-06-10 08:47:12.000000000 +0200
-+++ linux-2.6.30.4-pax/include/asm-generic/sections.h	2009-06-29 01:06:14.000000000 +0200
-@@ -9,7 +9,7 @@ extern char __bss_start[], __bss_stop[];
- extern char __init_begin[], __init_end[];
- extern char _sinittext[], _einittext[];
- extern char _end[];
--extern char __per_cpu_load[], __per_cpu_start[], __per_cpu_end[];
-+extern char per_cpu_load[], __per_cpu_load[], __per_cpu_start[], __per_cpu_end[];
- extern char __kprobes_text_start[], __kprobes_text_end[];
- extern char __initdata_begin[], __initdata_end[];
- extern char __start_rodata[], __end_rodata[];
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/include/asm-generic/vmlinux.lds.h linux-2.6.30.4-pax/include/asm-generic/vmlinux.lds.h
 --- linux-2.6.30.4/include/asm-generic/vmlinux.lds.h	2009-06-10 08:47:12.000000000 +0200
-+++ linux-2.6.30.4-pax/include/asm-generic/vmlinux.lds.h	2009-06-29 01:05:53.000000000 +0200
++++ linux-2.6.30.4-pax/include/asm-generic/vmlinux.lds.h	2009-08-04 09:24:53.000000000 +0200
 @@ -121,6 +121,7 @@
  	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
  		VMLINUX_SYMBOL(__start_rodata) = .;			\
@@ -23663,35 +23670,17 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/include/asm
  		*(__vermagic)		/* Kernel version magic */	\
  		*(__markers_strings)	/* Markers: strings */		\
  		*(__tracepoints_strings)/* Tracepoints: strings */	\
-@@ -468,22 +469,24 @@
-  * section in the linker script will go there too.  @phdr should have
-  * a leading colon.
-  *
-- * Note that this macros defines __per_cpu_load as an absolute symbol.
-+ * Note that this macros defines per_cpu_load as an absolute symbol.
-  * If there is no need to put the percpu section at a predetermined
-  * address, use PERCPU().
-  */
- #define PERCPU_VADDR(vaddr, phdr)					\
--	VMLINUX_SYMBOL(__per_cpu_load) = .;				\
--	.data.percpu vaddr : AT(VMLINUX_SYMBOL(__per_cpu_load)		\
-+	VMLINUX_SYMBOL(per_cpu_load) = .;				\
-+	.data.percpu vaddr : AT(VMLINUX_SYMBOL(per_cpu_load)		\
+@@ -476,8 +477,10 @@
+ 	VMLINUX_SYMBOL(__per_cpu_load) = .;				\
+ 	.data.percpu vaddr : AT(VMLINUX_SYMBOL(__per_cpu_load)		\
  				- LOAD_OFFSET) {			\
-+		VMLINUX_SYMBOL(__per_cpu_load) = . + per_cpu_load;	\
++		VMLINUX_SYMBOL(__per_cpu_load) = . + __per_cpu_load;	\
  		VMLINUX_SYMBOL(__per_cpu_start) = .;			\
  		*(.data.percpu.first)					\
 +		. = ALIGN(PAGE_SIZE);					\
  		*(.data.percpu.page_aligned)				\
  		*(.data.percpu)						\
  		*(.data.percpu.shared_aligned)				\
- 		VMLINUX_SYMBOL(__per_cpu_end) = .;			\
- 	} phdr								\
--	. = VMLINUX_SYMBOL(__per_cpu_load) + SIZEOF(.data.percpu);
-+	. = VMLINUX_SYMBOL(per_cpu_load) + SIZEOF(.data.percpu);
- 
- /**
-  * PERCPU - define output section for percpu area, simple version
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/include/drm/drmP.h linux-2.6.30.4-pax/include/drm/drmP.h
 --- linux-2.6.30.4/include/drm/drmP.h	2009-06-10 08:47:13.000000000 +0200
 +++ linux-2.6.30.4-pax/include/drm/drmP.h	2009-07-23 23:55:14.000000000 +0200
@@ -25762,7 +25751,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/lock
  	.stop	= ls_stop,
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/module.c linux-2.6.30.4-pax/kernel/module.c
 --- linux-2.6.30.4/kernel/module.c	2009-06-10 08:47:19.000000000 +0200
-+++ linux-2.6.30.4-pax/kernel/module.c	2009-08-04 09:06:35.000000000 +0200
++++ linux-2.6.30.4-pax/kernel/module.c	2009-08-04 09:25:40.000000000 +0200
 @@ -46,6 +46,11 @@
  #include <linux/rculist.h>
  #include <asm/uaccess.h>
@@ -25803,25 +25792,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  			return true;
  	}
  	return false;
-@@ -361,6 +367,8 @@ EXPORT_SYMBOL_GPL(find_module);
- 
- #ifdef CONFIG_HAVE_DYNAMIC_PER_CPU_AREA
- 
-+EXPORT_SYMBOL(__per_cpu_load);
-+
- static void *percpu_modalloc(unsigned long size, unsigned long align,
- 			     const char *name)
- {
-@@ -423,6 +431,8 @@ static inline unsigned int block_size(in
- 	return val;
- }
- 
-+EXPORT_SYMBOL(__per_cpu_load);
-+
- static void *percpu_modalloc(unsigned long size, unsigned long align,
- 			     const char *name)
- {
-@@ -430,7 +440,7 @@ static void *percpu_modalloc(unsigned lo
+@@ -430,7 +436,7 @@ static void *percpu_modalloc(unsigned lo
  	unsigned int i;
  	void *ptr;
  
@@ -25830,7 +25801,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  		printk(KERN_WARNING "%s: per-cpu alignment %li > %li\n",
  		       name, align, PAGE_SIZE);
  		align = PAGE_SIZE;
-@@ -533,7 +543,11 @@ static void percpu_modcopy(void *pcpudes
+@@ -533,7 +539,11 @@ static void percpu_modcopy(void *pcpudes
  	int cpu;
  
  	for_each_possible_cpu(cpu)
@@ -25842,7 +25813,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  }
  
  #else /* ... !CONFIG_SMP */
-@@ -1490,10 +1504,11 @@ static void free_module(struct module *m
+@@ -1490,10 +1500,11 @@ static void free_module(struct module *m
  	destroy_params(mod->kp, mod->num_kp);
  
  	/* release any pointers to mcount in this module */
@@ -25856,7 +25827,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	kfree(mod->args);
  	if (mod->percpu)
  		percpu_modfree(mod->percpu);
-@@ -1502,10 +1517,12 @@ static void free_module(struct module *m
+@@ -1502,10 +1513,12 @@ static void free_module(struct module *m
  		percpu_modfree(mod->refptr);
  #endif
  	/* Free lock-classes: */
@@ -25871,7 +25842,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  }
  
  void *__symbol_get(const char *symbol)
-@@ -1573,6 +1590,10 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1573,6 +1586,10 @@ static int simplify_symbols(Elf_Shdr *se
  	int ret = 0;
  	const struct kernel_symbol *ksym;
  
@@ -25882,7 +25853,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	for (i = 1; i < n; i++) {
  		switch (sym[i].st_shndx) {
  		case SHN_COMMON:
-@@ -1595,7 +1616,17 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1595,7 +1612,17 @@ static int simplify_symbols(Elf_Shdr *se
  					      strtab + sym[i].st_name, mod);
  			/* Ok if resolved.  */
  			if (ksym) {
@@ -25900,7 +25871,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  				break;
  			}
  
-@@ -1614,7 +1645,17 @@ static int simplify_symbols(Elf_Shdr *se
+@@ -1614,7 +1641,17 @@ static int simplify_symbols(Elf_Shdr *se
  				secbase = (unsigned long)mod->percpu;
  			else
  				secbase = sechdrs[sym[i].st_shndx].sh_addr;
@@ -25918,7 +25889,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  			break;
  		}
  	}
-@@ -1675,11 +1716,12 @@ static void layout_sections(struct modul
+@@ -1675,11 +1712,12 @@ static void layout_sections(struct modul
  			    || s->sh_entsize != ~0UL
  			    || strstarts(secstrings + s->sh_name, ".init"))
  				continue;
@@ -25934,7 +25905,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	}
  
  	DEBUGP("Init section allocation order:\n");
-@@ -1692,12 +1734,13 @@ static void layout_sections(struct modul
+@@ -1692,12 +1730,13 @@ static void layout_sections(struct modul
  			    || s->sh_entsize != ~0UL
  			    || !strstarts(secstrings + s->sh_name, ".init"))
  				continue;
@@ -25952,7 +25923,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	}
  }
  
-@@ -1836,14 +1879,31 @@ static void add_kallsyms(struct module *
+@@ -1836,14 +1875,31 @@ static void add_kallsyms(struct module *
  {
  	unsigned int i;
  
@@ -25987,7 +25958,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  }
  #else
  static inline void add_kallsyms(struct module *mod,
-@@ -1864,16 +1924,30 @@ static void dynamic_debug_setup(struct _
+@@ -1864,16 +1920,30 @@ static void dynamic_debug_setup(struct _
  #endif
  }
  
@@ -26023,7 +25994,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	}
  	return ret;
  }
-@@ -1899,6 +1973,10 @@ static noinline struct module *load_modu
+@@ -1899,6 +1969,10 @@ static noinline struct module *load_modu
  	unsigned long *mseg;
  	mm_segment_t old_fs;
  
@@ -26034,7 +26005,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	DEBUGP("load_module: umod=%p, len=%lu, uargs=%p\n",
  	       umod, len, uargs);
  	if (len < sizeof(*hdr))
-@@ -2049,22 +2127,57 @@ static noinline struct module *load_modu
+@@ -2049,22 +2123,57 @@ static noinline struct module *load_modu
  	layout_sections(mod, hdr, sechdrs, secstrings);
  
  	/* Do the allocs. */
@@ -26056,19 +26027,22 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
 +	}
 +	memset(ptr, 0, mod->init_size_rw);
 +	mod->module_init_rw = ptr;
-+
-+	ptr = module_alloc_update_bounds_rx(mod->core_size_rx);
-+	if (!ptr) {
-+		err = -ENOMEM;
-+		goto free_init_rw;
-+	}
-+
-+#ifdef CONFIG_PAX_KERNEXEC
-+	pax_open_kernel(cr0);
-+#endif
  
 -	ptr = module_alloc_update_bounds(mod->init_size);
 -	if (!ptr && mod->init_size) {
++	ptr = module_alloc_update_bounds_rx(mod->core_size_rx);
++	if (!ptr) {
+ 		err = -ENOMEM;
+-		goto free_core;
++		goto free_init_rw;
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	pax_open_kernel(cr0);
++#endif
++
 +	memset(ptr, 0, mod->core_size_rx);
 +
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -26079,13 +26053,10 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
 +
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
 +	if (!ptr && mod->init_size_rx) {
- 		err = -ENOMEM;
--		goto free_core;
++		err = -ENOMEM;
 +		goto free_core_rx;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
- 
++	}
++
 +#ifdef CONFIG_PAX_KERNEXEC
 +	pax_open_kernel(cr0);
 +#endif
@@ -26100,7 +26071,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	/* Transfer each section which specifies SHF_ALLOC */
  	DEBUGP("final section addresses:\n");
  	for (i = 0; i < hdr->e_shnum; i++) {
-@@ -2073,17 +2186,41 @@ static noinline struct module *load_modu
+@@ -2073,17 +2182,41 @@ static noinline struct module *load_modu
  		if (!(sechdrs[i].sh_flags & SHF_ALLOC))
  			continue;
  
@@ -26151,7 +26122,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  		DEBUGP("\t0x%lx %s\n", sechdrs[i].sh_addr, secstrings + sechdrs[i].sh_name);
  	}
  	/* Module has been moved. */
-@@ -2094,7 +2231,7 @@ static noinline struct module *load_modu
+@@ -2094,7 +2227,7 @@ static noinline struct module *load_modu
  				      mod->name);
  	if (!mod->refptr) {
  		err = -ENOMEM;
@@ -26160,7 +26131,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	}
  #endif
  	/* Now we've moved module, initialize linked lists, etc. */
-@@ -2191,8 +2328,8 @@ static noinline struct module *load_modu
+@@ -2191,8 +2324,8 @@ static noinline struct module *load_modu
  
  	/* Now do relocations. */
  	for (i = 1; i < hdr->e_shnum; i++) {
@@ -26170,7 +26141,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  
  		/* Not a valid relocation section? */
  		if (info >= hdr->e_shnum)
-@@ -2255,12 +2392,12 @@ static noinline struct module *load_modu
+@@ -2255,12 +2388,12 @@ static noinline struct module *load_modu
  	 * Do it before processing of module parameters, so the module
  	 * can provide parameter accessor functions of its own.
  	 */
@@ -26189,7 +26160,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  
  	set_fs(old_fs);
  
-@@ -2302,16 +2439,20 @@ static noinline struct module *load_modu
+@@ -2302,16 +2435,20 @@ static noinline struct module *load_modu
   cleanup:
  	kobject_del(&mod->mkobj.kobj);
  	kobject_put(&mod->mkobj.kobj);
@@ -26215,7 +26186,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	/* mod will be freed with core. Don't access it beyond this line! */
   free_percpu:
  	if (percpu)
-@@ -2394,20 +2535,17 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -2394,20 +2531,17 @@ SYSCALL_DEFINE3(init_module, void __user
  	mutex_lock(&module_mutex);
  	/* Drop initial reference. */
  	module_put(mod);
@@ -26242,7 +26213,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  #ifdef CONFIG_KALLSYMS
  /*
   * This ignores the intensely annoying "mapping symbols" found
-@@ -2428,10 +2566,16 @@ static const char *get_ksymbol(struct mo
+@@ -2428,10 +2562,16 @@ static const char *get_ksymbol(struct mo
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -26262,7 +26233,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  
  	/* Scan for closest preceeding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -2677,7 +2821,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2677,7 +2817,7 @@ static int m_show(struct seq_file *m, vo
  	char buf[8];
  
  	seq_printf(m, "%s %u",
@@ -26271,7 +26242,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -2686,7 +2830,7 @@ static int m_show(struct seq_file *m, vo
+@@ -2686,7 +2826,7 @@ static int m_show(struct seq_file *m, vo
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -26280,7 +26251,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  
  	/* Taints info */
  	if (mod->taints)
-@@ -2781,12 +2925,12 @@ struct module *__module_address(unsigned
+@@ -2781,12 +2921,12 @@ struct module *__module_address(unsigned
  {
  	struct module *mod;
  
@@ -26296,7 +26267,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/modu
  			return mod;
  	return NULL;
  }
-@@ -2820,11 +2964,20 @@ bool is_module_text_address(unsigned lon
+@@ -2820,11 +2960,20 @@ bool is_module_text_address(unsigned lon
   */
  struct module *__module_text_address(unsigned long addr)
  {
@@ -26511,7 +26482,7 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/sys.
  			}
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/sysctl.c linux-2.6.30.4-pax/kernel/sysctl.c
 --- linux-2.6.30.4/kernel/sysctl.c	2009-08-01 23:30:38.000000000 +0200
-+++ linux-2.6.30.4-pax/kernel/sysctl.c	2009-08-03 07:23:54.000000000 +0200
++++ linux-2.6.30.4-pax/kernel/sysctl.c	2009-08-04 21:16:17.000000000 +0200
 @@ -191,6 +191,21 @@ extern struct ctl_table epoll_table[];
  int sysctl_legacy_va_layout;
  #endif
@@ -26551,14 +26522,6 @@ diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/sysc
  #ifdef CONFIG_SCHED_DEBUG
  	{
  		.ctl_name	= CTL_UNNUMBERED,
-@@ -1280,6 +1305,7 @@ static struct ctl_table vm_table[] = {
- 		.proc_handler	= &scan_unevictable_handler,
- 	},
- #endif
-+
- /*
-  * NOTE: do not add new entries to this table unless you have read
-  * Documentation/sysctl/ctl_unnumbered.txt
 diff -NurpX linux-2.6.30.4-pax/Documentation/dontdiff linux-2.6.30.4/kernel/time/tick-broadcast.c linux-2.6.30.4-pax/kernel/time/tick-broadcast.c
 --- linux-2.6.30.4/kernel/time/tick-broadcast.c	2009-03-24 08:35:51.000000000 +0100
 +++ linux-2.6.30.4-pax/kernel/time/tick-broadcast.c	2009-06-18 00:25:06.000000000 +0200
