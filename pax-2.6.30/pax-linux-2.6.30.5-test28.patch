@@ -65,6 +65,22 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/Documentati
  wakeup.bin
  wakeup.elf
  wakeup.lds
+diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/Documentation/kernel-parameters.txt linux-2.6.30.5-pax/Documentation/kernel-parameters.txt
+--- linux-2.6.30.5/Documentation/kernel-parameters.txt	2009-06-10 08:45:57.000000000 +0200
++++ linux-2.6.30.5-pax/Documentation/kernel-parameters.txt	2009-08-30 11:51:29.000000000 +0200
+@@ -1707,6 +1707,12 @@ and is between 256 and 4096 characters. 
+ 			the specified number of seconds.  This is to be used if
+ 			your oopses keep scrolling off the screen.
+ 
++	pax_nouderef	[X86-32] disables UDEREF.  Most likely needed under certain
++			virtualization environments that don't cope well with the
++			expand down segment used by UDEREF on X86-32.
++
++	pax_softmode=	[X86-32] 0/1 to disable/enable PaX softmode on boot already.
++
+ 	pcbit=		[HW,ISDN]
+ 
+ 	pcd.		[PARIDE]
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/Makefile linux-2.6.30.5-pax/Makefile
 --- linux-2.6.30.5/Makefile	2009-08-16 23:49:58.000000000 +0200
 +++ linux-2.6.30.5-pax/Makefile	2009-08-23 00:14:28.000000000 +0200
@@ -6242,16 +6258,21 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/in
  #define INTERRUPT_RETURN						\
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/include/asm/pgalloc.h linux-2.6.30.5-pax/arch/x86/include/asm/pgalloc.h
 --- linux-2.6.30.5/arch/x86/include/asm/pgalloc.h	2009-03-24 08:35:02.000000000 +0100
-+++ linux-2.6.30.5-pax/arch/x86/include/asm/pgalloc.h	2009-06-18 00:24:57.000000000 +0200
-@@ -52,7 +52,7 @@ static inline void pmd_populate_kernel(s
++++ linux-2.6.30.5-pax/arch/x86/include/asm/pgalloc.h	2009-09-06 02:06:52.000000000 +0200
+@@ -52,6 +52,13 @@ static inline void pmd_populate_kernel(s
  				       pmd_t *pmd, pte_t *pte)
  {
  	paravirt_alloc_pte(mm, __pa(pte) >> PAGE_SHIFT);
--	set_pmd(pmd, __pmd(__pa(pte) | _PAGE_TABLE));
 +	set_pmd(pmd, __pmd(__pa(pte) | _KERNPG_TABLE));
++}
++
++static inline void pmd_populate_user(struct mm_struct *mm,
++				       pmd_t *pmd, pte_t *pte)
++{
++	paravirt_alloc_pte(mm, __pa(pte) >> PAGE_SHIFT);
+ 	set_pmd(pmd, __pmd(__pa(pte) | _PAGE_TABLE));
  }
  
- static inline void pmd_populate(struct mm_struct *mm, pmd_t *pmd,
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/include/asm/pgtable-2level.h linux-2.6.30.5-pax/arch/x86/include/asm/pgtable-2level.h
 --- linux-2.6.30.5/arch/x86/include/asm/pgtable-2level.h	2009-06-10 08:46:15.000000000 +0200
 +++ linux-2.6.30.5-pax/arch/x86/include/asm/pgtable-2level.h	2009-06-18 00:24:57.000000000 +0200
@@ -6393,7 +6414,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/in
  
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/include/asm/pgtable_32.h linux-2.6.30.5-pax/arch/x86/include/asm/pgtable_32.h
 --- linux-2.6.30.5/arch/x86/include/asm/pgtable_32.h	2009-06-10 08:46:15.000000000 +0200
-+++ linux-2.6.30.5-pax/arch/x86/include/asm/pgtable_32.h	2009-08-22 22:03:43.000000000 +0200
++++ linux-2.6.30.5-pax/arch/x86/include/asm/pgtable_32.h	2009-09-06 01:08:46.000000000 +0200
 @@ -26,8 +26,6 @@
  struct mm_struct;
  struct vm_area_struct;
@@ -6403,7 +6424,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/in
  static inline void pgtable_cache_init(void) { }
  static inline void check_pgt_cache(void) { }
  void paging_init(void);
-@@ -48,6 +46,15 @@ extern void set_pmd_pfn(unsigned long, u
+@@ -48,6 +46,11 @@ extern void set_pmd_pfn(unsigned long, u
  # include <asm/pgtable-2level.h>
  #endif
  
@@ -6411,15 +6432,11 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/in
 +#ifdef CONFIG_X86_PAE
 +extern pmd_t swapper_pm_dir[PTRS_PER_PGD][PTRS_PER_PMD];
 +#endif
-+extern pte_t swapper_pg_fixmap0[PTRS_PER_PMD];
-+extern pte_t swapper_pg_fixmap1[PTRS_PER_PMD];
-+extern pte_t swapper_pg_fixmap2[PTRS_PER_PMD];
-+extern pte_t swapper_pg_fixmap3[PTRS_PER_PMD];
 +
  #if defined(CONFIG_HIGHPTE)
  #define pte_offset_map(dir, address)					\
  	((pte_t *)kmap_atomic_pte(pmd_page(*(dir)), KM_PTE0) +		\
-@@ -80,6 +87,9 @@ do {						\
+@@ -80,6 +83,9 @@ do {						\
  
  #endif /* !__ASSEMBLY__ */
  
@@ -6431,8 +6448,8 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/in
   * SPARSEMEM and DISCONTIGMEM
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/include/asm/pgtable_64.h linux-2.6.30.5-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-2.6.30.5/arch/x86/include/asm/pgtable_64.h	2009-06-10 08:46:15.000000000 +0200
-+++ linux-2.6.30.5-pax/arch/x86/include/asm/pgtable_64.h	2009-06-18 00:24:57.000000000 +0200
-@@ -16,9 +16,12 @@
++++ linux-2.6.30.5-pax/arch/x86/include/asm/pgtable_64.h	2009-09-06 01:11:30.000000000 +0200
+@@ -16,9 +16,11 @@
  
  extern pud_t level3_kernel_pgt[512];
  extern pud_t level3_ident_pgt[512];
@@ -6442,11 +6459,10 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/in
  extern pmd_t level2_fixmap_pgt[512];
 -extern pmd_t level2_ident_pgt[512];
 +extern pmd_t level2_ident_pgt[512*4];
-+extern pte_t level1_fixmap_pgt[512];
  extern pgd_t init_level4_pgt[];
  
  #define swapper_pg_dir init_level4_pgt
-@@ -78,7 +81,19 @@ static inline pte_t native_ptep_get_and_
+@@ -78,7 +80,19 @@ static inline pte_t native_ptep_get_and_
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -8808,7 +8824,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  	/* Reserve INITRD */
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/kernel/head_32.S linux-2.6.30.5-pax/arch/x86/kernel/head_32.S
 --- linux-2.6.30.5/arch/x86/kernel/head_32.S	2009-06-10 08:46:21.000000000 +0200
-+++ linux-2.6.30.5-pax/arch/x86/kernel/head_32.S	2009-08-06 00:58:25.000000000 +0200
++++ linux-2.6.30.5-pax/arch/x86/kernel/head_32.S	2009-09-06 01:10:39.000000000 +0200
 @@ -20,6 +20,7 @@
  #include <asm/setup.h>
  #include <asm/processor-flags.h>
@@ -8859,7 +8875,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  ENTRY(startup_32)
  	/* test KEEP_SEGMENTS flag to see if the bootloader is asking
  		us to not reload segments */
-@@ -98,6 +110,58 @@ ENTRY(startup_32)
+@@ -98,6 +110,48 @@ ENTRY(startup_32)
  	movl %eax,%gs
  2:
  
@@ -8876,22 +8892,12 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
 +#endif
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	/* check for VMware */
-+	movl $0x564d5868,%eax
-+	xorl %ebx,%ebx
-+	movl $0xa,%ecx
-+	movl $0x5658,%edx
-+	in (%dx),%eax
-+	cmpl $0x564d5868,%ebx
-+	jz 2f
-+
 +	movl $NR_CPUS,%ecx
 +	movl $pa(cpu_gdt_table),%edi
 +1:
 +	movl $((((__PAGE_OFFSET-1) & 0xf0000000) >> 12) | 0x00c09700),GDT_ENTRY_KERNEL_DS * 8 + 4(%edi)
 +	addl $PAGE_SIZE_asm,%edi
 +	loop 1b
-+2:
 +#endif
 +
 +#ifdef CONFIG_PAX_KERNEXEC
@@ -8918,7 +8924,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  /*
   * Clear BSS first so that there are no surprises...
   */
-@@ -141,9 +205,7 @@ ENTRY(startup_32)
+@@ -141,9 +195,7 @@ ENTRY(startup_32)
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -8929,7 +8935,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -155,9 +217,9 @@ WEAK(xen_entry)
+@@ -155,9 +207,9 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
@@ -8942,41 +8948,35 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #endif /* CONFIG_PARAVIRT */
-@@ -218,8 +280,14 @@ default_entry:
+@@ -218,8 +270,11 @@ default_entry:
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
 -	movl $pa(swapper_pg_fixmap)+PDE_IDENT_ATTR,%eax
 -	movl %eax,pa(swapper_pg_pmd+0x1000*KPMDS-8)
 +#ifdef CONFIG_COMPAT_VDSO
-+	movl $pa(swapper_pg_fixmap0)+PDE_IDENT_ATTR+_PAGE_USER,pa(swapper_pg_pmd+0x1000*KPMDS-8)
++	movl $pa(swapper_pg_fixmap)+PDE_IDENT_ATTR+_PAGE_USER,pa(swapper_pg_pmd+0x1000*KPMDS-8)
 +#else
-+	movl $pa(swapper_pg_fixmap0)+PDE_IDENT_ATTR,pa(swapper_pg_pmd+0x1000*KPMDS-8)
++	movl $pa(swapper_pg_fixmap)+PDE_IDENT_ATTR,pa(swapper_pg_pmd+0x1000*KPMDS-8)
 +#endif
-+	movl $pa(swapper_pg_fixmap1)+PDE_IDENT_ATTR,pa(swapper_pg_pmd+0x1000*KPMDS-16)
-+	movl $pa(swapper_pg_fixmap2)+PDE_IDENT_ATTR,pa(swapper_pg_pmd+0x1000*KPMDS-24)
-+	movl $pa(swapper_pg_fixmap3)+PDE_IDENT_ATTR,pa(swapper_pg_pmd+0x1000*KPMDS-32)
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -249,8 +317,14 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -249,8 +304,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
 -	movl $pa(swapper_pg_fixmap)+PDE_IDENT_ATTR,%eax
 -	movl %eax,pa(swapper_pg_dir+0xffc)
 +#ifdef CONFIG_COMPAT_VDSO
-+	movl $pa(swapper_pg_fixmap0)+PDE_IDENT_ATTR+_PAGE_USER,pa(swapper_pg_dir+0xffc)
++	movl $pa(swapper_pg_fixmap)+PDE_IDENT_ATTR+_PAGE_USER,pa(swapper_pg_dir+0xffc)
 +#else
-+	movl $pa(swapper_pg_fixmap0)+PDE_IDENT_ATTR,pa(swapper_pg_dir+0xffc)
++	movl $pa(swapper_pg_fixmap)+PDE_IDENT_ATTR,pa(swapper_pg_dir+0xffc)
 +#endif
-+	movl $pa(swapper_pg_fixmap1)+PDE_IDENT_ATTR,pa(swapper_pg_dir+0xff8)
-+	movl $pa(swapper_pg_fixmap2)+PDE_IDENT_ATTR,pa(swapper_pg_dir+0xff4)
-+	movl $pa(swapper_pg_fixmap3)+PDE_IDENT_ATTR,pa(swapper_pg_dir+0xff0)
  #endif
  	jmp 3f
  /*
-@@ -314,13 +388,16 @@ ENTRY(startup_32_smp)
+@@ -314,13 +372,16 @@ ENTRY(startup_32_smp)
  	jnc 6f
  
  	/* Setup EFER (Extended Feature Enable Register) */
@@ -8994,7 +8994,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  6:
  
  /*
-@@ -346,9 +423,7 @@ ENTRY(startup_32_smp)
+@@ -346,9 +407,7 @@ ENTRY(startup_32_smp)
  
  #ifdef CONFIG_SMP
  	cmpb $0, ready
@@ -9005,7 +9005,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  #endif /* CONFIG_SMP */
  
  /*
-@@ -426,7 +501,7 @@ is386:	movl $2,%ecx		# set MP
+@@ -426,7 +485,7 @@ is386:	movl $2,%ecx		# set MP
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
  
@@ -9014,7 +9014,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  	movl %eax,%ds
  	movl %eax,%es
  
-@@ -440,8 +515,11 @@ is386:	movl $2,%ecx		# set MP
+@@ -440,8 +499,11 @@ is386:	movl $2,%ecx		# set MP
  	 */
  	cmpb $0,ready
  	jne 1f
@@ -9027,7 +9027,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  	subl $20, %ecx
  	movw %cx, 8 * GDT_ENTRY_STACK_CANARY + 2(%eax)
  	shrl $16, %ecx
-@@ -460,10 +538,6 @@ is386:	movl $2,%ecx		# set MP
+@@ -460,10 +522,6 @@ is386:	movl $2,%ecx		# set MP
  #ifdef CONFIG_SMP
  	movb ready, %cl
  	movb $1, ready
@@ -9038,7 +9038,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  #endif /* CONFIG_SMP */
  	jmp *(initial_code)
  
-@@ -549,22 +623,22 @@ early_page_fault:
+@@ -549,22 +607,22 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
@@ -9066,7 +9066,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -572,8 +646,11 @@ hlt_loop:
+@@ -572,8 +630,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -9079,7 +9079,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -582,9 +659,6 @@ ignore_int:
+@@ -582,9 +643,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -9089,7 +9089,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -608,37 +682,49 @@ ignore_int:
+@@ -608,37 +666,40 @@ ignore_int:
  ENTRY(initial_code)
  	.long i386_start_kernel
  
@@ -9114,19 +9114,9 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  ENTRY(swapper_pg_dir)
  	.fill 1024,4,0
  #endif
--swapper_pg_fixmap:
 +
-+ENTRY(swapper_pg_fixmap0)
-+	.fill 1024,4,0
-+
-+ENTRY(swapper_pg_fixmap1)
+ swapper_pg_fixmap:
  	.fill 1024,4,0
-+
-+ENTRY(swapper_pg_fixmap2)
-+	.fill 1024,4,0
-+
-+ENTRY(swapper_pg_fixmap3)
-+	.fill 1024,4,0
 +
 +.section .empty_zero_page,"a",@progbits
  ENTRY(empty_zero_page)
@@ -9152,7 +9142,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -661,11 +747,12 @@ ENTRY(swapper_pg_dir)
+@@ -661,11 +722,12 @@ ENTRY(swapper_pg_dir)
  
  .data
  ENTRY(stack_start)
@@ -9166,7 +9156,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  early_recursion_flag:
  	.long 0
  
-@@ -701,7 +788,7 @@ fault_msg:
+@@ -701,7 +763,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -9175,7 +9165,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -712,7 +799,7 @@ idt_descr:
+@@ -712,7 +774,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -9184,7 +9174,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -721,5 +808,59 @@ ENTRY(early_gdt_descr)
+@@ -721,5 +783,59 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -9248,7 +9238,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
 +	.endr
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/kernel/head_64.S linux-2.6.30.5-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.30.5/arch/x86/kernel/head_64.S	2009-06-10 08:46:21.000000000 +0200
-+++ linux-2.6.30.5-pax/arch/x86/kernel/head_64.S	2009-08-01 13:12:19.000000000 +0200
++++ linux-2.6.30.5-pax/arch/x86/kernel/head_64.S	2009-09-06 01:13:43.000000000 +0200
 @@ -39,6 +39,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
  L3_PAGE_OFFSET = pud_index(__PAGE_OFFSET)
  L4_START_KERNEL = pgd_index(__START_KERNEL_map)
@@ -9390,7 +9380,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -365,20 +379,27 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -365,20 +379,23 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -9398,22 +9388,21 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
 +	.fill	512,8,0
 +
  NEXT_PAGE(level2_fixmap_pgt)
- 	.fill	506,8,0
- 	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
+-	.fill	506,8,0
+-	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
 -	/* 8MB reserved for vsyscalls + a 2MB hole = 4 + 1 entries */
 -	.fill	5,8,0
++	.fill	507,8,0
 +	.quad	level1_vsyscall_pgt - __START_KERNEL_map + _PAGE_TABLE
 +	/* 6MB reserved for vsyscalls + a 2MB hole = 3 + 1 entries */
 +	.fill	4,8,0
  
- NEXT_PAGE(level1_fixmap_pgt)
+-NEXT_PAGE(level1_fixmap_pgt)
++NEXT_PAGE(level1_vsyscall_pgt)
  	.fill	512,8,0
  
 -NEXT_PAGE(level2_ident_pgt)
 -	/* Since I easily can, map the first 1G.
-+NEXT_PAGE(level1_vsyscall_pgt)
-+	.fill	512,8,0
-+
 +	/* Since I easily can, map the first 4G.
  	 * Don't set NX because code runs from these pages.
  	 */
@@ -9423,7 +9412,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/ke
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -391,33 +412,49 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -391,33 +408,49 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -15176,7 +15165,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/mm
  	return (void *)vaddr;
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/mm/ioremap.c linux-2.6.30.5-pax/arch/x86/mm/ioremap.c
 --- linux-2.6.30.5/arch/x86/mm/ioremap.c	2009-06-10 08:46:22.000000000 +0200
-+++ linux-2.6.30.5-pax/arch/x86/mm/ioremap.c	2009-07-31 01:40:39.000000000 +0200
++++ linux-2.6.30.5-pax/arch/x86/mm/ioremap.c	2009-09-06 02:07:11.000000000 +0200
 @@ -111,8 +111,8 @@ int page_is_ram(unsigned long pagenr)
  	 * Second special case: Some BIOSen report the PC BIOS
  	 * area (640->1Mb) as ram even though it is not.
@@ -15209,52 +15198,25 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/mm
  	/*
  	 * Ok, go for it..
  	 */
-@@ -489,7 +488,6 @@ static int __init early_ioremap_debug_se
+@@ -489,7 +488,7 @@ static int __init early_ioremap_debug_se
  early_param("early_ioremap_debug", early_ioremap_debug_setup);
  
  static __initdata int after_paging_init;
 -static pte_t bm_pte[PAGE_SIZE/sizeof(pte_t)] __page_aligned_bss;
++static pte_t bm_pte[PAGE_SIZE/sizeof(pte_t)] __read_only __aligned(PAGE_SIZE);
  
  static inline pmd_t * __init early_ioremap_pmd(unsigned long addr)
  {
-@@ -502,11 +500,6 @@ static inline pmd_t * __init early_iorem
- 	return pmd;
- }
- 
--static inline pte_t * __init early_ioremap_pte(unsigned long addr)
--{
--	return &bm_pte[pte_index(addr)];
--}
--
- static unsigned long slot_virt[FIX_BTMAPS_SLOTS] __initdata;
- 
- void __init early_ioremap_init(void)
-@@ -521,8 +514,6 @@ void __init early_ioremap_init(void)
+@@ -521,8 +520,7 @@ void __init early_ioremap_init(void)
  		slot_virt[i] = __fix_to_virt(FIX_BTMAP_BEGIN - NR_FIX_BTMAPS*i);
  
  	pmd = early_ioremap_pmd(fix_to_virt(FIX_BTMAP_BEGIN));
 -	memset(bm_pte, 0, sizeof(bm_pte));
 -	pmd_populate_kernel(&init_mm, pmd, bm_pte);
++	pmd_populate_user(&init_mm, pmd, bm_pte);
  
  	/*
  	 * The boot-ioremap range spans multiple pmds, for which
-@@ -552,13 +543,15 @@ static void __init __early_set_fixmap(en
- 				      phys_addr_t phys, pgprot_t flags)
- {
- 	unsigned long addr = __fix_to_virt(idx);
-+	unsigned int level;
- 	pte_t *pte;
- 
- 	if (idx >= __end_of_fixed_addresses) {
- 		BUG();
- 		return;
- 	}
--	pte = early_ioremap_pte(addr);
-+	pte = lookup_address(addr, &level);
-+	BUG_ON(!pte || level != PG_LEVEL_4K);
- 
- 	if (pgprot_val(flags))
- 		set_pte(pte, pfn_pte(phys >> PAGE_SHIFT, flags));
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/mm/mmap.c linux-2.6.30.5-pax/arch/x86/mm/mmap.c
 --- linux-2.6.30.5/arch/x86/mm/mmap.c	2009-06-10 08:46:22.000000000 +0200
 +++ linux-2.6.30.5-pax/arch/x86/mm/mmap.c	2009-06-18 00:24:59.000000000 +0200
@@ -16298,7 +16260,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/xe
  
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/xen/mmu.c linux-2.6.30.5-pax/arch/x86/xen/mmu.c
 --- linux-2.6.30.5/arch/x86/xen/mmu.c	2009-06-10 08:46:22.000000000 +0200
-+++ linux-2.6.30.5-pax/arch/x86/xen/mmu.c	2009-06-19 21:40:23.000000000 +0200
++++ linux-2.6.30.5-pax/arch/x86/xen/mmu.c	2009-09-06 01:11:40.000000000 +0200
 @@ -1716,6 +1716,8 @@ __init pgd_t *xen_setup_kernel_pagetable
  	convert_pfn_mfn(init_level4_pgt);
  	convert_pfn_mfn(level3_ident_pgt);
@@ -16308,7 +16270,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/xe
  
  	l3 = m2v(pgd[pgd_index(__START_KERNEL_map)].pgd);
  	l2 = m2v(l3[pud_index(__START_KERNEL_map)].pud);
-@@ -1734,9 +1736,12 @@ __init pgd_t *xen_setup_kernel_pagetable
+@@ -1734,6 +1736,8 @@ __init pgd_t *xen_setup_kernel_pagetable
  	set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_ident_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_kernel_pgt, PAGE_KERNEL_RO);
@@ -16317,10 +16279,6 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/xe
  	set_page_prot(level3_user_vsyscall, PAGE_KERNEL_RO);
  	set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
-+	set_page_prot(level1_fixmap_pgt, PAGE_KERNEL_RO);
- 
- 	/* Pin down new L4 */
- 	pin_pagetable_pfn(MMUEXT_PIN_L4_TABLE,
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/arch/x86/xen/smp.c linux-2.6.30.5-pax/arch/x86/xen/smp.c
 --- linux-2.6.30.5/arch/x86/xen/smp.c	2009-06-10 08:46:22.000000000 +0200
 +++ linux-2.6.30.5-pax/arch/x86/xen/smp.c	2009-06-18 21:23:43.000000000 +0200
@@ -25517,8 +25475,8 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/init/initra
  	next_state = Reset;
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/init/main.c linux-2.6.30.5-pax/init/main.c
 --- linux-2.6.30.5/init/main.c	2009-06-10 08:47:18.000000000 +0200
-+++ linux-2.6.30.5-pax/init/main.c	2009-06-18 00:25:05.000000000 +0200
-@@ -184,6 +184,40 @@ static int __init set_reset_devices(char
++++ linux-2.6.30.5-pax/init/main.c	2009-08-30 11:32:17.000000000 +0200
+@@ -184,6 +184,34 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
  
@@ -25527,22 +25485,16 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/init/main.c
 +{
 +	unsigned int cpu;
 +
-+#ifdef CONFIG_PAX_KERNEXEC
-+	unsigned long cr0;
++	for (cpu = 0; cpu < NR_CPUS; cpu++) {
++		get_cpu_gdt_table(cpu)[GDT_ENTRY_KERNEL_DS].type = 3;
++		get_cpu_gdt_table(cpu)[GDT_ENTRY_KERNEL_DS].limit = 0xf;
++	}
++	asm("mov %0, %%ds" : : "r" (__KERNEL_DS) : "memory");
++	asm("mov %0, %%es" : : "r" (__KERNEL_DS) : "memory");
 +
-+	pax_open_kernel(cr0);
-+#endif
-+
-+	for (cpu = 0; cpu < NR_CPUS; cpu++)
-+		get_cpu_gdt_table(cpu)[GDT_ENTRY_KERNEL_DS].b = 0x00cf9300;
-+
-+#ifdef CONFIG_PAX_KERNEXEC
-+	pax_close_kernel(cr0);
-+#endif
-+
-+	return 1;
++	return 0;
 +}
-+__setup("pax_nouderef", setup_pax_nouderef);
++early_param("pax_nouderef", setup_pax_nouderef);
 +#endif
 +
 +#ifdef CONFIG_PAX_SOFTMODE
@@ -25559,7 +25511,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/init/main.c
  static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -377,7 +411,7 @@ static void __init setup_nr_cpu_ids(void
+@@ -377,7 +405,7 @@ static void __init setup_nr_cpu_ids(void
  }
  
  #ifndef CONFIG_HAVE_SETUP_PER_CPU_AREA
@@ -25568,7 +25520,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/init/main.c
  
  EXPORT_SYMBOL(__per_cpu_offset);
  
-@@ -706,6 +740,7 @@ int do_one_initcall(initcall_t fn)
+@@ -706,6 +734,7 @@ int do_one_initcall(initcall_t fn)
  {
  	int count = preempt_count();
  	ktime_t calltime, delta, rettime;
@@ -25576,7 +25528,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/init/main.c
  	char msgbuf[64];
  	struct boot_trace_call call;
  	struct boot_trace_ret ret;
-@@ -736,15 +771,15 @@ int do_one_initcall(initcall_t fn)
+@@ -736,15 +765,15 @@ int do_one_initcall(initcall_t fn)
  		sprintf(msgbuf, "error code %d ", ret.result);
  
  	if (preempt_count() != count) {
@@ -26704,6 +26656,48 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/kernel/powe
  {
  	register_sysrq_key('o', &sysrq_poweroff_op);
  	return 0;
+diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/kernel/power/process.c linux-2.6.30.5-pax/kernel/power/process.c
+--- linux-2.6.30.5/kernel/power/process.c	2008-12-25 12:13:54.000000000 +0100
++++ linux-2.6.30.5-pax/kernel/power/process.c	2009-09-05 21:16:10.000000000 +0200
+@@ -36,12 +36,15 @@ static int try_to_freeze_tasks(bool sig_
+ 	struct timeval start, end;
+ 	u64 elapsed_csecs64;
+ 	unsigned int elapsed_csecs;
++	bool timedout = false;
+ 
+ 	do_gettimeofday(&start);
+ 
+ 	end_time = jiffies + TIMEOUT;
+ 	do {
+ 		todo = 0;
++		if (time_after(jiffies, end_time))
++			timedout = true;
+ 		read_lock(&tasklist_lock);
+ 		do_each_thread(g, p) {
+ 			if (frozen(p) || !freezeable(p))
+@@ -56,15 +59,17 @@ static int try_to_freeze_tasks(bool sig_
+ 			 * It is "frozen enough".  If the task does wake
+ 			 * up, it will immediately call try_to_freeze.
+ 			 */
+-			if (!task_is_stopped_or_traced(p) &&
+-			    !freezer_should_skip(p))
++			if (!task_is_stopped_or_traced(p) && !freezer_should_skip(p)) {
+ 				todo++;
++				if (timedout) {
++					printk(KERN_ERR "Task refusing to freeze:\n");
++					sched_show_task(p);
++				}
++			}
+ 		} while_each_thread(g, p);
+ 		read_unlock(&tasklist_lock);
+ 		yield();			/* Yield is okay here */
+-		if (time_after(jiffies, end_time))
+-			break;
+-	} while (todo);
++	} while (todo && !timedout);
+ 
+ 	do_gettimeofday(&end);
+ 	elapsed_csecs64 = timeval_to_ns(&end) - timeval_to_ns(&start);
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/kernel/rcupreempt_trace.c linux-2.6.30.5-pax/kernel/rcupreempt_trace.c
 --- linux-2.6.30.5/kernel/rcupreempt_trace.c	2009-03-24 08:35:51.000000000 +0100
 +++ linux-2.6.30.5-pax/kernel/rcupreempt_trace.c	2009-07-23 23:55:21.000000000 +0200
@@ -30575,7 +30569,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/scripts/mod
  
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/scripts/mod/modpost.c linux-2.6.30.5-pax/scripts/mod/modpost.c
 --- linux-2.6.30.5/scripts/mod/modpost.c	2009-06-10 08:47:25.000000000 +0200
-+++ linux-2.6.30.5-pax/scripts/mod/modpost.c	2009-08-23 01:05:10.000000000 +0200
++++ linux-2.6.30.5-pax/scripts/mod/modpost.c	2009-09-04 21:09:16.000000000 +0200
 @@ -831,6 +831,7 @@ enum mismatch {
  	INIT_TO_EXIT,
  	EXIT_TO_INIT,
@@ -30618,7 +30612,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/scripts/mod
 +/*
 +		fprintf(stderr,
 +		"The variable %s references\n"
-+		"the %s %s%s%s\n"
++		"the %s %s%s%s\n",
 +		fromsym, to, sec2annotation(tosec), tosym, to_p);
 +*/
 +		break;
@@ -30708,7 +30702,7 @@ diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/scripts/pnm
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.30.5-pax/Documentation/dontdiff linux-2.6.30.5/security/Kconfig linux-2.6.30.5-pax/security/Kconfig
 --- linux-2.6.30.5/security/Kconfig	2009-08-01 23:30:39.000000000 +0200
-+++ linux-2.6.30.5-pax/security/Kconfig	2009-08-01 23:31:11.000000000 +0200
++++ linux-2.6.30.5-pax/security/Kconfig	2009-09-02 00:03:54.000000000 +0200
 @@ -4,6 +4,462 @@
  
  menu "Security options"
