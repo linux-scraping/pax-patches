@@ -4590,7 +4590,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/boot/c
  	printf(".section \".rodata.compressed\",\"a\",@progbits\n");
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/boot/compressed/relocs.c linux-2.6.31-pax/arch/x86/boot/compressed/relocs.c
 --- linux-2.6.31/arch/x86/boot/compressed/relocs.c	2009-06-10 08:46:14.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/boot/compressed/relocs.c	2009-09-16 11:28:56.000000000 +0200
++++ linux-2.6.31-pax/arch/x86/boot/compressed/relocs.c	2009-09-23 23:46:04.000000000 +0200
 @@ -10,8 +10,11 @@
  #define USE_BSD
  #include <endian.h>
@@ -4752,7 +4752,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/boot/c
  		struct section *sec = &secs[i];
  
  		if (sec->shdr.sh_type != SHT_REL) {
-@@ -504,6 +548,24 @@ static void walk_relocs(void (*visit)(El
+@@ -504,6 +548,19 @@ static void walk_relocs(void (*visit)(El
  			if (sym->st_shndx == SHN_ABS) {
  				continue;
  			}
@@ -4766,18 +4766,13 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/boot/c
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".exit.text"))
 +				continue;
-+			if (!strcmp(sec_name(sym->st_shndx), ".text.head")) {
-+				if (!strcmp(sym_name(sym_strtab, sym), "startup_32") ||
-+				    !strcmp(sym_name(sym_strtab, sym), "_text"))
-+					continue;
-+			}
-+			if (!strcmp(sec_name(sym->st_shndx), ".text"))
++			if (!strcmp(sec_name(sym->st_shndx), ".text") && strcmp(sym_name(sym_strtab, sym), "__LOAD_PHYSICAL_ADDR"))
 +				continue;
 +#endif
  			if (r_type == R_386_NONE || r_type == R_386_PC32) {
  				/*
  				 * NONE can be ignored and and PC relative
-@@ -541,7 +603,7 @@ static int cmp_relocs(const void *va, co
+@@ -541,7 +598,7 @@ static int cmp_relocs(const void *va, co
  
  static void emit_relocs(int as_text)
  {
@@ -4786,7 +4781,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/boot/c
  	/* Count how many relocations I have and allocate space for them. */
  	reloc_count = 0;
  	walk_relocs(count_reloc);
-@@ -634,6 +696,7 @@ int main(int argc, char **argv)
+@@ -634,6 +691,7 @@ int main(int argc, char **argv)
  			fname, strerror(errno));
  	}
  	read_ehdr(fp);
@@ -6819,13 +6814,14 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/includ
  #define MODULES_LEN	(MODULES_VADDR - MODULES_END)
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/include/asm/pgtable_64.h linux-2.6.31-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-2.6.31/arch/x86/include/asm/pgtable_64.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/include/asm/pgtable_64.h	2009-09-10 19:43:33.000000000 +0200
-@@ -16,9 +16,11 @@
++++ linux-2.6.31-pax/arch/x86/include/asm/pgtable_64.h	2009-09-21 02:39:22.000000000 +0200
+@@ -16,9 +16,12 @@
  
  extern pud_t level3_kernel_pgt[512];
  extern pud_t level3_ident_pgt[512];
 +extern pud_t level3_vmalloc_pgt[512];
 +extern pud_t level3_vmemmap_pgt[512];
++extern pud_t level2_vmemmap_pgt[512];
  extern pmd_t level2_kernel_pgt[512];
  extern pmd_t level2_fixmap_pgt[512];
 -extern pmd_t level2_ident_pgt[512];
@@ -6833,7 +6829,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/includ
  extern pgd_t init_level4_pgt[];
  
  #define swapper_pg_dir init_level4_pgt
-@@ -74,7 +76,19 @@ static inline pte_t native_ptep_get_and_
+@@ -74,7 +77,19 @@ static inline pte_t native_ptep_get_and_
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -8404,6 +8400,20 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	DEFINE(TSS_ist, offsetof(struct tss_struct, x86_tss.ist));
  	BLANK();
  	DEFINE(crypto_tfm_ctx_offset, offsetof(struct crypto_tfm, __crt_ctx));
+diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel/cpu/Makefile linux-2.6.31-pax/arch/x86/kernel/cpu/Makefile
+--- linux-2.6.31/arch/x86/kernel/cpu/Makefile	2009-09-10 19:41:12.000000000 +0200
++++ linux-2.6.31-pax/arch/x86/kernel/cpu/Makefile	2009-09-21 00:49:44.000000000 +0200
+@@ -7,10 +7,6 @@ ifdef CONFIG_FUNCTION_TRACER
+ CFLAGS_REMOVE_common.o = -pg
+ endif
+ 
+-# Make sure load_percpu_segment has no stackprotector
+-nostackp := $(call cc-option, -fno-stack-protector)
+-CFLAGS_common.o		:= $(nostackp)
+-
+ obj-y			:= intel_cacheinfo.o addon_cpuid_features.o
+ obj-y			+= proc.o capflags.o powerflags.o common.o
+ obj-y			+= vmware.o hypervisor.o
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel/cpu/common.c linux-2.6.31-pax/arch/x86/kernel/cpu/common.c
 --- linux-2.6.31/arch/x86/kernel/cpu/common.c	2009-09-10 19:41:12.000000000 +0200
 +++ linux-2.6.31-pax/arch/x86/kernel/cpu/common.c	2009-09-10 19:43:33.000000000 +0200
@@ -9692,7 +9702,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
 +	.endr
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel/head_64.S linux-2.6.31-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.31/arch/x86/kernel/head_64.S	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/kernel/head_64.S	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31-pax/arch/x86/kernel/head_64.S	2009-09-21 02:10:09.000000000 +0200
 @@ -38,6 +38,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
  L3_PAGE_OFFSET = pud_index(__PAGE_OFFSET)
  L4_START_KERNEL = pgd_index(__START_KERNEL_map)
@@ -9805,7 +9815,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -350,13 +350,27 @@ NEXT_PAGE(init_level4_pgt)
+@@ -350,13 +350,31 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
@@ -9819,11 +9829,14 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  NEXT_PAGE(level3_ident_pgt)
  	.quad	level2_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
--	.fill	511,8,0
++#ifdef CONFIG_XEN
+ 	.fill	511,8,0
++#else
 +	.quad	level2_ident_pgt + PAGE_SIZE - __START_KERNEL_map + _KERNPG_TABLE
 +	.quad	level2_ident_pgt + 2*PAGE_SIZE - __START_KERNEL_map + _KERNPG_TABLE
 +	.quad	level2_ident_pgt + 3*PAGE_SIZE - __START_KERNEL_map + _KERNPG_TABLE
 +	.fill	508,8,0
++#endif
 +
 +NEXT_PAGE(level3_vmalloc_pgt)
 +	.fill	512,8,0
@@ -9834,7 +9847,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -364,20 +378,23 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -364,20 +382,23 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -9866,7 +9879,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -390,33 +407,49 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -390,33 +411,49 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -11736,7 +11749,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	 * to convert VMI_IRET to a call instead of a jump; so we have
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel/vmlinux.lds.S linux-2.6.31-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-2.6.31/arch/x86/kernel/vmlinux.lds.S	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/kernel/vmlinux.lds.S	2009-09-20 22:06:18.000000000 +0200
++++ linux-2.6.31-pax/arch/x86/kernel/vmlinux.lds.S	2009-09-23 23:47:26.000000000 +0200
 @@ -26,6 +26,22 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -11760,7 +11773,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  #undef i386     /* in case the preprocessor is a 32bit one */
  
-@@ -34,40 +50,47 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
+@@ -34,46 +50,52 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
  #ifdef CONFIG_X86_32
  OUTPUT_ARCH(i386)
  ENTRY(phys_startup_32)
@@ -11788,6 +11801,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
 +	percpu PT_LOAD FLAGS(6);        /* RW_ */
  #endif
 +	text.init PT_LOAD FLAGS(5);     /* R_E */
++	text.exit PT_LOAD FLAGS(5);     /* R_E */
  	init PT_LOAD FLAGS(7);          /* RWE */
 -#endif
  	note PT_NOTE FLAGS(0);          /* ___ */
@@ -11807,9 +11821,10 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  	/* Text and read-only data */
  
- 	/* bootstrapping code */
+-	/* bootstrapping code */
 -	.text.head : AT(ADDR(.text.head) - LOAD_OFFSET) {
-+	.text.head (. - __KERNEL_TEXT_OFFSET): AT(ADDR(.text.head) - LOAD_OFFSET + __KERNEL_TEXT_OFFSET) {
++	.text (. - __KERNEL_TEXT_OFFSET): AT(ADDR(.text) - LOAD_OFFSET + __KERNEL_TEXT_OFFSET) {
++		/* bootstrapping code */
 +#ifdef CONFIG_X86_32
 +		phys_startup_32 = startup_32 - LOAD_OFFSET + __KERNEL_TEXT_OFFSET;
 +#else
@@ -11818,8 +11833,15 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
 +		__LOAD_PHYSICAL_ADDR = . - LOAD_OFFSET + __KERNEL_TEXT_OFFSET;
  		_text = .;
  		*(.text.head)
- 	} :text = 0x9090
-@@ -92,7 +115,10 @@ SECTIONS
+-	} :text = 0x9090
+ 
+-	/* The rest of the text */
+-	.text :  AT(ADDR(.text) - LOAD_OFFSET) {
++		/* The rest of the text */
+ #ifdef CONFIG_X86_32
+ 		/* not really needed, already page aligned */
+ 		. = ALIGN(PAGE_SIZE);
+@@ -92,7 +114,10 @@ SECTIONS
  		_etext = .;
  	} :text = 0x9090
  
@@ -11831,7 +11853,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  	/* Exception table */
  	. = ALIGN(16);
-@@ -100,22 +126,53 @@ SECTIONS
+@@ -100,22 +125,53 @@ SECTIONS
  		__start___ex_table = .;
  		*(__ex_table)
  		__stop___ex_table = .;
@@ -11889,7 +11911,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  		*(.data.idt)
-@@ -182,12 +239,6 @@ SECTIONS
+@@ -182,12 +238,6 @@ SECTIONS
  	}
  	vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -11902,7 +11924,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	.vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3)) {
  		*(.vsyscall_3)
  	}
-@@ -205,12 +256,19 @@ SECTIONS
+@@ -205,12 +255,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -11925,7 +11947,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -219,18 +277,26 @@ SECTIONS
+@@ -219,18 +276,26 @@ SECTIONS
  	PERCPU_VADDR(0, :percpu)
  #endif
  
@@ -11935,6 +11957,10 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  		_sinittext = .;
  		INIT_TEXT
  		_einittext = .;
+-	}
+-#ifdef CONFIG_X86_64
+-	:init
+-#endif
 +	} :text.init
 +
 +	/*
@@ -11944,10 +11970,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
 +	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET) {
 +		EXIT_TEXT
 +		. = ALIGN(16);
- 	}
--#ifdef CONFIG_X86_64
--	:init
--#endif
++	} :text.exit
 +	. = init_begin + SIZEOF(.init.text) + SIZEOF(.exit.text);
  
  	.init.data : AT(ADDR(.init.data) - LOAD_OFFSET) {
@@ -11957,7 +11980,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  
  	. = ALIGN(16);
  	.init.setup : AT(ADDR(.init.setup) - LOAD_OFFSET) {
-@@ -276,14 +342,6 @@ SECTIONS
+@@ -276,14 +341,6 @@ SECTIONS
  		*(.altinstr_replacement)
  	}
  
@@ -11972,7 +11995,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	.exit.data : AT(ADDR(.exit.data) - LOAD_OFFSET) {
  		EXIT_DATA
  	}
-@@ -297,7 +355,7 @@ SECTIONS
+@@ -297,7 +354,7 @@ SECTIONS
  	}
  #endif
  
@@ -11981,7 +12004,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	PERCPU(PAGE_SIZE)
  #endif
  
-@@ -320,12 +378,6 @@ SECTIONS
+@@ -320,12 +377,6 @@ SECTIONS
  		. = ALIGN(PAGE_SIZE);
  	}
  
@@ -11994,7 +12017,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -341,6 +393,7 @@ SECTIONS
+@@ -341,6 +392,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -12002,7 +12025,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  		__brk_limit = .;
  	}
  
-@@ -369,13 +422,12 @@ SECTIONS
+@@ -369,13 +421,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = per_cpu__##x + __per_cpu_load
@@ -16592,7 +16615,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/xen/en
  	/* Get mfn list */
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/xen/mmu.c linux-2.6.31-pax/arch/x86/xen/mmu.c
 --- linux-2.6.31/arch/x86/xen/mmu.c	2009-09-10 19:41:14.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/xen/mmu.c	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31-pax/arch/x86/xen/mmu.c	2009-09-21 02:38:11.000000000 +0200
 @@ -1707,6 +1707,8 @@ __init pgd_t *xen_setup_kernel_pagetable
  	convert_pfn_mfn(init_level4_pgt);
  	convert_pfn_mfn(level3_ident_pgt);
@@ -16602,15 +16625,17 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/xen/mm
  
  	l3 = m2v(pgd[pgd_index(__START_KERNEL_map)].pgd);
  	l2 = m2v(l3[pud_index(__START_KERNEL_map)].pud);
-@@ -1725,6 +1727,8 @@ __init pgd_t *xen_setup_kernel_pagetable
+@@ -1725,7 +1727,10 @@ __init pgd_t *xen_setup_kernel_pagetable
  	set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_ident_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_kernel_pgt, PAGE_KERNEL_RO);
 +	set_page_prot(level3_vmalloc_pgt, PAGE_KERNEL_RO);
 +	set_page_prot(level3_vmemmap_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_user_vsyscall, PAGE_KERNEL_RO);
++	set_page_prot(level2_vmemmap_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
+ 
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/xen/smp.c linux-2.6.31-pax/arch/x86/xen/smp.c
 --- linux-2.6.31/arch/x86/xen/smp.c	2009-06-10 08:46:22.000000000 +0200
 +++ linux-2.6.31-pax/arch/x86/xen/smp.c	2009-09-10 19:43:33.000000000 +0200
@@ -30511,7 +30536,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/slab.c linux
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/slob.c linux-2.6.31-pax/mm/slob.c
 --- linux-2.6.31/mm/slob.c	2009-09-10 19:42:50.000000000 +0200
-+++ linux-2.6.31-pax/mm/slob.c	2009-09-10 19:43:35.000000000 +0200
++++ linux-2.6.31-pax/mm/slob.c	2009-09-23 22:09:55.000000000 +0200
 @@ -29,7 +29,7 @@
   * If kmalloc is asked for objects of PAGE_SIZE or larger, it calls
   * alloc_pages() directly, allocating compound pages so the page order
@@ -30548,6 +30573,15 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/slob.c linux
  }
  
  static inline void set_slob_page(struct slob_page *sp)
+@@ -148,7 +150,7 @@ static inline void clear_slob_page(struc
+ 
+ static inline struct slob_page *slob_page(const void *addr)
+ {
+-	return (struct slob_page *)virt_to_page(addr);
++	return (struct slob_page *)virt_to_head_page(addr);
+ }
+ 
+ /*
 @@ -208,7 +210,7 @@ static void set_slob(slob_t *s, slobidx_
  /*
   * Return the size of a slob block.
@@ -30629,7 +30663,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/slob.c linux
 -			page = virt_to_page(ret);
 -			page->private = size;
 +			struct slob_page *sp;
-+			sp = (struct slob_page *)virt_to_head_page(ret);
++			sp = slob_page(ret);
 +			sp->size = size;
  		}
  
@@ -30683,8 +30717,8 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/slob.c linux
 +	if (!virt_addr_valid(ptr))
 +		return;
 +
-+	sp = (struct slob_page *)virt_to_head_page(ptr);
-+	if (!PageSlobPage((struct page*)sp))
++	sp = slob_page(ptr);
++	if (!PageSlab((struct page*)sp))
 +		return;
 +
 +	if (sp->size) {
@@ -30763,7 +30797,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/slob.c linux
 +		struct slob_page *sp;
 +
  		b = slob_new_pages(flags, get_order(c->size), node);
-+		sp = (struct slob_page *)virt_to_head_page(b);
++		sp = slob_page(b);
 +		sp->size = c->size;
  		trace_kmem_cache_alloc_node(_RET_IP_, b, c->size,
  					    PAGE_SIZE << get_order(c->size),
@@ -30778,9 +30812,9 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/slob.c linux
  static void __kmem_cache_free(void *b, int size)
  {
 -	if (size < PAGE_SIZE)
-+	struct slob_page *sp = (struct slob_page *)virt_to_head_page(b);
++	struct slob_page *sp = slob_page(b);
 +
-+	if (slob_page(sp))
++	if (is_slob_page(sp))
  		slob_free(b, size);
 -	else
 +	else {
