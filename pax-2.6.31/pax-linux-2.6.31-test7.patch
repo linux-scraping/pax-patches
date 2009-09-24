@@ -2180,7 +2180,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/in
  	int t;
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/include/asm/elf.h linux-2.6.31-pax/arch/powerpc/include/asm/elf.h
 --- linux-2.6.31/arch/powerpc/include/asm/elf.h	2009-09-10 19:40:53.000000000 +0200
-+++ linux-2.6.31-pax/arch/powerpc/include/asm/elf.h	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31-pax/arch/powerpc/include/asm/elf.h	2009-09-24 09:24:23.000000000 +0200
 @@ -179,8 +179,19 @@ typedef elf_fpreg_t elf_vsrreghalf_t32[E
     the loader.  We need to make sure that it is out of the way of the program
     that it will "exec", and that there is sufficient room for the brk.  */
@@ -2203,6 +2203,16 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/in
  
  /*
   * Our registers are always unsigned longs, whether we're a 32 bit
+@@ -279,9 +290,6 @@ extern int arch_setup_additional_pages(s
+ 	(0x7ff >> (PAGE_SHIFT - 12)) : \
+ 	(0x3ffff >> (PAGE_SHIFT - 12)))
+ 
+-extern unsigned long arch_randomize_brk(struct mm_struct *mm);
+-#define arch_randomize_brk arch_randomize_brk
+-
+ #endif /* __KERNEL__ */
+ 
+ /*
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/include/asm/kmap_types.h linux-2.6.31-pax/arch/powerpc/include/asm/kmap_types.h
 --- linux-2.6.31/arch/powerpc/include/asm/kmap_types.h	2008-10-10 09:18:42.000000000 +0200
 +++ linux-2.6.31-pax/arch/powerpc/include/asm/kmap_types.h	2009-09-10 19:43:33.000000000 +0200
@@ -2386,8 +2396,16 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/ke
  		err |= setup_trampoline(__NR_rt_sigreturn, &frame->tramp[0]);
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/kernel/vdso.c linux-2.6.31-pax/arch/powerpc/kernel/vdso.c
 --- linux-2.6.31/arch/powerpc/kernel/vdso.c	2009-03-24 08:34:57.000000000 +0100
-+++ linux-2.6.31-pax/arch/powerpc/kernel/vdso.c	2009-09-10 19:43:33.000000000 +0200
-@@ -211,7 +211,7 @@ int arch_setup_additional_pages(struct l
++++ linux-2.6.31-pax/arch/powerpc/kernel/vdso.c	2009-09-24 09:26:14.000000000 +0200
+@@ -35,6 +35,7 @@
+ #include <asm/firmware.h>
+ #include <asm/vdso.h>
+ #include <asm/vdso_datapage.h>
++#include <asm/mman.h>
+ 
+ #include "setup.h"
+ 
+@@ -211,7 +212,7 @@ int arch_setup_additional_pages(struct l
  	vdso_base = VDSO32_MBASE;
  #endif
  
@@ -2396,7 +2414,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/ke
  
  	/* vDSO has a problem and was disabled, just don't "enable" it for the
  	 * process
-@@ -228,7 +228,7 @@ int arch_setup_additional_pages(struct l
+@@ -228,7 +229,7 @@ int arch_setup_additional_pages(struct l
  	 */
  	down_write(&mm->mmap_sem);
  	vdso_base = get_unmapped_area(NULL, vdso_base,
@@ -3520,7 +3538,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/M
  obj-y                   += fault_$(BITS).o
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/fault_32.c linux-2.6.31-pax/arch/sparc/mm/fault_32.c
 --- linux-2.6.31/arch/sparc/mm/fault_32.c	2009-09-10 19:41:09.000000000 +0200
-+++ linux-2.6.31-pax/arch/sparc/mm/fault_32.c	2009-09-12 12:52:10.000000000 +0200
++++ linux-2.6.31-pax/arch/sparc/mm/fault_32.c	2009-09-24 23:12:29.000000000 +0200
 @@ -21,6 +21,9 @@
  #include <linux/interrupt.h>
  #include <linux/module.h>
@@ -3734,7 +3752,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
 +				return 3;
 +			}
 +
-+			/* PaX: newer glibc/binutils generate sethi/jmp instead of save/call */
++			/* PaX: glibc 2.4+ generates sethi/jmpl instead of save/call */
 +			if ((save & 0xFFC00000U) == 0x05000000U &&
 +			    (call & 0xFFFFE000U) == 0x85C0A000U &&
 +			    nop == 0x01000000U)
@@ -3742,8 +3760,8 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
 +				unsigned long addr;
 +
 +				regs->u_regs[UREG_G1] = (sethi & 0x003FFFFFU) << 10;
++				regs->u_regs[UREG_G2] = addr + 4;
 +				addr = (save & 0x003FFFFFU) << 10;
-+				regs->u_regs[UREG_G2] = addr;
 +				addr += (((call | 0xFFFFE000U) ^ 0x00001000U) + 0x00001000U);
 +				regs->pc = addr;
 +				regs->npc = addr+4;
@@ -3824,7 +3842,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
  			goto bad_area;
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/fault_64.c linux-2.6.31-pax/arch/sparc/mm/fault_64.c
 --- linux-2.6.31/arch/sparc/mm/fault_64.c	2009-09-10 19:41:09.000000000 +0200
-+++ linux-2.6.31-pax/arch/sparc/mm/fault_64.c	2009-09-15 14:11:51.000000000 +0200
++++ linux-2.6.31-pax/arch/sparc/mm/fault_64.c	2009-09-24 23:12:34.000000000 +0200
 @@ -20,6 +20,9 @@
  #include <linux/kprobes.h>
  #include <linux/kdebug.h>
@@ -4179,7 +4197,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
 +				return 3;
 +			}
 +
-+			/* PaX: newer glibc/binutils generate sethi/jmp instead of save/call */
++			/* PaX: glibc 2.4+ generates sethi/jmpl instead of save/call */
 +			if ((save & 0xFFC00000U) == 0x05000000U &&
 +			    (call & 0xFFFFE000U) == 0x85C0A000U &&
 +			    nop == 0x01000000U)
@@ -4187,8 +4205,8 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
 +				unsigned long addr;
 +
 +				regs->u_regs[UREG_G1] = (sethi & 0x003FFFFFU) << 10;
++				regs->u_regs[UREG_G2] = addr + 4;
 +				addr = (save & 0x003FFFFFU) << 10;
-+				regs->u_regs[UREG_G2] = addr;
 +				addr += (((call | 0xFFFFFFFFFFFFE000UL) ^ 0x00001000UL) + 0x00001000UL);
 +
 +				if (test_thread_flag(TIF_32BIT))
@@ -16419,8 +16437,16 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
 +#undef	VEXTERN
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/vdso32-setup.c linux-2.6.31-pax/arch/x86/vdso/vdso32-setup.c
 --- linux-2.6.31/arch/x86/vdso/vdso32-setup.c	2009-09-10 19:41:14.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/vdso/vdso32-setup.c	2009-09-10 19:43:33.000000000 +0200
-@@ -226,7 +226,7 @@ static inline void map_compat_vdso(int m
++++ linux-2.6.31-pax/arch/x86/vdso/vdso32-setup.c	2009-09-24 13:24:43.000000000 +0200
+@@ -25,6 +25,7 @@
+ #include <asm/tlbflush.h>
+ #include <asm/vdso.h>
+ #include <asm/proto.h>
++#include <asm/mman.h>
+ 
+ enum {
+ 	VDSO_DISABLED = 0,
+@@ -226,7 +227,7 @@ static inline void map_compat_vdso(int m
  void enable_sep_cpu(void)
  {
  	int cpu = get_cpu();
@@ -16429,7 +16455,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
  
  	if (!boot_cpu_has(X86_FEATURE_SEP)) {
  		put_cpu();
-@@ -249,7 +249,7 @@ static int __init gate_vma_init(void)
+@@ -249,7 +250,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -16438,7 +16464,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
  	/*
  	 * Make sure the vDSO gets into every core dump.
  	 * Dumping its contents makes post-mortem fully interpretable later
-@@ -331,14 +331,14 @@ int arch_setup_additional_pages(struct l
+@@ -331,14 +332,14 @@ int arch_setup_additional_pages(struct l
  	if (compat)
  		addr = VDSO_HIGH_BASE;
  	else {
@@ -16455,7 +16481,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
  
  	if (compat_uses_vma || !compat) {
  		/*
-@@ -365,7 +365,7 @@ int arch_setup_additional_pages(struct l
+@@ -365,7 +366,7 @@ int arch_setup_additional_pages(struct l
  
    up_fail:
  	if (ret)
@@ -16464,7 +16490,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
  
  	up_write(&mm->mmap_sem);
  
-@@ -388,7 +388,7 @@ static ctl_table abi_table2[] = {
+@@ -388,7 +389,7 @@ static ctl_table abi_table2[] = {
  		.mode		= 0644,
  		.proc_handler	= proc_dointvec
  	},
@@ -16473,7 +16499,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
  };
  
  static ctl_table abi_root_table2[] = {
-@@ -398,7 +398,7 @@ static ctl_table abi_root_table2[] = {
+@@ -398,7 +399,7 @@ static ctl_table abi_root_table2[] = {
  		.mode = 0555,
  		.child = abi_table2
  	},
@@ -16482,7 +16508,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
  };
  
  static __init int ia32_binfmt_init(void)
-@@ -413,8 +413,14 @@ __initcall(ia32_binfmt_init);
+@@ -413,8 +414,14 @@ __initcall(ia32_binfmt_init);
  
  const char *arch_vma_name(struct vm_area_struct *vma)
  {
@@ -16498,7 +16524,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/vdso/v
  	return NULL;
  }
  
-@@ -423,7 +429,7 @@ struct vm_area_struct *get_gate_vma(stru
+@@ -423,7 +430,7 @@ struct vm_area_struct *get_gate_vma(stru
  	struct mm_struct *mm = tsk->mm;
  
  	/* Check to see if this task was created in compat vdso mode */
@@ -17981,7 +18007,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/drivers/char/hp
  {
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/drivers/char/hvcs.c linux-2.6.31-pax/drivers/char/hvcs.c
 --- linux-2.6.31/drivers/char/hvcs.c	2009-09-10 19:41:21.000000000 +0200
-+++ linux-2.6.31-pax/drivers/char/hvcs.c	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31-pax/drivers/char/hvcs.c	2009-09-24 09:53:50.000000000 +0200
 @@ -269,7 +269,7 @@ struct hvcs_struct {
  	unsigned int index;
  
@@ -17991,6 +18017,91 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/drivers/char/hv
  
  	/*
  	 * Used to tell the driver kernel_thread what operations need to take
+@@ -419,7 +419,7 @@ static ssize_t hvcs_vterm_state_store(st
+ 
+ 	spin_lock_irqsave(&hvcsd->lock, flags);
+ 
+-	if (hvcsd->open_count > 0) {
++	if (atomic_read(&hvcsd->open_count) > 0) {
+ 		spin_unlock_irqrestore(&hvcsd->lock, flags);
+ 		printk(KERN_INFO "HVCS: vterm state unchanged.  "
+ 				"The hvcs device node is still in use.\n");
+@@ -1135,7 +1135,7 @@ static int hvcs_open(struct tty_struct *
+ 		if ((retval = hvcs_partner_connect(hvcsd)))
+ 			goto error_release;
+ 
+-	hvcsd->open_count = 1;
++	atomic_set(&hvcsd->open_count, 1);
+ 	hvcsd->tty = tty;
+ 	tty->driver_data = hvcsd;
+ 
+@@ -1169,7 +1169,7 @@ fast_open:
+ 
+ 	spin_lock_irqsave(&hvcsd->lock, flags);
+ 	kref_get(&hvcsd->kref);
+-	hvcsd->open_count++;
++	atomic_inc(&hvcsd->open_count);
+ 	hvcsd->todo_mask |= HVCS_SCHED_READ;
+ 	spin_unlock_irqrestore(&hvcsd->lock, flags);
+ 
+@@ -1213,7 +1213,7 @@ static void hvcs_close(struct tty_struct
+ 	hvcsd = tty->driver_data;
+ 
+ 	spin_lock_irqsave(&hvcsd->lock, flags);
+-	if (--hvcsd->open_count == 0) {
++	if (atomic_dec_and_test(&hvcsd->open_count)) {
+ 
+ 		vio_disable_interrupts(hvcsd->vdev);
+ 
+@@ -1239,10 +1239,10 @@ static void hvcs_close(struct tty_struct
+ 		free_irq(irq, hvcsd);
+ 		kref_put(&hvcsd->kref, destroy_hvcs_struct);
+ 		return;
+-	} else if (hvcsd->open_count < 0) {
++	} else if (atomic_read(&hvcsd->open_count) < 0) {
+ 		printk(KERN_ERR "HVCS: vty-server@%X open_count: %d"
+ 				" is missmanaged.\n",
+-		hvcsd->vdev->unit_address, hvcsd->open_count);
++		hvcsd->vdev->unit_address, atomic_read(&hvcsd->open_count));
+ 	}
+ 
+ 	spin_unlock_irqrestore(&hvcsd->lock, flags);
+@@ -1258,7 +1258,7 @@ static void hvcs_hangup(struct tty_struc
+ 
+ 	spin_lock_irqsave(&hvcsd->lock, flags);
+ 	/* Preserve this so that we know how many kref refs to put */
+-	temp_open_count = hvcsd->open_count;
++	temp_open_count = atomic_read(&hvcsd->open_count);
+ 
+ 	/*
+ 	 * Don't kref put inside the spinlock because the destruction
+@@ -1273,7 +1273,7 @@ static void hvcs_hangup(struct tty_struc
+ 	hvcsd->tty->driver_data = NULL;
+ 	hvcsd->tty = NULL;
+ 
+-	hvcsd->open_count = 0;
++	atomic_set(&hvcsd->open_count, 0);
+ 
+ 	/* This will drop any buffered data on the floor which is OK in a hangup
+ 	 * scenario. */
+@@ -1344,7 +1344,7 @@ static int hvcs_write(struct tty_struct 
+ 	 * the middle of a write operation?  This is a crummy place to do this
+ 	 * but we want to keep it all in the spinlock.
+ 	 */
+-	if (hvcsd->open_count <= 0) {
++	if (atomic_read(&hvcsd->open_count) <= 0) {
+ 		spin_unlock_irqrestore(&hvcsd->lock, flags);
+ 		return -ENODEV;
+ 	}
+@@ -1418,7 +1418,7 @@ static int hvcs_write_room(struct tty_st
+ {
+ 	struct hvcs_struct *hvcsd = tty->driver_data;
+ 
+-	if (!hvcsd || hvcsd->open_count <= 0)
++	if (!hvcsd || atomic_read(&hvcsd->open_count) <= 0)
+ 		return 0;
+ 
+ 	return HVCS_BUFF_LEN - hvcsd->chars_in_buffer;
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/drivers/char/ipmi/ipmi_msghandler.c linux-2.6.31-pax/drivers/char/ipmi/ipmi_msghandler.c
 --- linux-2.6.31/drivers/char/ipmi/ipmi_msghandler.c	2009-06-10 08:46:26.000000000 +0200
 +++ linux-2.6.31-pax/drivers/char/ipmi/ipmi_msghandler.c	2009-09-10 19:43:33.000000000 +0200
@@ -25400,16 +25511,8 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/l
  #define BPRINTK(fmt, args...) if (ap->flags & ATA_FLAG_DEBUGMSG) printk(KERN_ERR "%s: " fmt, __func__, ## args)
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/mm.h linux-2.6.31-pax/include/linux/mm.h
 --- linux-2.6.31/include/linux/mm.h	2009-09-10 19:42:45.000000000 +0200
-+++ linux-2.6.31-pax/include/linux/mm.h	2009-09-10 19:43:34.000000000 +0200
-@@ -37,6 +37,7 @@ extern int sysctl_legacy_va_layout;
- #include <asm/page.h>
- #include <asm/pgtable.h>
- #include <asm/processor.h>
-+#include <asm/mman.h>
- 
- #define nth_page(page,n) pfn_to_page(page_to_pfn((page)) + (n))
- 
-@@ -104,6 +105,10 @@ extern unsigned int kobjsize(const void 
++++ linux-2.6.31-pax/include/linux/mm.h	2009-09-24 09:28:13.000000000 +0200
+@@ -104,6 +104,10 @@ extern unsigned int kobjsize(const void 
  #define VM_SAO		0x20000000	/* Strong Access Ordering (powerpc) */
  #define VM_PFN_AT_MMAP	0x40000000	/* PFNMAP vma that is fully mapped at mmap time */
  
@@ -25420,7 +25523,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/m
  #ifndef VM_STACK_DEFAULT_FLAGS		/* arch can override this */
  #define VM_STACK_DEFAULT_FLAGS VM_DATA_DEFAULT_FLAGS
  #endif
-@@ -871,6 +876,8 @@ struct shrinker {
+@@ -871,6 +875,8 @@ struct shrinker {
  extern void register_shrinker(struct shrinker *);
  extern void unregister_shrinker(struct shrinker *);
  
@@ -25429,7 +25532,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/m
  int vma_wants_writenotify(struct vm_area_struct *vma);
  
  extern pte_t *get_locked_pte(struct mm_struct *mm, unsigned long addr, spinlock_t **ptl);
-@@ -1141,6 +1148,7 @@ out:
+@@ -1141,6 +1147,7 @@ out:
  }
  
  extern int do_munmap(struct mm_struct *, unsigned long, size_t);
@@ -25437,7 +25540,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/m
  
  extern unsigned long do_brk(unsigned long, unsigned long);
  
-@@ -1195,6 +1203,10 @@ extern struct vm_area_struct * find_vma(
+@@ -1195,6 +1202,10 @@ extern struct vm_area_struct * find_vma(
  extern struct vm_area_struct * find_vma_prev(struct mm_struct * mm, unsigned long addr,
  					     struct vm_area_struct **pprev);
  
@@ -25448,7 +25551,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/m
  /* Look up the first VMA which intersects the interval start_addr..end_addr-1,
     NULL if none.  Assume start_addr < end_addr. */
  static inline struct vm_area_struct * find_vma_intersection(struct mm_struct * mm, unsigned long start_addr, unsigned long end_addr)
-@@ -1211,7 +1223,6 @@ static inline unsigned long vma_pages(st
+@@ -1211,7 +1222,6 @@ static inline unsigned long vma_pages(st
  	return (vma->vm_end - vma->vm_start) >> PAGE_SHIFT;
  }
  
@@ -25456,7 +25559,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/m
  struct vm_area_struct *find_extend_vma(struct mm_struct *, unsigned long addr);
  int remap_pfn_range(struct vm_area_struct *, unsigned long addr,
  			unsigned long pfn, unsigned long size, pgprot_t);
-@@ -1303,5 +1314,12 @@ void vmemmap_populate_print_last(void);
+@@ -1303,5 +1313,12 @@ void vmemmap_populate_print_last(void);
  extern int account_locked_memory(struct mm_struct *mm, struct rlimit *rlim,
  				 size_t size);
  extern void refund_locked_memory(struct mm_struct *mm, size_t size);
@@ -28159,6 +28262,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/lib/random32.c 
  }
  
  /**
+Files linux-2.6.31/libselinux.so.1 and linux-2.6.31-pax/libselinux.so.1 differ
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/mm/filemap.c linux-2.6.31-pax/mm/filemap.c
 --- linux-2.6.31/mm/filemap.c	2009-09-10 19:42:50.000000000 +0200
 +++ linux-2.6.31-pax/mm/filemap.c	2009-09-10 19:43:34.000000000 +0200
@@ -32028,8 +32132,8 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/scripts/pnmtolo
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfig linux-2.6.31-pax/security/Kconfig
 --- linux-2.6.31/security/Kconfig	2009-09-10 19:42:59.000000000 +0200
-+++ linux-2.6.31-pax/security/Kconfig	2009-09-10 19:43:35.000000000 +0200
-@@ -4,6 +4,462 @@
++++ linux-2.6.31-pax/security/Kconfig	2009-09-24 22:33:17.000000000 +0200
+@@ -4,6 +4,461 @@
  
  menu "Security options"
  
@@ -32238,7 +32342,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfi
 +
 +config PAX_MPROTECT
 +	bool "Restrict mprotect()"
-+	depends on (PAX_PAGEEXEC || PAX_SEGMEXEC) && !PPC64
++	depends on (PAX_PAGEEXEC || PAX_SEGMEXEC)
 +	help
 +	  Enabling this option will prevent programs from
 +	   - changing the executable status of memory pages that were
@@ -32290,7 +32394,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfi
 +
 +config PAX_EMUPLT
 +	bool "Automatically emulate ELF PLT"
-+	depends on PAX_MPROTECT && (ALPHA || PARISC || PPC32 || SPARC32 || SPARC64)
++	depends on PAX_MPROTECT && (ALPHA || PARISC || PPC32 || PPC64 || SPARC32 || SPARC64)
 +	default y
 +	help
 +	  Enabling this option will have the kernel automatically detect
@@ -32307,14 +32411,13 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfi
 +	  not need to be writable.
 +
 +config PAX_DLRESOLVE
-+	bool
++	bool 'Emulate old glibc resolver stub'
 +	depends on PAX_EMUPLT && (SPARC32 || SPARC64)
-+	default y
-+
-+config PAX_SYSCALL
-+	bool
-+	depends on PAX_PAGEEXEC && PPC32
-+	default y
++	default n
++	help
++	  This option is needed if userland has an old glibc (before 2.4)
++	  that puts a 'save' instruction into the runtime generated resolver
++	  stub that needs special emulation.
 +
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
@@ -32434,7 +32537,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfi
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
-+	depends on X86_32 && !COMPAT_VDSO && !UML_X86
++	depends on X86_32 && !COMPAT_VDSO && !UML_X86 && !PARAVIRT
 +	help
 +	  By saying Y here the kernel will be prevented from dereferencing
 +	  userland pointers in contexts where the kernel expects only kernel
@@ -32590,7 +32693,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/smack/
  	.next  = netlbladdr_seq_next,
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/sound/aoa/codecs/onyx.c linux-2.6.31-pax/sound/aoa/codecs/onyx.c
 --- linux-2.6.31/sound/aoa/codecs/onyx.c	2009-06-10 08:47:26.000000000 +0200
-+++ linux-2.6.31-pax/sound/aoa/codecs/onyx.c	2009-09-10 19:43:35.000000000 +0200
++++ linux-2.6.31-pax/sound/aoa/codecs/onyx.c	2009-09-24 09:46:13.000000000 +0200
 @@ -53,7 +53,7 @@ struct onyx {
  				spdif_locked:1,
  				analog_locked:1,
@@ -32600,6 +32703,25 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/sound/aoa/codec
  	struct codec_info	*codec_info;
  
  	/* mutex serializes concurrent access to the device
+@@ -752,7 +752,7 @@ static int onyx_open(struct codec_info_i
+ 	struct onyx *onyx = cii->codec_data;
+ 
+ 	mutex_lock(&onyx->mutex);
+-	onyx->open_count++;
++	atomic_inc(&onyx->open_count);
+ 	mutex_unlock(&onyx->mutex);
+ 
+ 	return 0;
+@@ -764,8 +764,7 @@ static int onyx_close(struct codec_info_
+ 	struct onyx *onyx = cii->codec_data;
+ 
+ 	mutex_lock(&onyx->mutex);
+-	onyx->open_count--;
+-	if (!onyx->open_count)
++	if (atomic_dec_and_test(&onyx->open_count))
+ 		onyx->spdif_locked = onyx->analog_locked = 0;
+ 	mutex_unlock(&onyx->mutex);
+ 
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/sound/core/oss/pcm_oss.c linux-2.6.31-pax/sound/core/oss/pcm_oss.c
 --- linux-2.6.31/sound/core/oss/pcm_oss.c	2009-09-10 19:42:59.000000000 +0200
 +++ linux-2.6.31-pax/sound/core/oss/pcm_oss.c	2009-09-10 19:43:35.000000000 +0200
