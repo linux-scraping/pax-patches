@@ -2305,27 +2305,119 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/in
  #define   DSISR_DABRMATCH	0x00400000	/* hit data breakpoint */
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/include/asm/uaccess.h linux-2.6.31-pax/arch/powerpc/include/asm/uaccess.h
 --- linux-2.6.31/arch/powerpc/include/asm/uaccess.h	2008-10-10 09:18:43.000000000 +0200
-+++ linux-2.6.31-pax/arch/powerpc/include/asm/uaccess.h	2009-09-10 19:43:33.000000000 +0200
-@@ -334,6 +334,9 @@ static inline unsigned long copy_from_us
++++ linux-2.6.31-pax/arch/powerpc/include/asm/uaccess.h	2009-09-27 14:53:00.000000000 +0200
+@@ -329,30 +329,46 @@ extern unsigned long __copy_tofrom_user(
+ 
+ #ifndef __powerpc64__
+ 
+-static inline unsigned long copy_from_user(void *to,
++static inline unsigned long __must_check copy_from_user(void *to,
+ 		const void __user *from, unsigned long n)
  {
  	unsigned long over;
  
+-	if (access_ok(VERIFY_READ, from, n))
 +	if ((long)n < 0)
 +		return n;
 +
- 	if (access_ok(VERIFY_READ, from, n))
++	if (access_ok(VERIFY_READ, from, n)) {
++		if (!__builtin_constant_p(n))
++			check_object_size(to, n, false);
  		return __copy_tofrom_user((__force void __user *)to, from, n);
++	}
  	if ((unsigned long)from < TASK_SIZE) {
-@@ -349,6 +352,9 @@ static inline unsigned long copy_to_user
+ 		over = (unsigned long)from + n - TASK_SIZE;
++		if (!__builtin_constant_p(n - over))
++			check_object_size(to, n - over, false);
+ 		return __copy_tofrom_user((__force void __user *)to, from,
+ 				n - over) + over;
+ 	}
+ 	return n;
+ }
+ 
+-static inline unsigned long copy_to_user(void __user *to,
++static inline unsigned long __must_check copy_to_user(void __user *to,
+ 		const void *from, unsigned long n)
  {
  	unsigned long over;
  
+-	if (access_ok(VERIFY_WRITE, to, n))
 +	if ((long)n < 0)
 +		return n;
 +
- 	if (access_ok(VERIFY_WRITE, to, n))
++	if (access_ok(VERIFY_WRITE, to, n)) {
++		if (!__builtin_constant_p(n))
++			check_object_size(from, n, true);
  		return __copy_tofrom_user(to, (__force void __user *)from, n);
++	}
  	if ((unsigned long)to < TASK_SIZE) {
+ 		over = (unsigned long)to + n - TASK_SIZE;
++		if (!__builtin_constant_p(n))
++			check_object_size(from, n - over, true);
+ 		return __copy_tofrom_user(to, (__force void __user *)from,
+ 				n - over) + over;
+ 	}
+@@ -364,10 +380,34 @@ static inline unsigned long copy_to_user
+ #define __copy_in_user(to, from, size) \
+ 	__copy_tofrom_user((to), (from), (size))
+ 
+-extern unsigned long copy_from_user(void *to, const void __user *from,
+-				    unsigned long n);
+-extern unsigned long copy_to_user(void __user *to, const void *from,
+-				  unsigned long n);
++static inline unsigned long __must_check copy_from_user(void *to, const void __user *from, unsigned long n)
++{
++	if ((long)n < 0)
++		return n;
++
++	if (!__builtin_constant_p(n))
++		check_object_size(to, n, false);
++
++	if (likely(access_ok(VERIFY_READ, from, n)))
++		n = __copy_from_user(to, from, n);
++	else
++		memset(to, 0, n);
++	return n;
++}
++
++static inline unsigned long __must_check copy_to_user(void __user *to, const void *from, unsigned long n)
++{
++	if ((long)n < 0)
++		return n;
++
++	if (likely(access_ok(VERIFY_WRITE, to, n))) {
++		if (!__builtin_constant_p(n))
++			check_object_size(from, n, true);
++		n = __copy_to_user(to, from, n);
++	}
++	return n;
++}
++
+ extern unsigned long copy_in_user(void __user *to, const void __user *from,
+ 				  unsigned long n);
+ 
+@@ -396,6 +436,10 @@ static inline unsigned long __copy_from_
+ 		if (ret == 0)
+ 			return 0;
+ 	}
++
++	if (!__builtin_constant_p(n))
++		check_object_size(to, n, false);
++
+ 	return __copy_tofrom_user((__force void __user *)to, from, n);
+ }
+ 
+@@ -422,6 +466,10 @@ static inline unsigned long __copy_to_us
+ 		if (ret == 0)
+ 			return 0;
+ 	}
++
++	if (!__builtin_constant_p(n))
++		check_object_size(from, n, true);
++
+ 	return __copy_tofrom_user(to, (__force const void __user *)from, n);
+ }
+ 
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/kernel/module_32.c linux-2.6.31-pax/arch/powerpc/kernel/module_32.c
 --- linux-2.6.31/arch/powerpc/kernel/module_32.c	2009-03-24 08:34:57.000000000 +0100
 +++ linux-2.6.31-pax/arch/powerpc/kernel/module_32.c	2009-09-10 19:43:33.000000000 +0200
@@ -2477,27 +2569,38 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/kv
  	.read    = seq_read,
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/lib/usercopy_64.c linux-2.6.31-pax/arch/powerpc/lib/usercopy_64.c
 --- linux-2.6.31/arch/powerpc/lib/usercopy_64.c	2008-04-17 04:49:44.000000000 +0200
-+++ linux-2.6.31-pax/arch/powerpc/lib/usercopy_64.c	2009-09-10 19:43:33.000000000 +0200
-@@ -11,6 +11,9 @@
++++ linux-2.6.31-pax/arch/powerpc/lib/usercopy_64.c	2009-09-27 14:48:46.000000000 +0200
+@@ -9,22 +9,6 @@
+ #include <linux/module.h>
+ #include <asm/uaccess.h>
  
- unsigned long copy_from_user(void *to, const void __user *from, unsigned long n)
+-unsigned long copy_from_user(void *to, const void __user *from, unsigned long n)
+-{
+-	if (likely(access_ok(VERIFY_READ, from, n)))
+-		n = __copy_from_user(to, from, n);
+-	else
+-		memset(to, 0, n);
+-	return n;
+-}
+-
+-unsigned long copy_to_user(void __user *to, const void *from, unsigned long n)
+-{
+-	if (likely(access_ok(VERIFY_WRITE, to, n)))
+-		n = __copy_to_user(to, from, n);
+-	return n;
+-}
+-
+ unsigned long copy_in_user(void __user *to, const void __user *from,
+ 			   unsigned long n)
  {
-+	if ((long)n < 0)
-+		return n;
-+
- 	if (likely(access_ok(VERIFY_READ, from, n)))
- 		n = __copy_from_user(to, from, n);
- 	else
-@@ -20,6 +23,9 @@ unsigned long copy_from_user(void *to, c
- 
- unsigned long copy_to_user(void __user *to, const void *from, unsigned long n)
- {
-+	if ((long)n < 0)
-+		return n;
-+
- 	if (likely(access_ok(VERIFY_WRITE, to, n)))
- 		n = __copy_to_user(to, from, n);
+@@ -35,7 +19,5 @@ unsigned long copy_in_user(void __user *
  	return n;
+ }
+ 
+-EXPORT_SYMBOL(copy_from_user);
+-EXPORT_SYMBOL(copy_to_user);
+ EXPORT_SYMBOL(copy_in_user);
+ 
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/powerpc/mm/fault.c linux-2.6.31-pax/arch/powerpc/mm/fault.c
 --- linux-2.6.31/arch/powerpc/mm/fault.c	2009-09-10 19:40:56.000000000 +0200
 +++ linux-2.6.31-pax/arch/powerpc/mm/fault.c	2009-09-26 18:08:08.000000000 +0200
@@ -3142,28 +3245,49 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/incl
  
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/include/asm/uaccess_32.h linux-2.6.31-pax/arch/sparc/include/asm/uaccess_32.h
 --- linux-2.6.31/arch/sparc/include/asm/uaccess_32.h	2009-09-10 19:41:08.000000000 +0200
-+++ linux-2.6.31-pax/arch/sparc/include/asm/uaccess_32.h	2009-09-10 19:43:33.000000000 +0200
-@@ -249,6 +249,9 @@ extern unsigned long __copy_user(void __
++++ linux-2.6.31-pax/arch/sparc/include/asm/uaccess_32.h	2009-09-27 14:41:59.000000000 +0200
+@@ -249,27 +249,46 @@ extern unsigned long __copy_user(void __
  
  static inline unsigned long copy_to_user(void __user *to, const void *from, unsigned long n)
  {
+-	if (n && __access_ok((unsigned long) to, n))
 +	if ((long)n < 0)
 +		return n;
 +
- 	if (n && __access_ok((unsigned long) to, n))
++	if (n && __access_ok((unsigned long) to, n)) {
++		if (!__builtin_constant_p(n))
++			check_object_size(from, n, true);
  		return __copy_user(to, (__force void __user *) from, n);
- 	else
-@@ -262,6 +265,9 @@ static inline unsigned long __copy_to_us
+-	else
++	} else
+ 		return n;
+ }
  
- static inline unsigned long copy_from_user(void *to, const void __user *from, unsigned long n)
+ static inline unsigned long __copy_to_user(void __user *to, const void *from, unsigned long n)
  {
 +	if ((long)n < 0)
 +		return n;
 +
- 	if (n && __access_ok((unsigned long) from, n))
++	if (!__builtin_constant_p(n))
++		check_object_size(from, n, true);
++
+ 	return __copy_user(to, (__force void __user *) from, n);
+ }
+ 
+ static inline unsigned long copy_from_user(void *to, const void __user *from, unsigned long n)
+ {
+-	if (n && __access_ok((unsigned long) from, n))
++	if ((long)n < 0)
++		return n;
++
++	if (n && __access_ok((unsigned long) from, n)) {
++		if (!__builtin_constant_p(n))
++			check_object_size(to, n, false);
  		return __copy_user((__force void __user *) to, from, n);
- 	else
-@@ -270,6 +276,9 @@ static inline unsigned long copy_from_us
+-	else
++	} else
+ 		return n;
+ }
  
  static inline unsigned long __copy_from_user(void *to, const void __user *from, unsigned long n)
  {
@@ -3175,8 +3299,8 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/incl
  
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/include/asm/uaccess_64.h linux-2.6.31-pax/arch/sparc/include/asm/uaccess_64.h
 --- linux-2.6.31/arch/sparc/include/asm/uaccess_64.h	2009-09-10 19:41:08.000000000 +0200
-+++ linux-2.6.31-pax/arch/sparc/include/asm/uaccess_64.h	2009-09-10 19:43:33.000000000 +0200
-@@ -212,8 +212,12 @@ extern unsigned long copy_from_user_fixu
++++ linux-2.6.31-pax/arch/sparc/include/asm/uaccess_64.h	2009-09-27 13:53:38.000000000 +0200
+@@ -212,8 +212,15 @@ extern unsigned long copy_from_user_fixu
  static inline unsigned long __must_check
  copy_from_user(void *to, const void __user *from, unsigned long size)
  {
@@ -3186,11 +3310,14 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/incl
 +	if ((long)size < 0)
 +		return size;
 +
++	if (!__builtin_constant_p(size))
++		check_object_size(to, size, false);
++
 +	ret = ___copy_from_user(to, from, size);
  	if (unlikely(ret))
  		ret = copy_from_user_fixup(to, from, size);
  	return ret;
-@@ -228,8 +232,12 @@ extern unsigned long copy_to_user_fixup(
+@@ -228,8 +235,15 @@ extern unsigned long copy_to_user_fixup(
  static inline unsigned long __must_check
  copy_to_user(void __user *to, const void *from, unsigned long size)
  {
@@ -3199,6 +3326,9 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/incl
 +
 +	if ((long)size < 0)
 +		return size;
++
++	if (!__builtin_constant_p(size))
++		check_object_size(from, size, true);
  
 +	ret = ___copy_to_user(to, from, size);
  	if (unlikely(ret))
@@ -3820,7 +3950,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
  			goto bad_area;
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/fault_64.c linux-2.6.31-pax/arch/sparc/mm/fault_64.c
 --- linux-2.6.31/arch/sparc/mm/fault_64.c	2009-09-10 19:41:09.000000000 +0200
-+++ linux-2.6.31-pax/arch/sparc/mm/fault_64.c	2009-09-26 17:33:39.000000000 +0200
++++ linux-2.6.31-pax/arch/sparc/mm/fault_64.c	2009-09-27 11:48:27.000000000 +0200
 @@ -20,6 +20,9 @@
  #include <linux/kprobes.h>
  #include <linux/kdebug.h>
@@ -3831,7 +3961,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -249,6 +252,413 @@ static void noinline bogus_32bit_fault_a
+@@ -249,6 +252,416 @@ static void noinline bogus_32bit_fault_a
  	show_regs(regs);
  }
  
@@ -4067,35 +4197,6 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
 +		}
 +	} while (0);
 +
-+	do { /* PaX: patched PLT emulation #7 */
-+		unsigned int sethi, ba, nop;
-+
-+		err = get_user(sethi, (unsigned int *)regs->tpc);
-+		err |= get_user(ba, (unsigned int *)(regs->tpc+4));
-+		err |= get_user(nop, (unsigned int *)(regs->tpc+8));
-+
-+		if (err)
-+			break;
-+
-+		if ((sethi & 0xFFC00000U) == 0x03000000U &&
-+		    (ba & 0xFFF00000U) == 0x30600000U &&
-+		    nop == 0x01000000U)
-+		{
-+			unsigned long addr;
-+
-+			addr = (sethi & 0x003FFFFFU) << 10;
-+			regs->u_regs[UREG_G1] = addr;
-+			addr = regs->tpc + ((((ba | 0xFFFFFFFFFFF80000UL) ^ 0x00040000UL) + 0x00040000UL) << 2);
-+
-+			if (test_thread_flag(TIF_32BIT))
-+				addr &= 0xFFFFFFFFUL;
-+
-+			regs->tpc = addr;
-+			regs->tnpc = addr+4;
-+			return 2;
-+		}
-+	} while (0);
-+
 +	do { /* PaX: unpatched PLT emulation step 1 */
 +		unsigned int sethi, ba, nop;
 +
@@ -4197,6 +4298,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
 +		}
 +	} while (0);
 +
++#ifdef CONFIG_PAX_DLRESOLVE
 +	do { /* PaX: unpatched PLT emulation step 2 */
 +		unsigned int save, call, nop;
 +
@@ -4223,6 +4325,37 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
 +	} while (0);
 +#endif
 +
++	do { /* PaX: patched PLT emulation #7, must be AFTER the unpatched PLT emulation */
++		unsigned int sethi, ba, nop;
++
++		err = get_user(sethi, (unsigned int *)regs->tpc);
++		err |= get_user(ba, (unsigned int *)(regs->tpc+4));
++		err |= get_user(nop, (unsigned int *)(regs->tpc+8));
++
++		if (err)
++			break;
++
++		if ((sethi & 0xFFC00000U) == 0x03000000U &&
++		    (ba & 0xFFF00000U) == 0x30600000U &&
++		    nop == 0x01000000U)
++		{
++			unsigned long addr;
++
++			addr = (sethi & 0x003FFFFFU) << 10;
++			regs->u_regs[UREG_G1] = addr;
++			addr = regs->tpc + ((((ba | 0xFFFFFFFFFFF80000UL) ^ 0x00040000UL) + 0x00040000UL) << 2);
++
++			if (test_thread_flag(TIF_32BIT))
++				addr &= 0xFFFFFFFFUL;
++
++			regs->tpc = addr;
++			regs->tnpc = addr+4;
++			return 2;
++		}
++	} while (0);
++
++#endif
++
 +	return 1;
 +}
 +
@@ -4245,7 +4378,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/sparc/mm/f
  asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
  {
  	struct mm_struct *mm = current->mm;
-@@ -315,6 +725,29 @@ asmlinkage void __kprobes do_sparc64_fau
+@@ -315,6 +728,29 @@ asmlinkage void __kprobes do_sparc64_fau
  	if (!vma)
  		goto bad_area;
  
@@ -6576,7 +6709,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/includ
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/include/asm/paravirt.h linux-2.6.31-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.31/arch/x86/include/asm/paravirt.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/include/asm/paravirt.h	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31-pax/arch/x86/include/asm/paravirt.h	2009-09-27 13:14:04.000000000 +0200
 @@ -1688,7 +1688,7 @@ static inline unsigned long __raw_local_
  
  #define PARA_PATCH(struct, off)        ((PARAVIRT_PATCH_##struct + (off)) / 4)
@@ -6586,6 +6719,25 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/includ
  #endif
  
  #define INTERRUPT_RETURN						\
+@@ -1718,6 +1718,18 @@ static inline unsigned long __raw_local_
+ 	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
+ 	pop %edx; pop %ecx
+ 
++#define GET_CR0_INTO_EDX				\
++	push %eax; push %ecx;				\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
++	mov %eax, %edx;					\
++	pop %ecx; pop %eax
++
++#define SET_CR0_FROM_EDX				\
++	push %eax; push %ecx;				\
++	mov %edx, %eax;					\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
++	pop %ecx; pop %eax
++
+ #define ENABLE_INTERRUPTS_SYSEXIT					\
+ 	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
+ 		  CLBR_NONE,						\
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/include/asm/pgalloc.h linux-2.6.31-pax/arch/x86/include/asm/pgalloc.h
 --- linux-2.6.31/arch/x86/include/asm/pgalloc.h	2009-09-10 19:41:11.000000000 +0200
 +++ linux-2.6.31-pax/arch/x86/include/asm/pgalloc.h	2009-09-10 19:43:33.000000000 +0200
@@ -10467,7 +10619,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  	.spin_is_contended = __ticket_spin_is_contended,
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel/paravirt.c linux-2.6.31-pax/arch/x86/kernel/paravirt.c
 --- linux-2.6.31/arch/x86/kernel/paravirt.c	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31-pax/arch/x86/kernel/paravirt.c	2009-09-12 15:20:39.000000000 +0200
++++ linux-2.6.31-pax/arch/x86/kernel/paravirt.c	2009-09-27 13:01:45.000000000 +0200
 @@ -54,7 +54,7 @@ u64 _paravirt_ident_64(u64 x)
  	return x;
  }
@@ -10477,6 +10629,34 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/arch/x86/kernel
  {
  	printk(KERN_INFO "Booting paravirtualized kernel on %s\n",
  	       pv_info.name);
+@@ -125,9 +125,9 @@ unsigned paravirt_patch_jmp(void *insnbu
+ 
+ /* Neat trick to map patch type back to the call within the
+  * corresponding structure. */
+-static void *get_call_destination(u8 type)
++static const void *get_call_destination(u8 type)
+ {
+-	struct paravirt_patch_template tmpl = {
++	const struct paravirt_patch_template tmpl = {
+ 		.pv_init_ops = pv_init_ops,
+ 		.pv_time_ops = pv_time_ops,
+ 		.pv_cpu_ops = pv_cpu_ops,
+@@ -138,13 +138,13 @@ static void *get_call_destination(u8 typ
+ 		.pv_lock_ops = pv_lock_ops,
+ #endif
+ 	};
+-	return *((void **)&tmpl + type);
++	return *((const void **)&tmpl + type);
+ }
+ 
+ unsigned paravirt_patch_default(u8 type, u16 clobbers, void *insnbuf,
+ 				unsigned long addr, unsigned len)
+ {
+-	void *opfunc = get_call_destination(type);
++	const void *opfunc = get_call_destination(type);
+ 	unsigned ret;
+ 
+ 	if (opfunc == NULL)
 @@ -183,7 +183,7 @@ unsigned paravirt_patch_insns(void *insn
  	if (insn_len > len || start == NULL)
  		insn_len = len;
@@ -25244,6 +25424,44 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/c
  
  /* Define the enumeration of all cgroup subsystems */
  #define SUBSYS(_x) _x ## _subsys_id,
+diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/compiler-gcc4.h linux-2.6.31-pax/include/linux/compiler-gcc4.h
+--- linux-2.6.31/include/linux/compiler-gcc4.h	2009-06-10 08:47:13.000000000 +0200
++++ linux-2.6.31-pax/include/linux/compiler-gcc4.h	2009-09-27 14:39:05.000000000 +0200
+@@ -36,4 +36,8 @@
+    the kernel context */
+ #define __cold			__attribute__((__cold__))
+ 
++#define __alloc_size(...)	__attribute((alloc_size(__VA_ARGS__)))
++#define __bos(ptr, arg)		__builtin_object_size((ptr), (arg))
++#define __bos0(ptr)		__bos((ptr), 0)
++#define __bos1(ptr)		__bos((ptr), 1)
+ #endif
+diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/compiler.h linux-2.6.31-pax/include/linux/compiler.h
+--- linux-2.6.31/include/linux/compiler.h	2009-09-10 19:42:43.000000000 +0200
++++ linux-2.6.31-pax/include/linux/compiler.h	2009-09-27 14:39:28.000000000 +0200
+@@ -256,6 +256,22 @@ void ftrace_likely_update(struct ftrace_
+ #define __cold
+ #endif
+ 
++#ifndef __alloc_size
++#define __alloc_size
++#endif
++
++#ifndef __bos
++#define __bos
++#endif
++
++#ifndef __bos0
++#define __bos0
++#endif
++
++#ifndef __bos1
++#define __bos1
++#endif
++
+ /* Simple shorthand for a section definition */
+ #ifndef __section
+ # define __section(S) __attribute__ ((__section__(#S)))
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/include/linux/cpumask.h linux-2.6.31-pax/include/linux/cpumask.h
 --- linux-2.6.31/include/linux/cpumask.h	2009-09-10 19:42:43.000000000 +0200
 +++ linux-2.6.31-pax/include/linux/cpumask.h	2009-09-10 19:43:34.000000000 +0200
@@ -26599,7 +26817,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/init/initramfs.
  	next_state = Reset;
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/init/main.c linux-2.6.31-pax/init/main.c
 --- linux-2.6.31/init/main.c	2009-09-10 19:42:47.000000000 +0200
-+++ linux-2.6.31-pax/init/main.c	2009-09-10 19:43:34.000000000 +0200
++++ linux-2.6.31-pax/init/main.c	2009-09-27 01:52:14.000000000 +0200
 @@ -182,6 +182,35 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -26869,7 +27087,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/kernel/cgroup.c
  	.llseek = seq_lseek,
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/kernel/cpu.c linux-2.6.31-pax/kernel/cpu.c
 --- linux-2.6.31/kernel/cpu.c	2009-09-10 19:42:47.000000000 +0200
-+++ linux-2.6.31-pax/kernel/cpu.c	2009-09-10 19:43:34.000000000 +0200
++++ linux-2.6.31-pax/kernel/cpu.c	2009-09-27 01:44:47.000000000 +0200
 @@ -19,7 +19,7 @@
  /* Serializes the updates to cpu_online_mask, cpu_present_mask */
  static DEFINE_MUTEX(cpu_add_remove_lock);
@@ -32109,7 +32327,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/scripts/pnmtolo
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfig linux-2.6.31-pax/security/Kconfig
 --- linux-2.6.31/security/Kconfig	2009-09-10 19:42:59.000000000 +0200
-+++ linux-2.6.31-pax/security/Kconfig	2009-09-26 22:09:04.000000000 +0200
++++ linux-2.6.31-pax/security/Kconfig	2009-09-27 13:43:59.000000000 +0200
 @@ -4,6 +4,460 @@
  
  menu "Security options"
@@ -32397,7 +32615,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfi
 +
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
-+	depends on PAX_NOEXEC && X86 && !EFI && !COMPAT_VDSO && (!X86_32 || X86_WP_WORKS_OK) && !PARAVIRT
++	depends on PAX_NOEXEC && X86 && !EFI && !COMPAT_VDSO && (!X86_32 || X86_WP_WORKS_OK)
 +	help
 +	  This is the kernel land equivalent of PAGEEXEC and MPROTECT,
 +	  that is, enabling this option will make it harder to inject
@@ -32513,7 +32731,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfi
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
-+	depends on X86_32 && !COMPAT_VDSO && !UML_X86 && !PARAVIRT
++	depends on X86_32 && !COMPAT_VDSO && !UML_X86
 +	help
 +	  By saying Y here the kernel will be prevented from dereferencing
 +	  userland pointers in contexts where the kernel expects only kernel
@@ -32550,7 +32768,7 @@ diff -NurpX linux-2.6.31-pax/Documentation/dontdiff linux-2.6.31/security/Kconfi
 +
 +config PAX_USERCOPY
 +	bool "Bounds check heap objects copies between kernel and userland"
-+	depends on X86
++	depends on X86 || PPC || SPARC
 +	depends on SLAB || SLUB || SLOB
 +	help
 +	  By saying Y here the kernel will enforce the size of heap objects
