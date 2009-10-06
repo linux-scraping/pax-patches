@@ -3319,7 +3319,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/sparc/
  
 diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/sparc/include/asm/spinlock_64.h linux-2.6.31.1-pax/arch/sparc/include/asm/spinlock_64.h
 --- linux-2.6.31.1/arch/sparc/include/asm/spinlock_64.h	2009-06-10 08:46:14.000000000 +0200
-+++ linux-2.6.31.1-pax/arch/sparc/include/asm/spinlock_64.h	2009-09-28 01:01:26.000000000 +0200
++++ linux-2.6.31.1-pax/arch/sparc/include/asm/spinlock_64.h	2009-09-28 01:44:17.000000000 +0200
 @@ -99,7 +99,12 @@ static void inline __read_lock(raw_rwloc
  	__asm__ __volatile__ (
  "1:	ldsw		[%2], %0\n"
@@ -3328,7 +3328,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/sparc/
 +"4:	 addcc		%0, 1, %1\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
-+"	tvs		%icc, 6\n"
++"	tvs		%%icc, 6\n"
 +#endif
 +
  "	cas		[%2], %0, %1\n"
@@ -3351,7 +3351,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/sparc/
 +"	addcc		%0, 1, %1\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
-+"	tvs		%icc, 6\n"
++"	tvs		%%icc, 6\n"
 +#endif
 +
  "	cas		[%2], %0, %1\n"
@@ -3365,7 +3365,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/sparc/
 +"	subcc	%0, 1, %1\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
-+"	tvs		%icc, 6\n"
++"	tvs	%%icc, 6\n"
 +#endif
 +
  "	cas	[%2], %0, %1\n"
@@ -8492,7 +8492,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/ke
  
 diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/kernel/acpi/wakeup_32.S linux-2.6.31.1-pax/arch/x86/kernel/acpi/wakeup_32.S
 --- linux-2.6.31.1/arch/x86/kernel/acpi/wakeup_32.S	2009-06-10 08:46:16.000000000 +0200
-+++ linux-2.6.31.1-pax/arch/x86/kernel/acpi/wakeup_32.S	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31.1-pax/arch/x86/kernel/acpi/wakeup_32.S	2009-10-06 23:53:06.000000000 +0200
 @@ -30,13 +30,11 @@ wakeup_pmode_return:
  	# and restore the stack ... but you need gdt for this to work
  	movl	saved_context_esp, %esp
@@ -15585,7 +15585,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  			(unsigned long)(&__init_end));
 diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm/init_32.c linux-2.6.31.1-pax/arch/x86/mm/init_32.c
 --- linux-2.6.31.1/arch/x86/mm/init_32.c	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.1-pax/arch/x86/mm/init_32.c	2009-09-16 09:34:52.000000000 +0200
++++ linux-2.6.31.1-pax/arch/x86/mm/init_32.c	2009-10-06 23:49:47.000000000 +0200
 @@ -51,6 +51,7 @@
  #include <asm/cacheflush.h>
  #include <asm/page_types.h>
@@ -15684,7 +15684,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  		for (; (pmd_idx < PTRS_PER_PMD) && (vaddr != end);
  							pmd++, pmd_idx++) {
  			pte = page_table_kmap_check(one_page_table_init(pmd),
-@@ -223,11 +215,23 @@ page_table_range_init(unsigned long star
+@@ -223,11 +215,28 @@ page_table_range_init(unsigned long star
  	}
  }
  
@@ -15706,13 +15706,18 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
 +	     end <= ktla_ktva((unsigned long)_stext)) &&
 +	    (start > ktla_ktva((unsigned long)_einittext) ||
 +	     end <= ktla_ktva((unsigned long)_sinittext)) &&
++
++#ifdef CONFIG_ACPI_SLEEP
++	    (start > (unsigned long)__va(acpi_wakeup_address) + 0x4000 || end <= (unsigned long)__va(acpi_wakeup_address)) &&
++#endif
++
 +	    (start > (unsigned long)__va(0xfffff) || end <= (unsigned long)__va(0xc0000)))
 +		return 0;
 +	return 1;
  }
  
  /*
-@@ -243,9 +247,10 @@ kernel_physical_mapping_init(unsigned lo
+@@ -243,9 +252,10 @@ kernel_physical_mapping_init(unsigned lo
  	int use_pse = page_size_mask == (1<<PG_LEVEL_2M);
  	unsigned long start_pfn, end_pfn;
  	pgd_t *pgd_base = swapper_pg_dir;
@@ -15724,7 +15729,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  	pmd_t *pmd;
  	pte_t *pte;
  	unsigned pages_2m, pages_4k;
-@@ -278,8 +283,13 @@ repeat:
+@@ -278,8 +288,13 @@ repeat:
  	pfn = start_pfn;
  	pgd_idx = pgd_index((pfn<<PAGE_SHIFT) + PAGE_OFFSET);
  	pgd = pgd_base + pgd_idx;
@@ -15740,7 +15745,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  
  		if (pfn >= end_pfn)
  			continue;
-@@ -291,14 +301,13 @@ repeat:
+@@ -291,14 +306,13 @@ repeat:
  #endif
  		for (; pmd_idx < PTRS_PER_PMD && pfn < end_pfn;
  		     pmd++, pmd_idx++) {
@@ -15756,7 +15761,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  				pgprot_t prot = PAGE_KERNEL_LARGE;
  				/*
  				 * first pass will use the same initial
-@@ -308,11 +317,7 @@ repeat:
+@@ -308,11 +322,7 @@ repeat:
  					__pgprot(PTE_IDENT_ATTR |
  						 _PAGE_PSE);
  
@@ -15769,7 +15774,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  					prot = PAGE_KERNEL_LARGE_EXEC;
  
  				pages_2m++;
-@@ -329,7 +334,7 @@ repeat:
+@@ -329,7 +339,7 @@ repeat:
  			pte_ofs = pte_index((pfn<<PAGE_SHIFT) + PAGE_OFFSET);
  			pte += pte_ofs;
  			for (; pte_ofs < PTRS_PER_PTE && pfn < end_pfn;
@@ -15778,7 +15783,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  				pgprot_t prot = PAGE_KERNEL;
  				/*
  				 * first pass will use the same initial
-@@ -337,7 +342,7 @@ repeat:
+@@ -337,7 +347,7 @@ repeat:
  				 */
  				pgprot_t init_prot = __pgprot(PTE_IDENT_ATTR);
  
@@ -15787,7 +15792,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  					prot = PAGE_KERNEL_EXEC;
  
  				pages_4k++;
-@@ -489,7 +494,7 @@ void __init native_pagetable_setup_start
+@@ -489,7 +499,7 @@ void __init native_pagetable_setup_start
  
  		pud = pud_offset(pgd, va);
  		pmd = pmd_offset(pud, va);
@@ -15796,7 +15801,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  			break;
  
  		pte = pte_offset_kernel(pmd, va);
-@@ -541,9 +546,7 @@ void __init early_ioremap_page_table_ran
+@@ -541,9 +551,7 @@ void __init early_ioremap_page_table_ran
  
  static void __init pagetable_init(void)
  {
@@ -15807,7 +15812,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  }
  
  #ifdef CONFIG_ACPI_SLEEP
-@@ -551,12 +554,12 @@ static void __init pagetable_init(void)
+@@ -551,12 +559,12 @@ static void __init pagetable_init(void)
   * ACPI suspend needs this for resume, because things like the intel-agp
   * driver might have split up a kernel 4MB mapping.
   */
@@ -15822,7 +15827,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  }
  #else /* !CONFIG_ACPI_SLEEP */
  static inline void save_pg_dir(void)
-@@ -588,7 +591,7 @@ void zap_low_mappings(bool early)
+@@ -588,7 +596,7 @@ void zap_low_mappings(bool early)
  		flush_tlb_all();
  }
  
@@ -15831,7 +15836,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  EXPORT_SYMBOL_GPL(__supported_pte_mask);
  
  /* user-defined highmem size */
-@@ -883,7 +886,7 @@ void __init mem_init(void)
+@@ -883,7 +891,7 @@ void __init mem_init(void)
  	set_highmem_pages_init();
  
  	codesize =  (unsigned long) &_etext - (unsigned long) &_text;
@@ -15840,7 +15845,7 @@ diff -NurpX linux-2.6.31.1-pax/Documentation/dontdiff linux-2.6.31.1/arch/x86/mm
  	initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
  
  	kclist_add(&kcore_mem, __va(0), max_low_pfn << PAGE_SHIFT);
-@@ -929,10 +932,10 @@ void __init mem_init(void)
+@@ -929,10 +937,10 @@ void __init mem_init(void)
  		((unsigned long)&__init_end -
  		 (unsigned long)&__init_begin) >> 10,
  
