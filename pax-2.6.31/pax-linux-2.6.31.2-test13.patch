@@ -1215,6 +1215,18 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/ia64/k
  				goto full_search;
  			}
  			return -ENOMEM;
+diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/ia64/kernel/vmlinux.lds.S linux-2.6.31.2-pax/arch/ia64/kernel/vmlinux.lds.S
+--- linux-2.6.31.2/arch/ia64/kernel/vmlinux.lds.S	2009-06-10 08:46:04.000000000 +0200
++++ linux-2.6.31.2-pax/arch/ia64/kernel/vmlinux.lds.S	2009-10-09 00:26:07.000000000 +0200
+@@ -245,7 +245,7 @@ SECTIONS
+   /* Per-cpu data: */
+   . = ALIGN(PERCPU_PAGE_SIZE);
+   PERCPU_VADDR(PERCPU_ADDR, :percpu)
+-  __phys_per_cpu_start = __per_cpu_load;
++  __phys_per_cpu_start = per_cpu_load;
+   . = __phys_per_cpu_start + PERCPU_PAGE_SIZE;	/* ensure percpu data fits
+   						 * into percpu page size
+ 						 */
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/ia64/mm/fault.c linux-2.6.31.2-pax/arch/ia64/mm/fault.c
 --- linux-2.6.31.2/arch/ia64/mm/fault.c	2009-09-10 19:40:47.000000000 +0200
 +++ linux-2.6.31.2-pax/arch/ia64/mm/fault.c	2009-09-10 19:43:33.000000000 +0200
@@ -4976,7 +4988,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/bo
  	printf(".section \".rodata.compressed\",\"a\",@progbits\n");
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/boot/compressed/relocs.c linux-2.6.31.2-pax/arch/x86/boot/compressed/relocs.c
 --- linux-2.6.31.2/arch/x86/boot/compressed/relocs.c	2009-06-10 08:46:14.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/boot/compressed/relocs.c	2009-09-23 23:46:04.000000000 +0200
++++ linux-2.6.31.2-pax/arch/x86/boot/compressed/relocs.c	2009-10-08 23:34:53.000000000 +0200
 @@ -10,8 +10,11 @@
  #define USE_BSD
  #include <endian.h>
@@ -8369,6 +8381,17 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/in
  		cycle_t (*vread)(void);
  		cycle_t	cycle_last;
  		cycle_t	mask;
+diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/include/asm/vmi.h linux-2.6.31.2-pax/arch/x86/include/asm/vmi.h
+--- linux-2.6.31.2/arch/x86/include/asm/vmi.h	2008-12-25 12:13:18.000000000 +0100
++++ linux-2.6.31.2-pax/arch/x86/include/asm/vmi.h	2009-10-09 00:57:31.000000000 +0200
+@@ -191,6 +191,7 @@ struct vrom_header {
+ 	u8      reserved[96];   /* Reserved for headers */
+ 	char    vmi_init[8];    /* VMI_Init jump point */
+ 	char    get_reloc[8];   /* VMI_GetRelocationInfo jump point */
++	char    rom_data[8048];	/* rest of the option ROM */
+ } __attribute__((packed));
+ 
+ struct pnp_header {
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/include/asm/vsyscall.h linux-2.6.31.2-pax/arch/x86/include/asm/vsyscall.h
 --- linux-2.6.31.2/arch/x86/include/asm/vsyscall.h	2008-12-25 12:13:18.000000000 +0100
 +++ linux-2.6.31.2-pax/arch/x86/include/asm/vsyscall.h	2009-09-10 19:43:33.000000000 +0200
@@ -9696,8 +9719,8 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	/* Reserve INITRD */
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/kernel/head_32.S linux-2.6.31.2-pax/arch/x86/kernel/head_32.S
 --- linux-2.6.31.2/arch/x86/kernel/head_32.S	2009-09-27 15:04:31.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/kernel/head_32.S	2009-09-27 15:05:21.000000000 +0200
-@@ -19,6 +19,7 @@
++++ linux-2.6.31.2-pax/arch/x86/kernel/head_32.S	2009-10-07 23:15:17.000000000 +0200
+@@ -19,10 +19,17 @@
  #include <asm/setup.h>
  #include <asm/processor-flags.h>
  #include <asm/percpu.h>
@@ -9705,7 +9728,17 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  /* Physical address */
  #define pa(X) ((X) - __PAGE_OFFSET)
-@@ -52,11 +53,7 @@
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++#define ta(X) (X)
++#else
++#define ta(X) ((X) - __PAGE_OFFSET)
++#endif
++
+ /*
+  * References to members of the new_cpu_data structure.
+  */
+@@ -52,11 +59,7 @@
   * and small than max_low_pfn, otherwise will waste some page table entries
   */
  
@@ -9718,7 +9751,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  /* Enough space to fit pagetables for the low memory linear map */
  MAPPING_BEYOND_END = \
-@@ -73,6 +70,12 @@ INIT_MAP_SIZE = PAGE_TABLE_SIZE(KERNEL_P
+@@ -73,6 +76,12 @@ INIT_MAP_SIZE = PAGE_TABLE_SIZE(KERNEL_P
  RESERVE_BRK(pagetables, INIT_MAP_SIZE)
  
  /*
@@ -9731,7 +9764,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
   * 32-bit kernel entrypoint; only used by the boot CPU.  On entry,
   * %esi points to the real-mode code as a 32-bit pointer.
   * CS and DS must be 4 GB flat segments, but we don't depend on
-@@ -80,6 +83,13 @@ RESERVE_BRK(pagetables, INIT_MAP_SIZE)
+@@ -80,6 +89,13 @@ RESERVE_BRK(pagetables, INIT_MAP_SIZE)
   * can.
   */
  .section .text.head,"ax",@progbits
@@ -9745,7 +9778,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  ENTRY(startup_32)
  	/* test KEEP_SEGMENTS flag to see if the bootloader is asking
  		us to not reload segments */
-@@ -97,6 +107,48 @@ ENTRY(startup_32)
+@@ -97,6 +113,52 @@ ENTRY(startup_32)
  	movl %eax,%gs
  2:
  
@@ -9772,15 +9805,19 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	movl $pa(boot_gdt),%edi
-+	movl $__LOAD_PHYSICAL_ADDR + __PAGE_OFFSET,%eax
++	movl $__LOAD_PHYSICAL_ADDR,%eax
 +	movw %ax,__BOOT_CS + 2(%edi)
 +	rorl $16,%eax
 +	movb %al,__BOOT_CS + 4(%edi)
 +	movb %ah,__BOOT_CS + 7(%edi)
 +	rorl $16,%eax
 +
++	ljmp $(__BOOT_CS),$1f
++1:
++
 +	movl $NR_CPUS,%ecx
 +	movl $pa(cpu_gdt_table),%edi
++	addl $__PAGE_OFFSET,%eax
 +1:
 +	movw %ax,__KERNEL_CS + 2(%edi)
 +	rorl $16,%eax
@@ -9794,7 +9831,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  /*
   * Clear BSS first so that there are no surprises...
   */
-@@ -140,9 +192,7 @@ ENTRY(startup_32)
+@@ -140,9 +202,7 @@ ENTRY(startup_32)
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -9805,20 +9842,20 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -154,9 +204,9 @@ WEAK(xen_entry)
+@@ -154,9 +214,9 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
 -	.long default_entry		/* normal x86/PC */
 -	.long lguest_entry		/* lguest hypervisor */
 -	.long xen_entry			/* Xen hypervisor */
-+	.long pa(default_entry)		/* normal x86/PC */
-+	.long pa(lguest_entry)		/* lguest hypervisor */
-+	.long pa(xen_entry)		/* Xen hypervisor */
++	.long ta(default_entry)		/* normal x86/PC */
++	.long ta(lguest_entry)		/* lguest hypervisor */
++	.long ta(xen_entry)		/* Xen hypervisor */
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #endif /* CONFIG_PARAVIRT */
-@@ -217,8 +267,11 @@ default_entry:
+@@ -217,8 +277,11 @@ default_entry:
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -9832,7 +9869,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -248,8 +301,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -248,8 +311,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -9846,7 +9883,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  #endif
  	jmp 3f
  /*
-@@ -296,6 +352,7 @@ ENTRY(startup_32_smp)
+@@ -296,6 +362,7 @@ ENTRY(startup_32_smp)
  	orl %edx,%eax
  	movl %eax,%cr4
  
@@ -9854,7 +9891,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	btl $5, %eax		# check if PAE is enabled
  	jnc 6f
  
-@@ -311,13 +368,17 @@ ENTRY(startup_32_smp)
+@@ -311,13 +378,17 @@ ENTRY(startup_32_smp)
  	jnc 6f
  
  	/* Setup EFER (Extended Feature Enable Register) */
@@ -9873,7 +9910,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  6:
  
  /*
-@@ -343,9 +404,7 @@ ENTRY(startup_32_smp)
+@@ -343,9 +414,7 @@ ENTRY(startup_32_smp)
  
  #ifdef CONFIG_SMP
  	cmpb $0, ready
@@ -9884,7 +9921,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  #endif /* CONFIG_SMP */
  
  /*
-@@ -423,7 +482,7 @@ is386:	movl $2,%ecx		# set MP
+@@ -423,7 +492,7 @@ is386:	movl $2,%ecx		# set MP
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
  
@@ -9893,7 +9930,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	movl %eax,%ds
  	movl %eax,%es
  
-@@ -437,8 +496,11 @@ is386:	movl $2,%ecx		# set MP
+@@ -437,8 +506,11 @@ is386:	movl $2,%ecx		# set MP
  	 */
  	cmpb $0,ready
  	jne 1f
@@ -9906,7 +9943,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	movw %cx, 8 * GDT_ENTRY_STACK_CANARY + 2(%eax)
  	shrl $16, %ecx
  	movb %cl, 8 * GDT_ENTRY_STACK_CANARY + 4(%eax)
-@@ -456,10 +518,6 @@ is386:	movl $2,%ecx		# set MP
+@@ -456,10 +528,6 @@ is386:	movl $2,%ecx		# set MP
  #ifdef CONFIG_SMP
  	movb ready, %cl
  	movb $1, ready
@@ -9917,7 +9954,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  #endif /* CONFIG_SMP */
  	jmp *(initial_code)
  
-@@ -545,22 +603,22 @@ early_page_fault:
+@@ -545,22 +613,22 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
@@ -9945,7 +9982,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -568,8 +626,11 @@ hlt_loop:
+@@ -568,8 +636,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -9958,7 +9995,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -578,9 +639,6 @@ ignore_int:
+@@ -578,9 +649,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -9968,7 +10005,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -607,27 +665,37 @@ ENTRY(initial_code)
+@@ -607,27 +675,37 @@ ENTRY(initial_code)
  /*
   * BSS section
   */
@@ -10011,7 +10048,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -650,11 +718,12 @@ ENTRY(swapper_pg_dir)
+@@ -650,11 +728,12 @@ ENTRY(swapper_pg_dir)
  
  .data
  ENTRY(stack_start)
@@ -10025,7 +10062,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  early_recursion_flag:
  	.long 0
  
-@@ -690,7 +759,7 @@ fault_msg:
+@@ -690,7 +769,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -10034,7 +10071,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -701,7 +770,7 @@ idt_descr:
+@@ -701,7 +780,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -10043,7 +10080,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -710,5 +779,59 @@ ENTRY(early_gdt_descr)
+@@ -710,5 +789,59 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -11877,6 +11914,31 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	set_tls_desc(p, idx, &info, 1);
  
  	return 0;
+diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/kernel/trampoline_32.S linux-2.6.31.2-pax/arch/x86/kernel/trampoline_32.S
+--- linux-2.6.31.2/arch/x86/kernel/trampoline_32.S	2009-06-10 08:46:21.000000000 +0200
++++ linux-2.6.31.2-pax/arch/x86/kernel/trampoline_32.S	2009-10-07 23:37:04.000000000 +0200
+@@ -31,6 +31,12 @@
+ #include <asm/segment.h>
+ #include <asm/page_types.h>
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++#define ta(X) (X)
++#else
++#define ta(X) ((X) - __PAGE_OFFSET)
++#endif
++
+ /* We can free up trampoline after bootup if cpu hotplug is not supported. */
+ #ifndef CONFIG_HOTPLUG_CPU
+ .section ".cpuinit.data","aw",@progbits
+@@ -64,7 +70,7 @@ r_base = .
+ 	inc	%ax		# protected mode (PE) bit
+ 	lmsw	%ax		# into protected mode
+ 	# flush prefetch and jump to startup_32_smp in arch/i386/kernel/head.S
+-	ljmpl	$__BOOT_CS, $(startup_32_smp-__PAGE_OFFSET)
++	ljmpl	$__BOOT_CS, $ta(startup_32_smp)
+ 
+ 	# These need to be in the same 64K segment as the above;
+ 	# hence we don't use the boot_gdt_descr defined in head.S
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/kernel/traps.c linux-2.6.31.2-pax/arch/x86/kernel/traps.c
 --- linux-2.6.31.2/arch/x86/kernel/traps.c	2009-09-10 19:41:13.000000000 +0200
 +++ linux-2.6.31.2-pax/arch/x86/kernel/traps.c	2009-09-10 19:43:33.000000000 +0200
@@ -12076,8 +12138,39 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  		tsk->thread.sysenter_cs = 0;
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/kernel/vmi_32.c linux-2.6.31.2-pax/arch/x86/kernel/vmi_32.c
 --- linux-2.6.31.2/arch/x86/kernel/vmi_32.c	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/kernel/vmi_32.c	2009-09-10 19:43:33.000000000 +0200
-@@ -102,18 +102,43 @@ static unsigned patch_internal(int call,
++++ linux-2.6.31.2-pax/arch/x86/kernel/vmi_32.c	2009-10-09 09:18:43.000000000 +0200
+@@ -44,12 +44,12 @@ typedef u32 __attribute__((regparm(1))) 
+ typedef u64 __attribute__((regparm(2))) (VROMLONGFUNC)(int);
+ 
+ #define call_vrom_func(rom,func) \
+-   (((VROMFUNC *)(rom->func))())
++   (((VROMFUNC *)(ktva_ktla(rom.func)))())
+ 
+ #define call_vrom_long_func(rom,func,arg) \
+-   (((VROMLONGFUNC *)(rom->func)) (arg))
++   (((VROMLONGFUNC *)(ktva_ktla(rom.func))) (arg))
+ 
+-static struct vrom_header *vmi_rom;
++static struct vrom_header vmi_rom __attribute((__section__(".vmi.rom"), __aligned__(PAGE_SIZE)));
+ static int disable_pge;
+ static int disable_pse;
+ static int disable_sep;
+@@ -94,7 +94,13 @@ struct vmi_timer_ops vmi_timer_ops;
+ static inline void patch_offset(void *insnbuf,
+ 				unsigned long ip, unsigned long dest)
+ {
+-        *(unsigned long *)(insnbuf+1) = dest-ip-5;
++
++#ifdef CONFIG_PAX_KERNEXEC
++	if (dest < (unsigned long)&vmi_rom)
++		printk("PAX: vmi patch trouble ahead: %08lx->%08lx\n", ip, dest);
++#endif
++
++	*(unsigned long *)(insnbuf+1) = ktva_ktla(dest)-ip-5;
+ }
+ 
+ static unsigned patch_internal(int call, unsigned len, void *insnbuf,
+@@ -102,18 +108,43 @@ static unsigned patch_internal(int call,
  {
  	u64 reloc;
  	struct vmi_relocation_info *const rel = (struct vmi_relocation_info *)&reloc;
@@ -12121,7 +12214,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  			return 5;
  
  		case VMI_RELOCATION_NOP:
-@@ -404,13 +429,13 @@ static void vmi_set_pud(pud_t *pudp, pud
+@@ -404,13 +435,13 @@ static void vmi_set_pud(pud_t *pudp, pud
  
  static void vmi_pte_clear(struct mm_struct *mm, unsigned long addr, pte_t *ptep)
  {
@@ -12137,7 +12230,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	vmi_ops.set_pte(pte, (pte_t *)pmd, VMI_PAGE_PD);
  }
  #endif
-@@ -438,8 +463,8 @@ vmi_startup_ipi_hook(int phys_apicid, un
+@@ -438,8 +469,8 @@ vmi_startup_ipi_hook(int phys_apicid, un
  	ap.ss = __KERNEL_DS;
  	ap.esp = (unsigned long) start_esp;
  
@@ -12148,17 +12241,76 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	ap.fs = __KERNEL_PERCPU;
  	ap.gs = __KERNEL_STACK_CANARY;
  
-@@ -640,12 +665,20 @@ static inline int __init activate_vmi(vo
- 	u64 reloc;
+@@ -498,6 +529,10 @@ static inline int __init check_vmi_rom(s
+ 		return 0;
+ 	if (rom->vrom_signature != VMI_SIGNATURE)
+ 		return 0;
++	if (rom->rom_length * 512 > sizeof(*rom)) {
++		printk(KERN_WARNING "PAX: VMI: ROM size too big: %x\n", rom->rom_length * 512);
++		return 0;
++	}
+ 	if (rom->api_version_maj != VMI_API_REV_MAJOR ||
+ 	    rom->api_version_min+1 < VMI_API_REV_MINOR+1) {
+ 		printk(KERN_WARNING "VMI: Found mismatched rom version %d.%d\n",
+@@ -562,7 +597,7 @@ static inline int __init probe_vmi_rom(v
+ 		struct vrom_header *romstart;
+ 		romstart = (struct vrom_header *)isa_bus_to_virt(base);
+ 		if (check_vmi_rom(romstart)) {
+-			vmi_rom = romstart;
++			vmi_rom = *romstart;
+ 			return 1;
+ 		}
+ 	}
+@@ -588,8 +623,14 @@ static void *vmi_get_function(int vmical
  	const struct vmi_relocation_info *rel = (struct vmi_relocation_info *)&reloc;
- 
+ 	reloc = call_vrom_long_func(vmi_rom, get_reloc,	vmicall);
+ 	BUG_ON(rel->type == VMI_RELOCATION_JUMP_REL);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	if (rel->eip < (unsigned char *)&vmi_rom)
++		printk("PAX: vmi get function trouble ahead: %d->%p\n", vmicall, rel->eip);
++#endif
++
+ 	if (rel->type == VMI_RELOCATION_CALL_REL)
+-		return (void *)rel->eip;
++		return (void *)ktva_ktla((unsigned long)rel->eip);
+ 	else
+ 		return NULL;
+ }
+@@ -603,6 +644,9 @@ static void *vmi_get_function(int vmical
+ do {								\
+ 	reloc = call_vrom_long_func(vmi_rom, get_reloc,		\
+ 				    VMI_CALL_##vmicall);	\
++	if (rel->eip < (unsigned char *)&vmi_rom)		\
++		printk("PAX: vmi para fill trouble ahead: %d->%p\n", VMI_CALL_##vmicall, rel->eip);\
++	rel->eip = (unsigned char *)ktva_ktla((unsigned long)rel->eip);\
+ 	if (rel->type == VMI_RELOCATION_CALL_REL) 		\
+ 		opname = (void *)rel->eip;			\
+ 	else if (rel->type == VMI_RELOCATION_NOP) 		\
+@@ -625,6 +669,9 @@ do {								\
+ 	reloc = call_vrom_long_func(vmi_rom, get_reloc,		\
+ 				    VMI_CALL_##vmicall);	\
+ 	BUG_ON(rel->type == VMI_RELOCATION_JUMP_REL);		\
++	if (rel->eip < (unsigned char *)&vmi_rom)		\
++		printk("PAX: vmi para wrap trouble ahead: %d->%p\n", VMI_CALL_##vmicall, rel->eip);\
++	rel->eip = (unsigned char *)ktva_ktla((unsigned long)rel->eip);\
+ 	if (rel->type == VMI_RELOCATION_CALL_REL) {		\
+ 		opname = wrapper;				\
+ 		vmi_ops.cache = (void *)rel->eip;		\
+@@ -638,7 +685,11 @@ static inline int __init activate_vmi(vo
+ {
+ 	short kernel_cs;
+ 	u64 reloc;
+-	const struct vmi_relocation_info *rel = (struct vmi_relocation_info *)&reloc;
++	struct vmi_relocation_info *rel = (struct vmi_relocation_info *)&reloc;
++
 +#ifdef CONFIG_PAX_KERNEXEC
 +	unsigned long cr0;
 +#endif
-+
+ 
  	if (call_vrom_func(vmi_rom, vmi_init) != 0) {
  		printk(KERN_ERR "VMI ROM failed to initialize!");
- 		return 0;
+@@ -646,6 +697,10 @@ static inline int __init activate_vmi(vo
  	}
  	savesegment(cs, kernel_cs);
  
@@ -12169,7 +12321,16 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	pv_info.paravirt_enabled = 1;
  	pv_info.kernel_rpl = kernel_cs & SEGMENT_RPL_MASK;
  	pv_info.name = "vmi";
-@@ -836,6 +869,10 @@ static inline int __init activate_vmi(vo
+@@ -807,7 +862,7 @@ static inline int __init activate_vmi(vo
+ 	 */
+ 	reloc = call_vrom_long_func(vmi_rom, get_reloc, VMI_CALL_GetCycleFrequency);
+ 	if (!disable_vmi_timer && rel->type != VMI_RELOCATION_NONE) {
+-		vmi_timer_ops.get_cycle_frequency = (void *)rel->eip;
++		vmi_timer_ops.get_cycle_frequency = (void *)ktva_ktla((unsigned long)rel->eip);
+ 		vmi_timer_ops.get_cycle_counter =
+ 			vmi_get_function(VMI_CALL_GetCycleCounter);
+ 		vmi_timer_ops.get_wallclock =
+@@ -836,6 +891,10 @@ static inline int __init activate_vmi(vo
  
  	para_fill(pv_irq_ops.safe_halt, Halt);
  
@@ -12180,9 +12341,39 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	/*
  	 * Alternative instruction rewriting doesn't happen soon enough
  	 * to convert VMI_IRET to a call instead of a jump; so we have
+@@ -853,16 +912,16 @@ static inline int __init activate_vmi(vo
+ 
+ void __init vmi_init(void)
+ {
+-	if (!vmi_rom)
++	if (!vmi_rom.rom_signature)
+ 		probe_vmi_rom();
+ 	else
+-		check_vmi_rom(vmi_rom);
++		check_vmi_rom(&vmi_rom);
+ 
+ 	/* In case probing for or validating the ROM failed, basil */
+-	if (!vmi_rom)
++	if (!vmi_rom.rom_signature)
+ 		return;
+ 
+-	reserve_top_address(-vmi_rom->virtual_top);
++	reserve_top_address(-vmi_rom.virtual_top);
+ 
+ #ifdef CONFIG_X86_IO_APIC
+ 	/* This is virtual hardware; timer routing is wired correctly */
+@@ -874,7 +933,7 @@ void __init vmi_activate(void)
+ {
+ 	unsigned long flags;
+ 
+-	if (!vmi_rom)
++	if (!vmi_rom.rom_signature)
+ 		return;
+ 
+ 	local_irq_save(flags);
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/kernel/vmlinux.lds.S linux-2.6.31.2-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-2.6.31.2/arch/x86/kernel/vmlinux.lds.S	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/kernel/vmlinux.lds.S	2009-09-23 23:47:26.000000000 +0200
++++ linux-2.6.31.2-pax/arch/x86/kernel/vmlinux.lds.S	2009-10-09 00:45:08.000000000 +0200
 @@ -26,6 +26,22 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -12206,7 +12397,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  #undef i386     /* in case the preprocessor is a 32bit one */
  
-@@ -34,46 +50,52 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
+@@ -34,46 +50,53 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
  #ifdef CONFIG_X86_32
  OUTPUT_ARCH(i386)
  ENTRY(phys_startup_32)
@@ -12222,6 +12413,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  PHDRS {
  	text PT_LOAD FLAGS(5);          /* R_E */
 -	data PT_LOAD FLAGS(7);          /* RWE */
++	vmi PT_LOAD FLAGS(5);           /* R_E */
 +	rodata PT_LOAD FLAGS(4);        /* R__ */
 +	data PT_LOAD FLAGS(6);          /* RW_ */
  #ifdef CONFIG_X86_64
@@ -12274,19 +12466,30 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  #ifdef CONFIG_X86_32
  		/* not really needed, already page aligned */
  		. = ALIGN(PAGE_SIZE);
-@@ -92,7 +114,10 @@ SECTIONS
- 		_etext = .;
+@@ -88,11 +111,19 @@ SECTIONS
+ 		IRQENTRY_TEXT
+ 		*(.fixup)
+ 		*(.gnu.warning)
+-		/* End of text section */
+-		_etext = .;
  	} :text = 0x9090
  
 -	NOTES :text :note
 +	. += __KERNEL_TEXT_OFFSET;
 +
 +	. = ALIGN(PAGE_SIZE);
++	.vmi.rom : AT(ADDR(.vmi.rom) - LOAD_OFFSET) {
++		*(.vmi.rom)
++		/* End of text section */
++		_etext = . - __KERNEL_TEXT_OFFSET;
++	} :vmi
++
++	. = ALIGN(PAGE_SIZE);
 +	NOTES :rodata :note
  
  	/* Exception table */
  	. = ALIGN(16);
-@@ -100,22 +125,53 @@ SECTIONS
+@@ -100,22 +131,53 @@ SECTIONS
  		__start___ex_table = .;
  		*(__ex_table)
  		__stop___ex_table = .;
@@ -12344,7 +12547,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  		*(.data.idt)
-@@ -182,12 +238,6 @@ SECTIONS
+@@ -182,12 +244,6 @@ SECTIONS
  	}
  	vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -12357,7 +12560,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	.vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3)) {
  		*(.vsyscall_3)
  	}
-@@ -205,12 +255,19 @@ SECTIONS
+@@ -205,12 +261,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -12380,7 +12583,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -219,18 +276,26 @@ SECTIONS
+@@ -219,18 +282,26 @@ SECTIONS
  	PERCPU_VADDR(0, :percpu)
  #endif
  
@@ -12413,7 +12616,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  	. = ALIGN(16);
  	.init.setup : AT(ADDR(.init.setup) - LOAD_OFFSET) {
-@@ -276,14 +341,6 @@ SECTIONS
+@@ -276,14 +347,6 @@ SECTIONS
  		*(.altinstr_replacement)
  	}
  
@@ -12428,7 +12631,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	.exit.data : AT(ADDR(.exit.data) - LOAD_OFFSET) {
  		EXIT_DATA
  	}
-@@ -297,7 +354,7 @@ SECTIONS
+@@ -297,7 +360,7 @@ SECTIONS
  	}
  #endif
  
@@ -12437,7 +12640,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	PERCPU(PAGE_SIZE)
  #endif
  
-@@ -320,12 +377,6 @@ SECTIONS
+@@ -320,12 +383,6 @@ SECTIONS
  		. = ALIGN(PAGE_SIZE);
  	}
  
@@ -12450,7 +12653,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -341,6 +392,7 @@ SECTIONS
+@@ -341,6 +398,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -12458,7 +12661,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  		__brk_limit = .;
  	}
  
-@@ -369,13 +421,12 @@ SECTIONS
+@@ -369,13 +427,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = per_cpu__##x + __per_cpu_load
@@ -15585,7 +15788,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  			(unsigned long)(&__init_end));
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm/init_32.c linux-2.6.31.2-pax/arch/x86/mm/init_32.c
 --- linux-2.6.31.2/arch/x86/mm/init_32.c	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/mm/init_32.c	2009-10-06 23:49:47.000000000 +0200
++++ linux-2.6.31.2-pax/arch/x86/mm/init_32.c	2009-10-09 09:02:20.000000000 +0200
 @@ -51,6 +51,7 @@
  #include <asm/cacheflush.h>
  #include <asm/page_types.h>
@@ -15684,7 +15887,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  		for (; (pmd_idx < PTRS_PER_PMD) && (vaddr != end);
  							pmd++, pmd_idx++) {
  			pte = page_table_kmap_check(one_page_table_init(pmd),
-@@ -223,11 +215,28 @@ page_table_range_init(unsigned long star
+@@ -223,11 +215,34 @@ page_table_range_init(unsigned long star
  	}
  }
  
@@ -15696,8 +15899,14 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
 -	return 0;
 +	unsigned long etext;
 +
-+#if defined(CONFIG_MODULES) && defined(CONFIG_PAX_KERNEXEC)
++#ifdef CONFIG_PAX_KERNEXEC
++#ifdef CONFIG_VMI
++	etext = ktva_ktla(0xffffffff);
++#elif defined(CONFIG_MODULES)
 +	etext = ktva_ktla((unsigned long)&MODULES_EXEC_END);
++#else
++	etext = (unsigned long)&_etext;
++#endif
 +#else
 +	etext = (unsigned long)&_etext;
 +#endif
@@ -15717,7 +15926,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  }
  
  /*
-@@ -243,9 +252,10 @@ kernel_physical_mapping_init(unsigned lo
+@@ -243,9 +258,10 @@ kernel_physical_mapping_init(unsigned lo
  	int use_pse = page_size_mask == (1<<PG_LEVEL_2M);
  	unsigned long start_pfn, end_pfn;
  	pgd_t *pgd_base = swapper_pg_dir;
@@ -15729,7 +15938,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  	pmd_t *pmd;
  	pte_t *pte;
  	unsigned pages_2m, pages_4k;
-@@ -278,8 +288,13 @@ repeat:
+@@ -278,8 +294,13 @@ repeat:
  	pfn = start_pfn;
  	pgd_idx = pgd_index((pfn<<PAGE_SHIFT) + PAGE_OFFSET);
  	pgd = pgd_base + pgd_idx;
@@ -15745,7 +15954,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  
  		if (pfn >= end_pfn)
  			continue;
-@@ -291,14 +306,13 @@ repeat:
+@@ -291,14 +312,13 @@ repeat:
  #endif
  		for (; pmd_idx < PTRS_PER_PMD && pfn < end_pfn;
  		     pmd++, pmd_idx++) {
@@ -15761,7 +15970,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  				pgprot_t prot = PAGE_KERNEL_LARGE;
  				/*
  				 * first pass will use the same initial
-@@ -308,11 +322,7 @@ repeat:
+@@ -308,11 +328,7 @@ repeat:
  					__pgprot(PTE_IDENT_ATTR |
  						 _PAGE_PSE);
  
@@ -15774,7 +15983,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  					prot = PAGE_KERNEL_LARGE_EXEC;
  
  				pages_2m++;
-@@ -329,7 +339,7 @@ repeat:
+@@ -329,7 +345,7 @@ repeat:
  			pte_ofs = pte_index((pfn<<PAGE_SHIFT) + PAGE_OFFSET);
  			pte += pte_ofs;
  			for (; pte_ofs < PTRS_PER_PTE && pfn < end_pfn;
@@ -15783,7 +15992,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  				pgprot_t prot = PAGE_KERNEL;
  				/*
  				 * first pass will use the same initial
-@@ -337,7 +347,7 @@ repeat:
+@@ -337,7 +353,7 @@ repeat:
  				 */
  				pgprot_t init_prot = __pgprot(PTE_IDENT_ATTR);
  
@@ -15792,7 +16001,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  					prot = PAGE_KERNEL_EXEC;
  
  				pages_4k++;
-@@ -489,7 +499,7 @@ void __init native_pagetable_setup_start
+@@ -489,7 +505,7 @@ void __init native_pagetable_setup_start
  
  		pud = pud_offset(pgd, va);
  		pmd = pmd_offset(pud, va);
@@ -15801,7 +16010,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  			break;
  
  		pte = pte_offset_kernel(pmd, va);
-@@ -541,9 +551,7 @@ void __init early_ioremap_page_table_ran
+@@ -541,9 +557,7 @@ void __init early_ioremap_page_table_ran
  
  static void __init pagetable_init(void)
  {
@@ -15812,7 +16021,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  }
  
  #ifdef CONFIG_ACPI_SLEEP
-@@ -551,12 +559,12 @@ static void __init pagetable_init(void)
+@@ -551,12 +565,12 @@ static void __init pagetable_init(void)
   * ACPI suspend needs this for resume, because things like the intel-agp
   * driver might have split up a kernel 4MB mapping.
   */
@@ -15827,7 +16036,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  }
  #else /* !CONFIG_ACPI_SLEEP */
  static inline void save_pg_dir(void)
-@@ -588,7 +596,7 @@ void zap_low_mappings(bool early)
+@@ -588,7 +602,7 @@ void zap_low_mappings(bool early)
  		flush_tlb_all();
  }
  
@@ -15836,7 +16045,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  EXPORT_SYMBOL_GPL(__supported_pte_mask);
  
  /* user-defined highmem size */
-@@ -883,7 +891,7 @@ void __init mem_init(void)
+@@ -883,7 +897,7 @@ void __init mem_init(void)
  	set_highmem_pages_init();
  
  	codesize =  (unsigned long) &_etext - (unsigned long) &_text;
@@ -15845,7 +16054,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  	initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
  
  	kclist_add(&kcore_mem, __va(0), max_low_pfn << PAGE_SHIFT);
-@@ -929,10 +937,10 @@ void __init mem_init(void)
+@@ -929,10 +943,10 @@ void __init mem_init(void)
  		((unsigned long)&__init_end -
  		 (unsigned long)&__init_begin) >> 10,
  
@@ -26485,13 +26694,17 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/include/lin
  #define VIDEO_TYPE_MDA		0x10	/* Monochrome Text Display	*/
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/include/linux/slab.h linux-2.6.31.2-pax/include/linux/slab.h
 --- linux-2.6.31.2/include/linux/slab.h	2009-09-10 19:42:46.000000000 +0200
-+++ linux-2.6.31.2-pax/include/linux/slab.h	2009-09-10 19:43:34.000000000 +0200
-@@ -82,10 +82,9 @@
++++ linux-2.6.31.2-pax/include/linux/slab.h	2009-10-08 21:04:22.000000000 +0200
+@@ -82,10 +82,13 @@
   * ZERO_SIZE_PTR can be passed to kfree though in the same way that NULL can.
   * Both make kfree a no-op.
   */
 -#define ZERO_SIZE_PTR ((void *)16)
-+#define ZERO_SIZE_PTR ((void *)-1024L)
++#define ZERO_SIZE_PTR				\
++({						\
++	BUILD_BUG_ON(!(MAX_ERRNO & ~PAGE_MASK));\
++	(void *)(-MAX_ERRNO-1L);		\
++})
  
 -#define ZERO_OR_NULL_PTR(x) ((unsigned long)(x) <= \
 -				(unsigned long)ZERO_SIZE_PTR)
@@ -26499,7 +26712,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/include/lin
  
  /*
   * struct kmem_cache related prototypes
-@@ -138,6 +137,7 @@ void * __must_check krealloc(const void 
+@@ -138,6 +141,7 @@ void * __must_check krealloc(const void 
  void kfree(const void *);
  void kzfree(const void *);
  size_t ksize(const void *);
@@ -26507,7 +26720,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/include/lin
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
-@@ -328,4 +328,37 @@ static inline void *kzalloc_node(size_t 
+@@ -328,4 +332,37 @@ static inline void *kzalloc_node(size_t 
  
  void __init kmem_cache_init_late(void);
  
@@ -27093,7 +27306,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/init/initra
  	next_state = Reset;
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/init/main.c linux-2.6.31.2-pax/init/main.c
 --- linux-2.6.31.2/init/main.c	2009-09-10 19:42:47.000000000 +0200
-+++ linux-2.6.31.2-pax/init/main.c	2009-09-27 01:52:14.000000000 +0200
++++ linux-2.6.31.2-pax/init/main.c	2009-10-07 21:39:24.000000000 +0200
 @@ -182,6 +182,35 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
