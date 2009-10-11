@@ -4988,7 +4988,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/bo
  	printf(".section \".rodata.compressed\",\"a\",@progbits\n");
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/boot/compressed/relocs.c linux-2.6.31.2-pax/arch/x86/boot/compressed/relocs.c
 --- linux-2.6.31.2/arch/x86/boot/compressed/relocs.c	2009-06-10 08:46:14.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/boot/compressed/relocs.c	2009-10-08 23:34:53.000000000 +0200
++++ linux-2.6.31.2-pax/arch/x86/boot/compressed/relocs.c	2009-10-11 21:01:13.000000000 +0200
 @@ -10,8 +10,11 @@
  #define USE_BSD
  #include <endian.h>
@@ -5150,7 +5150,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/bo
  		struct section *sec = &secs[i];
  
  		if (sec->shdr.sh_type != SHT_REL) {
-@@ -504,6 +548,19 @@ static void walk_relocs(void (*visit)(El
+@@ -504,6 +548,21 @@ static void walk_relocs(void (*visit)(El
  			if (sym->st_shndx == SHN_ABS) {
  				continue;
  			}
@@ -5160,6 +5160,8 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/bo
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
 +			/* Don't relocate actual code, they are relocated implicitly by the base address of KERNEL_CS */
++			if (!strcmp(sec_name(sym->st_shndx), ".module.text") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
++				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".init.text"))
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".exit.text"))
@@ -5170,7 +5172,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/bo
  			if (r_type == R_386_NONE || r_type == R_386_PC32) {
  				/*
  				 * NONE can be ignored and and PC relative
-@@ -541,7 +598,7 @@ static int cmp_relocs(const void *va, co
+@@ -541,7 +600,7 @@ static int cmp_relocs(const void *va, co
  
  static void emit_relocs(int as_text)
  {
@@ -5179,7 +5181,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/bo
  	/* Count how many relocations I have and allocate space for them. */
  	reloc_count = 0;
  	walk_relocs(count_reloc);
-@@ -634,6 +691,7 @@ int main(int argc, char **argv)
+@@ -634,6 +693,7 @@ int main(int argc, char **argv)
  			fname, strerror(errno));
  	}
  	read_ehdr(fp);
@@ -12629,7 +12631,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	local_irq_save(flags);
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/kernel/vmlinux.lds.S linux-2.6.31.2-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-2.6.31.2/arch/x86/kernel/vmlinux.lds.S	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/kernel/vmlinux.lds.S	2009-10-11 15:44:50.000000000 +0200
++++ linux-2.6.31.2-pax/arch/x86/kernel/vmlinux.lds.S	2009-10-11 18:36:17.000000000 +0200
 @@ -26,6 +26,22 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -12669,8 +12671,8 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  PHDRS {
  	text PT_LOAD FLAGS(5);          /* R_E */
 -	data PT_LOAD FLAGS(7);          /* RWE */
-+	module PT_LOAD FLAGS(5);        /* R_E */
 +	rodata PT_LOAD FLAGS(4);        /* R__ */
++	module PT_LOAD FLAGS(5);        /* R_E */
 +	data PT_LOAD FLAGS(6);          /* RW_ */
  #ifdef CONFIG_X86_64
 -	user PT_LOAD FLAGS(7);          /* RWE */
@@ -12722,7 +12724,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  #ifdef CONFIG_X86_32
  		/* not really needed, already page aligned */
  		. = ALIGN(PAGE_SIZE);
-@@ -88,11 +111,30 @@ SECTIONS
+@@ -88,11 +111,12 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -12733,30 +12735,12 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
 -	NOTES :text :note
 +	. += __KERNEL_TEXT_OFFSET;
 +
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_MODULES)
-+	. = ALIGN(PAGE_SIZE);
-+	.module.text : AT(ADDR(.module.text) - LOAD_OFFSET) {
-+		MODULES_EXEC_VADDR = .;
-+		BYTE(0)
-+		. += (8 * 1024 * 1024);
-+		. = ALIGN(PMD_SIZE);
-+		MODULES_EXEC_END = . - 1;
-+	} :module
-+#endif
-+
-+	. = ALIGN(PAGE_SIZE);
-+	.vmi.rom : AT(ADDR(.vmi.rom) - LOAD_OFFSET) {
-+		*(.vmi.rom)
-+		/* End of text section */
-+		_etext = . - __KERNEL_TEXT_OFFSET;
-+	} :module
-+
 +	. = ALIGN(PAGE_SIZE);
 +	NOTES :rodata :note
  
  	/* Exception table */
  	. = ALIGN(16);
-@@ -100,22 +142,42 @@ SECTIONS
+@@ -100,22 +124,55 @@ SECTIONS
  		__start___ex_table = .;
  		*(__ex_table)
  		__stop___ex_table = .;
@@ -12773,12 +12757,25 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
 +		*(.empty_zero_page)
 +		*(.swapper_pg_pmd)
 +		*(.swapper_pg_dir)
-+
-+#ifdef CONFIG_PAX_KERNEXEC
-+		. = ALIGN(PMD_SIZE);
++	}
 +#endif
 +
-+	}
++	. = ALIGN(PAGE_SIZE);
++	.vmi.rom : AT(ADDR(.vmi.rom) - LOAD_OFFSET) {
++		*(.vmi.rom)
++	} :module
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_MODULES)
++	. = ALIGN(PAGE_SIZE);
++	.module.text : AT(ADDR(.module.text) - LOAD_OFFSET) {
++		MODULES_EXEC_VADDR = .;
++		BYTE(0)
++		. += (8 * 1024 * 1024);
++		. = ALIGN(PMD_SIZE);
++		MODULES_EXEC_END = . - 1;
++		/* End of text section */
++		_etext = . - __KERNEL_TEXT_OFFSET;
++	} :module
 +#endif
 +
  	/* Data */
@@ -12803,7 +12800,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  		*(.data.idt)
-@@ -182,12 +244,6 @@ SECTIONS
+@@ -182,12 +239,6 @@ SECTIONS
  	}
  	vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -12816,7 +12813,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	.vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3)) {
  		*(.vsyscall_3)
  	}
-@@ -205,12 +261,19 @@ SECTIONS
+@@ -205,12 +256,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -12839,7 +12836,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -219,18 +282,26 @@ SECTIONS
+@@ -219,18 +277,26 @@ SECTIONS
  	PERCPU_VADDR(0, :percpu)
  #endif
  
@@ -12872,7 +12869,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  
  	. = ALIGN(16);
  	.init.setup : AT(ADDR(.init.setup) - LOAD_OFFSET) {
-@@ -276,14 +347,6 @@ SECTIONS
+@@ -276,14 +342,6 @@ SECTIONS
  		*(.altinstr_replacement)
  	}
  
@@ -12887,7 +12884,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	.exit.data : AT(ADDR(.exit.data) - LOAD_OFFSET) {
  		EXIT_DATA
  	}
-@@ -297,7 +360,7 @@ SECTIONS
+@@ -297,7 +355,7 @@ SECTIONS
  	}
  #endif
  
@@ -12896,7 +12893,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	PERCPU(PAGE_SIZE)
  #endif
  
-@@ -320,12 +383,6 @@ SECTIONS
+@@ -320,12 +378,6 @@ SECTIONS
  		. = ALIGN(PAGE_SIZE);
  	}
  
@@ -12909,7 +12906,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -341,6 +398,7 @@ SECTIONS
+@@ -341,6 +393,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -12917,7 +12914,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/ke
  		__brk_limit = .;
  	}
  
-@@ -369,13 +427,12 @@ SECTIONS
+@@ -369,13 +422,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = per_cpu__##x + __per_cpu_load
@@ -16039,7 +16036,7 @@ diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm
  			(unsigned long)(&__init_end));
 diff -NurpX linux-2.6.31.2-pax/Documentation/dontdiff linux-2.6.31.2/arch/x86/mm/init_32.c linux-2.6.31.2-pax/arch/x86/mm/init_32.c
 --- linux-2.6.31.2/arch/x86/mm/init_32.c	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.2-pax/arch/x86/mm/init_32.c	2009-10-11 15:34:05.000000000 +0200
++++ linux-2.6.31.2-pax/arch/x86/mm/init_32.c	2009-10-11 21:06:36.000000000 +0200
 @@ -51,6 +51,7 @@
  #include <asm/cacheflush.h>
  #include <asm/page_types.h>
