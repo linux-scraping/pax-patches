@@ -6647,7 +6647,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/in
  extern int iommu_pass_through;
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/include/asm/irqflags.h linux-2.6.31.6-pax/arch/x86/include/asm/irqflags.h
 --- linux-2.6.31.6/arch/x86/include/asm/irqflags.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.31.6-pax/arch/x86/include/asm/irqflags.h	2009-10-14 23:44:26.000000000 +0200
++++ linux-2.6.31.6-pax/arch/x86/include/asm/irqflags.h	2009-11-11 17:12:57.000000000 +0100
 @@ -147,6 +147,27 @@ static inline unsigned long __raw_local_
  #define INTERRUPT_RETURN		iret
  #define ENABLE_INTERRUPTS_SYSEXIT	sti; sysexit
@@ -6655,13 +6655,13 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/in
 +
 +/* PaX: special register usage in entry_32.S, beware */
 +#ifdef CONFIG_PAX_KERNEXEC
-+#define PAX_RESTORE_KERNEL	\
++#define PAX_EXIT_KERNEL		\
 +	bt $16, %esi;		\
 +	jc 1f;			\
 +	movl %esi, %cr0;	\
 +1:
 +
-+#define PAX_CLOSE_KERNEL	\
++#define PAX_ENTER_KERNEL	\
 +	movl %cr0, %esi;	\
 +	movl %esi, %edx;	\
 +	bts $16, %edx;		\
@@ -6669,8 +6669,8 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/in
 +	movl %edx, %cr0;	\
 +1:
 +#else
-+#define PAX_RESTORE_KERNEL
-+#define PAX_CLOSE_KERNEL
++#define PAX_EXIT_KERNEL
++#define PAX_ENTER_KERNEL
 +#endif
 +
  #endif
@@ -7085,7 +7085,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/in
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/include/asm/paravirt.h linux-2.6.31.6-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.31.6/arch/x86/include/asm/paravirt.h	2009-10-23 15:55:29.000000000 +0200
-+++ linux-2.6.31.6-pax/arch/x86/include/asm/paravirt.h	2009-10-15 22:22:56.000000000 +0200
++++ linux-2.6.31.6-pax/arch/x86/include/asm/paravirt.h	2009-11-11 17:15:05.000000000 +0100
 @@ -350,6 +350,12 @@ struct pv_mmu_ops {
  	   an mfn.  We can tell which is which from the index. */
  	void (*set_fixmap)(unsigned /* enum fixed_addresses */ idx,
@@ -7139,29 +7139,33 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/in
  #endif
  
  #define INTERRUPT_RETURN						\
-@@ -1695,6 +1716,27 @@ static inline unsigned long __raw_local_
+@@ -1695,6 +1716,31 @@ static inline unsigned long __raw_local_
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_usergs_sysret32))
  
  #ifdef CONFIG_X86_32
 +
 +#ifdef CONFIG_PAX_KERNEXEC
-+#define PAX_RESTORE_KERNEL					\
-+	bt $16, %esi;						\
-+	jc 1f;							\
-+	push %eax; push %ecx;					\
-+	movl %esi, %eax;					\
-+	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);	\
-+	pop %ecx; pop %eax;					\
++#define PAX_EXIT_KERNEL					\
++	bt $16, %esi;					\
++	jc 1f;						\
++	push %eax; push %ecx;				\
++	movl %esi, %eax;				\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
++	pop %ecx; pop %eax;				\
 +1:
 +
-+#define PAX_CLOSE_KERNEL					\
-+	push %eax; push %ecx;					\
-+	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_pax_close_kernel);	\
-+	movl %eax, %esi;					\
-+	pop %ecx; pop %eax
++#define PAX_ENTER_KERNEL				\
++	push %eax; push %ecx;				\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
++	movl %eax, %esi;				\
++	bts $16, %eax;					\
++	jc 1f;						\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
++1:							\
++	pop %ecx; pop %eax;
 +#else
-+#define PAX_RESTORE_KERNEL
-+#define PAX_CLOSE_KERNEL
++#define PAX_EXIT_KERNEL
++#define PAX_ENTER_KERNEL
 +#endif
 +
  #define GET_CR0_INTO_EAX				\
@@ -7342,7 +7346,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/in
  
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/include/asm/pgtable_32.h linux-2.6.31.6-pax/arch/x86/include/asm/pgtable_32.h
 --- linux-2.6.31.6/arch/x86/include/asm/pgtable_32.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.31.6-pax/arch/x86/include/asm/pgtable_32.h	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31.6-pax/arch/x86/include/asm/pgtable_32.h	2009-11-11 18:19:54.000000000 +0100
 @@ -26,8 +26,6 @@
  struct mm_struct;
  struct vm_area_struct;
@@ -7364,7 +7368,17 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/in
  #if defined(CONFIG_HIGHPTE)
  #define __KM_PTE			\
  	(in_nmi() ? KM_NMI_PTE : 	\
-@@ -84,6 +87,9 @@ do {						\
+@@ -72,7 +75,9 @@ extern void set_pmd_pfn(unsigned long, u
+ /* Clear a kernel PTE and flush it from the TLB */
+ #define kpte_clear_flush(ptep, vaddr)		\
+ do {						\
++	pax_open_kernel();			\
+ 	pte_clear(&init_mm, (vaddr), (ptep));	\
++	pax_close_kernel();			\
+ 	__flush_tlb_one((vaddr));		\
+ } while (0)
+ 
+@@ -84,6 +89,9 @@ do {						\
  
  #endif /* !__ASSEMBLY__ */
  
@@ -8911,15 +8925,14 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
  
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/kernel/asm-offsets_32.c linux-2.6.31.6-pax/arch/x86/kernel/asm-offsets_32.c
 --- linux-2.6.31.6/arch/x86/kernel/asm-offsets_32.c	2009-09-10 19:41:12.000000000 +0200
-+++ linux-2.6.31.6-pax/arch/x86/kernel/asm-offsets_32.c	2009-10-15 20:40:26.000000000 +0200
-@@ -115,6 +115,12 @@ void foo(void)
++++ linux-2.6.31.6-pax/arch/x86/kernel/asm-offsets_32.c	2009-11-11 17:03:47.000000000 +0100
+@@ -115,6 +115,11 @@ void foo(void)
  	OFFSET(PV_CPU_iret, pv_cpu_ops, iret);
  	OFFSET(PV_CPU_irq_enable_sysexit, pv_cpu_ops, irq_enable_sysexit);
  	OFFSET(PV_CPU_read_cr0, pv_cpu_ops, read_cr0);
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	OFFSET(PV_CPU_write_cr0, pv_cpu_ops, write_cr0);
-+	OFFSET(PV_MMU_pax_close_kernel, pv_mmu_ops, pax_close_kernel);
 +#endif
 +
  #endif
@@ -9290,6 +9303,26 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
  	}
  }
  
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/kernel/cpu/perfctr-watchdog.c linux-2.6.31.6-pax/arch/x86/kernel/cpu/perfctr-watchdog.c
+--- linux-2.6.31.6/arch/x86/kernel/cpu/perfctr-watchdog.c	2009-09-10 19:41:13.000000000 +0200
++++ linux-2.6.31.6-pax/arch/x86/kernel/cpu/perfctr-watchdog.c	2009-11-12 21:42:12.000000000 +0100
+@@ -30,11 +30,11 @@ struct nmi_watchdog_ctlblk {
+ 
+ /* Interface defining a CPU specific perfctr watchdog */
+ struct wd_ops {
+-	int (*reserve)(void);
+-	void (*unreserve)(void);
+-	int (*setup)(unsigned nmi_hz);
+-	void (*rearm)(struct nmi_watchdog_ctlblk *wd, unsigned nmi_hz);
+-	void (*stop)(void);
++	int (* const reserve)(void);
++	void (* const unreserve)(void);
++	int (* const setup)(unsigned nmi_hz);
++	void (* const rearm)(struct nmi_watchdog_ctlblk *wd, unsigned nmi_hz);
++	void (* const stop)(void);
+ 	unsigned perfctr;
+ 	unsigned evntsel;
+ 	u64 checkbit;
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/kernel/crash.c linux-2.6.31.6-pax/arch/x86/kernel/crash.c
 --- linux-2.6.31.6/arch/x86/kernel/crash.c	2009-09-10 19:41:13.000000000 +0200
 +++ linux-2.6.31.6-pax/arch/x86/kernel/crash.c	2009-09-10 19:43:33.000000000 +0200
@@ -9614,7 +9647,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
  efi_rt_function_ptr:
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/kernel/entry_32.S linux-2.6.31.6-pax/arch/x86/kernel/entry_32.S
 --- linux-2.6.31.6/arch/x86/kernel/entry_32.S	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.6-pax/arch/x86/kernel/entry_32.S	2009-10-14 23:44:11.000000000 +0200
++++ linux-2.6.31.6-pax/arch/x86/kernel/entry_32.S	2009-11-11 17:16:24.000000000 +0100
 @@ -191,7 +191,7 @@
  
  #endif	/* CONFIG_X86_32_LAZY_GS */
@@ -9640,7 +9673,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
 +.macro SAVE_ALL
 +#if defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF)
 +	__SAVE_ALL __KERNEL_DS
-+	PAX_CLOSE_KERNEL
++	PAX_ENTER_KERNEL
 +#else
 +	__SAVE_ALL __USER_DS
 +#endif
@@ -9657,7 +9690,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
 +#ifdef CONFIG_PAX_KERNEXEC
 +	jae resume_userspace
 +
-+	PAX_RESTORE_KERNEL
++	PAX_EXIT_KERNEL
 +	jmp resume_kernel
 +#else
  	jb resume_kernel		# not returning to v8086 or userspace
@@ -9836,7 +9869,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
  	UNWIND_ESPFIX_STACK
  	GS_TO_REG %ecx
 +
-+	PAX_CLOSE_KERNEL
++	PAX_ENTER_KERNEL
 +
  	movl PT_GS(%esp), %edi		# get the function address
  	movl PT_ORIG_EAX(%esp), %edx	# get the error code
@@ -9853,7 +9886,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
 +
-+	PAX_RESTORE_KERNEL
++	PAX_EXIT_KERNEL
 +
  	jmp restore_all_notrace
  	CFI_ENDPROC
@@ -9863,7 +9896,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/ke
  	xorl %edx,%edx			# zero error code
  	call do_nmi
 +
-+	PAX_RESTORE_KERNEL
++	PAX_EXIT_KERNEL
 +
  	RESTORE_REGS
  	lss 12+4(%esp), %esp		# back to espfix stack
@@ -15708,7 +15741,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm
  
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm/highmem_32.c linux-2.6.31.6-pax/arch/x86/mm/highmem_32.c
 --- linux-2.6.31.6/arch/x86/mm/highmem_32.c	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.6-pax/arch/x86/mm/highmem_32.c	2009-10-14 00:02:02.000000000 +0200
++++ linux-2.6.31.6-pax/arch/x86/mm/highmem_32.c	2009-11-11 18:20:42.000000000 +0100
 @@ -43,7 +43,10 @@ void *kmap_atomic_prot(struct page *page
  	idx = type + KM_TYPE_NR*smp_processor_id();
  	vaddr = __fix_to_virt(FIX_KMAP_BEGIN + idx);
@@ -15720,20 +15753,6 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm
  
  	return (void *)vaddr;
  }
-@@ -64,9 +67,11 @@ void kunmap_atomic(void *kvaddr, enum km
- 	 * also, in case the page changes cacheability attributes or becomes
- 	 * a protected page in a hypervisor.
- 	 */
--	if (vaddr == __fix_to_virt(FIX_KMAP_BEGIN+idx))
-+	if (vaddr == __fix_to_virt(FIX_KMAP_BEGIN+idx)) {
-+		pax_open_kernel();
- 		kpte_clear_flush(kmap_pte-idx, vaddr);
--	else {
-+		pax_close_kernel();
-+	} else {
- #ifdef CONFIG_DEBUG_HIGHMEM
- 		BUG_ON(vaddr < PAGE_OFFSET);
- 		BUG_ON(vaddr >= (unsigned long)high_memory);
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm/hugetlbpage.c linux-2.6.31.6-pax/arch/x86/mm/hugetlbpage.c
 --- linux-2.6.31.6/arch/x86/mm/hugetlbpage.c	2009-06-10 08:46:22.000000000 +0200
 +++ linux-2.6.31.6-pax/arch/x86/mm/hugetlbpage.c	2009-09-10 19:43:33.000000000 +0200
@@ -16350,7 +16369,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm
  		return "[vsyscall]";
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm/iomap_32.c linux-2.6.31.6-pax/arch/x86/mm/iomap_32.c
 --- linux-2.6.31.6/arch/x86/mm/iomap_32.c	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.31.6-pax/arch/x86/mm/iomap_32.c	2009-11-04 23:28:53.000000000 +0100
++++ linux-2.6.31.6-pax/arch/x86/mm/iomap_32.c	2009-11-11 18:20:23.000000000 +0100
 @@ -42,7 +42,11 @@ void *kmap_atomic_prot_pfn(unsigned long
  	debug_kmap_atomic(type);
  	idx = type + KM_TYPE_NR * smp_processor_id();
@@ -16363,19 +16382,6 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm
  	arch_flush_lazy_mmu_mode();
  
  	return (void *)vaddr;
-@@ -79,8 +83,11 @@ iounmap_atomic(void *kvaddr, enum km_typ
- 	 * also, in case the page changes cacheability attributes or becomes
- 	 * a protected page in a hypervisor.
- 	 */
--	if (vaddr == __fix_to_virt(FIX_KMAP_BEGIN+idx))
-+	if (vaddr == __fix_to_virt(FIX_KMAP_BEGIN+idx)) {
-+		pax_open_kernel();
- 		kpte_clear_flush(kmap_pte-idx, vaddr);
-+		pax_close_kernel();
-+	}
- 
- 	pagefault_enable();
- }
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/arch/x86/mm/ioremap.c linux-2.6.31.6-pax/arch/x86/mm/ioremap.c
 --- linux-2.6.31.6/arch/x86/mm/ioremap.c	2009-06-10 08:46:22.000000000 +0200
 +++ linux-2.6.31.6-pax/arch/x86/mm/ioremap.c	2009-09-10 19:43:33.000000000 +0200
@@ -17833,7 +17839,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/acp
  	.pre_snapshot = acpi_hibernation_pre_snapshot_old,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/acpi/video.c linux-2.6.31.6-pax/drivers/acpi/video.c
 --- linux-2.6.31.6/drivers/acpi/video.c	2009-09-10 19:41:18.000000000 +0200
-+++ linux-2.6.31.6-pax/drivers/acpi/video.c	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/acpi/video.c	2009-11-12 21:42:12.000000000 +0100
 @@ -283,7 +283,7 @@ static int acpi_video_device_brightness_
  						struct file *file);
  static ssize_t acpi_video_device_write_brightness(struct file *file,
@@ -17843,9 +17849,48 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/acp
  	.owner = THIS_MODULE,
  	.open = acpi_video_device_brightness_open_fs,
  	.read = seq_read,
+@@ -357,7 +357,7 @@ static int acpi_video_set_brightness(str
+ 				vd->brightness->levels[request_level]);
+ }
+ 
+-static struct backlight_ops acpi_backlight_ops = {
++static const struct backlight_ops acpi_backlight_ops = {
+ 	.get_brightness = acpi_video_get_brightness,
+ 	.update_status  = acpi_video_set_brightness,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/ahci.c linux-2.6.31.6-pax/drivers/ata/ahci.c
 --- linux-2.6.31.6/drivers/ata/ahci.c	2009-11-10 14:54:59.000000000 +0100
-+++ linux-2.6.31.6-pax/drivers/ata/ahci.c	2009-11-10 14:55:10.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/ahci.c	2009-11-12 21:42:12.000000000 +0100
+@@ -351,7 +351,7 @@ static struct scsi_host_template ahci_sh
+ 	.sdev_attrs		= ahci_sdev_attrs,
+ };
+ 
+-static struct ata_port_operations ahci_ops = {
++static const struct ata_port_operations ahci_ops = {
+ 	.inherits		= &sata_pmp_port_ops,
+ 
+ 	.qc_defer		= sata_pmp_qc_defer_cmd_switch,
+@@ -388,17 +388,17 @@ static struct ata_port_operations ahci_o
+ 	.port_stop		= ahci_port_stop,
+ };
+ 
+-static struct ata_port_operations ahci_vt8251_ops = {
++static const struct ata_port_operations ahci_vt8251_ops = {
+ 	.inherits		= &ahci_ops,
+ 	.hardreset		= ahci_vt8251_hardreset,
+ };
+ 
+-static struct ata_port_operations ahci_p5wdh_ops = {
++static const struct ata_port_operations ahci_p5wdh_ops = {
+ 	.inherits		= &ahci_ops,
+ 	.hardreset		= ahci_p5wdh_hardreset,
+ };
+ 
+-static struct ata_port_operations ahci_sb600_ops = {
++static const struct ata_port_operations ahci_sb600_ops = {
+ 	.inherits		= &ahci_ops,
+ 	.softreset		= ahci_sb600_softreset,
+ 	.pmp_softreset		= ahci_sb600_softreset,
 @@ -630,7 +630,7 @@ static const struct pci_device_id ahci_p
  	{ PCI_ANY_ID, PCI_ANY_ID, PCI_ANY_ID, PCI_ANY_ID,
  	  PCI_CLASS_STORAGE_SATA_AHCI, 0xffffff, board_ahci },
@@ -17855,9 +17900,21 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata
  };
  
  
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/ata_generic.c linux-2.6.31.6-pax/drivers/ata/ata_generic.c
+--- linux-2.6.31.6/drivers/ata/ata_generic.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/ata_generic.c	2009-11-12 21:42:12.000000000 +0100
+@@ -95,7 +95,7 @@ static struct scsi_host_template generic
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations generic_port_ops = {
++static const struct ata_port_operations generic_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= ata_cable_unknown,
+ 	.set_mode	= generic_set_mode,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/ata_piix.c linux-2.6.31.6-pax/drivers/ata/ata_piix.c
 --- linux-2.6.31.6/drivers/ata/ata_piix.c	2009-09-10 19:41:18.000000000 +0200
-+++ linux-2.6.31.6-pax/drivers/ata/ata_piix.c	2009-09-10 19:43:33.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/ata_piix.c	2009-11-12 21:42:12.000000000 +0100
 @@ -291,7 +291,7 @@ static const struct pci_device_id piix_p
  	{ 0x8086, 0x3b2d, PCI_ANY_ID, PCI_ANY_ID, 0, 0, ich8_2port_sata },
  	/* SATA Controller IDE (PCH) */
@@ -17867,6 +17924,42 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata
  };
  
  static struct pci_driver piix_pci_driver = {
+@@ -309,7 +309,7 @@ static struct scsi_host_template piix_sh
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations piix_pata_ops = {
++static const struct ata_port_operations piix_pata_ops = {
+ 	.inherits		= &ata_bmdma32_port_ops,
+ 	.cable_detect		= ata_cable_40wire,
+ 	.set_piomode		= piix_set_piomode,
+@@ -317,22 +317,22 @@ static struct ata_port_operations piix_p
+ 	.prereset		= piix_pata_prereset,
+ };
+ 
+-static struct ata_port_operations piix_vmw_ops = {
++static const struct ata_port_operations piix_vmw_ops = {
+ 	.inherits		= &piix_pata_ops,
+ 	.bmdma_status		= piix_vmw_bmdma_status,
+ };
+ 
+-static struct ata_port_operations ich_pata_ops = {
++static const struct ata_port_operations ich_pata_ops = {
+ 	.inherits		= &piix_pata_ops,
+ 	.cable_detect		= ich_pata_cable_detect,
+ 	.set_dmamode		= ich_set_dmamode,
+ };
+ 
+-static struct ata_port_operations piix_sata_ops = {
++static const struct ata_port_operations piix_sata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ };
+ 
+-static struct ata_port_operations piix_sidpr_sata_ops = {
++static const struct ata_port_operations piix_sidpr_sata_ops = {
+ 	.inherits		= &piix_sata_ops,
+ 	.hardreset		= sata_std_hardreset,
+ 	.scr_read		= piix_sidpr_scr_read,
 @@ -608,7 +608,7 @@ static const struct ich_laptop ich_lapto
  	{ 0x2653, 0x1043, 0x82D8 },	/* ICH6M on Asus Eee 701 */
  	{ 0x27df, 0x104d, 0x900e },	/* ICH7 on Sony TZ-90 */
@@ -17905,7 +17998,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata
  };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/libata-core.c linux-2.6.31.6-pax/drivers/ata/libata-core.c
 --- linux-2.6.31.6/drivers/ata/libata-core.c	2009-11-10 14:54:59.000000000 +0100
-+++ linux-2.6.31.6-pax/drivers/ata/libata-core.c	2009-11-10 14:55:10.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/libata-core.c	2009-11-12 21:45:15.000000000 +0100
 @@ -896,7 +896,7 @@ static const struct ata_xfer_ent {
  	{ ATA_SHIFT_PIO, ATA_NR_PIO_MODES, XFER_PIO_0 },
  	{ ATA_SHIFT_MWDMA, ATA_NR_MWDMA_MODES, XFER_MW_DMA_0 },
@@ -17961,6 +18054,1421 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata
  	spin_unlock(&lock);
  }
  
+@@ -6032,7 +6034,7 @@ int ata_host_start(struct ata_host *host
+  */
+ /* KILLME - the only user left is ipr */
+ void ata_host_init(struct ata_host *host, struct device *dev,
+-		   unsigned long flags, struct ata_port_operations *ops)
++		   unsigned long flags, const struct ata_port_operations *ops)
+ {
+ 	spin_lock_init(&host->lock);
+ 	host->dev = dev;
+@@ -6695,7 +6697,7 @@ static void ata_dummy_error_handler(stru
+ 	/* truly dummy */
+ }
+ 
+-struct ata_port_operations ata_dummy_port_ops = {
++const struct ata_port_operations ata_dummy_port_ops = {
+ 	.qc_prep		= ata_noop_qc_prep,
+ 	.qc_issue		= ata_dummy_qc_issue,
+ 	.error_handler		= ata_dummy_error_handler,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/libata-eh.c linux-2.6.31.6-pax/drivers/ata/libata-eh.c
+--- linux-2.6.31.6/drivers/ata/libata-eh.c	2009-11-10 14:54:59.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/libata-eh.c	2009-11-12 22:00:11.000000000 +0100
+@@ -3154,9 +3154,9 @@ static int ata_eh_handle_dev_fail(struct
+  *	RETURNS:
+  *	0 on success, -errno on failure.
+  */
+-int ata_eh_recover(struct ata_port *ap, ata_prereset_fn_t prereset,
+-		   ata_reset_fn_t softreset, ata_reset_fn_t hardreset,
+-		   ata_postreset_fn_t postreset,
++int ata_eh_recover(struct ata_port *ap, const ata_prereset_fn_t prereset,
++		   const ata_reset_fn_t softreset, const ata_reset_fn_t hardreset,
++		   const ata_postreset_fn_t postreset,
+ 		   struct ata_link **r_failed_link)
+ {
+ 	struct ata_link *link;
+@@ -3417,9 +3417,9 @@ void ata_eh_finish(struct ata_port *ap)
+  *	LOCKING:
+  *	Kernel thread context (may sleep).
+  */
+-void ata_do_eh(struct ata_port *ap, ata_prereset_fn_t prereset,
+-	       ata_reset_fn_t softreset, ata_reset_fn_t hardreset,
+-	       ata_postreset_fn_t postreset)
++void ata_do_eh(struct ata_port *ap, const ata_prereset_fn_t prereset,
++	       const ata_reset_fn_t softreset, const ata_reset_fn_t hardreset,
++	       const ata_postreset_fn_t postreset)
+ {
+ 	struct ata_device *dev;
+ 	int rc;
+@@ -3448,7 +3448,7 @@ void ata_do_eh(struct ata_port *ap, ata_
+  */
+ void ata_std_error_handler(struct ata_port *ap)
+ {
+-	struct ata_port_operations *ops = ap->ops;
++	const struct ata_port_operations *ops = ap->ops;
+ 	ata_reset_fn_t hardreset = ops->hardreset;
+ 
+ 	/* ignore built-in hardreset if SCR access is not available */
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/libata-pmp.c linux-2.6.31.6-pax/drivers/ata/libata-pmp.c
+--- linux-2.6.31.6/drivers/ata/libata-pmp.c	2009-03-24 08:35:06.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/libata-pmp.c	2009-11-12 21:42:12.000000000 +0100
+@@ -839,7 +839,7 @@ static int sata_pmp_handle_link_fail(str
+  */
+ static int sata_pmp_eh_recover(struct ata_port *ap)
+ {
+-	struct ata_port_operations *ops = ap->ops;
++	const struct ata_port_operations *ops = ap->ops;
+ 	int pmp_tries, link_tries[SATA_PMP_MAX_PORTS];
+ 	struct ata_link *pmp_link = &ap->link;
+ 	struct ata_device *pmp_dev = pmp_link->device;
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/libata.h linux-2.6.31.6-pax/drivers/ata/libata.h
+--- linux-2.6.31.6/drivers/ata/libata.h	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/libata.h	2009-11-12 22:00:24.000000000 +0100
+@@ -38,7 +38,7 @@ struct ata_scsi_args {
+ 	void			(*done)(struct scsi_cmnd *);
+ };
+ 
+-static inline int ata_is_builtin_hardreset(ata_reset_fn_t reset)
++static inline int ata_is_builtin_hardreset(const ata_reset_fn_t reset)
+ {
+ 	if (reset == sata_std_hardreset)
+ 		return 1;
+@@ -169,9 +169,9 @@ extern int ata_eh_reset(struct ata_link 
+ 			ata_prereset_fn_t prereset, ata_reset_fn_t softreset,
+ 			ata_reset_fn_t hardreset, ata_postreset_fn_t postreset);
+ extern int ata_set_mode(struct ata_link *link, struct ata_device **r_failed_dev);
+-extern int ata_eh_recover(struct ata_port *ap, ata_prereset_fn_t prereset,
+-			  ata_reset_fn_t softreset, ata_reset_fn_t hardreset,
+-			  ata_postreset_fn_t postreset,
++extern int ata_eh_recover(struct ata_port *ap, const ata_prereset_fn_t prereset,
++			  const ata_reset_fn_t softreset, const ata_reset_fn_t hardreset,
++			  const ata_postreset_fn_t postreset,
+ 			  struct ata_link **r_failed_disk);
+ extern void ata_eh_finish(struct ata_port *ap);
+ 
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_acpi.c linux-2.6.31.6-pax/drivers/ata/pata_acpi.c
+--- linux-2.6.31.6/drivers/ata/pata_acpi.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_acpi.c	2009-11-12 21:42:12.000000000 +0100
+@@ -215,7 +215,7 @@ static struct scsi_host_template pacpi_s
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations pacpi_ops = {
++static const struct ata_port_operations pacpi_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.qc_issue		= pacpi_qc_issue,
+ 	.cable_detect		= pacpi_cable_detect,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_ali.c linux-2.6.31.6-pax/drivers/ata/pata_ali.c
+--- linux-2.6.31.6/drivers/ata/pata_ali.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_ali.c	2009-11-12 21:42:12.000000000 +0100
+@@ -365,7 +365,7 @@ static struct scsi_host_template ali_sht
+  *	Port operations for PIO only ALi
+  */
+ 
+-static struct ata_port_operations ali_early_port_ops = {
++static const struct ata_port_operations ali_early_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_piomode	= ali_set_piomode,
+@@ -382,7 +382,7 @@ static const struct ata_port_operations 
+  *	Port operations for DMA capable ALi without cable
+  *	detect
+  */
+-static struct ata_port_operations ali_20_port_ops = {
++static const struct ata_port_operations ali_20_port_ops = {
+ 	.inherits	= &ali_dma_base_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.mode_filter	= ali_20_filter,
+@@ -393,7 +393,7 @@ static struct ata_port_operations ali_20
+ /*
+  *	Port operations for DMA capable ALi with cable detect
+  */
+-static struct ata_port_operations ali_c2_port_ops = {
++static const struct ata_port_operations ali_c2_port_ops = {
+ 	.inherits	= &ali_dma_base_ops,
+ 	.check_atapi_dma = ali_check_atapi_dma,
+ 	.cable_detect	= ali_c2_cable_detect,
+@@ -404,7 +404,7 @@ static struct ata_port_operations ali_c2
+ /*
+  *	Port operations for DMA capable ALi with cable detect
+  */
+-static struct ata_port_operations ali_c4_port_ops = {
++static const struct ata_port_operations ali_c4_port_ops = {
+ 	.inherits	= &ali_dma_base_ops,
+ 	.check_atapi_dma = ali_check_atapi_dma,
+ 	.cable_detect	= ali_c2_cable_detect,
+@@ -414,7 +414,7 @@ static struct ata_port_operations ali_c4
+ /*
+  *	Port operations for DMA capable ALi with cable detect and LBA48
+  */
+-static struct ata_port_operations ali_c5_port_ops = {
++static const struct ata_port_operations ali_c5_port_ops = {
+ 	.inherits	= &ali_dma_base_ops,
+ 	.check_atapi_dma = ali_check_atapi_dma,
+ 	.dev_config	= ali_warn_atapi_dma,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_amd.c linux-2.6.31.6-pax/drivers/ata/pata_amd.c
+--- linux-2.6.31.6/drivers/ata/pata_amd.c	2009-10-07 00:17:37.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_amd.c	2009-11-12 21:42:12.000000000 +0100
+@@ -397,28 +397,28 @@ static const struct ata_port_operations 
+ 	.prereset	= amd_pre_reset,
+ };
+ 
+-static struct ata_port_operations amd33_port_ops = {
++static const struct ata_port_operations amd33_port_ops = {
+ 	.inherits	= &amd_base_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_piomode	= amd33_set_piomode,
+ 	.set_dmamode	= amd33_set_dmamode,
+ };
+ 
+-static struct ata_port_operations amd66_port_ops = {
++static const struct ata_port_operations amd66_port_ops = {
+ 	.inherits	= &amd_base_port_ops,
+ 	.cable_detect	= ata_cable_unknown,
+ 	.set_piomode	= amd66_set_piomode,
+ 	.set_dmamode	= amd66_set_dmamode,
+ };
+ 
+-static struct ata_port_operations amd100_port_ops = {
++static const struct ata_port_operations amd100_port_ops = {
+ 	.inherits	= &amd_base_port_ops,
+ 	.cable_detect	= ata_cable_unknown,
+ 	.set_piomode	= amd100_set_piomode,
+ 	.set_dmamode	= amd100_set_dmamode,
+ };
+ 
+-static struct ata_port_operations amd133_port_ops = {
++static const struct ata_port_operations amd133_port_ops = {
+ 	.inherits	= &amd_base_port_ops,
+ 	.cable_detect	= amd_cable_detect,
+ 	.set_piomode	= amd133_set_piomode,
+@@ -433,13 +433,13 @@ static const struct ata_port_operations 
+ 	.host_stop	= nv_host_stop,
+ };
+ 
+-static struct ata_port_operations nv100_port_ops = {
++static const struct ata_port_operations nv100_port_ops = {
+ 	.inherits	= &nv_base_port_ops,
+ 	.set_piomode	= nv100_set_piomode,
+ 	.set_dmamode	= nv100_set_dmamode,
+ };
+ 
+-static struct ata_port_operations nv133_port_ops = {
++static const struct ata_port_operations nv133_port_ops = {
+ 	.inherits	= &nv_base_port_ops,
+ 	.set_piomode	= nv133_set_piomode,
+ 	.set_dmamode	= nv133_set_dmamode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_artop.c linux-2.6.31.6-pax/drivers/ata/pata_artop.c
+--- linux-2.6.31.6/drivers/ata/pata_artop.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_artop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -311,7 +311,7 @@ static struct scsi_host_template artop_s
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations artop6210_ops = {
++static const struct ata_port_operations artop6210_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.cable_detect		= ata_cable_40wire,
+ 	.set_piomode		= artop6210_set_piomode,
+@@ -320,7 +320,7 @@ static struct ata_port_operations artop6
+ 	.qc_defer		= artop6210_qc_defer,
+ };
+ 
+-static struct ata_port_operations artop6260_ops = {
++static const struct ata_port_operations artop6260_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.cable_detect		= artop6260_cable_detect,
+ 	.set_piomode		= artop6260_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_at32.c linux-2.6.31.6-pax/drivers/ata/pata_at32.c
+--- linux-2.6.31.6/drivers/ata/pata_at32.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_at32.c	2009-11-12 21:42:12.000000000 +0100
+@@ -172,7 +172,7 @@ static struct scsi_host_template at32_sh
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations at32_port_ops = {
++static const struct ata_port_operations at32_port_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 	.cable_detect		= ata_cable_40wire,
+ 	.set_piomode		= pata_at32_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_at91.c linux-2.6.31.6-pax/drivers/ata/pata_at91.c
+--- linux-2.6.31.6/drivers/ata/pata_at91.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_at91.c	2009-11-12 21:42:12.000000000 +0100
+@@ -195,7 +195,7 @@ static struct scsi_host_template pata_at
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations pata_at91_port_ops = {
++static const struct ata_port_operations pata_at91_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 
+ 	.sff_data_xfer	= pata_at91_data_xfer_noirq,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_atiixp.c linux-2.6.31.6-pax/drivers/ata/pata_atiixp.c
+--- linux-2.6.31.6/drivers/ata/pata_atiixp.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_atiixp.c	2009-11-12 21:42:12.000000000 +0100
+@@ -205,7 +205,7 @@ static struct scsi_host_template atiixp_
+ 	.sg_tablesize		= LIBATA_DUMB_MAX_PRD,
+ };
+ 
+-static struct ata_port_operations atiixp_port_ops = {
++static const struct ata_port_operations atiixp_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.qc_prep 	= ata_sff_dumb_qc_prep,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_bf54x.c linux-2.6.31.6-pax/drivers/ata/pata_bf54x.c
+--- linux-2.6.31.6/drivers/ata/pata_bf54x.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_bf54x.c	2009-11-12 21:42:12.000000000 +0100
+@@ -1464,7 +1464,7 @@ static struct scsi_host_template bfin_sh
+ 	.dma_boundary		= ATA_DMA_BOUNDARY,
+ };
+ 
+-static struct ata_port_operations bfin_pata_ops = {
++static const struct ata_port_operations bfin_pata_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 
+ 	.set_piomode		= bfin_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_cmd640.c linux-2.6.31.6-pax/drivers/ata/pata_cmd640.c
+--- linux-2.6.31.6/drivers/ata/pata_cmd640.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_cmd640.c	2009-11-12 21:42:12.000000000 +0100
+@@ -168,7 +168,7 @@ static struct scsi_host_template cmd640_
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations cmd640_port_ops = {
++static const struct ata_port_operations cmd640_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	/* In theory xfer_noirq is not needed once we kill the prefetcher */
+ 	.sff_data_xfer	= ata_sff_data_xfer_noirq,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_cmd64x.c linux-2.6.31.6-pax/drivers/ata/pata_cmd64x.c
+--- linux-2.6.31.6/drivers/ata/pata_cmd64x.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_cmd64x.c	2009-11-12 21:42:12.000000000 +0100
+@@ -275,18 +275,18 @@ static const struct ata_port_operations 
+ 	.set_dmamode	= cmd64x_set_dmamode,
+ };
+ 
+-static struct ata_port_operations cmd64x_port_ops = {
++static const struct ata_port_operations cmd64x_port_ops = {
+ 	.inherits	= &cmd64x_base_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ };
+ 
+-static struct ata_port_operations cmd646r1_port_ops = {
++static const struct ata_port_operations cmd646r1_port_ops = {
+ 	.inherits	= &cmd64x_base_ops,
+ 	.bmdma_stop	= cmd646r1_bmdma_stop,
+ 	.cable_detect	= ata_cable_40wire,
+ };
+ 
+-static struct ata_port_operations cmd648_port_ops = {
++static const struct ata_port_operations cmd648_port_ops = {
+ 	.inherits	= &cmd64x_base_ops,
+ 	.bmdma_stop	= cmd648_bmdma_stop,
+ 	.cable_detect	= cmd648_cable_detect,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_cs5520.c linux-2.6.31.6-pax/drivers/ata/pata_cs5520.c
+--- linux-2.6.31.6/drivers/ata/pata_cs5520.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_cs5520.c	2009-11-12 21:42:12.000000000 +0100
+@@ -144,7 +144,7 @@ static struct scsi_host_template cs5520_
+ 	.sg_tablesize		= LIBATA_DUMB_MAX_PRD,
+ };
+ 
+-static struct ata_port_operations cs5520_port_ops = {
++static const struct ata_port_operations cs5520_port_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.qc_prep		= ata_sff_dumb_qc_prep,
+ 	.cable_detect		= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_cs5530.c linux-2.6.31.6-pax/drivers/ata/pata_cs5530.c
+--- linux-2.6.31.6/drivers/ata/pata_cs5530.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_cs5530.c	2009-11-12 21:42:12.000000000 +0100
+@@ -164,7 +164,7 @@ static struct scsi_host_template cs5530_
+ 	.sg_tablesize	= LIBATA_DUMB_MAX_PRD,
+ };
+ 
+-static struct ata_port_operations cs5530_port_ops = {
++static const struct ata_port_operations cs5530_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.qc_prep 	= ata_sff_dumb_qc_prep,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_cs5535.c linux-2.6.31.6-pax/drivers/ata/pata_cs5535.c
+--- linux-2.6.31.6/drivers/ata/pata_cs5535.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_cs5535.c	2009-11-12 21:42:12.000000000 +0100
+@@ -160,7 +160,7 @@ static struct scsi_host_template cs5535_
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations cs5535_port_ops = {
++static const struct ata_port_operations cs5535_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= cs5535_cable_detect,
+ 	.set_piomode	= cs5535_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_cs5536.c linux-2.6.31.6-pax/drivers/ata/pata_cs5536.c
+--- linux-2.6.31.6/drivers/ata/pata_cs5536.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_cs5536.c	2009-11-12 21:42:12.000000000 +0100
+@@ -223,7 +223,7 @@ static struct scsi_host_template cs5536_
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations cs5536_port_ops = {
++static const struct ata_port_operations cs5536_port_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.cable_detect		= cs5536_cable_detect,
+ 	.set_piomode		= cs5536_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_cypress.c linux-2.6.31.6-pax/drivers/ata/pata_cypress.c
+--- linux-2.6.31.6/drivers/ata/pata_cypress.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_cypress.c	2009-11-12 21:42:12.000000000 +0100
+@@ -113,7 +113,7 @@ static struct scsi_host_template cy82c69
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations cy82c693_port_ops = {
++static const struct ata_port_operations cy82c693_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_piomode	= cy82c693_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_efar.c linux-2.6.31.6-pax/drivers/ata/pata_efar.c
+--- linux-2.6.31.6/drivers/ata/pata_efar.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_efar.c	2009-11-12 21:42:12.000000000 +0100
+@@ -222,7 +222,7 @@ static struct scsi_host_template efar_sh
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations efar_ops = {
++static const struct ata_port_operations efar_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.cable_detect		= efar_cable_detect,
+ 	.set_piomode		= efar_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_hpt366.c linux-2.6.31.6-pax/drivers/ata/pata_hpt366.c
+--- linux-2.6.31.6/drivers/ata/pata_hpt366.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_hpt366.c	2009-11-12 21:42:12.000000000 +0100
+@@ -282,7 +282,7 @@ static struct scsi_host_template hpt36x_
+  *	Configuration for HPT366/68
+  */
+ 
+-static struct ata_port_operations hpt366_port_ops = {
++static const struct ata_port_operations hpt366_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= hpt36x_cable_detect,
+ 	.mode_filter	= hpt366_filter,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_hpt37x.c linux-2.6.31.6-pax/drivers/ata/pata_hpt37x.c
+--- linux-2.6.31.6/drivers/ata/pata_hpt37x.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_hpt37x.c	2009-11-12 21:42:12.000000000 +0100
+@@ -578,7 +578,7 @@ static struct scsi_host_template hpt37x_
+  *	Configuration for HPT370
+  */
+ 
+-static struct ata_port_operations hpt370_port_ops = {
++static const struct ata_port_operations hpt370_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.bmdma_stop	= hpt370_bmdma_stop,
+@@ -593,7 +593,7 @@ static struct ata_port_operations hpt370
+  *	Configuration for HPT370A. Close to 370 but less filters
+  */
+ 
+-static struct ata_port_operations hpt370a_port_ops = {
++static const struct ata_port_operations hpt370a_port_ops = {
+ 	.inherits	= &hpt370_port_ops,
+ 	.mode_filter	= hpt370a_filter,
+ };
+@@ -603,7 +603,7 @@ static struct ata_port_operations hpt370
+  *	and DMA mode setting functionality.
+  */
+ 
+-static struct ata_port_operations hpt372_port_ops = {
++static const struct ata_port_operations hpt372_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.bmdma_stop	= hpt37x_bmdma_stop,
+@@ -618,7 +618,7 @@ static struct ata_port_operations hpt372
+  *	but we have a different cable detection procedure for function 1.
+  */
+ 
+-static struct ata_port_operations hpt374_fn1_port_ops = {
++static const struct ata_port_operations hpt374_fn1_port_ops = {
+ 	.inherits	= &hpt372_port_ops,
+ 	.prereset	= hpt374_fn1_pre_reset,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_hpt3x2n.c linux-2.6.31.6-pax/drivers/ata/pata_hpt3x2n.c
+--- linux-2.6.31.6/drivers/ata/pata_hpt3x2n.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_hpt3x2n.c	2009-11-12 21:42:12.000000000 +0100
+@@ -334,7 +334,7 @@ static struct scsi_host_template hpt3x2n
+  *	Configuration for HPT3x2n.
+  */
+ 
+-static struct ata_port_operations hpt3x2n_port_ops = {
++static const struct ata_port_operations hpt3x2n_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.bmdma_stop	= hpt3x2n_bmdma_stop,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_hpt3x3.c linux-2.6.31.6-pax/drivers/ata/pata_hpt3x3.c
+--- linux-2.6.31.6/drivers/ata/pata_hpt3x3.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_hpt3x3.c	2009-11-12 21:42:12.000000000 +0100
+@@ -141,7 +141,7 @@ static struct scsi_host_template hpt3x3_
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations hpt3x3_port_ops = {
++static const struct ata_port_operations hpt3x3_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_piomode	= hpt3x3_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_icside.c linux-2.6.31.6-pax/drivers/ata/pata_icside.c
+--- linux-2.6.31.6/drivers/ata/pata_icside.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_icside.c	2009-11-12 21:42:12.000000000 +0100
+@@ -319,7 +319,7 @@ static void pata_icside_postreset(struct
+ 	}
+ }
+ 
+-static struct ata_port_operations pata_icside_port_ops = {
++static const struct ata_port_operations pata_icside_port_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 	/* no need to build any PRD tables for DMA */
+ 	.qc_prep		= ata_noop_qc_prep,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_isapnp.c linux-2.6.31.6-pax/drivers/ata/pata_isapnp.c
+--- linux-2.6.31.6/drivers/ata/pata_isapnp.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_isapnp.c	2009-11-12 21:42:12.000000000 +0100
+@@ -23,12 +23,12 @@ static struct scsi_host_template isapnp_
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations isapnp_port_ops = {
++static const struct ata_port_operations isapnp_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ };
+ 
+-static struct ata_port_operations isapnp_noalt_port_ops = {
++static const struct ata_port_operations isapnp_noalt_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	/* No altstatus so we don't want to use the lost interrupt poll */
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_it8213.c linux-2.6.31.6-pax/drivers/ata/pata_it8213.c
+--- linux-2.6.31.6/drivers/ata/pata_it8213.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_it8213.c	2009-11-12 21:42:12.000000000 +0100
+@@ -234,7 +234,7 @@ static struct scsi_host_template it8213_
+ };
+ 
+ 
+-static struct ata_port_operations it8213_ops = {
++static const struct ata_port_operations it8213_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.cable_detect		= it8213_cable_detect,
+ 	.set_piomode		= it8213_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_it821x.c linux-2.6.31.6-pax/drivers/ata/pata_it821x.c
+--- linux-2.6.31.6/drivers/ata/pata_it821x.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_it821x.c	2009-11-12 21:42:12.000000000 +0100
+@@ -800,7 +800,7 @@ static struct scsi_host_template it821x_
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations it821x_smart_port_ops = {
++static const struct ata_port_operations it821x_smart_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.check_atapi_dma= it821x_check_atapi_dma,
+@@ -814,7 +814,7 @@ static struct ata_port_operations it821x
+ 	.port_start	= it821x_port_start,
+ };
+ 
+-static struct ata_port_operations it821x_passthru_port_ops = {
++static const struct ata_port_operations it821x_passthru_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.check_atapi_dma= it821x_check_atapi_dma,
+@@ -830,7 +830,7 @@ static struct ata_port_operations it821x
+ 	.port_start	= it821x_port_start,
+ };
+ 
+-static struct ata_port_operations it821x_rdc_port_ops = {
++static const struct ata_port_operations it821x_rdc_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.check_atapi_dma= it821x_check_atapi_dma,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_ixp4xx_cf.c linux-2.6.31.6-pax/drivers/ata/pata_ixp4xx_cf.c
+--- linux-2.6.31.6/drivers/ata/pata_ixp4xx_cf.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_ixp4xx_cf.c	2009-11-12 21:42:12.000000000 +0100
+@@ -89,7 +89,7 @@ static struct scsi_host_template ixp4xx_
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations ixp4xx_port_ops = {
++static const struct ata_port_operations ixp4xx_port_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 	.sff_data_xfer		= ixp4xx_mmio_data_xfer,
+ 	.cable_detect		= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_jmicron.c linux-2.6.31.6-pax/drivers/ata/pata_jmicron.c
+--- linux-2.6.31.6/drivers/ata/pata_jmicron.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_jmicron.c	2009-11-12 21:42:12.000000000 +0100
+@@ -111,7 +111,7 @@ static struct scsi_host_template jmicron
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations jmicron_ops = {
++static const struct ata_port_operations jmicron_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.prereset		= jmicron_pre_reset,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_legacy.c linux-2.6.31.6-pax/drivers/ata/pata_legacy.c
+--- linux-2.6.31.6/drivers/ata/pata_legacy.c	2009-06-10 08:46:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_legacy.c	2009-11-12 21:42:12.000000000 +0100
+@@ -106,7 +106,7 @@ struct legacy_probe {
+ 
+ struct legacy_controller {
+ 	const char *name;
+-	struct ata_port_operations *ops;
++	const struct ata_port_operations *ops;
+ 	unsigned int pio_mask;
+ 	unsigned int flags;
+ 	unsigned int pflags;
+@@ -223,12 +223,12 @@ static const struct ata_port_operations 
+  *	pio_mask as well.
+  */
+ 
+-static struct ata_port_operations simple_port_ops = {
++static const struct ata_port_operations simple_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.sff_data_xfer	= ata_sff_data_xfer_noirq,
+ };
+ 
+-static struct ata_port_operations legacy_port_ops = {
++static const struct ata_port_operations legacy_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.sff_data_xfer	= ata_sff_data_xfer_noirq,
+ 	.set_mode	= legacy_set_mode,
+@@ -324,7 +324,7 @@ static unsigned int pdc_data_xfer_vlb(st
+ 	return buflen;
+ }
+ 
+-static struct ata_port_operations pdc20230_port_ops = {
++static const struct ata_port_operations pdc20230_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= pdc20230_set_piomode,
+ 	.sff_data_xfer	= pdc_data_xfer_vlb,
+@@ -357,7 +357,7 @@ static void ht6560a_set_piomode(struct a
+ 	ioread8(ap->ioaddr.status_addr);
+ }
+ 
+-static struct ata_port_operations ht6560a_port_ops = {
++static const struct ata_port_operations ht6560a_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= ht6560a_set_piomode,
+ };
+@@ -400,7 +400,7 @@ static void ht6560b_set_piomode(struct a
+ 	ioread8(ap->ioaddr.status_addr);
+ }
+ 
+-static struct ata_port_operations ht6560b_port_ops = {
++static const struct ata_port_operations ht6560b_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= ht6560b_set_piomode,
+ };
+@@ -499,7 +499,7 @@ static void opti82c611a_set_piomode(stru
+ }
+ 
+ 
+-static struct ata_port_operations opti82c611a_port_ops = {
++static const struct ata_port_operations opti82c611a_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= opti82c611a_set_piomode,
+ };
+@@ -609,7 +609,7 @@ static unsigned int opti82c46x_qc_issue(
+ 	return ata_sff_qc_issue(qc);
+ }
+ 
+-static struct ata_port_operations opti82c46x_port_ops = {
++static const struct ata_port_operations opti82c46x_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= opti82c46x_set_piomode,
+ 	.qc_issue	= opti82c46x_qc_issue,
+@@ -771,20 +771,20 @@ static int qdi_port(struct platform_devi
+ 	return 0;
+ }
+ 
+-static struct ata_port_operations qdi6500_port_ops = {
++static const struct ata_port_operations qdi6500_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= qdi6500_set_piomode,
+ 	.qc_issue	= qdi_qc_issue,
+ 	.sff_data_xfer	= vlb32_data_xfer,
+ };
+ 
+-static struct ata_port_operations qdi6580_port_ops = {
++static const struct ata_port_operations qdi6580_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= qdi6580_set_piomode,
+ 	.sff_data_xfer	= vlb32_data_xfer,
+ };
+ 
+-static struct ata_port_operations qdi6580dp_port_ops = {
++static const struct ata_port_operations qdi6580dp_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= qdi6580dp_set_piomode,
+ 	.sff_data_xfer	= vlb32_data_xfer,
+@@ -855,7 +855,7 @@ static int winbond_port(struct platform_
+ 	return 0;
+ }
+ 
+-static struct ata_port_operations winbond_port_ops = {
++static const struct ata_port_operations winbond_port_ops = {
+ 	.inherits	= &legacy_base_port_ops,
+ 	.set_piomode	= winbond_set_piomode,
+ 	.sff_data_xfer	= vlb32_data_xfer,
+@@ -978,7 +978,7 @@ static __init int legacy_init_one(struct
+ 	int pio_modes = controller->pio_mask;
+ 	unsigned long io = probe->port;
+ 	u32 mask = (1 << probe->slot);
+-	struct ata_port_operations *ops = controller->ops;
++	const struct ata_port_operations *ops = controller->ops;
+ 	struct legacy_data *ld = &legacy_data[probe->slot];
+ 	struct ata_host *host = NULL;
+ 	struct ata_port *ap;
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_marvell.c linux-2.6.31.6-pax/drivers/ata/pata_marvell.c
+--- linux-2.6.31.6/drivers/ata/pata_marvell.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_marvell.c	2009-11-12 21:42:12.000000000 +0100
+@@ -100,7 +100,7 @@ static struct scsi_host_template marvell
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations marvell_ops = {
++static const struct ata_port_operations marvell_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.cable_detect		= marvell_cable_detect,
+ 	.prereset		= marvell_pre_reset,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_mpc52xx.c linux-2.6.31.6-pax/drivers/ata/pata_mpc52xx.c
+--- linux-2.6.31.6/drivers/ata/pata_mpc52xx.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_mpc52xx.c	2009-11-12 21:42:12.000000000 +0100
+@@ -609,7 +609,7 @@ static struct scsi_host_template mpc52xx
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations mpc52xx_ata_port_ops = {
++static const struct ata_port_operations mpc52xx_ata_port_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 	.sff_dev_select		= mpc52xx_ata_dev_select,
+ 	.set_piomode		= mpc52xx_ata_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_mpiix.c linux-2.6.31.6-pax/drivers/ata/pata_mpiix.c
+--- linux-2.6.31.6/drivers/ata/pata_mpiix.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_mpiix.c	2009-11-12 21:42:12.000000000 +0100
+@@ -140,7 +140,7 @@ static struct scsi_host_template mpiix_s
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations mpiix_port_ops = {
++static const struct ata_port_operations mpiix_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.qc_issue	= mpiix_qc_issue,
+ 	.cable_detect	= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_netcell.c linux-2.6.31.6-pax/drivers/ata/pata_netcell.c
+--- linux-2.6.31.6/drivers/ata/pata_netcell.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_netcell.c	2009-11-12 21:42:12.000000000 +0100
+@@ -34,7 +34,7 @@ static struct scsi_host_template netcell
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations netcell_ops = {
++static const struct ata_port_operations netcell_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= ata_cable_80wire,
+ 	.read_id	= netcell_read_id,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_ninja32.c linux-2.6.31.6-pax/drivers/ata/pata_ninja32.c
+--- linux-2.6.31.6/drivers/ata/pata_ninja32.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_ninja32.c	2009-11-12 21:42:12.000000000 +0100
+@@ -81,7 +81,7 @@ static struct scsi_host_template ninja32
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations ninja32_port_ops = {
++static const struct ata_port_operations ninja32_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.sff_dev_select = ninja32_dev_select,
+ 	.cable_detect	= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_ns87410.c linux-2.6.31.6-pax/drivers/ata/pata_ns87410.c
+--- linux-2.6.31.6/drivers/ata/pata_ns87410.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_ns87410.c	2009-11-12 21:42:12.000000000 +0100
+@@ -132,7 +132,7 @@ static struct scsi_host_template ns87410
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations ns87410_port_ops = {
++static const struct ata_port_operations ns87410_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.qc_issue	= ns87410_qc_issue,
+ 	.cable_detect	= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_ns87415.c linux-2.6.31.6-pax/drivers/ata/pata_ns87415.c
+--- linux-2.6.31.6/drivers/ata/pata_ns87415.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_ns87415.c	2009-11-12 21:42:12.000000000 +0100
+@@ -299,7 +299,7 @@ static u8 ns87560_bmdma_status(struct at
+ }
+ #endif		/* 87560 SuperIO Support */
+ 
+-static struct ata_port_operations ns87415_pata_ops = {
++static const struct ata_port_operations ns87415_pata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 
+ 	.check_atapi_dma	= ns87415_check_atapi_dma,
+@@ -313,7 +313,7 @@ static struct ata_port_operations ns8741
+ };
+ 
+ #if defined(CONFIG_SUPERIO)
+-static struct ata_port_operations ns87560_pata_ops = {
++static const struct ata_port_operations ns87560_pata_ops = {
+ 	.inherits		= &ns87415_pata_ops,
+ 	.sff_tf_read		= ns87560_tf_read,
+ 	.sff_check_status	= ns87560_check_status,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_oldpiix.c linux-2.6.31.6-pax/drivers/ata/pata_oldpiix.c
+--- linux-2.6.31.6/drivers/ata/pata_oldpiix.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_oldpiix.c	2009-11-12 21:42:12.000000000 +0100
+@@ -208,7 +208,7 @@ static struct scsi_host_template oldpiix
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations oldpiix_pata_ops = {
++static const struct ata_port_operations oldpiix_pata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.qc_issue		= oldpiix_qc_issue,
+ 	.cable_detect		= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_opti.c linux-2.6.31.6-pax/drivers/ata/pata_opti.c
+--- linux-2.6.31.6/drivers/ata/pata_opti.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_opti.c	2009-11-12 21:42:12.000000000 +0100
+@@ -152,7 +152,7 @@ static struct scsi_host_template opti_sh
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations opti_port_ops = {
++static const struct ata_port_operations opti_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_piomode	= opti_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_optidma.c linux-2.6.31.6-pax/drivers/ata/pata_optidma.c
+--- linux-2.6.31.6/drivers/ata/pata_optidma.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_optidma.c	2009-11-12 21:42:12.000000000 +0100
+@@ -337,7 +337,7 @@ static struct scsi_host_template optidma
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations optidma_port_ops = {
++static const struct ata_port_operations optidma_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_piomode	= optidma_set_pio_mode,
+@@ -346,7 +346,7 @@ static struct ata_port_operations optidm
+ 	.prereset	= optidma_pre_reset,
+ };
+ 
+-static struct ata_port_operations optiplus_port_ops = {
++static const struct ata_port_operations optiplus_port_ops = {
+ 	.inherits	= &optidma_port_ops,
+ 	.set_piomode	= optiplus_set_pio_mode,
+ 	.set_dmamode	= optiplus_set_dma_mode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_palmld.c linux-2.6.31.6-pax/drivers/ata/pata_palmld.c
+--- linux-2.6.31.6/drivers/ata/pata_palmld.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_palmld.c	2009-11-12 21:42:12.000000000 +0100
+@@ -37,7 +37,7 @@ static struct scsi_host_template palmld_
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations palmld_port_ops = {
++static const struct ata_port_operations palmld_port_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 	.sff_data_xfer		= ata_sff_data_xfer_noirq,
+ 	.cable_detect		= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_pcmcia.c linux-2.6.31.6-pax/drivers/ata/pata_pcmcia.c
+--- linux-2.6.31.6/drivers/ata/pata_pcmcia.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_pcmcia.c	2009-11-12 21:42:12.000000000 +0100
+@@ -162,14 +162,14 @@ static struct scsi_host_template pcmcia_
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations pcmcia_port_ops = {
++static const struct ata_port_operations pcmcia_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.sff_data_xfer	= ata_sff_data_xfer_noirq,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_mode	= pcmcia_set_mode,
+ };
+ 
+-static struct ata_port_operations pcmcia_8bit_port_ops = {
++static const struct ata_port_operations pcmcia_8bit_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.sff_data_xfer	= ata_data_xfer_8bit,
+ 	.cable_detect	= ata_cable_40wire,
+@@ -256,7 +256,7 @@ static int pcmcia_init_one(struct pcmcia
+ 	unsigned long io_base, ctl_base;
+ 	void __iomem *io_addr, *ctl_addr;
+ 	int n_ports = 1;
+-	struct ata_port_operations *ops = &pcmcia_port_ops;
++	const struct ata_port_operations *ops = &pcmcia_port_ops;
+ 
+ 	info = kzalloc(sizeof(*info), GFP_KERNEL);
+ 	if (info == NULL)
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_pdc2027x.c linux-2.6.31.6-pax/drivers/ata/pata_pdc2027x.c
+--- linux-2.6.31.6/drivers/ata/pata_pdc2027x.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_pdc2027x.c	2009-11-12 21:42:12.000000000 +0100
+@@ -132,14 +132,14 @@ static struct scsi_host_template pdc2027
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations pdc2027x_pata100_ops = {
++static const struct ata_port_operations pdc2027x_pata100_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.check_atapi_dma	= pdc2027x_check_atapi_dma,
+ 	.cable_detect		= pdc2027x_cable_detect,
+ 	.prereset		= pdc2027x_prereset,
+ };
+ 
+-static struct ata_port_operations pdc2027x_pata133_ops = {
++static const struct ata_port_operations pdc2027x_pata133_ops = {
+ 	.inherits		= &pdc2027x_pata100_ops,
+ 	.mode_filter		= pdc2027x_mode_filter,
+ 	.set_piomode		= pdc2027x_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_pdc202xx_old.c linux-2.6.31.6-pax/drivers/ata/pata_pdc202xx_old.c
+--- linux-2.6.31.6/drivers/ata/pata_pdc202xx_old.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_pdc202xx_old.c	2009-11-12 21:42:12.000000000 +0100
+@@ -265,7 +265,7 @@ static struct scsi_host_template pdc202x
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations pdc2024x_port_ops = {
++static const struct ata_port_operations pdc2024x_port_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 
+ 	.cable_detect		= ata_cable_40wire,
+@@ -273,7 +273,7 @@ static struct ata_port_operations pdc202
+ 	.set_dmamode		= pdc202xx_set_dmamode,
+ };
+ 
+-static struct ata_port_operations pdc2026x_port_ops = {
++static const struct ata_port_operations pdc2026x_port_ops = {
+ 	.inherits		= &pdc2024x_port_ops,
+ 
+ 	.check_atapi_dma	= pdc2026x_check_atapi_dma,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_platform.c linux-2.6.31.6-pax/drivers/ata/pata_platform.c
+--- linux-2.6.31.6/drivers/ata/pata_platform.c	2009-03-24 08:35:06.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/pata_platform.c	2009-11-12 21:42:12.000000000 +0100
+@@ -48,7 +48,7 @@ static struct scsi_host_template pata_pl
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations pata_platform_port_ops = {
++static const struct ata_port_operations pata_platform_port_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 	.sff_data_xfer		= ata_sff_data_xfer_noirq,
+ 	.cable_detect		= ata_cable_unknown,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_qdi.c linux-2.6.31.6-pax/drivers/ata/pata_qdi.c
+--- linux-2.6.31.6/drivers/ata/pata_qdi.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_qdi.c	2009-11-12 21:42:12.000000000 +0100
+@@ -157,7 +157,7 @@ static struct scsi_host_template qdi_sht
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations qdi6500_port_ops = {
++static const struct ata_port_operations qdi6500_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.qc_issue	= qdi_qc_issue,
+ 	.sff_data_xfer	= qdi_data_xfer,
+@@ -165,7 +165,7 @@ static struct ata_port_operations qdi650
+ 	.set_piomode	= qdi6500_set_piomode,
+ };
+ 
+-static struct ata_port_operations qdi6580_port_ops = {
++static const struct ata_port_operations qdi6580_port_ops = {
+ 	.inherits	= &qdi6500_port_ops,
+ 	.set_piomode	= qdi6580_set_piomode,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_radisys.c linux-2.6.31.6-pax/drivers/ata/pata_radisys.c
+--- linux-2.6.31.6/drivers/ata/pata_radisys.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_radisys.c	2009-11-12 21:42:12.000000000 +0100
+@@ -187,7 +187,7 @@ static struct scsi_host_template radisys
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations radisys_pata_ops = {
++static const struct ata_port_operations radisys_pata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.qc_issue		= radisys_qc_issue,
+ 	.cable_detect		= ata_cable_unknown,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_rb532_cf.c linux-2.6.31.6-pax/drivers/ata/pata_rb532_cf.c
+--- linux-2.6.31.6/drivers/ata/pata_rb532_cf.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_rb532_cf.c	2009-11-12 21:42:12.000000000 +0100
+@@ -68,7 +68,7 @@ static irqreturn_t rb532_pata_irq_handle
+ 	return IRQ_HANDLED;
+ }
+ 
+-static struct ata_port_operations rb532_pata_port_ops = {
++static const struct ata_port_operations rb532_pata_port_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 	.sff_data_xfer		= ata_sff_data_xfer32,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_rz1000.c linux-2.6.31.6-pax/drivers/ata/pata_rz1000.c
+--- linux-2.6.31.6/drivers/ata/pata_rz1000.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_rz1000.c	2009-11-12 21:42:12.000000000 +0100
+@@ -54,7 +54,7 @@ static struct scsi_host_template rz1000_
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations rz1000_port_ops = {
++static const struct ata_port_operations rz1000_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.cable_detect	= ata_cable_40wire,
+ 	.set_mode	= rz1000_set_mode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_sc1200.c linux-2.6.31.6-pax/drivers/ata/pata_sc1200.c
+--- linux-2.6.31.6/drivers/ata/pata_sc1200.c	2009-11-10 14:55:00.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/pata_sc1200.c	2009-11-12 21:42:12.000000000 +0100
+@@ -207,7 +207,7 @@ static struct scsi_host_template sc1200_
+ 	.sg_tablesize	= LIBATA_DUMB_MAX_PRD,
+ };
+ 
+-static struct ata_port_operations sc1200_port_ops = {
++static const struct ata_port_operations sc1200_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.qc_prep 	= ata_sff_dumb_qc_prep,
+ 	.qc_issue	= sc1200_qc_issue,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_scc.c linux-2.6.31.6-pax/drivers/ata/pata_scc.c
+--- linux-2.6.31.6/drivers/ata/pata_scc.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_scc.c	2009-11-12 21:42:12.000000000 +0100
+@@ -965,7 +965,7 @@ static struct scsi_host_template scc_sht
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations scc_pata_ops = {
++static const struct ata_port_operations scc_pata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 
+ 	.set_piomode		= scc_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_sch.c linux-2.6.31.6-pax/drivers/ata/pata_sch.c
+--- linux-2.6.31.6/drivers/ata/pata_sch.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_sch.c	2009-11-12 21:42:12.000000000 +0100
+@@ -75,7 +75,7 @@ static struct scsi_host_template sch_sht
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations sch_pata_ops = {
++static const struct ata_port_operations sch_pata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.cable_detect		= ata_cable_unknown,
+ 	.set_piomode		= sch_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_serverworks.c linux-2.6.31.6-pax/drivers/ata/pata_serverworks.c
+--- linux-2.6.31.6/drivers/ata/pata_serverworks.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_serverworks.c	2009-11-12 21:42:12.000000000 +0100
+@@ -299,7 +299,7 @@ static struct scsi_host_template serverw
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations serverworks_osb4_port_ops = {
++static const struct ata_port_operations serverworks_osb4_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= serverworks_cable_detect,
+ 	.mode_filter	= serverworks_osb4_filter,
+@@ -307,7 +307,7 @@ static struct ata_port_operations server
+ 	.set_dmamode	= serverworks_set_dmamode,
+ };
+ 
+-static struct ata_port_operations serverworks_csb_port_ops = {
++static const struct ata_port_operations serverworks_csb_port_ops = {
+ 	.inherits	= &serverworks_osb4_port_ops,
+ 	.mode_filter	= serverworks_csb_filter,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_sil680.c linux-2.6.31.6-pax/drivers/ata/pata_sil680.c
+--- linux-2.6.31.6/drivers/ata/pata_sil680.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_sil680.c	2009-11-12 21:42:12.000000000 +0100
+@@ -194,7 +194,7 @@ static struct scsi_host_template sil680_
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations sil680_port_ops = {
++static const struct ata_port_operations sil680_port_ops = {
+ 	.inherits	= &ata_bmdma32_port_ops,
+ 	.cable_detect	= sil680_cable_detect,
+ 	.set_piomode	= sil680_set_piomode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_sis.c linux-2.6.31.6-pax/drivers/ata/pata_sis.c
+--- linux-2.6.31.6/drivers/ata/pata_sis.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_sis.c	2009-11-12 21:42:12.000000000 +0100
+@@ -503,47 +503,47 @@ static struct scsi_host_template sis_sht
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations sis_133_for_sata_ops = {
++static const struct ata_port_operations sis_133_for_sata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.set_piomode		= sis_133_set_piomode,
+ 	.set_dmamode		= sis_133_set_dmamode,
+ 	.cable_detect		= sis_133_cable_detect,
+ };
+ 
+-static struct ata_port_operations sis_base_ops = {
++static const struct ata_port_operations sis_base_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.prereset		= sis_pre_reset,
+ };
+ 
+-static struct ata_port_operations sis_133_ops = {
++static const struct ata_port_operations sis_133_ops = {
+ 	.inherits		= &sis_base_ops,
+ 	.set_piomode		= sis_133_set_piomode,
+ 	.set_dmamode		= sis_133_set_dmamode,
+ 	.cable_detect		= sis_133_cable_detect,
+ };
+ 
+-static struct ata_port_operations sis_133_early_ops = {
++static const struct ata_port_operations sis_133_early_ops = {
+ 	.inherits		= &sis_base_ops,
+ 	.set_piomode		= sis_100_set_piomode,
+ 	.set_dmamode		= sis_133_early_set_dmamode,
+ 	.cable_detect		= sis_66_cable_detect,
+ };
+ 
+-static struct ata_port_operations sis_100_ops = {
++static const struct ata_port_operations sis_100_ops = {
+ 	.inherits		= &sis_base_ops,
+ 	.set_piomode		= sis_100_set_piomode,
+ 	.set_dmamode		= sis_100_set_dmamode,
+ 	.cable_detect		= sis_66_cable_detect,
+ };
+ 
+-static struct ata_port_operations sis_66_ops = {
++static const struct ata_port_operations sis_66_ops = {
+ 	.inherits		= &sis_base_ops,
+ 	.set_piomode		= sis_old_set_piomode,
+ 	.set_dmamode		= sis_66_set_dmamode,
+ 	.cable_detect		= sis_66_cable_detect,
+ };
+ 
+-static struct ata_port_operations sis_old_ops = {
++static const struct ata_port_operations sis_old_ops = {
+ 	.inherits		= &sis_base_ops,
+ 	.set_piomode		= sis_old_set_piomode,
+ 	.set_dmamode		= sis_old_set_dmamode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_sl82c105.c linux-2.6.31.6-pax/drivers/ata/pata_sl82c105.c
+--- linux-2.6.31.6/drivers/ata/pata_sl82c105.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_sl82c105.c	2009-11-12 21:42:12.000000000 +0100
+@@ -231,7 +231,7 @@ static struct scsi_host_template sl82c10
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations sl82c105_port_ops = {
++static const struct ata_port_operations sl82c105_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.qc_defer	= sl82c105_qc_defer,
+ 	.bmdma_start 	= sl82c105_bmdma_start,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_triflex.c linux-2.6.31.6-pax/drivers/ata/pata_triflex.c
+--- linux-2.6.31.6/drivers/ata/pata_triflex.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_triflex.c	2009-11-12 21:42:12.000000000 +0100
+@@ -178,7 +178,7 @@ static struct scsi_host_template triflex
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations triflex_port_ops = {
++static const struct ata_port_operations triflex_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.bmdma_start 	= triflex_bmdma_start,
+ 	.bmdma_stop	= triflex_bmdma_stop,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_via.c linux-2.6.31.6-pax/drivers/ata/pata_via.c
+--- linux-2.6.31.6/drivers/ata/pata_via.c	2009-11-10 14:55:00.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/pata_via.c	2009-11-12 21:42:12.000000000 +0100
+@@ -419,7 +419,7 @@ static struct scsi_host_template via_sht
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations via_port_ops = {
++static const struct ata_port_operations via_port_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 	.cable_detect	= via_cable_detect,
+ 	.set_piomode	= via_set_piomode,
+@@ -429,7 +429,7 @@ static struct ata_port_operations via_po
+ 	.port_start	= via_port_start,
+ };
+ 
+-static struct ata_port_operations via_port_ops_noirq = {
++static const struct ata_port_operations via_port_ops_noirq = {
+ 	.inherits	= &via_port_ops,
+ 	.sff_data_xfer	= ata_sff_data_xfer_noirq,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pata_winbond.c linux-2.6.31.6-pax/drivers/ata/pata_winbond.c
+--- linux-2.6.31.6/drivers/ata/pata_winbond.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pata_winbond.c	2009-11-12 21:42:12.000000000 +0100
+@@ -125,7 +125,7 @@ static struct scsi_host_template winbond
+ 	ATA_PIO_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations winbond_port_ops = {
++static const struct ata_port_operations winbond_port_ops = {
+ 	.inherits	= &ata_sff_port_ops,
+ 	.sff_data_xfer	= winbond_data_xfer,
+ 	.cable_detect	= ata_cable_40wire,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/pdc_adma.c linux-2.6.31.6-pax/drivers/ata/pdc_adma.c
+--- linux-2.6.31.6/drivers/ata/pdc_adma.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/pdc_adma.c	2009-11-12 21:42:12.000000000 +0100
+@@ -145,7 +145,7 @@ static struct scsi_host_template adma_at
+ 	.dma_boundary		= ADMA_DMA_BOUNDARY,
+ };
+ 
+-static struct ata_port_operations adma_ata_ops = {
++static const struct ata_port_operations adma_ata_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 
+ 	.lost_interrupt		= ATA_OP_NULL,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_fsl.c linux-2.6.31.6-pax/drivers/ata/sata_fsl.c
+--- linux-2.6.31.6/drivers/ata/sata_fsl.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_fsl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -1254,7 +1254,7 @@ static struct scsi_host_template sata_fs
+ 	.dma_boundary = ATA_DMA_BOUNDARY,
+ };
+ 
+-static struct ata_port_operations sata_fsl_ops = {
++static const struct ata_port_operations sata_fsl_ops = {
+ 	.inherits		= &sata_pmp_port_ops,
+ 
+ 	.qc_prep = sata_fsl_qc_prep,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_inic162x.c linux-2.6.31.6-pax/drivers/ata/sata_inic162x.c
+--- linux-2.6.31.6/drivers/ata/sata_inic162x.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_inic162x.c	2009-11-12 21:42:12.000000000 +0100
+@@ -721,7 +721,7 @@ static int inic_port_start(struct ata_po
+ 	return 0;
+ }
+ 
+-static struct ata_port_operations inic_port_ops = {
++static const struct ata_port_operations inic_port_ops = {
+ 	.inherits		= &sata_port_ops,
+ 
+ 	.check_atapi_dma	= inic_check_atapi_dma,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_mv.c linux-2.6.31.6-pax/drivers/ata/sata_mv.c
+--- linux-2.6.31.6/drivers/ata/sata_mv.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_mv.c	2009-11-12 21:42:12.000000000 +0100
+@@ -656,7 +656,7 @@ static struct scsi_host_template mv6_sht
+ 	.dma_boundary		= MV_DMA_BOUNDARY,
+ };
+ 
+-static struct ata_port_operations mv5_ops = {
++static const struct ata_port_operations mv5_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 
+ 	.lost_interrupt		= ATA_OP_NULL,
+@@ -678,7 +678,7 @@ static struct ata_port_operations mv5_op
+ 	.port_stop		= mv_port_stop,
+ };
+ 
+-static struct ata_port_operations mv6_ops = {
++static const struct ata_port_operations mv6_ops = {
+ 	.inherits		= &mv5_ops,
+ 	.dev_config             = mv6_dev_config,
+ 	.scr_read		= mv_scr_read,
+@@ -698,7 +698,7 @@ static struct ata_port_operations mv6_op
+ 	.bmdma_status		= mv_bmdma_status,
+ };
+ 
+-static struct ata_port_operations mv_iie_ops = {
++static const struct ata_port_operations mv_iie_ops = {
+ 	.inherits		= &mv6_ops,
+ 	.dev_config		= ATA_OP_NULL,
+ 	.qc_prep		= mv_qc_prep_iie,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_nv.c linux-2.6.31.6-pax/drivers/ata/sata_nv.c
+--- linux-2.6.31.6/drivers/ata/sata_nv.c	2009-11-10 14:55:00.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/sata_nv.c	2009-11-12 21:42:12.000000000 +0100
+@@ -464,7 +464,7 @@ static struct scsi_host_template nv_swnc
+  * cases.  Define nv_hardreset() which only kicks in for post-boot
+  * probing and use it for all variants.
+  */
+-static struct ata_port_operations nv_generic_ops = {
++static const struct ata_port_operations nv_generic_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.lost_interrupt		= ATA_OP_NULL,
+ 	.scr_read		= nv_scr_read,
+@@ -472,20 +472,20 @@ static struct ata_port_operations nv_gen
+ 	.hardreset		= nv_hardreset,
+ };
+ 
+-static struct ata_port_operations nv_nf2_ops = {
++static const struct ata_port_operations nv_nf2_ops = {
+ 	.inherits		= &nv_generic_ops,
+ 	.freeze			= nv_nf2_freeze,
+ 	.thaw			= nv_nf2_thaw,
+ };
+ 
+-static struct ata_port_operations nv_ck804_ops = {
++static const struct ata_port_operations nv_ck804_ops = {
+ 	.inherits		= &nv_generic_ops,
+ 	.freeze			= nv_ck804_freeze,
+ 	.thaw			= nv_ck804_thaw,
+ 	.host_stop		= nv_ck804_host_stop,
+ };
+ 
+-static struct ata_port_operations nv_adma_ops = {
++static const struct ata_port_operations nv_adma_ops = {
+ 	.inherits		= &nv_ck804_ops,
+ 
+ 	.check_atapi_dma	= nv_adma_check_atapi_dma,
+@@ -509,7 +509,7 @@ static struct ata_port_operations nv_adm
+ 	.host_stop		= nv_adma_host_stop,
+ };
+ 
+-static struct ata_port_operations nv_swncq_ops = {
++static const struct ata_port_operations nv_swncq_ops = {
+ 	.inherits		= &nv_generic_ops,
+ 
+ 	.qc_defer		= ata_std_qc_defer,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_promise.c linux-2.6.31.6-pax/drivers/ata/sata_promise.c
+--- linux-2.6.31.6/drivers/ata/sata_promise.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_promise.c	2009-11-12 21:42:12.000000000 +0100
+@@ -184,7 +184,7 @@ static const struct ata_port_operations 
+ 	.error_handler		= pdc_error_handler,
+ };
+ 
+-static struct ata_port_operations pdc_sata_ops = {
++static const struct ata_port_operations pdc_sata_ops = {
+ 	.inherits		= &pdc_common_ops,
+ 	.cable_detect		= pdc_sata_cable_detect,
+ 	.freeze			= pdc_sata_freeze,
+@@ -196,12 +196,12 @@ static struct ata_port_operations pdc_sa
+ };
+ 
+ /* First-generation chips need a more restrictive ->check_atapi_dma op */
+-static struct ata_port_operations pdc_old_sata_ops = {
++static const struct ata_port_operations pdc_old_sata_ops = {
+ 	.inherits		= &pdc_sata_ops,
+ 	.check_atapi_dma	= pdc_old_sata_check_atapi_dma,
+ };
+ 
+-static struct ata_port_operations pdc_pata_ops = {
++static const struct ata_port_operations pdc_pata_ops = {
+ 	.inherits		= &pdc_common_ops,
+ 	.cable_detect		= pdc_pata_cable_detect,
+ 	.freeze			= pdc_freeze,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_qstor.c linux-2.6.31.6-pax/drivers/ata/sata_qstor.c
+--- linux-2.6.31.6/drivers/ata/sata_qstor.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_qstor.c	2009-11-12 21:42:12.000000000 +0100
+@@ -132,7 +132,7 @@ static struct scsi_host_template qs_ata_
+ 	.dma_boundary		= QS_DMA_BOUNDARY,
+ };
+ 
+-static struct ata_port_operations qs_ata_ops = {
++static const struct ata_port_operations qs_ata_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 
+ 	.check_atapi_dma	= qs_check_atapi_dma,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_sil.c linux-2.6.31.6-pax/drivers/ata/sata_sil.c
+--- linux-2.6.31.6/drivers/ata/sata_sil.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_sil.c	2009-11-12 21:42:12.000000000 +0100
+@@ -182,7 +182,7 @@ static struct scsi_host_template sil_sht
+ 	.sg_tablesize		= ATA_MAX_PRD
+ };
+ 
+-static struct ata_port_operations sil_ops = {
++static const struct ata_port_operations sil_ops = {
+ 	.inherits		= &ata_bmdma32_port_ops,
+ 	.dev_config		= sil_dev_config,
+ 	.set_mode		= sil_set_mode,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_sil24.c linux-2.6.31.6-pax/drivers/ata/sata_sil24.c
+--- linux-2.6.31.6/drivers/ata/sata_sil24.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_sil24.c	2009-11-12 21:42:12.000000000 +0100
+@@ -388,7 +388,7 @@ static struct scsi_host_template sil24_s
+ 	.dma_boundary		= ATA_DMA_BOUNDARY,
+ };
+ 
+-static struct ata_port_operations sil24_ops = {
++static const struct ata_port_operations sil24_ops = {
+ 	.inherits		= &sata_pmp_port_ops,
+ 
+ 	.qc_defer		= sil24_qc_defer,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_sis.c linux-2.6.31.6-pax/drivers/ata/sata_sis.c
+--- linux-2.6.31.6/drivers/ata/sata_sis.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_sis.c	2009-11-12 21:42:12.000000000 +0100
+@@ -89,7 +89,7 @@ static struct scsi_host_template sis_sht
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations sis_ops = {
++static const struct ata_port_operations sis_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.scr_read		= sis_scr_read,
+ 	.scr_write		= sis_scr_write,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_svw.c linux-2.6.31.6-pax/drivers/ata/sata_svw.c
+--- linux-2.6.31.6/drivers/ata/sata_svw.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_svw.c	2009-11-12 21:42:12.000000000 +0100
+@@ -344,7 +344,7 @@ static struct scsi_host_template k2_sata
+ };
+ 
+ 
+-static struct ata_port_operations k2_sata_ops = {
++static const struct ata_port_operations k2_sata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.sff_tf_load		= k2_sata_tf_load,
+ 	.sff_tf_read		= k2_sata_tf_read,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_sx4.c linux-2.6.31.6-pax/drivers/ata/sata_sx4.c
+--- linux-2.6.31.6/drivers/ata/sata_sx4.c	2009-09-10 19:41:18.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_sx4.c	2009-11-12 21:42:12.000000000 +0100
+@@ -248,7 +248,7 @@ static struct scsi_host_template pdc_sat
+ };
+ 
+ /* TODO: inherit from base port_ops after converting to new EH */
+-static struct ata_port_operations pdc_20621_ops = {
++static const struct ata_port_operations pdc_20621_ops = {
+ 	.inherits		= &ata_sff_port_ops,
+ 
+ 	.check_atapi_dma	= pdc_check_atapi_dma,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_uli.c linux-2.6.31.6-pax/drivers/ata/sata_uli.c
+--- linux-2.6.31.6/drivers/ata/sata_uli.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_uli.c	2009-11-12 21:42:12.000000000 +0100
+@@ -79,7 +79,7 @@ static struct scsi_host_template uli_sht
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations uli_ops = {
++static const struct ata_port_operations uli_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.scr_read		= uli_scr_read,
+ 	.scr_write		= uli_scr_write,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_via.c linux-2.6.31.6-pax/drivers/ata/sata_via.c
+--- linux-2.6.31.6/drivers/ata/sata_via.c	2009-11-10 14:55:00.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/ata/sata_via.c	2009-11-12 21:42:12.000000000 +0100
+@@ -112,31 +112,31 @@ static struct scsi_host_template svia_sh
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations svia_base_ops = {
++static const struct ata_port_operations svia_base_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.sff_tf_load		= svia_tf_load,
+ };
+ 
+-static struct ata_port_operations vt6420_sata_ops = {
++static const struct ata_port_operations vt6420_sata_ops = {
+ 	.inherits		= &svia_base_ops,
+ 	.freeze			= svia_noop_freeze,
+ 	.prereset		= vt6420_prereset,
+ };
+ 
+-static struct ata_port_operations vt6421_pata_ops = {
++static const struct ata_port_operations vt6421_pata_ops = {
+ 	.inherits		= &svia_base_ops,
+ 	.cable_detect		= vt6421_pata_cable_detect,
+ 	.set_piomode		= vt6421_set_pio_mode,
+ 	.set_dmamode		= vt6421_set_dma_mode,
+ };
+ 
+-static struct ata_port_operations vt6421_sata_ops = {
++static const struct ata_port_operations vt6421_sata_ops = {
+ 	.inherits		= &svia_base_ops,
+ 	.scr_read		= svia_scr_read,
+ 	.scr_write		= svia_scr_write,
+ };
+ 
+-static struct ata_port_operations vt8251_ops = {
++static const struct ata_port_operations vt8251_ops = {
+ 	.inherits		= &svia_base_ops,
+ 	.hardreset		= sata_std_hardreset,
+ 	.scr_read		= vt8251_scr_read,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/ata/sata_vsc.c linux-2.6.31.6-pax/drivers/ata/sata_vsc.c
+--- linux-2.6.31.6/drivers/ata/sata_vsc.c	2009-06-10 08:46:25.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/ata/sata_vsc.c	2009-11-12 21:42:12.000000000 +0100
+@@ -306,7 +306,7 @@ static struct scsi_host_template vsc_sat
+ };
+ 
+ 
+-static struct ata_port_operations vsc_sata_ops = {
++static const struct ata_port_operations vsc_sata_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	/* The IRQ handling is not quite standard SFF behaviour so we
+ 	   cannot use the default lost interrupt handler */
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/atm/adummy.c linux-2.6.31.6-pax/drivers/atm/adummy.c
 --- linux-2.6.31.6/drivers/atm/adummy.c	2008-10-10 09:18:49.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/atm/adummy.c	2009-09-10 19:43:33.000000000 +0200
@@ -18944,7 +20452,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/atm
  
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/base/bus.c linux-2.6.31.6-pax/drivers/base/bus.c
 --- linux-2.6.31.6/drivers/base/bus.c	2009-10-07 00:17:37.000000000 +0200
-+++ linux-2.6.31.6-pax/drivers/base/bus.c	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/base/bus.c	2009-11-12 21:42:09.000000000 +0100
 @@ -70,7 +70,7 @@ static ssize_t drv_attr_store(struct kob
  	return ret;
  }
@@ -18963,6 +20471,15 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/bas
  	.show	= bus_attr_show,
  	.store	= bus_attr_store,
  };
+@@ -154,7 +154,7 @@ static int bus_uevent_filter(struct kset
+ 	return 0;
+ }
+ 
+-static struct kset_uevent_ops bus_uevent_ops = {
++static const struct kset_uevent_ops bus_uevent_ops = {
+ 	.filter = bus_uevent_filter,
+ };
+ 
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/base/class.c linux-2.6.31.6-pax/drivers/base/class.c
 --- linux-2.6.31.6/drivers/base/class.c	2008-12-25 12:13:20.000000000 +0100
 +++ linux-2.6.31.6-pax/drivers/base/class.c	2009-10-20 12:10:04.000000000 +0200
@@ -18977,7 +20494,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/bas
  };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/base/core.c linux-2.6.31.6-pax/drivers/base/core.c
 --- linux-2.6.31.6/drivers/base/core.c	2009-10-07 00:17:37.000000000 +0200
-+++ linux-2.6.31.6-pax/drivers/base/core.c	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/base/core.c	2009-11-12 21:42:09.000000000 +0100
 @@ -93,7 +93,7 @@ static ssize_t dev_attr_store(struct kob
  	return ret;
  }
@@ -18986,6 +20503,27 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/bas
 +static const struct sysfs_ops dev_sysfs_ops = {
  	.show	= dev_attr_show,
  	.store	= dev_attr_store,
+ };
+@@ -242,7 +242,7 @@ static int dev_uevent(struct kset *kset,
+ 	return retval;
+ }
+ 
+-static struct kset_uevent_ops device_uevent_ops = {
++static const struct kset_uevent_ops device_uevent_ops = {
+ 	.filter =	dev_uevent_filter,
+ 	.name =		dev_uevent_name,
+ 	.uevent =	dev_uevent,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/base/memory.c linux-2.6.31.6-pax/drivers/base/memory.c
+--- linux-2.6.31.6/drivers/base/memory.c	2009-03-24 08:35:07.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/base/memory.c	2009-11-12 21:42:12.000000000 +0100
+@@ -44,7 +44,7 @@ static int memory_uevent(struct kset *ks
+ 	return retval;
+ }
+ 
+-static struct kset_uevent_ops memory_uevent_ops = {
++static const struct kset_uevent_ops memory_uevent_ops = {
+ 	.name		= memory_uevent_name,
+ 	.uevent		= memory_uevent,
  };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/base/sys.c linux-2.6.31.6-pax/drivers/base/sys.c
 --- linux-2.6.31.6/drivers/base/sys.c	2009-09-10 19:41:19.000000000 +0200
@@ -20124,6 +21662,188 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu
  	sarea_priv->last_enqueue = dev_priv->counter - 1;
  	sarea_priv->last_dispatch = (int)hw_status[5];
  
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu/drm/i915/dvo.h linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo.h
+--- linux-2.6.31.6/drivers/gpu/drm/i915/dvo.h	2009-09-10 19:41:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo.h	2009-11-12 21:42:12.000000000 +0100
+@@ -51,14 +51,14 @@ struct intel_dvo_dev_ops {
+ 	 * Initialize the device at startup time.
+ 	 * Returns NULL if the device does not exist.
+ 	 */
+-	bool (*init)(struct intel_dvo_device *dvo,
++	bool (* const init)(struct intel_dvo_device *dvo,
+ 		     struct i2c_adapter *i2cbus);
+ 
+ 	/*
+ 	 * Called to allow the output a chance to create properties after the
+ 	 * RandR objects have been created.
+ 	 */
+-	void (*create_resources)(struct intel_dvo_device *dvo);
++	void (* const create_resources)(struct intel_dvo_device *dvo);
+ 
+ 	/*
+ 	 * Turn on/off output or set intermediate power levels if available.
+@@ -67,17 +67,17 @@ struct intel_dvo_dev_ops {
+ 	 * If the  mode is DPMSModeOff, the output must be disabled,
+ 	 * as the DPLL may be disabled afterwards.
+ 	 */
+-	void (*dpms)(struct intel_dvo_device *dvo, int mode);
++	void (* const dpms)(struct intel_dvo_device *dvo, int mode);
+ 
+ 	/*
+ 	 * Saves the output's state for restoration on VT switch.
+ 	 */
+-	void (*save)(struct intel_dvo_device *dvo);
++	void (* const save)(struct intel_dvo_device *dvo);
+ 
+ 	/*
+ 	 * Restore's the output's state at VT switch.
+ 	 */
+-	void (*restore)(struct intel_dvo_device *dvo);
++	void (* const restore)(struct intel_dvo_device *dvo);
+ 
+ 	/*
+ 	 * Callback for testing a video mode for a given output.
+@@ -88,7 +88,7 @@ struct intel_dvo_dev_ops {
+ 	 *
+ 	 * \return MODE_OK if the mode is valid, or another MODE_* otherwise.
+ 	 */
+-	int (*mode_valid)(struct intel_dvo_device *dvo,
++	int (* const mode_valid)(struct intel_dvo_device *dvo,
+ 			  struct drm_display_mode *mode);
+ 
+ 	/*
+@@ -98,19 +98,19 @@ struct intel_dvo_dev_ops {
+ 	 * timings, which is used for panels with fixed timings or for
+ 	 * buses with clock limitations.
+ 	 */
+-	bool (*mode_fixup)(struct intel_dvo_device *dvo,
++	bool (* const mode_fixup)(struct intel_dvo_device *dvo,
+ 			   struct drm_display_mode *mode,
+ 			   struct drm_display_mode *adjusted_mode);
+ 
+ 	/*
+ 	 * Callback for preparing mode changes on an output
+ 	 */
+-	void (*prepare)(struct intel_dvo_device *dvo);
++	void (* const prepare)(struct intel_dvo_device *dvo);
+ 
+ 	/*
+ 	 * Callback for committing mode changes on an output
+ 	 */
+-	void (*commit)(struct intel_dvo_device *dvo);
++	void (* const commit)(struct intel_dvo_device *dvo);
+ 
+ 	/*
+ 	 * Callback for setting up a video mode after fixups have been made.
+@@ -119,14 +119,14 @@ struct intel_dvo_dev_ops {
+ 	 * must be all that's necessary for the output, to turn the output on
+ 	 * after this function is called.
+ 	 */
+-	void (*mode_set)(struct intel_dvo_device *dvo,
++	void (* const mode_set)(struct intel_dvo_device *dvo,
+ 			 struct drm_display_mode *mode,
+ 			 struct drm_display_mode *adjusted_mode);
+ 
+ 	/*
+ 	 * Probe for a connected output, and return detect_status.
+ 	 */
+-	enum drm_connector_status (*detect)(struct intel_dvo_device *dvo);
++	enum drm_connector_status (* const detect)(struct intel_dvo_device *dvo);
+ 
+ 	/**
+ 	 * Query the device for the modes it provides.
+@@ -135,23 +135,23 @@ struct intel_dvo_dev_ops {
+ 	 *
+ 	 * \return singly-linked list of modes or NULL if no modes found.
+ 	 */
+-	struct drm_display_mode *(*get_modes)(struct intel_dvo_device *dvo);
++	struct drm_display_mode *(* const get_modes)(struct intel_dvo_device *dvo);
+ 
+ 	/**
+ 	 * Clean up driver-specific bits of the output
+ 	 */
+-	void (*destroy) (struct intel_dvo_device *dvo);
++	void (* const destroy) (struct intel_dvo_device *dvo);
+ 
+ 	/**
+ 	 * Debugging hook to dump device registers to log file
+ 	 */
+-	void (*dump_regs)(struct intel_dvo_device *dvo);
++	void (* const dump_regs)(struct intel_dvo_device *dvo);
+ };
+ 
+-extern struct intel_dvo_dev_ops sil164_ops;
+-extern struct intel_dvo_dev_ops ch7xxx_ops;
+-extern struct intel_dvo_dev_ops ivch_ops;
+-extern struct intel_dvo_dev_ops tfp410_ops;
+-extern struct intel_dvo_dev_ops ch7017_ops;
++extern const struct intel_dvo_dev_ops sil164_ops;
++extern const struct intel_dvo_dev_ops ch7xxx_ops;
++extern const struct intel_dvo_dev_ops ivch_ops;
++extern const struct intel_dvo_dev_ops tfp410_ops;
++extern const struct intel_dvo_dev_ops ch7017_ops;
+ 
+ #endif /* _INTEL_DVO_H */
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu/drm/i915/dvo_ch7017.c linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_ch7017.c
+--- linux-2.6.31.6/drivers/gpu/drm/i915/dvo_ch7017.c	2009-09-10 19:41:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_ch7017.c	2009-11-12 21:42:12.000000000 +0100
+@@ -443,7 +443,7 @@ static void ch7017_destroy(struct intel_
+ 	}
+ }
+ 
+-struct intel_dvo_dev_ops ch7017_ops = {
++const struct intel_dvo_dev_ops ch7017_ops = {
+ 	.init = ch7017_init,
+ 	.detect = ch7017_detect,
+ 	.mode_valid = ch7017_mode_valid,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu/drm/i915/dvo_ch7xxx.c linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_ch7xxx.c
+--- linux-2.6.31.6/drivers/gpu/drm/i915/dvo_ch7xxx.c	2009-09-10 19:41:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_ch7xxx.c	2009-11-12 21:42:12.000000000 +0100
+@@ -356,7 +356,7 @@ static void ch7xxx_destroy(struct intel_
+ 	}
+ }
+ 
+-struct intel_dvo_dev_ops ch7xxx_ops = {
++const struct intel_dvo_dev_ops ch7xxx_ops = {
+ 	.init = ch7xxx_init,
+ 	.detect = ch7xxx_detect,
+ 	.mode_valid = ch7xxx_mode_valid,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu/drm/i915/dvo_ivch.c linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_ivch.c
+--- linux-2.6.31.6/drivers/gpu/drm/i915/dvo_ivch.c	2009-09-10 19:41:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_ivch.c	2009-11-12 21:42:12.000000000 +0100
+@@ -430,7 +430,7 @@ static void ivch_destroy(struct intel_dv
+ 	}
+ }
+ 
+-struct intel_dvo_dev_ops ivch_ops= {
++const struct intel_dvo_dev_ops ivch_ops= {
+ 	.init = ivch_init,
+ 	.dpms = ivch_dpms,
+ 	.save = ivch_save,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu/drm/i915/dvo_sil164.c linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_sil164.c
+--- linux-2.6.31.6/drivers/gpu/drm/i915/dvo_sil164.c	2009-09-10 19:41:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_sil164.c	2009-11-12 21:42:12.000000000 +0100
+@@ -290,7 +290,7 @@ static void sil164_destroy(struct intel_
+ 	}
+ }
+ 
+-struct intel_dvo_dev_ops sil164_ops = {
++const struct intel_dvo_dev_ops sil164_ops = {
+ 	.init = sil164_init,
+ 	.detect = sil164_detect,
+ 	.mode_valid = sil164_mode_valid,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu/drm/i915/dvo_tfp410.c linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_tfp410.c
+--- linux-2.6.31.6/drivers/gpu/drm/i915/dvo_tfp410.c	2009-09-10 19:41:24.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/gpu/drm/i915/dvo_tfp410.c	2009-11-12 21:42:12.000000000 +0100
+@@ -323,7 +323,7 @@ static void tfp410_destroy(struct intel_
+ 	}
+ }
+ 
+-struct intel_dvo_dev_ops tfp410_ops = {
++const struct intel_dvo_dev_ops tfp410_ops = {
+ 	.init = tfp410_init,
+ 	.detect = tfp410_detect,
+ 	.mode_valid = tfp410_mode_valid,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/gpu/drm/i915/i915_drv.c linux-2.6.31.6-pax/drivers/gpu/drm/i915/i915_drv.c
 --- linux-2.6.31.6/drivers/gpu/drm/i915/i915_drv.c	2009-10-07 00:17:37.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/gpu/drm/i915/i915_drv.c	2009-10-07 00:17:49.000000000 +0200
@@ -20980,6 +22700,27 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/lgu
  	.owner	 = THIS_MODULE,
  	.release = close,
  	.write	 = write,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/macintosh/via-pmu-backlight.c linux-2.6.31.6-pax/drivers/macintosh/via-pmu-backlight.c
+--- linux-2.6.31.6/drivers/macintosh/via-pmu-backlight.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/macintosh/via-pmu-backlight.c	2009-11-12 21:42:12.000000000 +0100
+@@ -15,7 +15,7 @@
+ 
+ #define MAX_PMU_LEVEL 0xFF
+ 
+-static struct backlight_ops pmu_backlight_data;
++static const struct backlight_ops pmu_backlight_data;
+ static DEFINE_SPINLOCK(pmu_backlight_lock);
+ static int sleeping, uses_pmu_bl;
+ static u8 bl_curve[FB_BACKLIGHT_LEVELS];
+@@ -115,7 +115,7 @@ static int pmu_backlight_get_brightness(
+ 	return bd->props.brightness;
+ }
+ 
+-static struct backlight_ops pmu_backlight_data = {
++static const struct backlight_ops pmu_backlight_data = {
+ 	.get_brightness	= pmu_backlight_get_brightness,
+ 	.update_status	= pmu_backlight_update_status,
+ 
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/macintosh/via-pmu.c linux-2.6.31.6-pax/drivers/macintosh/via-pmu.c
 --- linux-2.6.31.6/drivers/macintosh/via-pmu.c	2009-11-10 14:55:00.000000000 +0100
 +++ linux-2.6.31.6-pax/drivers/macintosh/via-pmu.c	2009-11-10 14:55:10.000000000 +0100
@@ -21030,7 +22771,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/md/
  		       dm_device_name(ti->table->md), bdevname(bdev, b),
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/md/md.c linux-2.6.31.6-pax/drivers/md/md.c
 --- linux-2.6.31.6/drivers/md/md.c	2009-09-10 19:41:35.000000000 +0200
-+++ linux-2.6.31.6-pax/drivers/md/md.c	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/md/md.c	2009-11-12 21:42:12.000000000 +0100
 @@ -2474,7 +2474,7 @@ static void rdev_free(struct kobject *ko
  	mdk_rdev_t *rdev = container_of(ko, mdk_rdev_t, kobj);
  	kfree(rdev);
@@ -21348,6 +23089,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/mes
  
  	return 0;
  }
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/mfd/ab3100-core.c linux-2.6.31.6-pax/drivers/mfd/ab3100-core.c
+--- linux-2.6.31.6/drivers/mfd/ab3100-core.c	2009-10-07 00:17:37.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/mfd/ab3100-core.c	2009-11-11 23:16:21.000000000 +0100
+@@ -465,7 +465,7 @@ static int ab3100_get_set_reg_open_file(
+ 	return 0;
+ }
+ 
+-static int ab3100_get_set_reg(struct file *file,
++static ssize_t ab3100_get_set_reg(struct file *file,
+ 			      const char __user *user_buf,
+ 			      size_t count, loff_t *ppos)
+ {
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/misc/ibmasm/ibmasmfs.c linux-2.6.31.6-pax/drivers/misc/ibmasm/ibmasmfs.c
 --- linux-2.6.31.6/drivers/misc/ibmasm/ibmasmfs.c	2009-03-24 08:35:17.000000000 +0100
 +++ linux-2.6.31.6-pax/drivers/misc/ibmasm/ibmasmfs.c	2009-09-10 19:43:33.000000000 +0200
@@ -21565,6 +23318,30 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net
  	.acquire_nvm		= e1000_acquire_nvm_80003es2lan,
  	.read_nvm		= e1000e_read_nvm_eerd,
  	.release_nvm		= e1000_release_nvm_80003es2lan,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/e1000e/hw.h linux-2.6.31.6-pax/drivers/net/e1000e/hw.h
+--- linux-2.6.31.6/drivers/net/e1000e/hw.h	2009-09-10 19:41:48.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/net/e1000e/hw.h	2009-11-12 21:42:12.000000000 +0100
+@@ -774,13 +774,13 @@ struct e1000_phy_operations {
+ 
+ /* Function pointers for the NVM. */
+ struct e1000_nvm_operations {
+-	s32  (*acquire_nvm)(struct e1000_hw *);
+-	s32  (*read_nvm)(struct e1000_hw *, u16, u16, u16 *);
+-	void (*release_nvm)(struct e1000_hw *);
+-	s32  (*update_nvm)(struct e1000_hw *);
+-	s32  (*valid_led_default)(struct e1000_hw *, u16 *);
+-	s32  (*validate_nvm)(struct e1000_hw *);
+-	s32  (*write_nvm)(struct e1000_hw *, u16, u16, u16 *);
++	s32  (* const acquire_nvm)(struct e1000_hw *);
++	s32  (* const read_nvm)(struct e1000_hw *, u16, u16, u16 *);
++	void (* const release_nvm)(struct e1000_hw *);
++	s32  (* const update_nvm)(struct e1000_hw *);
++	s32  (* const valid_led_default)(struct e1000_hw *, u16 *);
++	s32  (* const validate_nvm)(struct e1000_hw *);
++	s32  (* const write_nvm)(struct e1000_hw *, u16, u16, u16 *);
+ };
+ 
+ struct e1000_mac_info {
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/e1000e/ich8lan.c linux-2.6.31.6-pax/drivers/net/e1000e/ich8lan.c
 --- linux-2.6.31.6/drivers/net/e1000e/ich8lan.c	2009-09-10 19:41:48.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/net/e1000e/ich8lan.c	2009-10-20 12:10:04.000000000 +0200
@@ -21637,8 +23414,20 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net
  	.release              = igb_release_nvm_82575,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/igb/e1000_hw.h linux-2.6.31.6-pax/drivers/net/igb/e1000_hw.h
 --- linux-2.6.31.6/drivers/net/igb/e1000_hw.h	2009-06-10 08:46:39.000000000 +0200
-+++ linux-2.6.31.6-pax/drivers/net/igb/e1000_hw.h	2009-10-20 12:10:04.000000000 +0200
-@@ -310,9 +310,9 @@ struct e1000_nvm_operations {
++++ linux-2.6.31.6-pax/drivers/net/igb/e1000_hw.h	2009-11-12 21:42:09.000000000 +0100
+@@ -302,17 +302,17 @@ struct e1000_phy_operations {
+ };
+ 
+ struct e1000_nvm_operations {
+-	s32  (*acquire)(struct e1000_hw *);
+-	s32  (*read)(struct e1000_hw *, u16, u16, u16 *);
+-	void (*release)(struct e1000_hw *);
+-	s32  (*write)(struct e1000_hw *, u16, u16, u16 *);
++	s32  (* const acquire)(struct e1000_hw *);
++	s32  (* const read)(struct e1000_hw *, u16, u16, u16 *);
++	void (* const release)(struct e1000_hw *);
++	s32  (* const write)(struct e1000_hw *, u16, u16, u16 *);
+ };
  
  struct e1000_info {
  	s32 (*get_invariants)(struct e1000_hw *);
@@ -21795,6 +23584,74 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net
  				result =
  				    hso_start_serial_device(serial_table[i], GFP_NOIO);
  				hso_kick_transmit(dev2ser(serial_table[i]));
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-3945.c linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-3945.c
+--- linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-3945.c	2009-10-07 00:17:37.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-3945.c	2009-11-12 21:42:12.000000000 +0100
+@@ -2867,7 +2867,7 @@ static struct iwl_hcmd_utils_ops iwl3945
+ 	.build_addsta_hcmd = iwl3945_build_addsta_hcmd,
+ };
+ 
+-static struct iwl_ops iwl3945_ops = {
++static const struct iwl_ops iwl3945_ops = {
+ 	.ucode = &iwl3945_ucode,
+ 	.lib = &iwl3945_lib,
+ 	.hcmd = &iwl3945_hcmd,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-4965.c linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-4965.c
+--- linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-4965.c	2009-10-07 00:17:37.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-4965.c	2009-11-12 21:42:12.000000000 +0100
+@@ -2324,7 +2324,7 @@ static struct iwl_lib_ops iwl4965_lib = 
+ 	},
+ };
+ 
+-static struct iwl_ops iwl4965_ops = {
++static const struct iwl_ops iwl4965_ops = {
+ 	.ucode = &iwl4965_ucode,
+ 	.lib = &iwl4965_lib,
+ 	.hcmd = &iwl4965_hcmd,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-5000.c linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-5000.c
+--- linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-5000.c	2009-10-07 00:17:37.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-5000.c	2009-11-12 21:42:12.000000000 +0100
+@@ -1597,14 +1597,14 @@ static struct iwl_lib_ops iwl5150_lib = 
+ 	 },
+ };
+ 
+-struct iwl_ops iwl5000_ops = {
++const struct iwl_ops iwl5000_ops = {
+ 	.ucode = &iwl5000_ucode,
+ 	.lib = &iwl5000_lib,
+ 	.hcmd = &iwl5000_hcmd,
+ 	.utils = &iwl5000_hcmd_utils,
+ };
+ 
+-static struct iwl_ops iwl5150_ops = {
++static const struct iwl_ops iwl5150_ops = {
+ 	.ucode = &iwl5000_ucode,
+ 	.lib = &iwl5150_lib,
+ 	.hcmd = &iwl5000_hcmd,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-6000.c linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-6000.c
+--- linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-6000.c	2009-10-07 00:17:37.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-6000.c	2009-11-12 21:42:12.000000000 +0100
+@@ -68,7 +68,7 @@ static struct iwl_hcmd_utils_ops iwl6000
+ 	.calc_rssi = iwl5000_calc_rssi,
+ };
+ 
+-static struct iwl_ops iwl6000_ops = {
++static const struct iwl_ops iwl6000_ops = {
+ 	.ucode = &iwl5000_ucode,
+ 	.lib = &iwl5000_lib,
+ 	.hcmd = &iwl5000_hcmd,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-dev.h linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-dev.h
+--- linux-2.6.31.6/drivers/net/wireless/iwlwifi/iwl-dev.h	2009-10-07 00:17:37.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/net/wireless/iwlwifi/iwl-dev.h	2009-11-12 21:42:12.000000000 +0100
+@@ -65,7 +65,7 @@ extern struct iwl_cfg iwl1000_bgn_cfg;
+ 
+ /* shared structures from iwl-5000.c */
+ extern struct iwl_mod_params iwl50_mod_params;
+-extern struct iwl_ops iwl5000_ops;
++extern const struct iwl_ops iwl5000_ops;
+ extern struct iwl_ucode_ops iwl5000_ucode;
+ extern struct iwl_lib_ops iwl5000_lib;
+ extern struct iwl_hcmd_ops iwl5000_hcmd;
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/oprofile/buffer_sync.c linux-2.6.31.6-pax/drivers/oprofile/buffer_sync.c
 --- linux-2.6.31.6/drivers/oprofile/buffer_sync.c	2009-06-10 08:46:46.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/oprofile/buffer_sync.c	2009-09-10 19:43:33.000000000 +0200
@@ -22003,6 +23860,150 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/pcm
  };
  MODULE_DEVICE_TABLE(pci, yenta_table);
  
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/acer-wmi.c linux-2.6.31.6-pax/drivers/platform/x86/acer-wmi.c
+--- linux-2.6.31.6/drivers/platform/x86/acer-wmi.c	2009-09-10 19:42:02.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/acer-wmi.c	2009-11-12 21:42:12.000000000 +0100
+@@ -916,7 +916,7 @@ static int update_bl_status(struct backl
+ 	return 0;
+ }
+ 
+-static struct backlight_ops acer_bl_ops = {
++static const struct backlight_ops acer_bl_ops = {
+ 	.get_brightness = read_brightness,
+ 	.update_status = update_bl_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/asus-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/asus-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/asus-laptop.c	2009-09-10 19:42:02.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/asus-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -232,7 +232,7 @@ static struct backlight_device *asus_bac
+  */
+ static int read_brightness(struct backlight_device *bd);
+ static int update_bl_status(struct backlight_device *bd);
+-static struct backlight_ops asusbl_ops = {
++static const struct backlight_ops asusbl_ops = {
+ 	.get_brightness = read_brightness,
+ 	.update_status = update_bl_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/asus_acpi.c linux-2.6.31.6-pax/drivers/platform/x86/asus_acpi.c
+--- linux-2.6.31.6/drivers/platform/x86/asus_acpi.c	2009-09-10 19:42:02.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/asus_acpi.c	2009-11-12 21:42:12.000000000 +0100
+@@ -1402,7 +1402,7 @@ static int asus_hotk_remove(struct acpi_
+ 	return 0;
+ }
+ 
+-static struct backlight_ops asus_backlight_data = {
++static const struct backlight_ops asus_backlight_data = {
+ 	.get_brightness = read_brightness,
+ 	.update_status  = set_brightness_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/compal-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/compal-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/compal-laptop.c	2009-03-24 08:35:29.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/platform/x86/compal-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -163,7 +163,7 @@ static int bl_update_status(struct backl
+ 	return set_lcd_level(b->props.brightness);
+ }
+ 
+-static struct backlight_ops compalbl_ops = {
++static const struct backlight_ops compalbl_ops = {
+ 	.get_brightness = bl_get_brightness,
+ 	.update_status	= bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/dell-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/dell-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/dell-laptop.c	2009-09-10 19:42:02.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/dell-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -305,7 +305,7 @@ static int dell_get_intensity(struct bac
+ 	return buffer.output[1];
+ }
+ 
+-static struct backlight_ops dell_ops = {
++static const struct backlight_ops dell_ops = {
+ 	.get_brightness = dell_get_intensity,
+ 	.update_status  = dell_send_intensity,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/eeepc-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/eeepc-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/eeepc-laptop.c	2009-09-10 19:42:02.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/eeepc-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -234,7 +234,7 @@ static struct device *eeepc_hwmon_device
+  */
+ static int read_brightness(struct backlight_device *bd);
+ static int update_bl_status(struct backlight_device *bd);
+-static struct backlight_ops eeepcbl_ops = {
++static const struct backlight_ops eeepcbl_ops = {
+ 	.get_brightness = read_brightness,
+ 	.update_status = update_bl_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/fujitsu-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/fujitsu-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/fujitsu-laptop.c	2009-06-10 08:46:47.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/fujitsu-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -442,7 +442,7 @@ static int bl_update_status(struct backl
+ 	return ret;
+ }
+ 
+-static struct backlight_ops fujitsubl_ops = {
++static const struct backlight_ops fujitsubl_ops = {
+ 	.get_brightness = bl_get_brightness,
+ 	.update_status = bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/msi-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/msi-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/msi-laptop.c	2009-03-24 08:35:29.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/platform/x86/msi-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -161,7 +161,7 @@ static int bl_update_status(struct backl
+ 	return set_lcd_level(b->props.brightness);
+ }
+ 
+-static struct backlight_ops msibl_ops = {
++static const struct backlight_ops msibl_ops = {
+ 	.get_brightness = bl_get_brightness,
+ 	.update_status  = bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/panasonic-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/panasonic-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/panasonic-laptop.c	2009-06-10 08:46:47.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/panasonic-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -352,7 +352,7 @@ static int bl_set_status(struct backligh
+ 	return acpi_pcc_write_sset(pcc, SINF_DC_CUR_BRIGHT, bright);
+ }
+ 
+-static struct backlight_ops pcc_backlight_ops = {
++static const struct backlight_ops pcc_backlight_ops = {
+ 	.get_brightness	= bl_get,
+ 	.update_status	= bl_set_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/sony-laptop.c linux-2.6.31.6-pax/drivers/platform/x86/sony-laptop.c
+--- linux-2.6.31.6/drivers/platform/x86/sony-laptop.c	2009-10-07 00:17:38.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/sony-laptop.c	2009-11-12 21:42:12.000000000 +0100
+@@ -850,7 +850,7 @@ static int sony_backlight_get_brightness
+ }
+ 
+ static struct backlight_device *sony_backlight_device;
+-static struct backlight_ops sony_backlight_ops = {
++static const struct backlight_ops sony_backlight_ops = {
+ 	.update_status = sony_backlight_update_status,
+ 	.get_brightness = sony_backlight_get_brightness,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/thinkpad_acpi.c linux-2.6.31.6-pax/drivers/platform/x86/thinkpad_acpi.c
+--- linux-2.6.31.6/drivers/platform/x86/thinkpad_acpi.c	2009-10-07 00:17:38.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/thinkpad_acpi.c	2009-11-12 21:42:12.000000000 +0100
+@@ -5635,7 +5635,7 @@ static int brightness_get(struct backlig
+ 	return status & TP_EC_BACKLIGHT_LVLMSK;
+ }
+ 
+-static struct backlight_ops ibm_backlight_data = {
++static const struct backlight_ops ibm_backlight_data = {
+ 	.get_brightness = brightness_get,
+ 	.update_status  = brightness_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/platform/x86/toshiba_acpi.c linux-2.6.31.6-pax/drivers/platform/x86/toshiba_acpi.c
+--- linux-2.6.31.6/drivers/platform/x86/toshiba_acpi.c	2009-09-10 19:42:02.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/platform/x86/toshiba_acpi.c	2009-11-12 21:42:12.000000000 +0100
+@@ -671,7 +671,7 @@ static acpi_status remove_device(void)
+ 	return AE_OK;
+ }
+ 
+-static struct backlight_ops toshiba_backlight_data = {
++static const struct backlight_ops toshiba_backlight_data = {
+         .get_brightness = get_lcd,
+         .update_status  = set_lcd_status,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/pnp/pnpbios/bioscalls.c linux-2.6.31.6-pax/drivers/pnp/pnpbios/bioscalls.c
 --- linux-2.6.31.6/drivers/pnp/pnpbios/bioscalls.c	2009-03-24 08:35:29.000000000 +0100
 +++ linux-2.6.31.6-pax/drivers/pnp/pnpbios/bioscalls.c	2009-10-13 00:35:27.000000000 +0200
@@ -22122,6 +24123,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/s39
  	.owner	 = THIS_MODULE,
  	.open	 = qdio_perf_seq_open,
  	.read	 = seq_read,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/scsi/ipr.c linux-2.6.31.6-pax/drivers/scsi/ipr.c
+--- linux-2.6.31.6/drivers/scsi/ipr.c	2009-09-10 19:42:09.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/scsi/ipr.c	2009-11-12 21:42:12.000000000 +0100
+@@ -5262,7 +5262,7 @@ static bool ipr_qc_fill_rtf(struct ata_q
+ 	return true;
+ }
+ 
+-static struct ata_port_operations ipr_sata_ops = {
++static const struct ata_port_operations ipr_sata_ops = {
+ 	.phy_reset = ipr_ata_phy_reset,
+ 	.hardreset = ipr_sata_reset,
+ 	.post_internal_cmd = ipr_ata_post_internal,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/scsi/libfc/fc_exch.c linux-2.6.31.6-pax/drivers/scsi/libfc/fc_exch.c
 --- linux-2.6.31.6/drivers/scsi/libfc/fc_exch.c	2009-09-10 19:42:09.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/scsi/libfc/fc_exch.c	2009-09-10 19:43:33.000000000 +0200
@@ -22247,6 +24260,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/scs
  		FC_EM_DBG(mp, "non-BLS response to sequence");
  	}
  	fc_frame_free(fp);
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/scsi/libsas/sas_ata.c linux-2.6.31.6-pax/drivers/scsi/libsas/sas_ata.c
+--- linux-2.6.31.6/drivers/scsi/libsas/sas_ata.c	2008-12-25 12:13:36.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/scsi/libsas/sas_ata.c	2009-11-12 21:42:12.000000000 +0100
+@@ -343,7 +343,7 @@ static int sas_ata_scr_read(struct ata_l
+ 	}
+ }
+ 
+-static struct ata_port_operations sas_sata_ops = {
++static const struct ata_port_operations sas_sata_ops = {
+ 	.phy_reset		= sas_ata_phy_reset,
+ 	.post_internal_cmd	= sas_ata_post_internal,
+ 	.qc_prep		= ata_noop_qc_prep,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/scsi/scsi_logging.h linux-2.6.31.6-pax/drivers/scsi/scsi_logging.h
 --- linux-2.6.31.6/drivers/scsi/scsi_logging.h	2008-04-17 04:49:44.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/scsi/scsi_logging.h	2009-09-10 19:43:33.000000000 +0200
@@ -22546,6 +24571,30 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/sta
  	.read    = keypad_read,		/* read */
  	.open    = keypad_open,		/* open */
  	.release = keypad_release,	/* close */
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/staging/pata_rdc/pata_rdc.c linux-2.6.31.6-pax/drivers/staging/pata_rdc/pata_rdc.c
+--- linux-2.6.31.6/drivers/staging/pata_rdc/pata_rdc.c	2009-09-10 19:42:17.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/staging/pata_rdc/pata_rdc.c	2009-11-12 21:42:12.000000000 +0100
+@@ -875,7 +875,7 @@ static struct scsi_host_template rdc_pat
+ 	ATA_BMDMA_SHT(KBUILD_MODNAME),
+ };
+ 
+-static struct ata_port_operations rdc_pata_ops = {
++static const struct ata_port_operations rdc_pata_ops = {
+ 	.inherits	= &ata_bmdma_port_ops,
+ 
+ 	.port_start	= rdc_pata_port_start,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/staging/phison/phison.c linux-2.6.31.6-pax/drivers/staging/phison/phison.c
+--- linux-2.6.31.6/drivers/staging/phison/phison.c	2009-06-10 08:46:56.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/staging/phison/phison.c	2009-11-12 21:42:12.000000000 +0100
+@@ -43,7 +43,7 @@ static struct scsi_host_template phison_
+ 	ATA_BMDMA_SHT(DRV_NAME),
+ };
+ 
+-static struct ata_port_operations phison_ops = {
++static const struct ata_port_operations phison_ops = {
+ 	.inherits		= &ata_bmdma_port_ops,
+ 	.prereset		= phison_pre_reset,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/staging/poch/poch.c linux-2.6.31.6-pax/drivers/staging/poch/poch.c
 --- linux-2.6.31.6/drivers/staging/poch/poch.c	2009-03-24 08:35:34.000000000 +0100
 +++ linux-2.6.31.6-pax/drivers/staging/poch/poch.c	2009-09-10 19:43:33.000000000 +0200
@@ -22581,7 +24630,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/sta
  	.llseek		= seq_lseek,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/uio/uio.c linux-2.6.31.6-pax/drivers/uio/uio.c
 --- linux-2.6.31.6/drivers/uio/uio.c	2009-06-10 08:46:58.000000000 +0200
-+++ linux-2.6.31.6-pax/drivers/uio/uio.c	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/uio/uio.c	2009-11-12 21:42:12.000000000 +0100
 @@ -128,7 +128,7 @@ static ssize_t map_type_show(struct kobj
  	return entry->show(mem, buf);
  }
@@ -22903,6 +24952,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/usb
  	.open    = pzl_open,
  	.read    = seq_read,
  	.llseek  = seq_lseek,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/usb/misc/appledisplay.c linux-2.6.31.6-pax/drivers/usb/misc/appledisplay.c
+--- linux-2.6.31.6/drivers/usb/misc/appledisplay.c	2008-12-25 12:13:39.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/usb/misc/appledisplay.c	2009-11-12 21:42:12.000000000 +0100
+@@ -178,7 +178,7 @@ static int appledisplay_bl_get_brightnes
+ 		return pdata->msgdata[1];
+ }
+ 
+-static struct backlight_ops appledisplay_bl_data = {
++static const struct backlight_ops appledisplay_bl_data = {
+ 	.get_brightness	= appledisplay_bl_get_brightness,
+ 	.update_status	= appledisplay_bl_update_status,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/usb/mon/mon_bin.c linux-2.6.31.6-pax/drivers/usb/mon/mon_bin.c
 --- linux-2.6.31.6/drivers/usb/mon/mon_bin.c	2009-09-10 19:42:25.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/usb/mon/mon_bin.c	2009-09-10 19:43:33.000000000 +0200
@@ -23032,6 +25093,258 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/uwb
  	.show	= wlp_wss_attr_show,
  	.store	= wlp_wss_attr_store,
  };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/atmel_lcdfb.c linux-2.6.31.6-pax/drivers/video/atmel_lcdfb.c
+--- linux-2.6.31.6/drivers/video/atmel_lcdfb.c	2009-09-10 19:42:26.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/atmel_lcdfb.c	2009-11-12 21:42:12.000000000 +0100
+@@ -110,7 +110,7 @@ static int atmel_bl_get_brightness(struc
+ 	return lcdc_readl(sinfo, ATMEL_LCDC_CONTRAST_VAL);
+ }
+ 
+-static struct backlight_ops atmel_lcdc_bl_ops = {
++static const struct backlight_ops atmel_lcdc_bl_ops = {
+ 	.update_status = atmel_bl_update_status,
+ 	.get_brightness = atmel_bl_get_brightness,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/aty/aty128fb.c linux-2.6.31.6-pax/drivers/video/aty/aty128fb.c
+--- linux-2.6.31.6/drivers/video/aty/aty128fb.c	2009-09-10 19:42:26.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/aty/aty128fb.c	2009-11-12 21:42:12.000000000 +0100
+@@ -1787,7 +1787,7 @@ static int aty128_bl_get_brightness(stru
+ 	return bd->props.brightness;
+ }
+ 
+-static struct backlight_ops aty128_bl_data = {
++static const struct backlight_ops aty128_bl_data = {
+ 	.get_brightness	= aty128_bl_get_brightness,
+ 	.update_status	= aty128_bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/aty/atyfb_base.c linux-2.6.31.6-pax/drivers/video/aty/atyfb_base.c
+--- linux-2.6.31.6/drivers/video/aty/atyfb_base.c	2009-09-10 19:42:26.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/aty/atyfb_base.c	2009-11-12 21:42:12.000000000 +0100
+@@ -2165,7 +2165,7 @@ static int aty_bl_get_brightness(struct 
+ 	return bd->props.brightness;
+ }
+ 
+-static struct backlight_ops aty_bl_data = {
++static const struct backlight_ops aty_bl_data = {
+ 	.get_brightness = aty_bl_get_brightness,
+ 	.update_status	= aty_bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/aty/radeon_backlight.c linux-2.6.31.6-pax/drivers/video/aty/radeon_backlight.c
+--- linux-2.6.31.6/drivers/video/aty/radeon_backlight.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/aty/radeon_backlight.c	2009-11-12 21:42:12.000000000 +0100
+@@ -127,7 +127,7 @@ static int radeon_bl_get_brightness(stru
+ 	return bd->props.brightness;
+ }
+ 
+-static struct backlight_ops radeon_bl_data = {
++static const struct backlight_ops radeon_bl_data = {
+ 	.get_brightness = radeon_bl_get_brightness,
+ 	.update_status	= radeon_bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/atmel-pwm-bl.c linux-2.6.31.6-pax/drivers/video/backlight/atmel-pwm-bl.c
+--- linux-2.6.31.6/drivers/video/backlight/atmel-pwm-bl.c	2008-10-10 09:19:10.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/backlight/atmel-pwm-bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -113,7 +113,7 @@ static int atmel_pwm_bl_init_pwm(struct 
+ 	return pwm_channel_enable(&pwmbl->pwmc);
+ }
+ 
+-static struct backlight_ops atmel_pwm_bl_ops = {
++static const struct backlight_ops atmel_pwm_bl_ops = {
+ 	.get_brightness = atmel_pwm_bl_get_intensity,
+ 	.update_status  = atmel_pwm_bl_set_intensity,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/backlight.c linux-2.6.31.6-pax/drivers/video/backlight/backlight.c
+--- linux-2.6.31.6/drivers/video/backlight/backlight.c	2009-03-24 08:35:38.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/backlight.c	2009-11-12 21:42:12.000000000 +0100
+@@ -227,7 +227,7 @@ static struct device_attribute bl_device
+  * ERR_PTR() or a pointer to the newly allocated device.
+  */
+ struct backlight_device *backlight_device_register(const char *name,
+-		struct device *parent, void *devdata, struct backlight_ops *ops)
++		struct device *parent, void *devdata, const struct backlight_ops *ops)
+ {
+ 	struct backlight_device *new_bd;
+ 	int rc;
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/corgi_lcd.c linux-2.6.31.6-pax/drivers/video/backlight/corgi_lcd.c
+--- linux-2.6.31.6/drivers/video/backlight/corgi_lcd.c	2008-12-25 12:13:39.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/corgi_lcd.c	2009-11-12 21:42:12.000000000 +0100
+@@ -450,7 +450,7 @@ void corgi_lcd_limit_intensity(int limit
+ }
+ EXPORT_SYMBOL(corgi_lcd_limit_intensity);
+ 
+-static struct backlight_ops corgi_bl_ops = {
++static const struct backlight_ops corgi_bl_ops = {
+ 	.get_brightness	= corgi_bl_get_intensity,
+ 	.update_status  = corgi_bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/cr_bllcd.c linux-2.6.31.6-pax/drivers/video/backlight/cr_bllcd.c
+--- linux-2.6.31.6/drivers/video/backlight/cr_bllcd.c	2009-03-24 08:35:38.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/cr_bllcd.c	2009-11-12 21:42:12.000000000 +0100
+@@ -108,7 +108,7 @@ static int cr_backlight_get_intensity(st
+ 	return intensity;
+ }
+ 
+-static struct backlight_ops cr_backlight_ops = {
++static const struct backlight_ops cr_backlight_ops = {
+ 	.get_brightness = cr_backlight_get_intensity,
+ 	.update_status = cr_backlight_set_intensity,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/da903x_bl.c linux-2.6.31.6-pax/drivers/video/backlight/da903x_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/da903x_bl.c	2009-03-24 08:35:38.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/da903x_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -94,7 +94,7 @@ static int da903x_backlight_get_brightne
+ 	return data->current_brightness;
+ }
+ 
+-static struct backlight_ops da903x_backlight_ops = {
++static const struct backlight_ops da903x_backlight_ops = {
+ 	.update_status	= da903x_backlight_update_status,
+ 	.get_brightness	= da903x_backlight_get_brightness,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/generic_bl.c linux-2.6.31.6-pax/drivers/video/backlight/generic_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/generic_bl.c	2009-03-24 08:35:38.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/generic_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -70,7 +70,7 @@ void corgibl_limit_intensity(int limit)
+ }
+ EXPORT_SYMBOL(corgibl_limit_intensity);
+ 
+-static struct backlight_ops genericbl_ops = {
++static const struct backlight_ops genericbl_ops = {
+ 	.options = BL_CORE_SUSPENDRESUME,
+ 	.get_brightness = genericbl_get_intensity,
+ 	.update_status  = genericbl_send_intensity,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/hp680_bl.c linux-2.6.31.6-pax/drivers/video/backlight/hp680_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/hp680_bl.c	2009-03-24 08:35:38.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/hp680_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -98,7 +98,7 @@ static int hp680bl_get_intensity(struct 
+ 	return current_intensity;
+ }
+ 
+-static struct backlight_ops hp680bl_ops = {
++static const struct backlight_ops hp680bl_ops = {
+ 	.get_brightness = hp680bl_get_intensity,
+ 	.update_status  = hp680bl_set_intensity,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/jornada720_bl.c linux-2.6.31.6-pax/drivers/video/backlight/jornada720_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/jornada720_bl.c	2009-09-10 19:42:26.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/backlight/jornada720_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -93,7 +93,7 @@ out:
+ 	return ret;
+ }
+ 
+-static struct backlight_ops jornada_bl_ops = {
++static const struct backlight_ops jornada_bl_ops = {
+ 	.get_brightness = jornada_bl_get_brightness,
+ 	.update_status = jornada_bl_update_status,
+ 	.options = BL_CORE_SUSPENDRESUME,
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/kb3886_bl.c linux-2.6.31.6-pax/drivers/video/backlight/kb3886_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/kb3886_bl.c	2008-12-25 12:13:39.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/kb3886_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -134,7 +134,7 @@ static int kb3886bl_get_intensity(struct
+ 	return kb3886bl_intensity;
+ }
+ 
+-static struct backlight_ops kb3886bl_ops = {
++static const struct backlight_ops kb3886bl_ops = {
+ 	.get_brightness = kb3886bl_get_intensity,
+ 	.update_status  = kb3886bl_send_intensity,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/locomolcd.c linux-2.6.31.6-pax/drivers/video/backlight/locomolcd.c
+--- linux-2.6.31.6/drivers/video/backlight/locomolcd.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/backlight/locomolcd.c	2009-11-12 21:42:12.000000000 +0100
+@@ -141,7 +141,7 @@ static int locomolcd_get_intensity(struc
+ 	return current_intensity;
+ }
+ 
+-static struct backlight_ops locomobl_data = {
++static const struct backlight_ops locomobl_data = {
+ 	.get_brightness = locomolcd_get_intensity,
+ 	.update_status  = locomolcd_set_intensity,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/mbp_nvidia_bl.c linux-2.6.31.6-pax/drivers/video/backlight/mbp_nvidia_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/mbp_nvidia_bl.c	2009-06-10 08:47:02.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/backlight/mbp_nvidia_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -33,7 +33,7 @@ struct dmi_match_data {
+ 	unsigned long iostart;
+ 	unsigned long iolen;
+ 	/* Backlight operations structure. */
+-	struct backlight_ops backlight_ops;
++	const struct backlight_ops backlight_ops;
+ };
+ 
+ /* Module parameters. */
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/omap1_bl.c linux-2.6.31.6-pax/drivers/video/backlight/omap1_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/omap1_bl.c	2008-10-10 09:19:10.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/backlight/omap1_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -125,7 +125,7 @@ static int omapbl_get_intensity(struct b
+ 	return bl->current_intensity;
+ }
+ 
+-static struct backlight_ops omapbl_ops = {
++static const struct backlight_ops omapbl_ops = {
+ 	.get_brightness = omapbl_get_intensity,
+ 	.update_status  = omapbl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/progear_bl.c linux-2.6.31.6-pax/drivers/video/backlight/progear_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/progear_bl.c	2009-03-24 08:35:38.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/progear_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -54,7 +54,7 @@ static int progearbl_get_intensity(struc
+ 	return intensity - HW_LEVEL_MIN;
+ }
+ 
+-static struct backlight_ops progearbl_ops = {
++static const struct backlight_ops progearbl_ops = {
+ 	.get_brightness = progearbl_get_intensity,
+ 	.update_status = progearbl_set_intensity,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/pwm_bl.c linux-2.6.31.6-pax/drivers/video/backlight/pwm_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/pwm_bl.c	2009-09-10 19:42:26.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/backlight/pwm_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -56,7 +56,7 @@ static int pwm_backlight_get_brightness(
+ 	return bl->props.brightness;
+ }
+ 
+-static struct backlight_ops pwm_backlight_ops = {
++static const struct backlight_ops pwm_backlight_ops = {
+ 	.update_status	= pwm_backlight_update_status,
+ 	.get_brightness	= pwm_backlight_get_brightness,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/backlight/tosa_bl.c linux-2.6.31.6-pax/drivers/video/backlight/tosa_bl.c
+--- linux-2.6.31.6/drivers/video/backlight/tosa_bl.c	2008-12-25 12:13:39.000000000 +0100
++++ linux-2.6.31.6-pax/drivers/video/backlight/tosa_bl.c	2009-11-12 21:42:12.000000000 +0100
+@@ -72,7 +72,7 @@ static int tosa_bl_get_brightness(struct
+ 	return props->brightness;
+ }
+ 
+-static struct backlight_ops bl_ops = {
++static const struct backlight_ops bl_ops = {
+ 	.get_brightness		= tosa_bl_get_brightness,
+ 	.update_status		= tosa_bl_update_status,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/bf54x-lq043fb.c linux-2.6.31.6-pax/drivers/video/bf54x-lq043fb.c
+--- linux-2.6.31.6/drivers/video/bf54x-lq043fb.c	2009-09-10 19:42:26.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/bf54x-lq043fb.c	2009-11-12 21:42:12.000000000 +0100
+@@ -463,7 +463,7 @@ static int bl_get_brightness(struct back
+ 	return 0;
+ }
+ 
+-static struct backlight_ops bfin_lq043fb_bl_ops = {
++static const struct backlight_ops bfin_lq043fb_bl_ops = {
+ 	.get_brightness = bl_get_brightness,
+ };
+ 
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/bfin-t350mcqb-fb.c linux-2.6.31.6-pax/drivers/video/bfin-t350mcqb-fb.c
+--- linux-2.6.31.6/drivers/video/bfin-t350mcqb-fb.c	2009-09-10 19:42:26.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/bfin-t350mcqb-fb.c	2009-11-12 21:42:13.000000000 +0100
+@@ -381,7 +381,7 @@ static int bl_get_brightness(struct back
+ 	return 0;
+ }
+ 
+-static struct backlight_ops bfin_lq043fb_bl_ops = {
++static const struct backlight_ops bfin_lq043fb_bl_ops = {
+ 	.get_brightness = bl_get_brightness,
+ };
+ 
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/fb_defio.c linux-2.6.31.6-pax/drivers/video/fb_defio.c
 --- linux-2.6.31.6/drivers/video/fb_defio.c	2009-06-10 08:47:02.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/video/fb_defio.c	2009-09-10 19:43:33.000000000 +0200
@@ -23412,6 +25725,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/vid
      },
  };
  
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/nvidia/nv_backlight.c linux-2.6.31.6-pax/drivers/video/nvidia/nv_backlight.c
+--- linux-2.6.31.6/drivers/video/nvidia/nv_backlight.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/nvidia/nv_backlight.c	2009-11-12 21:42:13.000000000 +0100
+@@ -87,7 +87,7 @@ static int nvidia_bl_get_brightness(stru
+ 	return bd->props.brightness;
+ }
+ 
+-static struct backlight_ops nvidia_bl_ops = {
++static const struct backlight_ops nvidia_bl_ops = {
+ 	.get_brightness = nvidia_bl_get_brightness,
+ 	.update_status	= nvidia_bl_update_status,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/omap/dispc.c linux-2.6.31.6-pax/drivers/video/omap/dispc.c
 --- linux-2.6.31.6/drivers/video/omap/dispc.c	2009-06-10 08:47:03.000000000 +0200
 +++ linux-2.6.31.6-pax/drivers/video/omap/dispc.c	2009-09-10 19:43:33.000000000 +0200
@@ -23423,6 +25748,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/vid
 +static const struct vm_operations_struct mmap_user_ops = {
  	.open = mmap_user_open,
  	.close = mmap_user_close,
+ };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/riva/fbdev.c linux-2.6.31.6-pax/drivers/video/riva/fbdev.c
+--- linux-2.6.31.6/drivers/video/riva/fbdev.c	2008-07-14 03:51:42.000000000 +0200
++++ linux-2.6.31.6-pax/drivers/video/riva/fbdev.c	2009-11-12 21:42:13.000000000 +0100
+@@ -331,7 +331,7 @@ static int riva_bl_get_brightness(struct
+ 	return bd->props.brightness;
+ }
+ 
+-static struct backlight_ops riva_bl_ops = {
++static const struct backlight_ops riva_bl_ops = {
+ 	.get_brightness = riva_bl_get_brightness,
+ 	.update_status	= riva_bl_update_status,
  };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/drivers/video/uvesafb.c linux-2.6.31.6-pax/drivers/video/uvesafb.c
 --- linux-2.6.31.6/drivers/video/uvesafb.c	2009-10-23 15:55:30.000000000 +0200
@@ -23632,6 +25969,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/9p/vfs_i
  
  	P9_DPRINTK(P9_DEBUG_VFS, " %s %s\n", dentry->d_name.name,
  		IS_ERR(s) ? "<error>" : s);
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/afs/flock.c linux-2.6.31.6-pax/fs/afs/flock.c
+--- linux-2.6.31.6/fs/afs/flock.c	2009-09-10 19:42:30.000000000 +0200
++++ linux-2.6.31.6-pax/fs/afs/flock.c	2009-11-12 21:42:13.000000000 +0100
+@@ -21,7 +21,7 @@ static void afs_fl_release_private(struc
+ static struct workqueue_struct *afs_lock_manager;
+ static DEFINE_MUTEX(afs_lock_manager_mutex);
+ 
+-static struct file_lock_operations afs_lock_ops = {
++static const struct file_lock_operations afs_lock_ops = {
+ 	.fl_copy_lock		= afs_fl_copy_lock,
+ 	.fl_release_private	= afs_fl_release_private,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/afs/proc.c linux-2.6.31.6-pax/fs/afs/proc.c
 --- linux-2.6.31.6/fs/afs/proc.c	2009-06-10 08:47:04.000000000 +0200
 +++ linux-2.6.31.6-pax/fs/afs/proc.c	2009-09-10 19:43:33.000000000 +0200
@@ -25535,7 +27884,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/gfs2/fil
  };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/gfs2/sys.c linux-2.6.31.6-pax/fs/gfs2/sys.c
 --- linux-2.6.31.6/fs/gfs2/sys.c	2009-09-10 19:42:34.000000000 +0200
-+++ linux-2.6.31.6-pax/fs/gfs2/sys.c	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/fs/gfs2/sys.c	2009-11-12 21:42:09.000000000 +0100
 @@ -48,7 +48,7 @@ static ssize_t gfs2_attr_store(struct ko
  	return a->store ? a->store(sdp, buf, len) : len;
  }
@@ -25545,6 +27894,15 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/gfs2/sys
  	.show  = gfs2_attr_show,
  	.store = gfs2_attr_store,
  };
+@@ -574,7 +574,7 @@ static int gfs2_uevent(struct kset *kset
+ 	return 0;
+ }
+ 
+-static struct kset_uevent_ops gfs2_uevent_ops = {
++static const struct kset_uevent_ops gfs2_uevent_ops = {
+ 	.uevent = gfs2_uevent,
+ };
+ 
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/hfs/inode.c linux-2.6.31.6-pax/fs/hfs/inode.c
 --- linux-2.6.31.6/fs/hfs/inode.c	2009-06-10 08:47:07.000000000 +0200
 +++ linux-2.6.31.6-pax/fs/hfs/inode.c	2009-09-10 19:43:34.000000000 +0200
@@ -25835,6 +28193,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/jffs2/wb
  };
  
  /*
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/lockd/clntproc.c linux-2.6.31.6-pax/fs/lockd/clntproc.c
+--- linux-2.6.31.6/fs/lockd/clntproc.c	2009-09-10 19:42:35.000000000 +0200
++++ linux-2.6.31.6-pax/fs/lockd/clntproc.c	2009-11-12 21:42:13.000000000 +0100
+@@ -458,7 +458,7 @@ static void nlmclnt_locks_release_privat
+ 	nlm_put_lockowner(fl->fl_u.nfs_fl.owner);
+ }
+ 
+-static struct file_lock_operations nlmclnt_lock_ops = {
++static const struct file_lock_operations nlmclnt_lock_ops = {
+ 	.fl_copy_lock = nlmclnt_locks_copy_lock,
+ 	.fl_release_private = nlmclnt_locks_release_private,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/lockd/svc.c linux-2.6.31.6-pax/fs/lockd/svc.c
 --- linux-2.6.31.6/fs/lockd/svc.c	2009-06-10 08:47:08.000000000 +0200
 +++ linux-2.6.31.6-pax/fs/lockd/svc.c	2009-10-11 12:46:06.000000000 +0200
@@ -25847,9 +28217,30 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/lockd/sv
  EXPORT_SYMBOL_GPL(nlmsvc_ops);
  
  static DEFINE_MUTEX(nlmsvc_mutex);
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/lockd/svclock.c linux-2.6.31.6-pax/fs/lockd/svclock.c
+--- linux-2.6.31.6/fs/lockd/svclock.c	2009-09-10 19:42:35.000000000 +0200
++++ linux-2.6.31.6-pax/fs/lockd/svclock.c	2009-11-12 21:42:13.000000000 +0100
+@@ -705,7 +705,7 @@ static int nlmsvc_same_owner(struct file
+ 	return fl1->fl_owner == fl2->fl_owner && fl1->fl_pid == fl2->fl_pid;
+ }
+ 
+-struct lock_manager_operations nlmsvc_lock_operations = {
++const struct lock_manager_operations nlmsvc_lock_operations = {
+ 	.fl_compare_owner = nlmsvc_same_owner,
+ 	.fl_notify = nlmsvc_notify_blocked,
+ 	.fl_grant = nlmsvc_grant_deferred,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/locks.c linux-2.6.31.6-pax/fs/locks.c
 --- linux-2.6.31.6/fs/locks.c	2009-09-10 19:42:35.000000000 +0200
-+++ linux-2.6.31.6-pax/fs/locks.c	2009-09-10 19:43:34.000000000 +0200
++++ linux-2.6.31.6-pax/fs/locks.c	2009-11-12 21:42:12.000000000 +0100
+@@ -434,7 +434,7 @@ static int lease_mylease_callback(struct
+ 	return fl->fl_file == try->fl_file;
+ }
+ 
+-static struct lock_manager_operations lease_manager_ops = {
++static const struct lock_manager_operations lease_manager_ops = {
+ 	.fl_break = lease_break_callback,
+ 	.fl_release_private = lease_release_private_callback,
+ 	.fl_mylease = lease_mylease_callback,
 @@ -2007,16 +2007,16 @@ void locks_remove_flock(struct file *fil
  		return;
  
@@ -26198,6 +28589,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/nfs/nfs4
  	int err;
  
  	err = nfs4_set_lock_state(state, fl);
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/nfs/nfs4state.c linux-2.6.31.6-pax/fs/nfs/nfs4state.c
+--- linux-2.6.31.6/fs/nfs/nfs4state.c	2009-09-10 19:42:35.000000000 +0200
++++ linux-2.6.31.6-pax/fs/nfs/nfs4state.c	2009-11-12 21:42:13.000000000 +0100
+@@ -638,7 +638,7 @@ static void nfs4_fl_release_lock(struct 
+ 	nfs4_put_lock_state(fl->fl_u.nfs4_fl.owner);
+ }
+ 
+-static struct file_lock_operations nfs4_fl_lock_ops = {
++static const struct file_lock_operations nfs4_fl_lock_ops = {
+ 	.fl_copy_lock = nfs4_fl_copy_lock,
+ 	.fl_release_private = nfs4_fl_release_lock,
+ };
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/nfsd/export.c linux-2.6.31.6-pax/fs/nfsd/export.c
 --- linux-2.6.31.6/fs/nfsd/export.c	2009-09-10 19:42:35.000000000 +0200
 +++ linux-2.6.31.6-pax/fs/nfsd/export.c	2009-09-10 19:43:34.000000000 +0200
@@ -26222,6 +28625,27 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/nfsd/loc
  	.fopen		= nlm_fopen,		/* open file for locking */
  	.fclose		= nlm_fclose,		/* close file */
  };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/nfsd/nfs4state.c linux-2.6.31.6-pax/fs/nfsd/nfs4state.c
+--- linux-2.6.31.6/fs/nfsd/nfs4state.c	2009-09-10 19:42:35.000000000 +0200
++++ linux-2.6.31.6-pax/fs/nfsd/nfs4state.c	2009-11-12 21:42:13.000000000 +0100
+@@ -2163,7 +2163,7 @@ int nfsd_change_deleg_cb(struct file_loc
+ 		return -EAGAIN;
+ }
+ 
+-static struct lock_manager_operations nfsd_lease_mng_ops = {
++static const struct lock_manager_operations nfsd_lease_mng_ops = {
+ 	.fl_break = nfsd_break_deleg_cb,
+ 	.fl_release_private = nfsd_release_deleg_cb,
+ 	.fl_copy_lock = nfsd_copy_lock_deleg_cb,
+@@ -3368,7 +3368,7 @@ nfs4_transform_lock_offset(struct file_l
+ 
+ /* Hack!: For now, we're defining this just so we can use a pointer to it
+  * as a unique cookie to identify our (NFSv4's) posix locks. */
+-static struct lock_manager_operations nfsd_posix_mng_ops  = {
++static const struct lock_manager_operations nfsd_posix_mng_ops  = {
+ };
+ 
+ static inline void
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/nfsd/nfsctl.c linux-2.6.31.6-pax/fs/nfsd/nfsctl.c
 --- linux-2.6.31.6/fs/nfsd/nfsctl.c	2009-09-10 19:42:35.000000000 +0200
 +++ linux-2.6.31.6-pax/fs/nfsd/nfsctl.c	2009-09-10 19:43:34.000000000 +0200
@@ -27088,6 +29512,63 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/reiserfs
  	do_balance_starts(tb);
  
  	/* balance leaf returns 0 except if combining L R and S into
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/reiserfs/item_ops.c linux-2.6.31.6-pax/fs/reiserfs/item_ops.c
+--- linux-2.6.31.6/fs/reiserfs/item_ops.c	2009-06-10 08:47:10.000000000 +0200
++++ linux-2.6.31.6-pax/fs/reiserfs/item_ops.c	2009-11-12 21:42:13.000000000 +0100
+@@ -102,7 +102,7 @@ static void sd_print_vi(struct virtual_i
+ 			 vi->vi_index, vi->vi_type, vi->vi_ih);
+ }
+ 
+-static struct item_operations stat_data_ops = {
++static const struct item_operations stat_data_ops = {
+ 	.bytes_number = sd_bytes_number,
+ 	.decrement_key = sd_decrement_key,
+ 	.is_left_mergeable = sd_is_left_mergeable,
+@@ -196,7 +196,7 @@ static void direct_print_vi(struct virtu
+ 			 vi->vi_index, vi->vi_type, vi->vi_ih);
+ }
+ 
+-static struct item_operations direct_ops = {
++static const struct item_operations direct_ops = {
+ 	.bytes_number = direct_bytes_number,
+ 	.decrement_key = direct_decrement_key,
+ 	.is_left_mergeable = direct_is_left_mergeable,
+@@ -341,7 +341,7 @@ static void indirect_print_vi(struct vir
+ 			 vi->vi_index, vi->vi_type, vi->vi_ih);
+ }
+ 
+-static struct item_operations indirect_ops = {
++static const struct item_operations indirect_ops = {
+ 	.bytes_number = indirect_bytes_number,
+ 	.decrement_key = indirect_decrement_key,
+ 	.is_left_mergeable = indirect_is_left_mergeable,
+@@ -628,7 +628,7 @@ static void direntry_print_vi(struct vir
+ 	printk("\n");
+ }
+ 
+-static struct item_operations direntry_ops = {
++static const struct item_operations direntry_ops = {
+ 	.bytes_number = direntry_bytes_number,
+ 	.decrement_key = direntry_decrement_key,
+ 	.is_left_mergeable = direntry_is_left_mergeable,
+@@ -724,7 +724,7 @@ static void errcatch_print_vi(struct vir
+ 			 "Invalid item type observed, run fsck ASAP");
+ }
+ 
+-static struct item_operations errcatch_ops = {
++static const struct item_operations errcatch_ops = {
+ 	errcatch_bytes_number,
+ 	errcatch_decrement_key,
+ 	errcatch_is_left_mergeable,
+@@ -746,7 +746,7 @@ static struct item_operations errcatch_o
+ #error Item types must use disk-format assigned values.
+ #endif
+ 
+-struct item_operations *item_ops[TYPE_ANY + 1] = {
++const struct item_operations *item_ops[TYPE_ANY + 1] = {
+ 	&stat_data_ops,
+ 	&indirect_ops,
+ 	&direct_ops,
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/reiserfs/procfs.c linux-2.6.31.6-pax/fs/reiserfs/procfs.c
 --- linux-2.6.31.6/fs/reiserfs/procfs.c	2009-06-10 08:47:10.000000000 +0200
 +++ linux-2.6.31.6-pax/fs/reiserfs/procfs.c	2009-09-10 19:43:34.000000000 +0200
@@ -27506,7 +29987,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/fs/xfs/xfs_
  #if defined(XFS_RW_TRACE)
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/acpi/acpi_drivers.h linux-2.6.31.6-pax/include/acpi/acpi_drivers.h
 --- linux-2.6.31.6/include/acpi/acpi_drivers.h	2009-09-10 19:42:42.000000000 +0200
-+++ linux-2.6.31.6-pax/include/acpi/acpi_drivers.h	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/include/acpi/acpi_drivers.h	2009-11-12 21:42:11.000000000 +0100
+@@ -119,8 +119,8 @@ int acpi_processor_set_thermal_limit(acp
+                                   Dock Station
+   -------------------------------------------------------------------------- */
+ struct acpi_dock_ops {
+-	acpi_notify_handler handler;
+-	acpi_notify_handler uevent;
++	const acpi_notify_handler handler;
++	const acpi_notify_handler uevent;
+ };
+ 
+ #if defined(CONFIG_ACPI_DOCK) || defined(CONFIG_ACPI_DOCK_MODULE)
 @@ -128,7 +128,7 @@ extern int is_dock_device(acpi_handle ha
  extern int register_dock_notifier(struct notifier_block *nb);
  extern void unregister_dock_notifier(struct notifier_block *nb);
@@ -27999,6 +30491,50 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  	__AAL_STAT_ITEMS
  #undef __HANDLE_ITEM
  };
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/backlight.h linux-2.6.31.6-pax/include/linux/backlight.h
+--- linux-2.6.31.6/include/linux/backlight.h	2009-03-24 08:35:47.000000000 +0100
++++ linux-2.6.31.6-pax/include/linux/backlight.h	2009-11-12 21:42:13.000000000 +0100
+@@ -31,18 +31,18 @@ struct backlight_device;
+ struct fb_info;
+ 
+ struct backlight_ops {
+-	unsigned int options;
++	const unsigned int options;
+ 
+ #define BL_CORE_SUSPENDRESUME	(1 << 0)
+ 
+ 	/* Notify the backlight driver some property has changed */
+-	int (*update_status)(struct backlight_device *);
++	int (* const update_status)(struct backlight_device *);
+ 	/* Return the current backlight brightness (accounting for power,
+ 	   fb_blank etc.) */
+-	int (*get_brightness)(struct backlight_device *);
++	int (* const get_brightness)(struct backlight_device *);
+ 	/* Check if given framebuffer device is the one bound to this backlight;
+ 	   return 0 if not, !=0 if it is. If NULL, backlight always matches the fb. */
+-	int (*check_fb)(struct fb_info *);
++	int (* const check_fb)(struct fb_info *);
+ };
+ 
+ /* This structure defines all the properties of a backlight */
+@@ -81,7 +81,7 @@ struct backlight_device {
+ 	   registered this device has been unloaded, and if class_get_devdata()
+ 	   points to something in the body of that driver, it is also invalid. */
+ 	struct mutex ops_lock;
+-	struct backlight_ops *ops;
++	const struct backlight_ops *ops;
+ 
+ 	/* The framebuffer notifier block */
+ 	struct notifier_block fb_notif;
+@@ -98,7 +98,7 @@ static inline void backlight_update_stat
+ }
+ 
+ extern struct backlight_device *backlight_device_register(const char *name,
+-	struct device *dev, void *devdata, struct backlight_ops *ops);
++	struct device *dev, void *devdata, const struct backlight_ops *ops);
+ extern void backlight_device_unregister(struct backlight_device *bd);
+ 
+ #define to_backlight_device(obj) container_of(obj, struct backlight_device, dev)
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/binfmts.h linux-2.6.31.6-pax/include/linux/binfmts.h
 --- linux-2.6.31.6/include/linux/binfmts.h	2009-09-10 19:42:43.000000000 +0200
 +++ linux-2.6.31.6-pax/include/linux/binfmts.h	2009-09-10 19:43:34.000000000 +0200
@@ -28174,7 +30710,48 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/fs.h linux-2.6.31.6-pax/include/linux/fs.h
 --- linux-2.6.31.6/include/linux/fs.h	2009-09-10 19:42:44.000000000 +0200
-+++ linux-2.6.31.6-pax/include/linux/fs.h	2009-10-20 00:42:35.000000000 +0200
++++ linux-2.6.31.6-pax/include/linux/fs.h	2009-11-12 21:42:12.000000000 +0100
+@@ -1024,19 +1024,19 @@ static inline int file_check_writeable(s
+ typedef struct files_struct *fl_owner_t;
+ 
+ struct file_lock_operations {
+-	void (*fl_copy_lock)(struct file_lock *, struct file_lock *);
+-	void (*fl_release_private)(struct file_lock *);
++	void (* const fl_copy_lock)(struct file_lock *, struct file_lock *);
++	void (* const fl_release_private)(struct file_lock *);
+ };
+ 
+ struct lock_manager_operations {
+-	int (*fl_compare_owner)(struct file_lock *, struct file_lock *);
+-	void (*fl_notify)(struct file_lock *);	/* unblock callback */
+-	int (*fl_grant)(struct file_lock *, struct file_lock *, int);
+-	void (*fl_copy_lock)(struct file_lock *, struct file_lock *);
+-	void (*fl_release_private)(struct file_lock *);
+-	void (*fl_break)(struct file_lock *);
+-	int (*fl_mylease)(struct file_lock *, struct file_lock *);
+-	int (*fl_change)(struct file_lock **, int);
++	int (* const fl_compare_owner)(struct file_lock *, struct file_lock *);
++	void (* const fl_notify)(struct file_lock *);	/* unblock callback */
++	int (* const fl_grant)(struct file_lock *, struct file_lock *, int);
++	void (* const fl_copy_lock)(struct file_lock *, struct file_lock *);
++	void (* const fl_release_private)(struct file_lock *);
++	void (* const fl_break)(struct file_lock *);
++	int (* const fl_mylease)(struct file_lock *, struct file_lock *);
++	int (* const fl_change)(struct file_lock **, int);
+ };
+ 
+ struct lock_manager {
+@@ -1067,8 +1067,8 @@ struct file_lock {
+ 	struct fasync_struct *	fl_fasync; /* for lease break notifications */
+ 	unsigned long fl_break_time;	/* for nonblocking lease breaks */
+ 
+-	struct file_lock_operations *fl_ops;	/* Callbacks for filesystems */
+-	struct lock_manager_operations *fl_lmops;	/* Callbacks for lockmanagers */
++	const struct file_lock_operations *fl_ops;	/* Callbacks for filesystems */
++	const struct lock_manager_operations *fl_lmops;	/* Callbacks for lockmanagers */
+ 	union {
+ 		struct nfs_lock_info	nfs_fl;
+ 		struct nfs4_lock_info	nfs4_fl;
 @@ -1435,7 +1435,7 @@ struct fiemap_extent_info {
  	unsigned int fi_flags;		/* Flags as passed from user */
  	unsigned int fi_extents_mapped;	/* Number of mapped extents */
@@ -28339,7 +30916,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  	do {								\
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/kobject.h linux-2.6.31.6-pax/include/linux/kobject.h
 --- linux-2.6.31.6/include/linux/kobject.h	2009-06-10 08:47:15.000000000 +0200
-+++ linux-2.6.31.6-pax/include/linux/kobject.h	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/include/linux/kobject.h	2009-11-12 21:42:12.000000000 +0100
 @@ -106,7 +106,7 @@ extern char *kobject_get_path(struct kob
  
  struct kobj_type {
@@ -28347,6 +30924,19 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
 -	struct sysfs_ops *sysfs_ops;
 +	const struct sysfs_ops *sysfs_ops;
  	struct attribute **default_attrs;
+ };
+ 
+@@ -118,9 +118,9 @@ struct kobj_uevent_env {
+ };
+ 
+ struct kset_uevent_ops {
+-	int (*filter)(struct kset *kset, struct kobject *kobj);
+-	const char *(*name)(struct kset *kset, struct kobject *kobj);
+-	int (*uevent)(struct kset *kset, struct kobject *kobj,
++	int (* const filter)(struct kset *kset, struct kobject *kobj);
++	const char *(* const name)(struct kset *kset, struct kobject *kobj);
++	int (* const uevent)(struct kset *kset, struct kobject *kobj,
+ 		      struct kobj_uevent_env *env);
  };
  
 @@ -132,7 +132,7 @@ struct kobj_attribute {
@@ -28358,6 +30948,23 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  
  /**
   * struct kset - a set of kobjects of a specific type, belonging to a specific subsystem.
+@@ -155,14 +155,14 @@ struct kset {
+ 	struct list_head list;
+ 	spinlock_t list_lock;
+ 	struct kobject kobj;
+-	struct kset_uevent_ops *uevent_ops;
++	const struct kset_uevent_ops *uevent_ops;
+ };
+ 
+ extern void kset_init(struct kset *kset);
+ extern int __must_check kset_register(struct kset *kset);
+ extern void kset_unregister(struct kset *kset);
+ extern struct kset * __must_check kset_create_and_add(const char *name,
+-						struct kset_uevent_ops *u,
++						const struct kset_uevent_ops *u,
+ 						struct kobject *parent_kobj);
+ 
+ static inline struct kset *to_kset(struct kobject *kobj)
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/kvm_host.h linux-2.6.31.6-pax/include/linux/kvm_host.h
 --- linux-2.6.31.6/include/linux/kvm_host.h	2009-09-10 19:42:45.000000000 +0200
 +++ linux-2.6.31.6-pax/include/linux/kvm_host.h	2009-09-10 19:43:34.000000000 +0200
@@ -28381,7 +30988,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  int kvm_arch_vcpu_init(struct kvm_vcpu *vcpu);
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/libata.h linux-2.6.31.6-pax/include/linux/libata.h
 --- linux-2.6.31.6/include/linux/libata.h	2009-09-10 19:42:45.000000000 +0200
-+++ linux-2.6.31.6-pax/include/linux/libata.h	2009-09-10 19:43:34.000000000 +0200
++++ linux-2.6.31.6-pax/include/linux/libata.h	2009-11-12 21:42:12.000000000 +0100
 @@ -64,11 +64,11 @@
  #ifdef ATA_VERBOSE_DEBUG
  #define VPRINTK(fmt, args...) printk(KERN_ERR "%s: " fmt, __func__, ## args)
@@ -28397,6 +31004,210 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  #endif	/* ATA_DEBUG */
  
  #define BPRINTK(fmt, args...) if (ap->flags & ATA_FLAG_DEBUGMSG) printk(KERN_ERR "%s: " fmt, __func__, ## args)
+@@ -460,10 +460,10 @@ struct ata_queued_cmd;
+ 
+ /* typedefs */
+ typedef void (*ata_qc_cb_t) (struct ata_queued_cmd *qc);
+-typedef int (*ata_prereset_fn_t)(struct ata_link *link, unsigned long deadline);
+-typedef int (*ata_reset_fn_t)(struct ata_link *link, unsigned int *classes,
++typedef int (* const ata_prereset_fn_t)(struct ata_link *link, unsigned long deadline);
++typedef int (* ata_reset_fn_t)(struct ata_link *link, unsigned int *classes,
+ 			      unsigned long deadline);
+-typedef void (*ata_postreset_fn_t)(struct ata_link *link, unsigned int *classes);
++typedef void (* const ata_postreset_fn_t)(struct ata_link *link, unsigned int *classes);
+ 
+ /*
+  * host pm policy: If you alter this, you also need to alter libata-scsi.c
+@@ -509,11 +509,11 @@ struct ata_ioports {
+ 
+ struct ata_host {
+ 	spinlock_t		lock;
+-	struct device 		*dev;
++	struct device		*dev;
+ 	void __iomem * const	*iomap;
+ 	unsigned int		n_ports;
+ 	void			*private_data;
+-	struct ata_port_operations *ops;
++	const struct ata_port_operations *ops;
+ 	unsigned long		flags;
+ #ifdef CONFIG_ATA_ACPI
+ 	acpi_handle		acpi_handle;
+@@ -693,7 +693,7 @@ struct ata_link {
+ 
+ struct ata_port {
+ 	struct Scsi_Host	*scsi_host; /* our co-allocated scsi host */
+-	struct ata_port_operations *ops;
++	const struct ata_port_operations *ops;
+ 	spinlock_t		*lock;
+ 	/* Flags owned by the EH context. Only EH should touch these once the
+ 	   port is active */
+@@ -775,26 +775,26 @@ struct ata_port_operations {
+ 	/*
+ 	 * Command execution
+ 	 */
+-	int  (*qc_defer)(struct ata_queued_cmd *qc);
+-	int  (*check_atapi_dma)(struct ata_queued_cmd *qc);
+-	void (*qc_prep)(struct ata_queued_cmd *qc);
+-	unsigned int (*qc_issue)(struct ata_queued_cmd *qc);
+-	bool (*qc_fill_rtf)(struct ata_queued_cmd *qc);
++	int  (* const qc_defer)(struct ata_queued_cmd *qc);
++	int  (* const check_atapi_dma)(struct ata_queued_cmd *qc);
++	void (* const qc_prep)(struct ata_queued_cmd *qc);
++	unsigned int (* const qc_issue)(struct ata_queued_cmd *qc);
++	bool (* const qc_fill_rtf)(struct ata_queued_cmd *qc);
+ 
+ 	/*
+ 	 * Configuration and exception handling
+ 	 */
+-	int  (*cable_detect)(struct ata_port *ap);
+-	unsigned long (*mode_filter)(struct ata_device *dev, unsigned long xfer_mask);
+-	void (*set_piomode)(struct ata_port *ap, struct ata_device *dev);
+-	void (*set_dmamode)(struct ata_port *ap, struct ata_device *dev);
+-	int  (*set_mode)(struct ata_link *link, struct ata_device **r_failed_dev);
+-	unsigned int (*read_id)(struct ata_device *dev, struct ata_taskfile *tf, u16 *id);
++	int  (* const cable_detect)(struct ata_port *ap);
++	unsigned long (* const mode_filter)(struct ata_device *dev, unsigned long xfer_mask);
++	void (* const set_piomode)(struct ata_port *ap, struct ata_device *dev);
++	void (* const set_dmamode)(struct ata_port *ap, struct ata_device *dev);
++	int  (* const set_mode)(struct ata_link *link, struct ata_device **r_failed_dev);
++	unsigned int (* const read_id)(struct ata_device *dev, struct ata_taskfile *tf, u16 *id);
+ 
+-	void (*dev_config)(struct ata_device *dev);
++	void (* const dev_config)(struct ata_device *dev);
+ 
+-	void (*freeze)(struct ata_port *ap);
+-	void (*thaw)(struct ata_port *ap);
++	void (* const freeze)(struct ata_port *ap);
++	void (* const thaw)(struct ata_port *ap);
+ 	ata_prereset_fn_t	prereset;
+ 	ata_reset_fn_t		softreset;
+ 	ata_reset_fn_t		hardreset;
+@@ -803,64 +803,64 @@ struct ata_port_operations {
+ 	ata_reset_fn_t		pmp_softreset;
+ 	ata_reset_fn_t		pmp_hardreset;
+ 	ata_postreset_fn_t	pmp_postreset;
+-	void (*error_handler)(struct ata_port *ap);
+-	void (*lost_interrupt)(struct ata_port *ap);
+-	void (*post_internal_cmd)(struct ata_queued_cmd *qc);
++	void (* const error_handler)(struct ata_port *ap);
++	void (* const lost_interrupt)(struct ata_port *ap);
++	void (* const post_internal_cmd)(struct ata_queued_cmd *qc);
+ 
+ 	/*
+ 	 * Optional features
+ 	 */
+-	int  (*scr_read)(struct ata_link *link, unsigned int sc_reg, u32 *val);
+-	int  (*scr_write)(struct ata_link *link, unsigned int sc_reg, u32 val);
+-	void (*pmp_attach)(struct ata_port *ap);
+-	void (*pmp_detach)(struct ata_port *ap);
+-	int  (*enable_pm)(struct ata_port *ap, enum link_pm policy);
+-	void (*disable_pm)(struct ata_port *ap);
++	int  (* const scr_read)(struct ata_link *link, unsigned int sc_reg, u32 *val);
++	int  (* const scr_write)(struct ata_link *link, unsigned int sc_reg, u32 val);
++	void (* const pmp_attach)(struct ata_port *ap);
++	void (* const pmp_detach)(struct ata_port *ap);
++	int  (* const enable_pm)(struct ata_port *ap, enum link_pm policy);
++	void (* const disable_pm)(struct ata_port *ap);
+ 
+ 	/*
+ 	 * Start, stop, suspend and resume
+ 	 */
+-	int  (*port_suspend)(struct ata_port *ap, pm_message_t mesg);
+-	int  (*port_resume)(struct ata_port *ap);
+-	int  (*port_start)(struct ata_port *ap);
+-	void (*port_stop)(struct ata_port *ap);
+-	void (*host_stop)(struct ata_host *host);
++	int  (* const port_suspend)(struct ata_port *ap, pm_message_t mesg);
++	int  (* const port_resume)(struct ata_port *ap);
++	int  (* const port_start)(struct ata_port *ap);
++	void (* const port_stop)(struct ata_port *ap);
++	void (* const host_stop)(struct ata_host *host);
+ 
+ #ifdef CONFIG_ATA_SFF
+ 	/*
+ 	 * SFF / taskfile oriented ops
+ 	 */
+-	void (*sff_dev_select)(struct ata_port *ap, unsigned int device);
+-	u8   (*sff_check_status)(struct ata_port *ap);
+-	u8   (*sff_check_altstatus)(struct ata_port *ap);
+-	void (*sff_tf_load)(struct ata_port *ap, const struct ata_taskfile *tf);
+-	void (*sff_tf_read)(struct ata_port *ap, struct ata_taskfile *tf);
+-	void (*sff_exec_command)(struct ata_port *ap,
++	void (* const sff_dev_select)(struct ata_port *ap, unsigned int device);
++	u8   (* sff_check_status)(struct ata_port *ap);
++	u8   (* const sff_check_altstatus)(struct ata_port *ap);
++	void (* sff_tf_load)(struct ata_port *ap, const struct ata_taskfile *tf);
++	void (* sff_tf_read)(struct ata_port *ap, struct ata_taskfile *tf);
++	void (* sff_exec_command)(struct ata_port *ap,
+ 				 const struct ata_taskfile *tf);
+-	unsigned int (*sff_data_xfer)(struct ata_device *dev,
++	unsigned int (* sff_data_xfer)(struct ata_device *dev,
+ 			unsigned char *buf, unsigned int buflen, int rw);
+-	u8   (*sff_irq_on)(struct ata_port *);
+-	void (*sff_irq_clear)(struct ata_port *);
++	u8   (* const sff_irq_on)(struct ata_port *);
++	void (* const sff_irq_clear)(struct ata_port *);
+ 
+-	void (*bmdma_setup)(struct ata_queued_cmd *qc);
+-	void (*bmdma_start)(struct ata_queued_cmd *qc);
+-	void (*bmdma_stop)(struct ata_queued_cmd *qc);
+-	u8   (*bmdma_status)(struct ata_port *ap);
++	void (* const bmdma_setup)(struct ata_queued_cmd *qc);
++	void (* const bmdma_start)(struct ata_queued_cmd *qc);
++	void (* const bmdma_stop)(struct ata_queued_cmd *qc);
++	u8   (* const bmdma_status)(struct ata_port *ap);
+ 
+-	void (*drain_fifo)(struct ata_queued_cmd *qc);
++	void (* const drain_fifo)(struct ata_queued_cmd *qc);
+ #endif /* CONFIG_ATA_SFF */
+ 
+-	ssize_t (*em_show)(struct ata_port *ap, char *buf);
+-	ssize_t (*em_store)(struct ata_port *ap, const char *message,
++	ssize_t (* const em_show)(struct ata_port *ap, char *buf);
++	ssize_t (* const em_store)(struct ata_port *ap, const char *message,
+ 			    size_t size);
+-	ssize_t (*sw_activity_show)(struct ata_device *dev, char *buf);
+-	ssize_t (*sw_activity_store)(struct ata_device *dev,
++	ssize_t (* const sw_activity_show)(struct ata_device *dev, char *buf);
++	ssize_t (* const sw_activity_store)(struct ata_device *dev,
+ 				     enum sw_activity val);
+ 	/*
+ 	 * Obsolete
+ 	 */
+-	void (*phy_reset)(struct ata_port *ap);
+-	void (*eng_timeout)(struct ata_port *ap);
++	void (* const phy_reset)(struct ata_port *ap);
++	void (* const eng_timeout)(struct ata_port *ap);
+ 
+ 	/*
+ 	 * ->inherits must be the last field and all the preceding
+@@ -875,7 +875,7 @@ struct ata_port_info {
+ 	unsigned long		pio_mask;
+ 	unsigned long		mwdma_mask;
+ 	unsigned long		udma_mask;
+-	struct ata_port_operations *port_ops;
++	const struct ata_port_operations *port_ops;
+ 	void 			*private_data;
+ };
+ 
+@@ -899,7 +899,7 @@ extern const unsigned long sata_deb_timi
+ extern const unsigned long sata_deb_timing_hotplug[];
+ extern const unsigned long sata_deb_timing_long[];
+ 
+-extern struct ata_port_operations ata_dummy_port_ops;
++extern const struct ata_port_operations ata_dummy_port_ops;
+ extern const struct ata_port_info ata_dummy_port_info;
+ 
+ static inline const unsigned long *
+@@ -945,7 +945,7 @@ extern int ata_host_activate(struct ata_
+ 			     struct scsi_host_template *sht);
+ extern void ata_host_detach(struct ata_host *host);
+ extern void ata_host_init(struct ata_host *, struct device *,
+-			  unsigned long, struct ata_port_operations *);
++			  unsigned long, const struct ata_port_operations *);
+ extern int ata_scsi_detect(struct scsi_host_template *sht);
+ extern int ata_scsi_ioctl(struct scsi_device *dev, int cmd, void __user *arg);
+ extern int ata_scsi_queuecmd(struct scsi_cmnd *cmd, void (*done)(struct scsi_cmnd *));
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/lockd/bind.h linux-2.6.31.6-pax/include/linux/lockd/bind.h
 --- linux-2.6.31.6/include/linux/lockd/bind.h	2009-03-24 08:35:48.000000000 +0100
 +++ linux-2.6.31.6-pax/include/linux/lockd/bind.h	2009-10-11 12:46:26.000000000 +0200
@@ -28409,6 +31220,18 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  
  /*
   * Similar to nfs_client_initdata, but without the NFS-specific
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/lockd/lockd.h linux-2.6.31.6-pax/include/linux/lockd/lockd.h
+--- linux-2.6.31.6/include/linux/lockd/lockd.h	2009-09-10 19:42:45.000000000 +0200
++++ linux-2.6.31.6-pax/include/linux/lockd/lockd.h	2009-11-12 21:42:13.000000000 +0100
+@@ -395,7 +395,7 @@ static inline int nlm_compare_locks(cons
+ 	     &&(fl1->fl_type  == fl2->fl_type || fl2->fl_type == F_UNLCK);
+ }
+ 
+-extern struct lock_manager_operations nlmsvc_lock_operations;
++extern const struct lock_manager_operations nlmsvc_lock_operations;
+ 
+ #endif /* __KERNEL__ */
+ 
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/mm.h linux-2.6.31.6-pax/include/linux/mm.h
 --- linux-2.6.31.6/include/linux/mm.h	2009-09-10 19:42:45.000000000 +0200
 +++ linux-2.6.31.6-pax/include/linux/mm.h	2009-09-24 09:28:13.000000000 +0200
@@ -28787,7 +31610,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  #endif /* _LINUX_RANDOM_H */
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/reiserfs_fs.h linux-2.6.31.6-pax/include/linux/reiserfs_fs.h
 --- linux-2.6.31.6/include/linux/reiserfs_fs.h	2009-09-10 19:42:45.000000000 +0200
-+++ linux-2.6.31.6-pax/include/linux/reiserfs_fs.h	2009-09-10 19:43:34.000000000 +0200
++++ linux-2.6.31.6-pax/include/linux/reiserfs_fs.h	2009-11-12 21:42:12.000000000 +0100
 @@ -1326,7 +1326,7 @@ static inline loff_t max_reiserfs_offset
  #define REISERFS_USER_MEM		1	/* reiserfs user memory mode            */
  
@@ -28797,6 +31620,43 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  #define FILESYSTEM_CHANGED_TB(tb)  (get_generation((tb)->tb_sb) != (tb)->fs_gen)
  #define __fs_changed(gen,s) (gen != get_generation (s))
  #define fs_changed(gen,s) ({cond_resched(); __fs_changed(gen, s);})
+@@ -1534,24 +1534,24 @@ static inline struct super_block *sb_fro
+ */
+ 
+ struct item_operations {
+-	int (*bytes_number) (struct item_head * ih, int block_size);
+-	void (*decrement_key) (struct cpu_key *);
+-	int (*is_left_mergeable) (struct reiserfs_key * ih,
++	int (* const bytes_number) (struct item_head * ih, int block_size);
++	void (* const decrement_key) (struct cpu_key *);
++	int (* const is_left_mergeable) (struct reiserfs_key * ih,
+ 				  unsigned long bsize);
+-	void (*print_item) (struct item_head *, char *item);
+-	void (*check_item) (struct item_head *, char *item);
++	void (* const print_item) (struct item_head *, char *item);
++	void (* const check_item) (struct item_head *, char *item);
+ 
+-	int (*create_vi) (struct virtual_node * vn, struct virtual_item * vi,
++	int (* const create_vi) (struct virtual_node * vn, struct virtual_item * vi,
+ 			  int is_affected, int insert_size);
+-	int (*check_left) (struct virtual_item * vi, int free,
++	int (* const check_left) (struct virtual_item * vi, int free,
+ 			   int start_skip, int end_skip);
+-	int (*check_right) (struct virtual_item * vi, int free);
+-	int (*part_size) (struct virtual_item * vi, int from, int to);
+-	int (*unit_num) (struct virtual_item * vi);
+-	void (*print_vi) (struct virtual_item * vi);
++	int (* const check_right) (struct virtual_item * vi, int free);
++	int (* const part_size) (struct virtual_item * vi, int from, int to);
++	int (* const unit_num) (struct virtual_item * vi);
++	void (* const print_vi) (struct virtual_item * vi);
+ };
+ 
+-extern struct item_operations *item_ops[TYPE_ANY + 1];
++extern const struct item_operations *item_ops[TYPE_ANY + 1];
+ 
+ #define op_bytes_number(ih,bsize)                    item_ops[le_ih_k_type (ih)]->bytes_number (ih, bsize)
+ #define op_is_left_mergeable(key,bsize)              item_ops[le_key_k_type (le_key_version (key), key)]->is_left_mergeable (key, bsize)
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/reiserfs_fs_sb.h linux-2.6.31.6-pax/include/linux/reiserfs_fs_sb.h
 --- linux-2.6.31.6/include/linux/reiserfs_fs_sb.h	2009-09-10 19:42:45.000000000 +0200
 +++ linux-2.6.31.6-pax/include/linux/reiserfs_fs_sb.h	2009-09-10 19:43:34.000000000 +0200
@@ -29079,6 +31939,20 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/lin
  
  /* CTL_VM names: */
  enum
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/sysfs.h linux-2.6.31.6-pax/include/linux/sysfs.h
+--- linux-2.6.31.6/include/linux/sysfs.h	2008-12-25 12:13:53.000000000 +0100
++++ linux-2.6.31.6-pax/include/linux/sysfs.h	2009-11-12 21:42:13.000000000 +0100
+@@ -75,8 +75,8 @@ struct bin_attribute {
+ };
+ 
+ struct sysfs_ops {
+-	ssize_t	(*show)(struct kobject *, struct attribute *,char *);
+-	ssize_t	(*store)(struct kobject *,struct attribute *,const char *, size_t);
++	ssize_t	(* const show)(struct kobject *, struct attribute *,char *);
++	ssize_t	(* const store)(struct kobject *,struct attribute *,const char *, size_t);
+ };
+ 
+ struct sysfs_dirent;
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/linux/thread_info.h linux-2.6.31.6-pax/include/linux/thread_info.h
 --- linux-2.6.31.6/include/linux/thread_info.h	2009-09-10 19:42:46.000000000 +0200
 +++ linux-2.6.31.6-pax/include/linux/thread_info.h	2009-09-10 19:43:34.000000000 +0200
@@ -29292,6 +32166,46 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/net
  #define SCTP_ENABLE_DEBUG
  #define SCTP_DISABLE_DEBUG
  #define SCTP_ASSERT(expr, str, func)
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/net/tcp.h linux-2.6.31.6-pax/include/net/tcp.h
+--- linux-2.6.31.6/include/net/tcp.h	2009-09-10 19:42:47.000000000 +0200
++++ linux-2.6.31.6-pax/include/net/tcp.h	2009-11-12 21:42:13.000000000 +0100
+@@ -667,26 +667,26 @@ struct tcp_congestion_ops {
+ 	unsigned long flags;
+ 
+ 	/* initialize private data (optional) */
+-	void (*init)(struct sock *sk);
++	void (* const init)(struct sock *sk);
+ 	/* cleanup private data  (optional) */
+-	void (*release)(struct sock *sk);
++	void (* const release)(struct sock *sk);
+ 
+ 	/* return slow start threshold (required) */
+-	u32 (*ssthresh)(struct sock *sk);
++	u32 (* const ssthresh)(struct sock *sk);
+ 	/* lower bound for congestion window (optional) */
+-	u32 (*min_cwnd)(const struct sock *sk);
++	u32 (* const min_cwnd)(const struct sock *sk);
+ 	/* do new cwnd calculation (required) */
+-	void (*cong_avoid)(struct sock *sk, u32 ack, u32 in_flight);
++	void (* const cong_avoid)(struct sock *sk, u32 ack, u32 in_flight);
+ 	/* call before changing ca_state (optional) */
+-	void (*set_state)(struct sock *sk, u8 new_state);
++	void (* const set_state)(struct sock *sk, u8 new_state);
+ 	/* call when cwnd event occurs (optional) */
+-	void (*cwnd_event)(struct sock *sk, enum tcp_ca_event ev);
++	void (* const cwnd_event)(struct sock *sk, enum tcp_ca_event ev);
+ 	/* new value of cwnd after loss (optional) */
+-	u32  (*undo_cwnd)(struct sock *sk);
++	u32  (* const undo_cwnd)(struct sock *sk);
+ 	/* hook for packet ack accounting (optional) */
+-	void (*pkts_acked)(struct sock *sk, u32 num_acked, s32 rtt_us);
++	void (* const pkts_acked)(struct sock *sk, u32 num_acked, s32 rtt_us);
+ 	/* get info for inet_diag (optional) */
+-	void (*get_info)(struct sock *sk, u32 ext, struct sk_buff *skb);
++	void (* const get_info)(struct sock *sk, u32 ext, struct sk_buff *skb);
+ 
+ 	char 		name[TCP_CA_NAME_MAX];
+ 	struct module 	*owner;
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/include/sound/ac97_codec.h linux-2.6.31.6-pax/include/sound/ac97_codec.h
 --- linux-2.6.31.6/include/sound/ac97_codec.h	2009-03-24 08:35:49.000000000 +0100
 +++ linux-2.6.31.6-pax/include/sound/ac97_codec.h	2009-10-11 12:57:59.000000000 +0200
@@ -30792,7 +33706,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/kernel/pani
  EXPORT_SYMBOL(__stack_chk_fail);
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/kernel/params.c linux-2.6.31.6-pax/kernel/params.c
 --- linux-2.6.31.6/kernel/params.c	2009-11-10 14:55:00.000000000 +0100
-+++ linux-2.6.31.6-pax/kernel/params.c	2009-11-10 15:01:34.000000000 +0100
++++ linux-2.6.31.6-pax/kernel/params.c	2009-11-12 21:42:12.000000000 +0100
 @@ -724,7 +724,7 @@ static ssize_t module_attr_store(struct 
  	return ret;
  }
@@ -30802,6 +33716,15 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/kernel/para
  	.show = module_attr_show,
  	.store = module_attr_store,
  };
+@@ -738,7 +738,7 @@ static int uevent_filter(struct kset *ks
+ 	return 0;
+ }
+ 
+-static struct kset_uevent_ops module_uevent_ops = {
++static const struct kset_uevent_ops module_uevent_ops = {
+ 	.filter = uevent_filter,
+ };
+ 
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/kernel/perf_counter.c linux-2.6.31.6-pax/kernel/perf_counter.c
 --- linux-2.6.31.6/kernel/perf_counter.c	2009-10-07 00:17:37.000000000 +0200
 +++ linux-2.6.31.6-pax/kernel/perf_counter.c	2009-10-07 00:17:49.000000000 +0200
@@ -31426,7 +34349,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/lib/inflate
  
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/lib/kobject.c linux-2.6.31.6-pax/lib/kobject.c
 --- linux-2.6.31.6/lib/kobject.c	2009-09-10 19:42:50.000000000 +0200
-+++ linux-2.6.31.6-pax/lib/kobject.c	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/lib/kobject.c	2009-11-12 21:42:12.000000000 +0100
 @@ -700,7 +700,7 @@ static ssize_t kobj_attr_store(struct ko
  	return ret;
  }
@@ -31436,6 +34359,36 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/lib/kobject
  	.show	= kobj_attr_show,
  	.store	= kobj_attr_store,
  };
+@@ -789,7 +789,7 @@ static struct kobj_type kset_ktype = {
+  * If the kset was not able to be created, NULL will be returned.
+  */
+ static struct kset *kset_create(const char *name,
+-				struct kset_uevent_ops *uevent_ops,
++				const struct kset_uevent_ops *uevent_ops,
+ 				struct kobject *parent_kobj)
+ {
+ 	struct kset *kset;
+@@ -832,7 +832,7 @@ static struct kset *kset_create(const ch
+  * If the kset was not able to be created, NULL will be returned.
+  */
+ struct kset *kset_create_and_add(const char *name,
+-				 struct kset_uevent_ops *uevent_ops,
++				 const struct kset_uevent_ops *uevent_ops,
+ 				 struct kobject *parent_kobj)
+ {
+ 	struct kset *kset;
+diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/lib/kobject_uevent.c linux-2.6.31.6-pax/lib/kobject_uevent.c
+--- linux-2.6.31.6/lib/kobject_uevent.c	2009-06-10 08:47:20.000000000 +0200
++++ linux-2.6.31.6-pax/lib/kobject_uevent.c	2009-11-12 21:42:13.000000000 +0100
+@@ -95,7 +95,7 @@ int kobject_uevent_env(struct kobject *k
+ 	const char *subsystem;
+ 	struct kobject *top_kobj;
+ 	struct kset *kset;
+-	struct kset_uevent_ops *uevent_ops;
++	const struct kset_uevent_ops *uevent_ops;
+ 	u64 seq;
+ 	int i = 0;
+ 	int retval = 0;
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/lib/parser.c linux-2.6.31.6-pax/lib/parser.c
 --- linux-2.6.31.6/lib/parser.c	2008-12-25 12:13:54.000000000 +0100
 +++ linux-2.6.31.6-pax/lib/parser.c	2009-09-10 19:43:34.000000000 +0200
@@ -31522,7 +34475,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/mm/fremap.c
  	 * and that the remapped range is valid and fully within
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/mm/highmem.c linux-2.6.31.6-pax/mm/highmem.c
 --- linux-2.6.31.6/mm/highmem.c	2009-09-10 19:42:50.000000000 +0200
-+++ linux-2.6.31.6-pax/mm/highmem.c	2009-10-13 00:33:44.000000000 +0200
++++ linux-2.6.31.6-pax/mm/highmem.c	2009-11-10 20:41:56.000000000 +0100
 @@ -116,9 +116,10 @@ static void flush_all_zero_pkmaps(void)
  		 * So no dangers, even with speculative execution.
  		 */
@@ -34155,7 +37108,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/mm/slob.c l
  	trace_kmem_cache_free(_RET_IP_, b);
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/mm/slub.c linux-2.6.31.6-pax/mm/slub.c
 --- linux-2.6.31.6/mm/slub.c	2009-09-10 19:42:50.000000000 +0200
-+++ linux-2.6.31.6-pax/mm/slub.c	2009-10-20 12:10:04.000000000 +0200
++++ linux-2.6.31.6-pax/mm/slub.c	2009-11-12 21:42:12.000000000 +0100
 @@ -1915,7 +1915,7 @@ static int slub_min_objects;
   * Merge control. If this is set then no merging of slab caches will occur.
   * (Could be removed. This was introduced to pacify the merge skeptics.)
@@ -34283,6 +37236,15 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/mm/slub.c l
  	.show = slab_attr_show,
  	.store = slab_attr_store,
  };
+@@ -4466,7 +4503,7 @@ static int uevent_filter(struct kset *ks
+ 	return 0;
+ }
+ 
+-static struct kset_uevent_ops slab_uevent_ops = {
++static const struct kset_uevent_ops slab_uevent_ops = {
+ 	.filter = uevent_filter,
+ };
+ 
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/mm/util.c linux-2.6.31.6-pax/mm/util.c
 --- linux-2.6.31.6/mm/util.c	2009-09-10 19:42:50.000000000 +0200
 +++ linux-2.6.31.6-pax/mm/util.c	2009-09-10 19:43:35.000000000 +0200
@@ -35201,7 +38163,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/scripts/kal
  #define text_range_inittext (&text_ranges[1])
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/scripts/kconfig/lkc.h linux-2.6.31.6-pax/scripts/kconfig/lkc.h
 --- linux-2.6.31.6/scripts/kconfig/lkc.h	2009-09-10 19:42:58.000000000 +0200
-+++ linux-2.6.31.6-pax/scripts/kconfig/lkc.h	2009-09-10 19:43:35.000000000 +0200
++++ linux-2.6.31.6-pax/scripts/kconfig/lkc.h	2009-11-12 21:52:51.000000000 +0100
 @@ -97,7 +97,7 @@ void menu_add_expr(enum prop_type type, 
  void menu_add_symbol(enum prop_type type, struct symbol *sym, struct expr *dep);
  void menu_add_option(int token, char *arg);
@@ -35213,7 +38175,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/scripts/kco
  struct file *file_lookup(const char *name);
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/scripts/kconfig/mconf.c linux-2.6.31.6-pax/scripts/kconfig/mconf.c
 --- linux-2.6.31.6/scripts/kconfig/mconf.c	2009-09-10 19:42:59.000000000 +0200
-+++ linux-2.6.31.6-pax/scripts/kconfig/mconf.c	2009-09-10 19:43:35.000000000 +0200
++++ linux-2.6.31.6-pax/scripts/kconfig/mconf.c	2009-11-12 21:53:11.000000000 +0100
 @@ -361,7 +361,7 @@ static char filename[PATH_MAX+1];
  static void set_config_filename(const char *config_filename)
  {
@@ -35225,7 +38187,7 @@ diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/scripts/kco
  	sym = sym_lookup("KERNELVERSION", 0);
 diff -NurpX linux-2.6.31.6-pax/Documentation/dontdiff linux-2.6.31.6/scripts/kconfig/menu.c linux-2.6.31.6-pax/scripts/kconfig/menu.c
 --- linux-2.6.31.6/scripts/kconfig/menu.c	2008-07-14 03:51:46.000000000 +0200
-+++ linux-2.6.31.6-pax/scripts/kconfig/menu.c	2009-09-10 19:43:35.000000000 +0200
++++ linux-2.6.31.6-pax/scripts/kconfig/menu.c	2009-11-12 21:53:31.000000000 +0100
 @@ -104,7 +104,7 @@ void menu_add_dep(struct expr *dep)
  	current_entry->dep = expr_alloc_and(current_entry->dep, menu_check_dep(dep));
  }
