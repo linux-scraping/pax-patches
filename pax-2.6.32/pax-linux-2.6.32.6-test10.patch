@@ -7429,7 +7429,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/in
  #define MODULES_LEN	(MODULES_VADDR - MODULES_END)
 diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/include/asm/pgtable_64.h linux-2.6.32.6-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-2.6.32.6/arch/x86/include/asm/pgtable_64.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.32.6-pax/arch/x86/include/asm/pgtable_64.h	2009-12-12 01:28:32.000000000 +0100
++++ linux-2.6.32.6-pax/arch/x86/include/asm/pgtable_64.h	2010-01-28 17:03:09.000000000 +0100
 @@ -16,9 +16,12 @@
  
  extern pud_t level3_kernel_pgt[512];
@@ -7440,7 +7440,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/in
  extern pmd_t level2_kernel_pgt[512];
  extern pmd_t level2_fixmap_pgt[512];
 -extern pmd_t level2_ident_pgt[512];
-+extern pmd_t level2_ident_pgt[512*4];
++extern pmd_t level2_ident_pgt[512*2];
  extern pgd_t init_level4_pgt[];
  
  #define swapper_pg_dir init_level4_pgt
@@ -12734,7 +12734,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  	local_irq_save(flags);
 diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/kernel/vmlinux.lds.S linux-2.6.32.6-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-2.6.32.6/arch/x86/kernel/vmlinux.lds.S	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.6-pax/arch/x86/kernel/vmlinux.lds.S	2009-12-19 16:01:56.000000000 +0100
++++ linux-2.6.32.6-pax/arch/x86/kernel/vmlinux.lds.S	2010-01-28 21:48:44.000000000 +0100
 @@ -26,6 +26,22 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -12758,7 +12758,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  
  #undef i386     /* in case the preprocessor is a 32bit one */
  
-@@ -34,40 +50,49 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
+@@ -34,40 +50,55 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
  #ifdef CONFIG_X86_32
  OUTPUT_ARCH(i386)
  ENTRY(phys_startup_32)
@@ -12774,8 +12774,14 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  PHDRS {
  	text PT_LOAD FLAGS(5);          /* R_E */
 -	data PT_LOAD FLAGS(7);          /* RWE */
++#ifdef CONFIG_XEN
++	rodata PT_LOAD FLAGS(5);        /* R_E */
++#else
 +	rodata PT_LOAD FLAGS(4);        /* R__ */
++#endif
++#ifdef CONFIG_X86_32
 +	module PT_LOAD FLAGS(5);        /* R_E */
++#endif
 +	data PT_LOAD FLAGS(6);          /* RW_ */
  #ifdef CONFIG_X86_64
  	user PT_LOAD FLAGS(5);          /* R_E */
@@ -12818,7 +12824,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  		HEAD_TEXT
  #ifdef CONFIG_X86_32
  		. = ALIGN(PAGE_SIZE);
-@@ -82,28 +107,64 @@ SECTIONS
+@@ -82,28 +113,64 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -12846,7 +12852,6 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
 +		*(.swapper_pg_pmd)
 +		*(.swapper_pg_dir)
 +	}
-+#endif
 +
 +	. = ALIGN(PAGE_SIZE);
 +	.vmi.rom : AT(ADDR(.vmi.rom) - LOAD_OFFSET) {
@@ -12856,7 +12861,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
 +	. = ALIGN(PAGE_SIZE);
 +	.module.text : AT(ADDR(.module.text) - LOAD_OFFSET) {
 +
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_MODULES)
++#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_MODULES)
 +		MODULES_EXEC_VADDR = .;
 +		BYTE(0)
 +		. += (8 * 1024 * 1024);
@@ -12864,12 +12869,13 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
 +		MODULES_EXEC_END = . - 1;
 +#endif
 +
-+		/* End of text section */
-+		_etext = . - __KERNEL_TEXT_OFFSET;
 +	} :module
++#endif
 +
  	/* Data */
  	.data : AT(ADDR(.data) - LOAD_OFFSET) {
++		/* End of text section */
++		_etext = . - __KERNEL_TEXT_OFFSET;
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	. = ALIGN(PMD_SIZE);
@@ -12890,7 +12896,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  
-@@ -166,12 +227,6 @@ SECTIONS
+@@ -166,12 +233,6 @@ SECTIONS
  	}
  	vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -12903,7 +12909,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  	.vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3)) {
  		*(.vsyscall_3)
  	}
-@@ -187,12 +242,19 @@ SECTIONS
+@@ -187,12 +248,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -12926,7 +12932,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -201,12 +263,25 @@ SECTIONS
+@@ -201,12 +269,27 @@ SECTIONS
  	PERCPU_VADDR(0, :percpu)
  #endif
  
@@ -12940,9 +12946,9 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
 +		VMLINUX_SYMBOL(_sinittext) = .;
 +		INIT_TEXT
 +		VMLINUX_SYMBOL(_einittext) = .;
++		. = ALIGN(PAGE_SIZE);
 +	} :text.init
- 
--	INIT_DATA_SECTION(16)
++
 +	/*
 +	 * .exit.text is discard at runtime, not link time, to deal with
 +	 *  references from .altinstructions and .eh_frame
@@ -12952,12 +12958,14 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
 +		. = ALIGN(16);
 +	} :text.exit
 +	. = init_begin + SIZEOF(.init.text) + SIZEOF(.exit.text);
-+
+ 
+-	INIT_DATA_SECTION(16)
++	. = ALIGN(PAGE_SIZE);
 +	INIT_DATA_SECTION(16) :init
  
  	.x86_cpu_dev.init : AT(ADDR(.x86_cpu_dev.init) - LOAD_OFFSET) {
  		__x86_cpu_dev_start = .;
-@@ -232,19 +307,11 @@ SECTIONS
+@@ -232,19 +315,11 @@ SECTIONS
  		*(.altinstr_replacement)
  	}
  
@@ -12978,7 +12986,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  	PERCPU(PAGE_SIZE)
  #endif
  
-@@ -267,12 +334,6 @@ SECTIONS
+@@ -267,12 +342,6 @@ SECTIONS
  		. = ALIGN(PAGE_SIZE);
  	}
  
@@ -12991,7 +12999,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -288,6 +349,7 @@ SECTIONS
+@@ -288,6 +357,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -12999,7 +13007,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/arch/x86/ke
  		__brk_limit = .;
  	}
  
-@@ -316,13 +378,12 @@ SECTIONS
+@@ -316,13 +386,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = per_cpu__##x + __per_cpu_load
@@ -37630,7 +37638,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/scripts/pnm
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/security/Kconfig linux-2.6.32.6-pax/security/Kconfig
 --- linux-2.6.32.6/security/Kconfig	2009-12-03 15:02:54.000000000 +0100
-+++ linux-2.6.32.6-pax/security/Kconfig	2009-12-04 00:54:44.000000000 +0100
++++ linux-2.6.32.6-pax/security/Kconfig	2010-01-28 21:29:37.000000000 +0100
 @@ -4,6 +4,460 @@
  
  menu "Security options"
@@ -37918,7 +37926,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/security/Kc
 +
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
-+	depends on PAX_NOEXEC && X86 && !EFI && !COMPAT_VDSO && (!X86_32 || X86_WP_WORKS_OK)
++	depends on PAX_NOEXEC && X86 && !EFI && !COMPAT_VDSO && !XEN && (!X86_32 || X86_WP_WORKS_OK)
 +	help
 +	  This is the kernel land equivalent of PAGEEXEC and MPROTECT,
 +	  that is, enabling this option will make it harder to inject
@@ -38034,7 +38042,7 @@ diff -NurpX linux-2.6.32.6-pax/Documentation/dontdiff linux-2.6.32.6/security/Kc
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
-+	depends on X86_32 && !COMPAT_VDSO && !UML_X86
++	depends on X86_32 && !COMPAT_VDSO && !UML_X86 && !XEN
 +	help
 +	  By saying Y here the kernel will be prevented from dereferencing
 +	  userland pointers in contexts where the kernel expects only kernel
