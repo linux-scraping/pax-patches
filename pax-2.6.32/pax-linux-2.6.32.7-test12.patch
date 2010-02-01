@@ -4867,7 +4867,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/bo
  	printf(".section \".rodata.compressed\",\"a\",@progbits\n");
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/boot/compressed/relocs.c linux-2.6.32.7-pax/arch/x86/boot/compressed/relocs.c
 --- linux-2.6.32.7/arch/x86/boot/compressed/relocs.c	2009-06-10 08:46:14.000000000 +0200
-+++ linux-2.6.32.7-pax/arch/x86/boot/compressed/relocs.c	2009-12-04 00:54:39.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/boot/compressed/relocs.c	2010-01-31 03:36:09.000000000 +0100
 @@ -10,8 +10,11 @@
  #define USE_BSD
  #include <endian.h>
@@ -5039,7 +5039,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/bo
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
 +			/* Don't relocate actual code, they are relocated implicitly by the base address of KERNEL_CS */
-+			if (!strcmp(sec_name(sym->st_shndx), ".module.text") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
++			if (!strcmp(sec_name(sym->st_shndx), ".data") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".init.text"))
 +				continue;
@@ -34684,7 +34684,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mlock.c 
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c linux-2.6.32.7-pax/mm/mmap.c
 --- linux-2.6.32.7/mm/mmap.c	2010-01-19 00:50:09.000000000 +0100
-+++ linux-2.6.32.7-pax/mm/mmap.c	2010-01-19 00:58:43.000000000 +0100
++++ linux-2.6.32.7-pax/mm/mmap.c	2010-01-31 03:51:47.000000000 +0100
 @@ -45,6 +45,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -35335,34 +35335,35 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1818,6 +2059,108 @@ detach_vmas_to_be_unmapped(struct mm_str
-  * Split a vma into two pieces at address 'addr', a new vma is allocated
-  * either for the first part or the tail.
-  */
-+
+@@ -1824,10 +2065,23 @@ int split_vma(struct mm_struct * mm, str
+ 	struct mempolicy *pol;
+ 	struct vm_area_struct *new;
+ 
 +#ifdef CONFIG_PAX_SEGMEXEC
-+int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
-+	      unsigned long addr, int new_below)
-+{
-+	struct mempolicy *pol;
 +	struct vm_area_struct *new, *vma_m, *new_m = NULL;
 +	unsigned long addr_m = addr + SEGMEXEC_TASK_SIZE;
++#endif
 +
-+	if (is_vm_hugetlb_page(vma) && (addr & ~HPAGE_MASK))
-+		return -EINVAL;
-+
-+	vma_m = pax_find_mirror_vma(vma);
-+	if (vma_m) {
+ 	if (is_vm_hugetlb_page(vma) && (addr &
+ 					~(huge_page_mask(hstate_vma(vma)))))
+ 		return -EINVAL;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (mm->pax_flags & MF_PAX_SEGMEXEC) {
 +		BUG_ON(vma->vm_end > SEGMEXEC_TASK_SIZE);
 +		if (mm->map_count >= sysctl_max_map_count-1)
 +			return -ENOMEM;
-+	} else if (mm->map_count >= sysctl_max_map_count)
-+		return -ENOMEM;
++	} else
++#endif
 +
-+	new = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
-+	if (!new)
-+		return -ENOMEM;
-+
+ 	if (mm->map_count >= sysctl_max_map_count)
+ 		return -ENOMEM;
+ 
+@@ -1835,6 +2089,16 @@ int split_vma(struct mm_struct * mm, str
+ 	if (!new)
+ 		return -ENOMEM;
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
 +	if (vma_m) {
 +		new_m = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
 +		if (!new_m) {
@@ -35370,17 +35371,16 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
 +			return -ENOMEM;
 +		}
 +	}
++#endif
 +
-+	/* most fields are the same, copy all, and then fixup */
-+	*new = *vma;
-+
-+	if (new_below)
-+		new->vm_end = addr;
-+	else {
-+		new->vm_start = addr;
-+		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
-+	}
-+
+ 	/* most fields are the same, copy all, and then fixup */
+ 	*new = *vma;
+ 
+@@ -1845,8 +2109,29 @@ int split_vma(struct mm_struct * mm, str
+ 		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
+ 	}
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
 +	if (vma_m) {
 +		*new_m = *vma_m;
 +		new_m->vm_mirror = new;
@@ -35393,31 +35393,24 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
 +			new_m->vm_pgoff += ((addr_m - vma_m->vm_start) >> PAGE_SHIFT);
 +		}
 +	}
++#endif
 +
-+	pol = mpol_dup(vma_policy(vma));
-+	if (IS_ERR(pol)) {
+ 	pol = mpol_dup(vma_policy(vma));
+ 	if (IS_ERR(pol)) {
++
++#ifdef CONFIG_PAX_SEGMEXEC
 +		if (new_m)
 +			kmem_cache_free(vm_area_cachep, new_m);
-+		kmem_cache_free(vm_area_cachep, new);
-+		return PTR_ERR(pol);
-+	}
-+	vma_set_policy(new, pol);
++#endif
 +
-+	if (new->vm_file) {
-+		get_file(new->vm_file);
-+		if (vma->vm_flags & VM_EXECUTABLE)
-+			added_exe_file_vma(mm);
-+	}
-+
-+	if (new->vm_ops && new->vm_ops->open)
-+		new->vm_ops->open(new);
-+
-+	if (new_below)
-+		vma_adjust(vma, addr, vma->vm_end, vma->vm_pgoff +
-+			((addr - new->vm_start) >> PAGE_SHIFT), new);
-+	else
-+		vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
-+
+ 		kmem_cache_free(vm_area_cachep, new);
+ 		return PTR_ERR(pol);
+ 	}
+@@ -1867,6 +2152,28 @@ int split_vma(struct mm_struct * mm, str
+ 	else
+ 		vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
+ 
++#ifdef CONFIG_PAX_SEGMEXEC
 +	if (vma_m) {
 +		mpol_get(pol);
 +		vma_set_policy(new_m, pol);
@@ -35437,27 +35430,18 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
 +		else
 +			vma_adjust(vma_m, vma_m->vm_start, addr_m, vma_m->vm_pgoff, new_m);
 +	}
++#endif
 +
-+	return 0;
-+}
-+#else
- int split_vma(struct mm_struct * mm, struct vm_area_struct * vma,
- 	      unsigned long addr, int new_below)
- {
-@@ -1869,17 +2212,37 @@ int split_vma(struct mm_struct * mm, str
- 
  	return 0;
  }
-+#endif
  
- /* Munmap is split into 2 main parts -- this part which finds
-  * what needs doing, and the areas themselves, which do the
+@@ -1875,11 +2182,30 @@ int split_vma(struct mm_struct * mm, str
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
 +#ifdef CONFIG_PAX_SEGMEXEC
-+int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
-+{
+ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+ {
 +	int ret = __do_munmap(mm, start, len);
 +	if (ret || !(mm->pax_flags & MF_PAX_SEGMEXEC))
 +		return ret;
@@ -35467,9 +35451,9 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
 +
 +int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#else
- int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
++int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#endif
- {
++{
  	unsigned long end;
  	struct vm_area_struct *vma, *prev, *last;
  
@@ -35482,7 +35466,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -1943,6 +2306,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -1943,6 +2269,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -35491,7 +35475,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  	return 0;
  }
  
-@@ -1955,22 +2320,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -1955,22 +2283,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  
  	profile_munmap(addr);
  
@@ -35520,7 +35504,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -1984,6 +2345,11 @@ unsigned long do_brk(unsigned long addr,
+@@ -1984,6 +2308,11 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -35532,7 +35516,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -1995,16 +2361,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -1995,16 +2324,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -35564,7 +35548,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2021,22 +2401,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2021,22 +2364,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -35591,7 +35575,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2050,10 +2430,21 @@ unsigned long do_brk(unsigned long addr,
+@@ -2050,10 +2393,21 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -35614,7 +35598,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  	vma->vm_mm = mm;
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
-@@ -2062,11 +2453,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2062,11 +2416,12 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -35629,7 +35613,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  	return addr;
  }
  
-@@ -2113,8 +2505,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2113,8 +2468,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -35641,7 +35625,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2128,6 +2522,10 @@ int insert_vm_struct(struct mm_struct * 
+@@ -2128,6 +2485,10 @@ int insert_vm_struct(struct mm_struct * 
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -35652,7 +35636,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2150,7 +2548,22 @@ int insert_vm_struct(struct mm_struct * 
+@@ -2150,7 +2511,22 @@ int insert_vm_struct(struct mm_struct * 
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -35675,7 +35659,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  	return 0;
  }
  
-@@ -2168,6 +2581,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2168,6 +2544,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -35684,7 +35668,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2211,6 +2626,35 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2211,6 +2589,35 @@ struct vm_area_struct *copy_vma(struct v
  	return new_vma;
  }
  
@@ -35720,7 +35704,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/mm/mmap.c l
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2290,6 +2734,15 @@ int install_special_mapping(struct mm_st
+@@ -2290,6 +2697,15 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
