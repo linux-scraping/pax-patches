@@ -532,6 +532,57 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/arm/ma
  	.enter		= sa11x0_pm_enter,
  	.valid		= suspend_valid_only_mem,
  };
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/arm/mm/fault.c linux-2.6.32.7-pax/arch/arm/mm/fault.c
+--- linux-2.6.32.7/arch/arm/mm/fault.c	2009-12-03 15:01:16.000000000 +0100
++++ linux-2.6.32.7-pax/arch/arm/mm/fault.c	2010-02-10 19:53:54.000000000 +0100
+@@ -166,6 +166,13 @@ __do_user_fault(struct task_struct *tsk,
+ 	}
+ #endif
+ 
++#ifdef CONFIG_PAX_PAGEEXEC
++	if (fsr & FSR_LNX_PF) {
++		pax_report_fault(regs, (void *)regs->ARM_pc, (void *)regs->ARM_sp);
++		do_group_exit(SIGKILL);
++	}
++#endif
++
+ 	tsk->thread.address = addr;
+ 	tsk->thread.error_code = fsr;
+ 	tsk->thread.trap_no = 14;
+@@ -357,6 +364,33 @@ do_page_fault(unsigned long addr, unsign
+ }
+ #endif					/* CONFIG_MMU */
+ 
++#ifdef CONFIG_PAX_PAGEEXEC
++void pax_report_insns(void *pc, void *sp)
++{
++	long i;
++
++	printk(KERN_ERR "PAX: bytes at PC: ");
++	for (i = 0; i < 20; i++) {
++		unsigned char c;
++		if (get_user(c, (__force unsigned char __user *)pc+i))
++			printk(KERN_CONT "?? ");
++		else
++			printk(KERN_CONT "%02x ", c);
++	}
++	printk("\n");
++
++	printk(KERN_ERR "PAX: bytes at SP-4: ");
++	for (i = -1; i < 20; i++) {
++		unsigned long c;
++		if (get_user(c, (__force unsigned long __user *)sp+i))
++			printk(KERN_CONT "???????? ");
++		else
++			printk(KERN_CONT "%08lx ", c);
++	}
++	printk("\n");
++}
++#endif
++
+ /*
+  * First Level Translation Fault Handler
+  *
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/arm/mm/mmap.c linux-2.6.32.7-pax/arch/arm/mm/mmap.c
 --- linux-2.6.32.7/arch/arm/mm/mmap.c	2010-01-19 00:50:07.000000000 +0100
 +++ linux-2.6.32.7-pax/arch/arm/mm/mmap.c	2010-01-19 00:50:23.000000000 +0100
@@ -12391,7 +12442,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	# hence we don't use the boot_gdt_descr defined in head.S
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/kernel/traps.c linux-2.6.32.7-pax/arch/x86/kernel/traps.c
 --- linux-2.6.32.7/arch/x86/kernel/traps.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/kernel/traps.c	2009-12-04 00:54:39.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/kernel/traps.c	2010-02-08 01:37:52.000000000 +0100
 @@ -69,12 +69,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -12405,7 +12456,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  #endif
  
  DECLARE_BITMAP(used_vectors, NR_VECTORS);
-@@ -112,7 +106,7 @@ static inline void preempt_conditional_c
+@@ -112,19 +106,19 @@ static inline void preempt_conditional_c
  static inline void
  die_if_kernel(const char *str, struct pt_regs *regs, long err)
  {
@@ -12414,7 +12465,12 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  		die(str, regs, err);
  }
  #endif
-@@ -124,7 +118,7 @@ do_trap(int trapnr, int signr, char *str
+ 
+ static void __kprobes
+-do_trap(int trapnr, int signr, char *str, struct pt_regs *regs,
++do_trap(int trapnr, int signr, const char *str, struct pt_regs *regs,
+ 	long error_code, siginfo_t *info)
+ {
  	struct task_struct *tsk = current;
  
  #ifdef CONFIG_X86_32
@@ -12441,8 +12497,16 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  		       regs->ip, regs->sp, error_code);
  		print_vma_addr(" in ", regs->ip);
  		printk("\n");
-@@ -177,6 +171,12 @@ kernel_trap:
+@@ -175,8 +169,20 @@ kernel_trap:
+ 	if (!fixup_exception(regs)) {
+ 		tsk->thread.error_code = error_code;
  		tsk->thread.trap_no = trapnr;
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++		if (trapnr == 12 && (regs->cs & 0xFFFF) == __KERNEL_CS)
++			str = "PAX: suspicious stack segment fault";
++#endif
++
  		die(str, regs, error_code);
  	}
 +
@@ -12454,7 +12518,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	return;
  
  #ifdef CONFIG_X86_32
-@@ -265,14 +265,30 @@ do_general_protection(struct pt_regs *re
+@@ -265,14 +271,30 @@ do_general_protection(struct pt_regs *re
  	conditional_sti(regs);
  
  #ifdef CONFIG_X86_32
@@ -12487,7 +12551,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	tsk->thread.error_code = error_code;
  	tsk->thread.trap_no = 13;
  
-@@ -305,6 +321,13 @@ gp_in_kernel:
+@@ -305,6 +327,13 @@ gp_in_kernel:
  	if (notify_die(DIE_GPF, "general protection fault", regs,
  				error_code, 13, SIGSEGV) == NOTIFY_STOP)
  		return;
@@ -12501,7 +12565,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	die("general protection fault", regs, error_code);
  }
  
-@@ -558,7 +581,7 @@ dotraplinkage void __kprobes do_debug(st
+@@ -558,7 +587,7 @@ dotraplinkage void __kprobes do_debug(st
  	}
  
  #ifdef CONFIG_X86_32
@@ -12510,7 +12574,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  		goto debug_vm86;
  #endif
  
-@@ -570,7 +593,7 @@ dotraplinkage void __kprobes do_debug(st
+@@ -570,7 +599,7 @@ dotraplinkage void __kprobes do_debug(st
  	 * kernel space (but re-enable TF when returning to user mode).
  	 */
  	if (condition & DR_STEP) {
@@ -12519,7 +12583,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  			goto clear_TF_reenable;
  	}
  
-@@ -757,7 +780,7 @@ do_simd_coprocessor_error(struct pt_regs
+@@ -757,7 +786,7 @@ do_simd_coprocessor_error(struct pt_regs
  	 * Handle strange cache flush from user space exception
  	 * in all other cases.  This is undocumented behaviour.
  	 */
@@ -15257,7 +15321,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/mm
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/mm/fault.c linux-2.6.32.7-pax/arch/x86/mm/fault.c
 --- linux-2.6.32.7/arch/x86/mm/fault.c	2009-12-03 15:01:42.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/mm/fault.c	2009-12-28 14:00:05.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/mm/fault.c	2010-02-10 19:30:44.000000000 +0100
 @@ -11,10 +11,14 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
@@ -15780,7 +15844,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/mm
 +	printk("\n");
 +
 +	printk(KERN_ERR "PAX: bytes at SP-%lu: ", (unsigned long)sizeof(long));
-+	for (i = -1; i < 80 / sizeof(long); i++) {
++	for (i = -1; i < 80 / (long)sizeof(long); i++) {
 +		unsigned long c;
 +		if (get_user(c, (__force unsigned long __user *)sp+i))
 +#ifdef CONFIG_X86_32
@@ -37622,7 +37686,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/scripts/pnm
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/security/Kconfig linux-2.6.32.7-pax/security/Kconfig
 --- linux-2.6.32.7/security/Kconfig	2009-12-03 15:02:54.000000000 +0100
-+++ linux-2.6.32.7-pax/security/Kconfig	2010-01-28 21:29:37.000000000 +0100
++++ linux-2.6.32.7-pax/security/Kconfig	2010-02-10 19:56:43.000000000 +0100
 @@ -4,6 +4,460 @@
  
  menu "Security options"
@@ -37719,7 +37783,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/security/Kc
 +
 +config PAX_NOEXEC
 +	bool "Enforce non-executable pages"
-+	depends on (PAX_EI_PAX || PAX_PT_PAX_FLAGS || PAX_HAVE_ACL_FLAGS || PAX_HOOK_ACL_FLAGS) && (ALPHA || IA64 || MIPS32 || MIPS64 || PARISC || PPC32 || PPC64 || SPARC32 || SPARC64 || X86)
++	depends on (PAX_EI_PAX || PAX_PT_PAX_FLAGS || PAX_HAVE_ACL_FLAGS || PAX_HOOK_ACL_FLAGS) && (ALPHA || (ARM && (CPU_V6 || CPU_V7)) || IA64 || MIPS32 || MIPS64 || PARISC || PPC32 || PPC64 || SPARC32 || SPARC64 || X86)
 +	help
 +	  By design some architectures do not allow for protecting memory
 +	  pages against execution or even if they do, Linux does not make
