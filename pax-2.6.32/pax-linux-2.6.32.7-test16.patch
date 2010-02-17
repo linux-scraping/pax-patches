@@ -6677,26 +6677,27 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  extern int iommu_pass_through;
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/include/asm/irqflags.h linux-2.6.32.7-pax/arch/x86/include/asm/irqflags.h
 --- linux-2.6.32.7/arch/x86/include/asm/irqflags.h	2009-12-03 15:01:39.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/include/asm/irqflags.h	2009-12-04 00:54:39.000000000 +0100
-@@ -146,6 +146,27 @@ static inline unsigned long __raw_local_
++++ linux-2.6.32.7-pax/arch/x86/include/asm/irqflags.h	2010-02-16 14:41:36.000000000 +0100
+@@ -146,6 +146,28 @@ static inline unsigned long __raw_local_
  #define INTERRUPT_RETURN		iret
  #define ENABLE_INTERRUPTS_SYSEXIT	sti; sysexit
  #define GET_CR0_INTO_EAX		movl %cr0, %eax
 +
 +/* PaX: special register usage in entry_32.S, beware */
 +#ifdef CONFIG_PAX_KERNEXEC
-+#define PAX_EXIT_KERNEL		\
-+	bt $16, %esi;		\
-+	jc 1f;			\
-+	movl %esi, %cr0;	\
++#define PAX_EXIT_KERNEL				\
++	cmpw $__KERNEXEC_KERNEL_CS, PT_CS(%esp);\
++	jnz 1f;					\
++	movl %cr0, %esi;			\
++	btc $16, %esi;				\
++	movl %esi, %cr0;			\
 +1:
 +
-+#define PAX_ENTER_KERNEL	\
-+	movl %cr0, %esi;	\
-+	movl %esi, %edx;	\
-+	bts $16, %edx;		\
-+	jc 1f;			\
-+	movl %edx, %cr0;	\
++#define PAX_ENTER_KERNEL			\
++	movl %cr0, %esi;			\
++	bts $16, %esi;				\
++	jc 1f;					\
++	movl %esi, %cr0;			\
 +1:
 +#else
 +#define PAX_EXIT_KERNEL
@@ -7132,7 +7133,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/include/asm/paravirt.h linux-2.6.32.7-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.7/arch/x86/include/asm/paravirt.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/include/asm/paravirt.h	2009-12-04 00:54:39.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/include/asm/paravirt.h	2010-02-16 14:41:36.000000000 +0100
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7180,10 +7181,11 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +#define PAX_EXIT_KERNEL					\
-+	bt $16, %esi;					\
-+	jc 1f;						\
++	cmpw $__KERNEXEC_KERNEL_CS, PT_CS(%esp);	\
++	jnz 1f;						\
 +	push %eax; push %ecx;				\
-+	movl %esi, %eax;				\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
++	btc $16, %eax;					\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
 +	pop %ecx; pop %eax;				\
 +1:
@@ -7191,7 +7193,6 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
 +#define PAX_ENTER_KERNEL				\
 +	push %eax; push %ecx;				\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
-+	movl %eax, %esi;				\
 +	bts $16, %eax;					\
 +	jc 1f;						\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
@@ -7298,8 +7299,8 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  /*
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/include/asm/pgtable.h linux-2.6.32.7-pax/arch/x86/include/asm/pgtable.h
 --- linux-2.6.32.7/arch/x86/include/asm/pgtable.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/include/asm/pgtable.h	2009-12-23 21:33:40.000000000 +0100
-@@ -74,12 +74,51 @@ extern struct list_head pgd_list;
++++ linux-2.6.32.7-pax/arch/x86/include/asm/pgtable.h	2010-02-16 14:41:36.000000000 +0100
+@@ -74,12 +74,61 @@ extern struct list_head pgd_list;
  
  #define arch_end_context_switch(prev)	do {} while(0)
  
@@ -7319,6 +7320,11 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
 +	barrier();
 +	cr0 = read_cr0();
 +	BUG_ON(unlikely(!(cr0 & X86_CR0_WP)));
++
++#ifdef CONFIG_X86_32
++	asm volatile("ljmp %0,$1f; 1:\n\t" : : "i"(__KERNEXEC_KERNEL_CS), "m"(__force_order));
++#endif
++
 +	write_cr0(cr0 & ~X86_CR0_WP);
 +	return cr0;
 +}
@@ -7329,6 +7335,11 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
 +
 +	cr0 = read_cr0();
 +	BUG_ON(unlikely(cr0 & X86_CR0_WP));
++
++#ifdef CONFIG_X86_32
++	asm volatile("ljmp %0,$1f; 1:\n\t" : : "i"(__KERNEL_CS), "m"(__force_order));
++#endif
++
 +	write_cr0(cr0 | X86_CR0_WP);
 +	barrier();
 +	preempt_enable_no_resched();
@@ -7351,7 +7362,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  static inline int pte_dirty(pte_t pte)
  {
  	return pte_flags(pte) & _PAGE_DIRTY;
-@@ -167,9 +206,29 @@ static inline pte_t pte_wrprotect(pte_t 
+@@ -167,9 +216,29 @@ static inline pte_t pte_wrprotect(pte_t 
  	return pte_clear_flags(pte, _PAGE_RW);
  }
  
@@ -7382,7 +7393,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -472,7 +531,7 @@ static inline pud_t *pud_offset(pgd_t *p
+@@ -472,7 +541,7 @@ static inline pud_t *pud_offset(pgd_t *p
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -7391,13 +7402,17 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -613,7 +672,9 @@ static inline void ptep_set_wrprotect(st
+@@ -611,9 +680,12 @@ static inline void ptep_set_wrprotect(st
+  * dst and src can be on the same page, but the range must not overlap,
+  * and must not cross a page boundary.
   */
- static inline void clone_pgd_range(pgd_t *dst, pgd_t *src, int count)
+-static inline void clone_pgd_range(pgd_t *dst, pgd_t *src, int count)
++static inline void clone_pgd_range(pgd_t *dst, const pgd_t *src, int count)
  {
 -       memcpy(dst, src, count * sizeof(pgd_t));
 +	pax_open_kernel();
-+	memcpy(dst, src, count * sizeof(pgd_t));
++	while (count--)
++		*dst++ = *src++;
 +	pax_close_kernel();
  }
  
@@ -7972,8 +7987,28 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/include/asm/segment.h linux-2.6.32.7-pax/arch/x86/include/asm/segment.h
 --- linux-2.6.32.7/arch/x86/include/asm/segment.h	2009-06-10 08:46:15.000000000 +0200
-+++ linux-2.6.32.7-pax/arch/x86/include/asm/segment.h	2009-12-04 00:54:39.000000000 +0100
-@@ -88,7 +88,7 @@
++++ linux-2.6.32.7-pax/arch/x86/include/asm/segment.h	2010-02-16 14:41:36.000000000 +0100
+@@ -62,8 +62,8 @@
+  *  26 - ESPFIX small SS
+  *  27 - per-cpu			[ offset to per-cpu data area ]
+  *  28 - stack_canary-20		[ for stack protector ]
+- *  29 - unused
+- *  30 - unused
++ *  29 - PCI BIOS CS
++ *  30 - PCI BIOS DS
+  *  31 - TSS for double fault handler
+  */
+ #define GDT_ENTRY_TLS_MIN	6
+@@ -77,6 +77,8 @@
+ 
+ #define GDT_ENTRY_KERNEL_CS		(GDT_ENTRY_KERNEL_BASE + 0)
+ 
++#define GDT_ENTRY_KERNEXEC_KERNEL_CS	(4)
++
+ #define GDT_ENTRY_KERNEL_DS		(GDT_ENTRY_KERNEL_BASE + 1)
+ 
+ #define GDT_ENTRY_TSS			(GDT_ENTRY_KERNEL_BASE + 4)
+@@ -88,7 +90,7 @@
  #define GDT_ENTRY_ESPFIX_SS		(GDT_ENTRY_KERNEL_BASE + 14)
  #define __ESPFIX_SS (GDT_ENTRY_ESPFIX_SS * 8)
  
@@ -7982,7 +8017,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  #ifdef CONFIG_SMP
  #define __KERNEL_PERCPU (GDT_ENTRY_PERCPU * 8)
  #else
-@@ -102,6 +102,12 @@
+@@ -102,6 +104,12 @@
  #define __KERNEL_STACK_CANARY		0
  #endif
  
@@ -7995,7 +8030,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  #define GDT_ENTRY_DOUBLEFAULT_TSS	31
  
  /*
-@@ -139,7 +145,7 @@
+@@ -139,12 +147,13 @@
   */
  
  /* Matches PNP_CS32 and PNP_CS16 (they must be consecutive) */
@@ -8004,6 +8039,20 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/in
  
  
  #else
+ #include <asm/cache.h>
+ 
++#define GDT_ENTRY_KERNEXEC_KERNEL_CS 0
+ #define GDT_ENTRY_KERNEL32_CS 1
+ #define GDT_ENTRY_KERNEL_CS 2
+ #define GDT_ENTRY_KERNEL_DS 3
+@@ -183,6 +192,7 @@
+ #endif
+ 
+ #define __KERNEL_CS	(GDT_ENTRY_KERNEL_CS * 8)
++#define __KERNEXEC_KERNEL_CS	(GDT_ENTRY_KERNEXEC_KERNEL_CS * 8)
+ #define __KERNEL_DS	(GDT_ENTRY_KERNEL_DS * 8)
+ #define __USER_DS     (GDT_ENTRY_DEFAULT_USER_DS* 8 + 3)
+ #define __USER_CS     (GDT_ENTRY_DEFAULT_USER_CS* 8 + 3)
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/include/asm/spinlock.h linux-2.6.32.7-pax/arch/x86/include/asm/spinlock.h
 --- linux-2.6.32.7/arch/x86/include/asm/spinlock.h	2009-09-10 19:41:11.000000000 +0200
 +++ linux-2.6.32.7-pax/arch/x86/include/asm/spinlock.h	2009-12-04 00:54:39.000000000 +0100
@@ -9184,7 +9233,16 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  };
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/kernel/cpu/mcheck/mce.c linux-2.6.32.7-pax/arch/x86/kernel/cpu/mcheck/mce.c
 --- linux-2.6.32.7/arch/x86/kernel/cpu/mcheck/mce.c	2009-12-20 06:23:59.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/kernel/cpu/mcheck/mce.c	2009-12-20 06:24:22.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/kernel/cpu/mcheck/mce.c	2010-02-16 14:41:36.000000000 +0100
+@@ -187,7 +187,7 @@ static void print_mce(struct mce *m)
+ 			!(m->mcgstatus & MCG_STATUS_EIPV) ? " !INEXACT!" : "",
+ 				m->cs, m->ip);
+ 
+-		if (m->cs == __KERNEL_CS)
++		if (m->cs == __KERNEL_CS || m->cs == __KERNEXEC_KERNEL_CS)
+ 			print_symbol("{%s}", m->ip);
+ 		pr_cont("\n");
+ 	}
 @@ -1429,14 +1429,14 @@ void __cpuinit mcheck_init(struct cpuinf
   */
  
@@ -10104,7 +10162,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	/* Reserve INITRD */
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/kernel/head_32.S linux-2.6.32.7-pax/arch/x86/kernel/head_32.S
 --- linux-2.6.32.7/arch/x86/kernel/head_32.S	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/kernel/head_32.S	2009-12-04 00:54:39.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/kernel/head_32.S	2010-02-16 14:41:36.000000000 +0100
 @@ -19,10 +19,17 @@
  #include <asm/setup.h>
  #include <asm/processor-flags.h>
@@ -10163,7 +10221,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  ENTRY(startup_32)
  	/* test KEEP_SEGMENTS flag to see if the bootloader is asking
  		us to not reload segments */
-@@ -97,6 +113,52 @@ ENTRY(startup_32)
+@@ -97,6 +113,55 @@ ENTRY(startup_32)
  	movl %eax,%gs
  2:
  
@@ -10205,9 +10263,12 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
 +	addl $__PAGE_OFFSET,%eax
 +1:
 +	movw %ax,__KERNEL_CS + 2(%edi)
++	movw %ax,__KERNEXEC_KERNEL_CS + 2(%edi)
 +	rorl $16,%eax
 +	movb %al,__KERNEL_CS + 4(%edi)
++	movb %al,__KERNEXEC_KERNEL_CS + 4(%edi)
 +	movb %ah,__KERNEL_CS + 7(%edi)
++	movb %ah,__KERNEXEC_KERNEL_CS + 7(%edi)
 +	rorl $16,%eax
 +	addl $PAGE_SIZE_asm,%edi
 +	loop 1b
@@ -10216,7 +10277,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  /*
   * Clear BSS first so that there are no surprises...
   */
-@@ -140,9 +202,7 @@ ENTRY(startup_32)
+@@ -140,9 +205,7 @@ ENTRY(startup_32)
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -10227,7 +10288,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -154,10 +214,10 @@ WEAK(xen_entry)
+@@ -154,10 +217,10 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
@@ -10242,7 +10303,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #endif /* CONFIG_PARAVIRT */
-@@ -218,8 +278,11 @@ default_entry:
+@@ -218,8 +281,11 @@ default_entry:
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -10256,7 +10317,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -249,8 +312,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -249,8 +315,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -10270,7 +10331,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  #endif
  	jmp 3f
  /*
-@@ -297,6 +363,7 @@ ENTRY(startup_32_smp)
+@@ -297,6 +366,7 @@ ENTRY(startup_32_smp)
  	orl %edx,%eax
  	movl %eax,%cr4
  
@@ -10278,7 +10339,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	btl $5, %eax		# check if PAE is enabled
  	jnc 6f
  
-@@ -312,13 +379,17 @@ ENTRY(startup_32_smp)
+@@ -312,13 +382,17 @@ ENTRY(startup_32_smp)
  	jnc 6f
  
  	/* Setup EFER (Extended Feature Enable Register) */
@@ -10297,7 +10358,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  6:
  
  /*
-@@ -344,9 +415,7 @@ ENTRY(startup_32_smp)
+@@ -344,9 +418,7 @@ ENTRY(startup_32_smp)
  
  #ifdef CONFIG_SMP
  	cmpb $0, ready
@@ -10308,7 +10369,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  #endif /* CONFIG_SMP */
  
  /*
-@@ -424,7 +493,7 @@ is386:	movl $2,%ecx		# set MP
+@@ -424,7 +496,7 @@ is386:	movl $2,%ecx		# set MP
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
  
@@ -10317,7 +10378,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	movl %eax,%ds
  	movl %eax,%es
  
-@@ -438,8 +507,11 @@ is386:	movl $2,%ecx		# set MP
+@@ -438,8 +510,11 @@ is386:	movl $2,%ecx		# set MP
  	 */
  	cmpb $0,ready
  	jne 1f
@@ -10330,7 +10391,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	movw %cx, 8 * GDT_ENTRY_STACK_CANARY + 2(%eax)
  	shrl $16, %ecx
  	movb %cl, 8 * GDT_ENTRY_STACK_CANARY + 4(%eax)
-@@ -457,10 +529,6 @@ is386:	movl $2,%ecx		# set MP
+@@ -457,10 +532,6 @@ is386:	movl $2,%ecx		# set MP
  #ifdef CONFIG_SMP
  	movb ready, %cl
  	movb $1, ready
@@ -10341,7 +10402,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  #endif /* CONFIG_SMP */
  	jmp *(initial_code)
  
-@@ -546,22 +614,22 @@ early_page_fault:
+@@ -546,22 +617,22 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
@@ -10369,7 +10430,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -569,8 +637,11 @@ hlt_loop:
+@@ -569,8 +640,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -10382,7 +10443,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -579,9 +650,6 @@ ignore_int:
+@@ -579,9 +653,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -10392,7 +10453,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -608,27 +676,37 @@ ENTRY(initial_code)
+@@ -608,27 +679,37 @@ ENTRY(initial_code)
  /*
   * BSS section
   */
@@ -10435,7 +10496,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -651,11 +729,12 @@ ENTRY(swapper_pg_dir)
+@@ -651,11 +732,12 @@ ENTRY(swapper_pg_dir)
  
  .data
  ENTRY(stack_start)
@@ -10449,7 +10510,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  early_recursion_flag:
  	.long 0
  
-@@ -691,7 +770,7 @@ fault_msg:
+@@ -691,7 +773,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -10458,7 +10519,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -702,7 +781,7 @@ idt_descr:
+@@ -702,7 +784,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -10467,7 +10528,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -711,5 +790,59 @@ ENTRY(early_gdt_descr)
+@@ -711,5 +793,65 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -10483,7 +10544,13 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
 +	.quad 0x0000000000000000	/* 0x0b reserved */
 +	.quad 0x0000000000000000	/* 0x13 reserved */
 +	.quad 0x0000000000000000	/* 0x1b reserved */
++
++#ifdef CONFIG_PAX_KERNEXEC
++	.quad 0x00cf9b000000ffff	/* 0x20 alternate kernel 4GB code at 0x00000000 */
++#else
 +	.quad 0x0000000000000000	/* 0x20 unused */
++#endif
++
 +	.quad 0x0000000000000000	/* 0x28 unused */
 +	.quad 0x0000000000000000	/* 0x33 TLS entry 1 */
 +	.quad 0x0000000000000000	/* 0x3b TLS entry 2 */
@@ -10531,7 +10598,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
 +	.endr
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/kernel/head_64.S linux-2.6.32.7-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.32.7/arch/x86/kernel/head_64.S	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/kernel/head_64.S	2010-01-19 02:35:49.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/kernel/head_64.S	2010-02-17 02:06:07.000000000 +0100
 @@ -38,6 +38,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
  L3_PAGE_OFFSET = pud_index(__PAGE_OFFSET)
  L4_START_KERNEL = pgd_index(__START_KERNEL_map)
@@ -10644,7 +10711,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -350,13 +350,35 @@ NEXT_PAGE(init_level4_pgt)
+@@ -350,13 +350,29 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
@@ -10656,12 +10723,6 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	/* (2^48-(2*1024*1024*1024))/(2^39) = 511 */
  	.quad	level3_kernel_pgt - __START_KERNEL_map + _PAGE_TABLE
  
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	.rept NR_CPUS - 1
-+	.fill	512,8,0
-+	.endr
-+#endif
-+
  NEXT_PAGE(level3_ident_pgt)
  	.quad	level2_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
 +#ifdef CONFIG_XEN
@@ -10680,7 +10741,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -364,20 +386,23 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -364,20 +380,23 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -10712,7 +10773,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -390,33 +415,49 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -390,33 +409,49 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -12442,7 +12503,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  	# hence we don't use the boot_gdt_descr defined in head.S
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/kernel/traps.c linux-2.6.32.7-pax/arch/x86/kernel/traps.c
 --- linux-2.6.32.7/arch/x86/kernel/traps.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.7-pax/arch/x86/kernel/traps.c	2010-02-08 01:37:52.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/kernel/traps.c	2010-02-16 14:41:36.000000000 +0100
 @@ -69,12 +69,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -12503,7 +12564,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  		tsk->thread.trap_no = trapnr;
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+		if (trapnr == 12 && (regs->cs & 0xFFFF) == __KERNEL_CS)
++		if (trapnr == 12 && ((regs->cs & 0xFFFF) == __KERNEL_CS || (regs->cs & 0xFFFF) == __KERNEXEC_KERNEL_CS))
 +			str = "PAX: suspicious stack segment fault";
 +#endif
 +
@@ -12557,7 +12618,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/ke
  		return;
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+	if ((regs->cs & 0xFFFF) == __KERNEL_CS)
++	if ((regs->cs & 0xFFFF) == __KERNEL_CS || (regs->cs & 0xFFFF) == __KERNEXEC_KERNEL_CS)
 +		die("PAX: suspicious general protection fault", regs, error_code);
 +	else
 +#endif
@@ -16542,6 +16603,21 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/mm
  
  	/*
  	 * The boot-ioremap range spans multiple pmds, for which
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/mm/kmemcheck/kmemcheck.c linux-2.6.32.7-pax/arch/x86/mm/kmemcheck/kmemcheck.c
+--- linux-2.6.32.7/arch/x86/mm/kmemcheck/kmemcheck.c	2009-12-03 15:01:42.000000000 +0100
++++ linux-2.6.32.7-pax/arch/x86/mm/kmemcheck/kmemcheck.c	2010-02-16 14:41:36.000000000 +0100
+@@ -622,9 +622,9 @@ bool kmemcheck_fault(struct pt_regs *reg
+ 	 * memory (e.g. tracked pages)? For now, we need this to avoid
+ 	 * invoking kmemcheck for PnP BIOS calls.
+ 	 */
+-	if (regs->flags & X86_VM_MASK)
++	if (v8086_mode(regs))
+ 		return false;
+-	if (regs->cs != __KERNEL_CS)
++	if (regs->cs != __KERNEL_CS && regs->cs != __KERNEXEC_KERNEL_CS)
+ 		return false;
+ 
+ 	pte = kmemcheck_pte_lookup(address);
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/arch/x86/mm/mmap.c linux-2.6.32.7-pax/arch/x86/mm/mmap.c
 --- linux-2.6.32.7/arch/x86/mm/mmap.c	2009-12-03 15:01:42.000000000 +0100
 +++ linux-2.6.32.7-pax/arch/x86/mm/mmap.c	2009-12-04 00:54:40.000000000 +0100
@@ -17747,6 +17823,18 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/block/blk-i
  	.show	= &integrity_attr_show,
  	.store	= &integrity_attr_store,
  };
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/block/blk-iopoll.c linux-2.6.32.7-pax/block/blk-iopoll.c
+--- linux-2.6.32.7/block/blk-iopoll.c	2009-12-03 15:01:42.000000000 +0100
++++ linux-2.6.32.7-pax/block/blk-iopoll.c	2010-02-16 14:41:36.000000000 +0100
+@@ -77,7 +77,7 @@ void blk_iopoll_complete(struct blk_iopo
+ }
+ EXPORT_SYMBOL(blk_iopoll_complete);
+ 
+-static void blk_iopoll_softirq(struct softirq_action *h)
++static void blk_iopoll_softirq(void)
+ {
+ 	struct list_head *list = &__get_cpu_var(blk_cpu_iopoll);
+ 	int rearm = 0, budget = blk_iopoll_budget;
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/block/blk-map.c linux-2.6.32.7-pax/block/blk-map.c
 --- linux-2.6.32.7/block/blk-map.c	2009-09-10 19:41:14.000000000 +0200
 +++ linux-2.6.32.7-pax/block/blk-map.c	2009-12-12 01:28:32.000000000 +0100
@@ -17768,6 +17856,18 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/block/blk-m
  	if (do_copy)
  		bio = bio_copy_kern(q, kbuf, len, gfp_mask, reading);
  	else
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/block/blk-softirq.c linux-2.6.32.7-pax/block/blk-softirq.c
+--- linux-2.6.32.7/block/blk-softirq.c	2009-06-10 08:46:23.000000000 +0200
++++ linux-2.6.32.7-pax/block/blk-softirq.c	2010-02-16 14:41:36.000000000 +0100
+@@ -17,7 +17,7 @@ static DEFINE_PER_CPU(struct list_head, 
+  * Softirq action handler - move entries to local list and loop over them
+  * while passing them to the queue registered handler.
+  */
+-static void blk_done_softirq(struct softirq_action *h)
++static void blk_done_softirq(void)
+ {
+ 	struct list_head *cpu_list, local_list;
+ 
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/block/blk-sysfs.c linux-2.6.32.7-pax/block/blk-sysfs.c
 --- linux-2.6.32.7/block/blk-sysfs.c	2009-12-03 15:01:42.000000000 +0100
 +++ linux-2.6.32.7-pax/block/blk-sysfs.c	2009-12-04 00:55:24.000000000 +0100
@@ -23452,7 +23552,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net
  	.release_nvm		= e1000_release_nvm_80003es2lan,
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net/e1000e/hw.h linux-2.6.32.7-pax/drivers/net/e1000e/hw.h
 --- linux-2.6.32.7/drivers/net/e1000e/hw.h	2009-12-03 15:02:00.000000000 +0100
-+++ linux-2.6.32.7-pax/drivers/net/e1000e/hw.h	2009-12-04 00:55:25.000000000 +0100
++++ linux-2.6.32.7-pax/drivers/net/e1000e/hw.h	2010-02-12 14:40:25.000000000 +0100
 @@ -755,34 +755,34 @@ struct e1000_mac_operations {
  
  /* Function pointers for the PHY. */
@@ -23512,15 +23612,6 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net
  };
  
  struct e1000_mac_info {
-@@ -856,7 +856,7 @@ struct e1000_phy_info {
- };
- 
- struct e1000_nvm_info {
--	struct e1000_nvm_operations ops;
-+	const struct e1000_nvm_operations ops;
- 
- 	enum e1000_nvm_type type;
- 	enum e1000_nvm_override override;
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net/e1000e/ich8lan.c linux-2.6.32.7-pax/drivers/net/e1000e/ich8lan.c
 --- linux-2.6.32.7/drivers/net/e1000e/ich8lan.c	2009-12-03 15:02:00.000000000 +0100
 +++ linux-2.6.32.7-pax/drivers/net/e1000e/ich8lan.c	2009-12-04 00:55:25.000000000 +0100
@@ -23593,7 +23684,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net
  	.release              = igb_release_nvm_82575,
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net/igb/e1000_hw.h linux-2.6.32.7-pax/drivers/net/igb/e1000_hw.h
 --- linux-2.6.32.7/drivers/net/igb/e1000_hw.h	2009-12-03 15:02:02.000000000 +0100
-+++ linux-2.6.32.7-pax/drivers/net/igb/e1000_hw.h	2009-12-04 00:55:25.000000000 +0100
++++ linux-2.6.32.7-pax/drivers/net/igb/e1000_hw.h	2010-02-12 14:32:57.000000000 +0100
 @@ -302,17 +302,17 @@ struct e1000_phy_operations {
  };
  
@@ -23619,15 +23710,6 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net
  };
  
  extern const struct e1000_info e1000_82575_info;
-@@ -397,7 +397,7 @@ struct e1000_phy_info {
- };
- 
- struct e1000_nvm_info {
--	struct e1000_nvm_operations ops;
-+	const struct e1000_nvm_operations ops;
- 
- 	enum e1000_nvm_type type;
- 	enum e1000_nvm_override override;
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/drivers/net/irda/vlsi_ir.c linux-2.6.32.7-pax/drivers/net/irda/vlsi_ir.c
 --- linux-2.6.32.7/drivers/net/irda/vlsi_ir.c	2009-12-03 15:02:02.000000000 +0100
 +++ linux-2.6.32.7-pax/drivers/net/irda/vlsi_ir.c	2009-12-04 00:54:41.000000000 +0100
@@ -30704,7 +30786,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/include/lin
  	unsigned start2, unsigned end2)
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/include/linux/interrupt.h linux-2.6.32.7-pax/include/linux/interrupt.h
 --- linux-2.6.32.7/include/linux/interrupt.h	2009-12-03 15:02:42.000000000 +0100
-+++ linux-2.6.32.7-pax/include/linux/interrupt.h	2009-12-04 00:54:42.000000000 +0100
++++ linux-2.6.32.7-pax/include/linux/interrupt.h	2010-02-16 14:41:36.000000000 +0100
 @@ -357,7 +357,7 @@ enum
  /* map softirq index to softirq name. update 'softirq_to_name' in
   * kernel/softirq.c when adding a new softirq.
@@ -30714,6 +30796,21 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/include/lin
  
  /* softirq mask and active fields moved to irq_cpustat_t in
   * asm/hardirq.h to get better cache usage.  KAO
+@@ -365,12 +365,12 @@ extern char *softirq_to_name[NR_SOFTIRQS
+ 
+ struct softirq_action
+ {
+-	void	(*action)(struct softirq_action *);
++	void	(*action)(void);
+ };
+ 
+ asmlinkage void do_softirq(void);
+ asmlinkage void __do_softirq(void);
+-extern void open_softirq(int nr, void (*action)(struct softirq_action *));
++extern void open_softirq(int nr, void (*action)(void));
+ extern void softirq_init(void);
+ #define __raise_softirq_irqoff(nr) do { or_softirq_pending(1UL << (nr)); } while (0)
+ extern void raise_softirq_irqoff(unsigned int nr);
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/include/linux/jbd.h linux-2.6.32.7-pax/include/linux/jbd.h
 --- linux-2.6.32.7/include/linux/jbd.h	2009-12-03 15:02:42.000000000 +0100
 +++ linux-2.6.32.7-pax/include/linux/jbd.h	2009-12-04 00:54:42.000000000 +0100
@@ -32040,6 +32137,45 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/include/sou
  	void *private_data;
  	void (*private_free) (struct snd_ac97 *ac97);
  	/* --- */
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/include/trace/events/irq.h linux-2.6.32.7-pax/include/trace/events/irq.h
+--- linux-2.6.32.7/include/trace/events/irq.h	2009-12-03 15:02:44.000000000 +0100
++++ linux-2.6.32.7-pax/include/trace/events/irq.h	2010-02-16 14:41:36.000000000 +0100
+@@ -34,7 +34,7 @@
+  */
+ TRACE_EVENT(irq_handler_entry,
+ 
+-	TP_PROTO(int irq, struct irqaction *action),
++	TP_PROTO(int irq, const struct irqaction *action),
+ 
+ 	TP_ARGS(irq, action),
+ 
+@@ -64,7 +64,7 @@ TRACE_EVENT(irq_handler_entry,
+  */
+ TRACE_EVENT(irq_handler_exit,
+ 
+-	TP_PROTO(int irq, struct irqaction *action, int ret),
++	TP_PROTO(int irq, const struct irqaction *action, int ret),
+ 
+ 	TP_ARGS(irq, action, ret),
+ 
+@@ -95,7 +95,7 @@ TRACE_EVENT(irq_handler_exit,
+  */
+ TRACE_EVENT(softirq_entry,
+ 
+-	TP_PROTO(struct softirq_action *h, struct softirq_action *vec),
++	TP_PROTO(const struct softirq_action *h, const struct softirq_action *vec),
+ 
+ 	TP_ARGS(h, vec),
+ 
+@@ -124,7 +124,7 @@ TRACE_EVENT(softirq_entry,
+  */
+ TRACE_EVENT(softirq_exit,
+ 
+-	TP_PROTO(struct softirq_action *h, struct softirq_action *vec),
++	TP_PROTO(const struct softirq_action *h, const struct softirq_action *vec),
+ 
+ 	TP_ARGS(h, vec),
+ 
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/include/video/uvesafb.h linux-2.6.32.7-pax/include/video/uvesafb.h
 --- linux-2.6.32.7/include/video/uvesafb.h	2009-03-24 08:35:49.000000000 +0100
 +++ linux-2.6.32.7-pax/include/video/uvesafb.h	2009-12-04 00:54:43.000000000 +0100
@@ -32712,6 +32848,18 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/gcov
  			if (prev)
  				prev->next = info->next;
  			else
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/hrtimer.c linux-2.6.32.7-pax/kernel/hrtimer.c
+--- linux-2.6.32.7/kernel/hrtimer.c	2009-12-03 15:02:44.000000000 +0100
++++ linux-2.6.32.7-pax/kernel/hrtimer.c	2010-02-16 14:41:36.000000000 +0100
+@@ -1364,7 +1364,7 @@ void hrtimer_peek_ahead_timers(void)
+ 	local_irq_restore(flags);
+ }
+ 
+-static void run_hrtimer_softirq(struct softirq_action *h)
++static void run_hrtimer_softirq(void)
+ {
+ 	hrtimer_peek_ahead_timers();
+ }
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/kallsyms.c linux-2.6.32.7-pax/kernel/kallsyms.c
 --- linux-2.6.32.7/kernel/kallsyms.c	2009-12-03 15:02:45.000000000 +0100
 +++ linux-2.6.32.7-pax/kernel/kallsyms.c	2009-12-19 16:21:22.000000000 +0100
@@ -33559,6 +33707,18 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/ptra
  }
  
  int generic_ptrace_pokedata(struct task_struct *tsk, long addr, long data)
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/rcutree.c linux-2.6.32.7-pax/kernel/rcutree.c
+--- linux-2.6.32.7/kernel/rcutree.c	2009-12-20 06:24:01.000000000 +0100
++++ linux-2.6.32.7-pax/kernel/rcutree.c	2010-02-16 14:41:36.000000000 +0100
+@@ -1303,7 +1303,7 @@ __rcu_process_callbacks(struct rcu_state
+ /*
+  * Do softirq processing for the current CPU.
+  */
+-static void rcu_process_callbacks(struct softirq_action *unused)
++static void rcu_process_callbacks(void)
+ {
+ 	/*
+ 	 * Memory references from any prior RCU read-side critical sections
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/relay.c linux-2.6.32.7-pax/kernel/relay.c
 --- linux-2.6.32.7/kernel/relay.c	2009-12-03 15:02:45.000000000 +0100
 +++ linux-2.6.32.7-pax/kernel/relay.c	2009-12-04 00:54:44.000000000 +0100
@@ -33573,7 +33733,16 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/rela
          if (read_start + ret == nonpad_end)
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/sched.c linux-2.6.32.7-pax/kernel/sched.c
 --- linux-2.6.32.7/kernel/sched.c	2010-01-29 04:17:43.000000000 +0100
-+++ linux-2.6.32.7-pax/kernel/sched.c	2010-01-29 04:18:57.000000000 +0100
++++ linux-2.6.32.7-pax/kernel/sched.c	2010-02-16 14:41:36.000000000 +0100
+@@ -4822,7 +4822,7 @@ out:
+  * In CONFIG_NO_HZ case, the idle load balance owner will do the
+  * rebalancing for all the cpus for whom scheduler ticks are stopped.
+  */
+-static void run_rebalance_domains(struct softirq_action *h)
++static void run_rebalance_domains(void)
+ {
+ 	int this_cpu = smp_processor_id();
+ 	struct rq *this_rq = cpu_rq(this_cpu);
 @@ -7424,7 +7424,7 @@ static struct ctl_table sd_ctl_dir[] = {
  		.procname	= "sched_domain",
  		.mode		= 0555,
@@ -33624,7 +33793,7 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/smp.
  }
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/softirq.c linux-2.6.32.7-pax/kernel/softirq.c
 --- linux-2.6.32.7/kernel/softirq.c	2009-12-03 15:02:46.000000000 +0100
-+++ linux-2.6.32.7-pax/kernel/softirq.c	2009-12-04 00:54:44.000000000 +0100
++++ linux-2.6.32.7-pax/kernel/softirq.c	2010-02-16 14:41:36.000000000 +0100
 @@ -56,7 +56,7 @@ static struct softirq_action softirq_vec
  
  static DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
@@ -33634,6 +33803,51 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/soft
  	"HI", "TIMER", "NET_TX", "NET_RX", "BLOCK", "BLOCK_IOPOLL",
  	"TASKLET", "SCHED", "HRTIMER",	"RCU"
  };
+@@ -190,7 +190,7 @@ EXPORT_SYMBOL(local_bh_enable_ip);
+ 
+ asmlinkage void __do_softirq(void)
+ {
+-	struct softirq_action *h;
++	const struct softirq_action *h;
+ 	__u32 pending;
+ 	int max_restart = MAX_SOFTIRQ_RESTART;
+ 	int cpu;
+@@ -216,7 +216,7 @@ restart:
+ 			kstat_incr_softirqs_this_cpu(h - softirq_vec);
+ 
+ 			trace_softirq_entry(h, softirq_vec);
+-			h->action(h);
++			h->action();
+ 			trace_softirq_exit(h, softirq_vec);
+ 			if (unlikely(prev_count != preempt_count())) {
+ 				printk(KERN_ERR "huh, entered softirq %td %s %p"
+@@ -340,7 +340,7 @@ void raise_softirq(unsigned int nr)
+ 	local_irq_restore(flags);
+ }
+ 
+-void open_softirq(int nr, void (*action)(struct softirq_action *))
++void open_softirq(int nr, void (*action)(void))
+ {
+ 	softirq_vec[nr].action = action;
+ }
+@@ -396,7 +396,7 @@ void __tasklet_hi_schedule_first(struct 
+ 
+ EXPORT_SYMBOL(__tasklet_hi_schedule_first);
+ 
+-static void tasklet_action(struct softirq_action *a)
++static void tasklet_action(void)
+ {
+ 	struct tasklet_struct *list;
+ 
+@@ -431,7 +431,7 @@ static void tasklet_action(struct softir
+ 	}
+ }
+ 
+-static void tasklet_hi_action(struct softirq_action *a)
++static void tasklet_hi_action(void)
+ {
+ 	struct tasklet_struct *list;
+ 
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/sys.c linux-2.6.32.7-pax/kernel/sys.c
 --- linux-2.6.32.7/kernel/sys.c	2009-12-03 15:02:46.000000000 +0100
 +++ linux-2.6.32.7-pax/kernel/sys.c	2009-12-04 00:54:44.000000000 +0100
@@ -33750,6 +33964,18 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/time
  {
  #if HZ <= USEC_PER_SEC && !(USEC_PER_SEC % HZ)
  	return (USEC_PER_SEC / HZ) * j;
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/timer.c linux-2.6.32.7-pax/kernel/timer.c
+--- linux-2.6.32.7/kernel/timer.c	2009-12-03 15:02:46.000000000 +0100
++++ linux-2.6.32.7-pax/kernel/timer.c	2010-02-16 14:41:36.000000000 +0100
+@@ -1207,7 +1207,7 @@ void update_process_times(int user_tick)
+ /*
+  * This function runs timers and the timer-tq in bottom half context.
+  */
+-static void run_timer_softirq(struct softirq_action *h)
++static void run_timer_softirq(void)
+ {
+ 	struct tvec_base *base = __get_cpu_var(tvec_bases);
+ 
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/kernel/trace/ftrace.c linux-2.6.32.7-pax/kernel/trace/ftrace.c
 --- linux-2.6.32.7/kernel/trace/ftrace.c	2009-12-03 15:02:46.000000000 +0100
 +++ linux-2.6.32.7-pax/kernel/trace/ftrace.c	2009-12-23 01:00:50.000000000 +0100
@@ -37084,6 +37310,27 @@ diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/net/bridge/
  	.show = brport_show,
  	.store = brport_store,
  };
+diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/net/core/dev.c linux-2.6.32.7-pax/net/core/dev.c
+--- linux-2.6.32.7/net/core/dev.c	2009-12-20 06:24:02.000000000 +0100
++++ linux-2.6.32.7-pax/net/core/dev.c	2010-02-16 14:41:36.000000000 +0100
+@@ -2047,7 +2047,7 @@ int netif_rx_ni(struct sk_buff *skb)
+ }
+ EXPORT_SYMBOL(netif_rx_ni);
+ 
+-static void net_tx_action(struct softirq_action *h)
++static void net_tx_action(void)
+ {
+ 	struct softnet_data *sd = &__get_cpu_var(softnet_data);
+ 
+@@ -2808,7 +2808,7 @@ void netif_napi_del(struct napi_struct *
+ EXPORT_SYMBOL(netif_napi_del);
+ 
+ 
+-static void net_rx_action(struct softirq_action *h)
++static void net_rx_action(void)
+ {
+ 	struct list_head *list = &__get_cpu_var(softnet_data).poll_list;
+ 	unsigned long time_limit = jiffies + 2;
 diff -NurpX linux-2.6.32.7-pax/Documentation/dontdiff linux-2.6.32.7/net/core/flow.c linux-2.6.32.7-pax/net/core/flow.c
 --- linux-2.6.32.7/net/core/flow.c	2009-03-24 08:35:52.000000000 +0100
 +++ linux-2.6.32.7-pax/net/core/flow.c	2009-12-04 00:54:44.000000000 +0100
