@@ -4420,7 +4420,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
  			goto bad_area;
 diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/mm/fault_64.c linux-2.6.32.8-pax//arch/sparc/mm/fault_64.c
 --- linux-2.6.32.8/arch/sparc/mm/fault_64.c	2009-09-10 19:41:09.000000000 +0200
-+++ linux-2.6.32.8-pax//arch/sparc/mm/fault_64.c	2010-02-22 16:23:06.000000000 +0100
++++ linux-2.6.32.8-pax//arch/sparc/mm/fault_64.c	2010-02-22 16:58:27.000000000 +0100
 @@ -20,6 +20,9 @@
  #include <linux/kprobes.h>
  #include <linux/kdebug.h>
@@ -4431,7 +4431,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -249,6 +252,427 @@ static void noinline bogus_32bit_fault_a
+@@ -249,6 +252,456 @@ static void noinline bogus_32bit_fault_a
  	show_regs(regs);
  }
  
@@ -4545,6 +4545,35 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +	}
 +
 +	do { /* PaX: patched PLT emulation #3 */
++		unsigned int sethi, jmpl, nop;
++
++		err = get_user(sethi, (unsigned int *)regs->tpc);
++		err |= get_user(jmpl, (unsigned int *)(regs->tpc+4));
++		err |= get_user(nop, (unsigned int *)(regs->tpc+8));
++
++		if (err)
++			break;
++
++		if ((sethi & 0xFFC00000U) == 0x03000000U &&
++		    (jmpl & 0xFFFFE000U) == 0x81C06000U &&
++		    nop == 0x01000000U)
++		{
++			unsigned long addr;
++
++			addr = (sethi & 0x003FFFFFU) << 10;
++			regs->u_regs[UREG_G1] = addr;
++			addr += (((jmpl | 0xFFFFFFFFFFFFE000UL) ^ 0x00001000UL) + 0x00001000UL);
++
++			if (test_thread_flag(TIF_32BIT))
++				addr &= 0xFFFFFFFFUL;
++
++			regs->tpc = addr;
++			regs->tnpc = addr+4;
++			return 2;
++		}
++	} while (0);
++
++	do { /* PaX: patched PLT emulation #4 */
 +		unsigned int sethi, mov1, call, mov2;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
@@ -4574,7 +4603,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +		}
 +	} while (0);
 +
-+	do { /* PaX: patched PLT emulation #4 */
++	do { /* PaX: patched PLT emulation #5 */
 +		unsigned int sethi, sethi1, sethi2, or1, or2, sllx, jmpl, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
@@ -4610,7 +4639,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +		}
 +	} while (0);
 +
-+	do { /* PaX: patched PLT emulation #5 */
++	do { /* PaX: patched PLT emulation #6 */
 +		unsigned int sethi, sethi1, sethi2, sllx, or,  jmpl, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
@@ -4806,7 +4835,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +	} while (0);
 +#endif
 +
-+	do { /* PaX: patched PLT emulation #6, must be AFTER the unpatched PLT emulation */
++	do { /* PaX: patched PLT emulation #7, must be AFTER the unpatched PLT emulation */
 +		unsigned int sethi, ba, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
@@ -4859,7 +4888,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
  asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
  {
  	struct mm_struct *mm = current->mm;
-@@ -315,6 +739,29 @@ asmlinkage void __kprobes do_sparc64_fau
+@@ -315,6 +768,29 @@ asmlinkage void __kprobes do_sparc64_fau
  	if (!vma)
  		goto bad_area;
  
