@@ -1906,7 +1906,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/powerp
  
 diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/powerpc/include/asm/page.h linux-2.6.32.8-pax//arch/powerpc/include/asm/page.h
 --- linux-2.6.32.8/arch/powerpc/include/asm/page.h	2009-12-03 15:01:30.000000000 +0100
-+++ linux-2.6.32.8-pax//arch/powerpc/include/asm/page.h	2009-12-04 00:54:39.000000000 +0100
++++ linux-2.6.32.8-pax//arch/powerpc/include/asm/page.h	2010-02-22 15:02:57.000000000 +0100
 @@ -116,8 +116,9 @@ extern phys_addr_t kernstart_addr;
   * and needs to be executable.  This means the whole heap ends
   * up being executable.
@@ -1919,6 +1919,16 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/powerp
  
  #define VM_DATA_DEFAULT_FLAGS64	(VM_READ | VM_WRITE | \
  				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
+@@ -145,6 +146,9 @@ extern phys_addr_t kernstart_addr;
+ #define is_kernel_addr(x)	((x) >= PAGE_OFFSET)
+ #endif
+ 
++#define ktla_ktva(addr)		(addr)
++#define ktva_ktla(addr)		(addr)
++
+ #ifndef __ASSEMBLY__
+ 
+ #undef STRICT_MM_TYPECHECKS
 diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/powerpc/include/asm/page_64.h linux-2.6.32.8-pax//arch/powerpc/include/asm/page_64.h
 --- linux-2.6.32.8/arch/powerpc/include/asm/page_64.h	2009-12-03 15:01:30.000000000 +0100
 +++ linux-2.6.32.8-pax//arch/powerpc/include/asm/page_64.h	2009-12-04 00:54:39.000000000 +0100
@@ -4104,7 +4114,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
  obj-y                   += fault_$(BITS).o
 diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/mm/fault_32.c linux-2.6.32.8-pax//arch/sparc/mm/fault_32.c
 --- linux-2.6.32.8/arch/sparc/mm/fault_32.c	2009-09-10 19:41:09.000000000 +0200
-+++ linux-2.6.32.8-pax//arch/sparc/mm/fault_32.c	2009-12-04 00:54:39.000000000 +0100
++++ linux-2.6.32.8-pax//arch/sparc/mm/fault_32.c	2010-02-22 16:02:00.000000000 +0100
 @@ -21,6 +21,9 @@
  #include <linux/interrupt.h>
  #include <linux/module.h>
@@ -4369,7 +4379,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +	unsigned long i;
 +
 +	printk(KERN_ERR "PAX: bytes at PC: ");
-+	for (i = 0; i < 5; i++) {
++	for (i = 0; i < 8; i++) {
 +		unsigned int c;
 +		if (get_user(c, (unsigned int *)pc+i))
 +			printk(KERN_CONT "???????? ");
@@ -4410,7 +4420,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
  			goto bad_area;
 diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/mm/fault_64.c linux-2.6.32.8-pax//arch/sparc/mm/fault_64.c
 --- linux-2.6.32.8/arch/sparc/mm/fault_64.c	2009-09-10 19:41:09.000000000 +0200
-+++ linux-2.6.32.8-pax//arch/sparc/mm/fault_64.c	2010-02-22 08:32:26.000000000 +0100
++++ linux-2.6.32.8-pax//arch/sparc/mm/fault_64.c	2010-02-22 16:23:06.000000000 +0100
 @@ -20,6 +20,9 @@
  #include <linux/kprobes.h>
  #include <linux/kdebug.h>
@@ -4421,7 +4431,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -249,6 +252,450 @@ static void noinline bogus_32bit_fault_a
+@@ -249,6 +252,427 @@ static void noinline bogus_32bit_fault_a
  	show_regs(regs);
  }
  
@@ -4535,45 +4545,18 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +	}
 +
 +	do { /* PaX: patched PLT emulation #3 */
-+		unsigned int sethi, jmpl, nop;
++		unsigned int sethi, mov1, call, mov2;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
-+		err |= get_user(jmpl, (unsigned int *)(regs->tpc+4));
-+		err |= get_user(nop, (unsigned int *)(regs->tpc+8));
++		err |= get_user(mov1, (unsigned int *)regs->tpc+4);
++		err |= get_user(call, (unsigned int *)(regs->tpc+8));
++		err |= get_user(mov2, (unsigned int *)(regs->tpc+12));
 +
 +		if (err)
 +			break;
 +
 +		if ((sethi & 0xFFC00000U) == 0x03000000U &&
-+		    (jmpl & 0xFFFFE000U) == 0x81C06000U &&
-+		    nop == 0x01000000U)
-+		{
-+			unsigned long addr;
-+
-+			addr = (sethi & 0x003FFFFFU) << 10;
-+			regs->u_regs[UREG_G1] = addr;
-+			addr += (((jmpl | 0xFFFFFFFFFFFFE000UL) ^ 0x00001000UL) + 0x00001000UL);
-+
-+			if (test_thread_flag(TIF_32BIT))
-+				addr &= 0xFFFFFFFFUL;
-+
-+			regs->tpc = addr;
-+			regs->tnpc = addr+4;
-+			return 2;
-+		}
-+	} while (0);
-+
-+	do { /* PaX: patched PLT emulation #4 */
-+		unsigned int mov1, call, mov2;
-+
-+		err = get_user(mov1, (unsigned int *)regs->tpc);
-+		err |= get_user(call, (unsigned int *)(regs->tpc+4));
-+		err |= get_user(mov2, (unsigned int *)(regs->tpc+8));
-+
-+		if (err)
-+			break;
-+
-+		if (mov1 == 0x8210000FU &&
++		    mov1 == 0x8210000FU &&
 +		    (call & 0xC0000000U) == 0x40000000U &&
 +		    mov2 == 0x9E100001U)
 +		{
@@ -4591,21 +4574,23 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +		}
 +	} while (0);
 +
-+	do { /* PaX: patched PLT emulation #5 */
-+		unsigned int sethi1, sethi2, or1, or2, sllx, jmpl, nop;
++	do { /* PaX: patched PLT emulation #4 */
++		unsigned int sethi, sethi1, sethi2, or1, or2, sllx, jmpl, nop;
 +
-+		err = get_user(sethi1, (unsigned int *)regs->tpc);
-+		err |= get_user(sethi2, (unsigned int *)(regs->tpc+4));
-+		err |= get_user(or1, (unsigned int *)(regs->tpc+8));
-+		err |= get_user(or2, (unsigned int *)(regs->tpc+12));
-+		err |= get_user(sllx, (unsigned int *)(regs->tpc+16));
-+		err |= get_user(jmpl, (unsigned int *)(regs->tpc+20));
-+		err |= get_user(nop, (unsigned int *)(regs->tpc+24));
++		err = get_user(sethi, (unsigned int *)regs->tpc);
++		err |= get_user(sethi1, (unsigned int *)regs->tpc+4);
++		err |= get_user(sethi2, (unsigned int *)(regs->tpc+8));
++		err |= get_user(or1, (unsigned int *)(regs->tpc+12));
++		err |= get_user(or2, (unsigned int *)(regs->tpc+16));
++		err |= get_user(sllx, (unsigned int *)(regs->tpc+20));
++		err |= get_user(jmpl, (unsigned int *)(regs->tpc+24));
++		err |= get_user(nop, (unsigned int *)(regs->tpc+28));
 +
 +		if (err)
 +			break;
 +
-+		if ((sethi1 & 0xFFC00000U) == 0x03000000U &&
++		if ((sethi & 0xFFC00000U) == 0x03000000U &&
++		    (sethi1 & 0xFFC00000U) == 0x03000000U &&
 +		    (sethi2 & 0xFFC00000U) == 0x0B000000U &&
 +		    (or1 & 0xFFFFE000U) == 0x82106000U &&
 +		    (or2 & 0xFFFFE000U) == 0x8A116000U &&
@@ -4625,20 +4610,22 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +		}
 +	} while (0);
 +
-+	do { /* PaX: patched PLT emulation #6 */
-+		unsigned int sethi1, sethi2, sllx, or,  jmpl, nop;
++	do { /* PaX: patched PLT emulation #5 */
++		unsigned int sethi, sethi1, sethi2, sllx, or,  jmpl, nop;
 +
-+		err = get_user(sethi1, (unsigned int *)regs->tpc);
-+		err |= get_user(sethi2, (unsigned int *)(regs->tpc+4));
-+		err |= get_user(sllx, (unsigned int *)(regs->tpc+8));
-+		err |= get_user(or, (unsigned int *)(regs->tpc+12));
-+		err |= get_user(jmpl, (unsigned int *)(regs->tpc+16));
-+		err |= get_user(nop, (unsigned int *)(regs->tpc+20));
++		err = get_user(sethi, (unsigned int *)regs->tpc);
++		err |= get_user(sethi1, (unsigned int *)regs->tpc+4);
++		err |= get_user(sethi2, (unsigned int *)(regs->tpc+8));
++		err |= get_user(sllx, (unsigned int *)(regs->tpc+12));
++		err |= get_user(or, (unsigned int *)(regs->tpc+16));
++		err |= get_user(jmpl, (unsigned int *)(regs->tpc+20));
++		err |= get_user(nop, (unsigned int *)(regs->tpc+24));
 +
 +		if (err)
 +			break;
 +
-+		if ((sethi1 & 0xFFC00000U) == 0x03000000U &&
++		if ((sethi & 0xFFC00000U) == 0x03000000U &&
++		    (sethi1 & 0xFFC00000U) == 0x03000000U &&
 +		    (sethi2 & 0xFFC00000U) == 0x0B000000U &&
 +		    sllx == 0x83287020 &&
 +		    (or & 0xFFFFE000U) == 0x8A116000U &&
@@ -4778,13 +4765,13 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +			    jmpl == 0x89C14000U &&
 +			    nop == 0x01000000U)
 +			{
++				regs->u_regs[UREG_G1] = (sethi & 0x003FFFFFU) << 10;
 +				regs->u_regs[UREG_G4] = ((sethi1 & 0x003FFFFFU) << 10) | (or1 & 0x000003FFU);
 +				regs->u_regs[UREG_G4] <<= 32;
 +				regs->u_regs[UREG_G5] = ((sethi2 & 0x003FFFFFU) << 10) | (or2 & 0x000003FFU);
 +				regs->u_regs[UREG_G5] += regs->u_regs[UREG_G4];
 +				regs->u_regs[UREG_G4] = addr + 24;
 +				addr = regs->u_regs[UREG_G5];
-+
 +				regs->tpc = addr;
 +				regs->tnpc = addr+4;
 +				return 3;
@@ -4819,7 +4806,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +	} while (0);
 +#endif
 +
-+	do { /* PaX: patched PLT emulation #7, must be AFTER the unpatched PLT emulation */
++	do { /* PaX: patched PLT emulation #6, must be AFTER the unpatched PLT emulation */
 +		unsigned int sethi, ba, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
@@ -4858,7 +4845,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
 +	unsigned long i;
 +
 +	printk(KERN_ERR "PAX: bytes at PC: ");
-+	for (i = 0; i < 5; i++) {
++	for (i = 0; i < 8; i++) {
 +		unsigned int c;
 +		if (get_user(c, (unsigned int *)pc+i))
 +			printk(KERN_CONT "???????? ");
@@ -4872,7 +4859,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/sparc/
  asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
  {
  	struct mm_struct *mm = current->mm;
-@@ -315,6 +762,29 @@ asmlinkage void __kprobes do_sparc64_fau
+@@ -315,6 +739,29 @@ asmlinkage void __kprobes do_sparc64_fau
  	if (!vma)
  		goto bad_area;
  
@@ -16840,7 +16827,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/x86/mm
  	return (void *)vaddr;
 diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/x86/mm/ioremap.c linux-2.6.32.8-pax//arch/x86/mm/ioremap.c
 --- linux-2.6.32.8/arch/x86/mm/ioremap.c	2009-12-03 15:01:42.000000000 +0100
-+++ linux-2.6.32.8-pax//arch/x86/mm/ioremap.c	2010-01-19 02:33:53.000000000 +0100
++++ linux-2.6.32.8-pax//arch/x86/mm/ioremap.c	2010-02-22 15:03:22.000000000 +0100
 @@ -41,8 +41,8 @@ int page_is_ram(unsigned long pagenr)
  	 * Second special case: Some BIOSen report the PC BIOS
  	 * area (640->1Mb) as ram even though it is not.
@@ -16852,7 +16839,7 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/x86/mm
  		return 0;
  
  	for (i = 0; i < e820.nr_map; i++) {
-@@ -137,10 +137,7 @@ static void __iomem *__ioremap_caller(re
+@@ -137,13 +137,10 @@ static void __iomem *__ioremap_caller(re
  	/*
  	 * Don't allow anybody to remap normal RAM that we're using..
  	 */
@@ -16863,7 +16850,11 @@ diff -NurpX linux-2.6.32.8-pax/Documentation/dontdiff linux-2.6.32.8/arch/x86/mm
 +	for (pfn = phys_addr >> PAGE_SHIFT; ((resource_size_t)pfn << PAGE_SHIFT) < (last_addr & PAGE_MASK); pfn++) {
  		int is_ram = page_is_ram(pfn);
  
- 		if (is_ram && pfn_valid(pfn) && !PageReserved(pfn_to_page(pfn)))
+-		if (is_ram && pfn_valid(pfn) && !PageReserved(pfn_to_page(pfn)))
++		if (is_ram && pfn_valid(pfn) && (pfn >= 0x100 || !PageReserved(pfn_to_page(pfn))))
+ 			return NULL;
+ 		WARN_ON_ONCE(is_ram);
+ 	}
 @@ -407,7 +404,7 @@ static int __init early_ioremap_debug_se
  early_param("early_ioremap_debug", early_ioremap_debug_setup);
  
