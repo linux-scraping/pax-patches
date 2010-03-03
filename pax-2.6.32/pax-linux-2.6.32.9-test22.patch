@@ -7004,28 +7004,75 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  extern int iommu_pass_through;
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/irqflags.h linux-2.6.32.9-pax/arch/x86/include/asm/irqflags.h
 --- linux-2.6.32.9/arch/x86/include/asm/irqflags.h	2009-12-03 15:01:39.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/irqflags.h	2010-02-16 14:41:36.000000000 +0100
-@@ -146,6 +146,28 @@ static inline unsigned long __raw_local_
++++ linux-2.6.32.9-pax/arch/x86/include/asm/irqflags.h	2010-03-03 00:40:07.000000000 +0100
+@@ -142,10 +142,75 @@ static inline unsigned long __raw_local_
+ 	sti;					\
+ 	sysexit
+ 
++/* PaX: special register usage in entry_64.S, beware */
++#ifdef CONFIG_PAX_KERNEXEC
++	.macro ljmpq sel, off
++	.byte 0x48; ljmp *1234f(%rip)
++	.pushsection .rodata
++	.align 16
++	1234: .quad \off; .word \sel
++	.popsection
++	.endm
++
++#define PAX_EXIT_KERNEL			\
++	mov %cs, %rsi;			\
++	cmp $__KERNEXEC_KERNEL_CS, %esi;\
++	jnz 2f;				\
++	mov %cr0, %rsi;			\
++	btc $16, %rsi;			\
++	ljmpq __KERNEL_CS, 1f;		\
++1:	mov %rsi, %cr0;			\
++2:
++
++#define PAX_ENTER_KERNEL		\
++	mov %cr0, %rsi;			\
++	bts $16, %rsi;			\
++	jnc 1f;				\
++	mov %cs, %esi;			\
++	cmp $__KERNEL_CS, %esi;		\
++	jz 3f;				\
++	ljmpq __KERNEL_CS, 3f;		\
++1:	ljmpq __KERNEXEC_KERNEL_CS, 2f;	\
++2:	mov %rsi, %cr0;			\
++3:
++#else
++#define PAX_EXIT_KERNEL
++#define PAX_ENTER_KERNEL
++#endif
++
+ #else
  #define INTERRUPT_RETURN		iret
  #define ENABLE_INTERRUPTS_SYSEXIT	sti; sysexit
  #define GET_CR0_INTO_EAX		movl %cr0, %eax
 +
 +/* PaX: special register usage in entry_32.S, beware */
 +#ifdef CONFIG_PAX_KERNEXEC
-+#define PAX_EXIT_KERNEL				\
-+	cmpw $__KERNEXEC_KERNEL_CS, PT_CS(%esp);\
-+	jnz 1f;					\
-+	movl %cr0, %esi;			\
-+	btc $16, %esi;				\
-+	movl %esi, %cr0;			\
-+1:
++#define PAX_EXIT_KERNEL			\
++	mov %cs, %esi;			\
++	cmp $__KERNEXEC_KERNEL_CS, %esi;\
++	jnz 2f;				\
++	mov %cr0, %esi;			\
++	btc $16, %esi;			\
++	ljmp $__KERNEL_CS, $1f;		\
++1:	mov %esi, %cr0;			\
++2:
 +
-+#define PAX_ENTER_KERNEL			\
-+	movl %cr0, %esi;			\
-+	bts $16, %esi;				\
-+	jc 1f;					\
-+	movl %esi, %cr0;			\
-+1:
++#define PAX_ENTER_KERNEL		\
++	mov %cr0, %esi;			\
++	bts $16, %esi;			\
++	jnc 1f;				\
++	mov %cs, %esi;			\
++	cmp $__KERNEL_CS, %esi;		\
++	jz 3f;				\
++	ljmp $__KERNEL_CS, $3f;		\
++1:	ljmp $__KERNEXEC_KERNEL_CS, $2f;\
++2:	mov %esi, %cr0;			\
++3:
 +#else
 +#define PAX_EXIT_KERNEL
 +#define PAX_ENTER_KERNEL
@@ -7460,7 +7507,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/paravirt.h linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.9/arch/x86/include/asm/paravirt.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h	2010-02-16 14:41:36.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h	2010-03-03 00:40:07.000000000 +0100
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7501,30 +7548,35 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  #endif
  
  #define INTERRUPT_RETURN						\
-@@ -970,6 +985,31 @@ extern void default_banner(void);
+@@ -970,6 +985,36 @@ extern void default_banner(void);
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_usergs_sysret32))
  
  #ifdef CONFIG_X86_32
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +#define PAX_EXIT_KERNEL					\
-+	cmpw $__KERNEXEC_KERNEL_CS, PT_CS(%esp);	\
-+	jnz 1f;						\
 +	push %eax; push %ecx;				\
++	mov %cs, %eax;					\
++	cmp $__KERNEXEC_KERNEL_CS, %eax;		\
++	jnz 2f;						\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
 +	btc $16, %eax;					\
-+	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
-+	pop %ecx; pop %eax;				\
-+1:
++	ljmp $__KERNEL_CS, $1f;				\
++1:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
++2:	pop %ecx; pop %eax;				\
 +
 +#define PAX_ENTER_KERNEL				\
 +	push %eax; push %ecx;				\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
 +	bts $16, %eax;					\
-+	jc 1f;						\
-+	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
-+1:							\
-+	pop %ecx; pop %eax;
++	jnc 1f;						\
++	mov %cs, %ecx;					\
++	cmp $__KERNEL_CS, %ecx;				\
++	jz 3f;						\
++	ljmp $__KERNEL_CS, $3f;				\
++1:	ljmp $__KERNEXEC_KERNEL_CS, $2f;		\
++2:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
++3:	pop %ecx; pop %eax;
 +#else
 +#define PAX_EXIT_KERNEL
 +#define PAX_ENTER_KERNEL
@@ -7626,8 +7678,8 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  /*
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/pgtable.h linux-2.6.32.9-pax/arch/x86/include/asm/pgtable.h
 --- linux-2.6.32.9/arch/x86/include/asm/pgtable.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/pgtable.h	2010-02-16 14:41:36.000000000 +0100
-@@ -74,12 +74,61 @@ extern struct list_head pgd_list;
++++ linux-2.6.32.9-pax/arch/x86/include/asm/pgtable.h	2010-03-03 00:40:07.000000000 +0100
+@@ -74,12 +74,51 @@ extern struct list_head pgd_list;
  
  #define arch_end_context_switch(prev)	do {} while(0)
  
@@ -7645,32 +7697,22 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
 +
 +	preempt_disable();
 +	barrier();
-+	cr0 = read_cr0();
-+	BUG_ON(unlikely(!(cr0 & X86_CR0_WP)));
-+
-+#ifdef CONFIG_X86_32
-+	asm volatile("ljmp %0,$1f; 1:\n\t" : : "i"(__KERNEXEC_KERNEL_CS), "m"(__force_order));
-+#endif
-+
-+	write_cr0(cr0 & ~X86_CR0_WP);
-+	return cr0;
++	cr0 = read_cr0() ^ X86_CR0_WP;
++	BUG_ON(unlikely(cr0 & X86_CR0_WP));
++	write_cr0(cr0);
++	return cr0 ^ X86_CR0_WP;
 +}
 +
 +static inline unsigned long native_pax_close_kernel(void)
 +{
 +	unsigned long cr0;
 +
-+	cr0 = read_cr0();
-+	BUG_ON(unlikely(cr0 & X86_CR0_WP));
-+
-+#ifdef CONFIG_X86_32
-+	asm volatile("ljmp %0,$1f; 1:\n\t" : : "i"(__KERNEL_CS), "m"(__force_order));
-+#endif
-+
-+	write_cr0(cr0 | X86_CR0_WP);
++	cr0 = read_cr0() ^ X86_CR0_WP;
++	BUG_ON(unlikely(!(cr0 & X86_CR0_WP)));
++	write_cr0(cr0);
 +	barrier();
 +	preempt_enable_no_resched();
-+	return cr0;
++	return cr0 ^ X86_CR0_WP;
 +}
 +#else
 +static inline unsigned long native_pax_open_kernel(void) { return 0; }
@@ -7689,7 +7731,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  static inline int pte_dirty(pte_t pte)
  {
  	return pte_flags(pte) & _PAGE_DIRTY;
-@@ -167,9 +216,29 @@ static inline pte_t pte_wrprotect(pte_t
+@@ -167,9 +206,29 @@ static inline pte_t pte_wrprotect(pte_t
  	return pte_clear_flags(pte, _PAGE_RW);
  }
  
@@ -7720,7 +7762,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -472,7 +541,7 @@ static inline pud_t *pud_offset(pgd_t *p
+@@ -472,7 +531,7 @@ static inline pud_t *pud_offset(pgd_t *p
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -7729,7 +7771,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -611,9 +680,12 @@ static inline void ptep_set_wrprotect(st
+@@ -611,9 +670,12 @@ static inline void ptep_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -7946,7 +7988,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  extern pgprot_t pgprot_writecombine(pgprot_t prot);
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/processor.h linux-2.6.32.9-pax/arch/x86/include/asm/processor.h
 --- linux-2.6.32.9/arch/x86/include/asm/processor.h	2010-01-19 00:50:07.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/processor.h	2010-01-19 00:50:23.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/include/asm/processor.h	2010-03-03 00:40:07.000000000 +0100
 @@ -272,7 +272,7 @@ struct tss_struct {
  
  } ____cacheline_aligned;
@@ -7956,26 +7998,24 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  /*
   * Save the original ist values for checking stack pointers during debugging
-@@ -911,8 +911,17 @@ static inline void spin_lock_prefetch(co
+@@ -911,8 +911,15 @@ static inline void spin_lock_prefetch(co
   */
  #define TASK_SIZE		PAGE_OFFSET
  #define TASK_SIZE_MAX		TASK_SIZE
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +#define SEGMEXEC_TASK_SIZE	(TASK_SIZE / 2)
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
 +#define STACK_TOP		((current->mm->pax_flags & MF_PAX_SEGMEXEC)?SEGMEXEC_TASK_SIZE:TASK_SIZE)
 +#else
  #define STACK_TOP		TASK_SIZE
 -#define STACK_TOP_MAX		STACK_TOP
 +#endif
++
 +#define STACK_TOP_MAX		TASK_SIZE
  
  #define INIT_THREAD  {							  \
  	.sp0			= sizeof(init_stack) + (long)&init_stack, \
-@@ -929,7 +938,7 @@ static inline void spin_lock_prefetch(co
+@@ -929,7 +936,7 @@ static inline void spin_lock_prefetch(co
   */
  #define INIT_TSS  {							  \
  	.x86_tss = {							  \
@@ -7984,7 +8024,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  		.ss0		= __KERNEL_DS,				  \
  		.ss1		= __KERNEL_CS,				  \
  		.io_bitmap_base	= INVALID_IO_BITMAP_OFFSET,		  \
-@@ -940,11 +949,7 @@ static inline void spin_lock_prefetch(co
+@@ -940,11 +947,7 @@ static inline void spin_lock_prefetch(co
  extern unsigned long thread_saved_pc(struct task_struct *tsk);
  
  #define THREAD_SIZE_LONGS      (THREAD_SIZE/sizeof(unsigned long))
@@ -7997,7 +8037,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  /*
   * The below -8 is to reserve 8 bytes on top of the ring0 stack.
-@@ -959,7 +964,7 @@ extern unsigned long thread_saved_pc(str
+@@ -959,7 +962,7 @@ extern unsigned long thread_saved_pc(str
  #define task_pt_regs(task)                                             \
  ({                                                                     \
         struct pt_regs *__regs__;                                       \
@@ -8006,7 +8046,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
         __regs__ - 1;                                                   \
  })
  
-@@ -975,7 +980,7 @@ extern unsigned long thread_saved_pc(str
+@@ -975,7 +978,7 @@ extern unsigned long thread_saved_pc(str
   * space during mmap's.
   */
  #define IA32_PAGE_OFFSET	((current->personality & ADDR_LIMIT_3GB) ? \
@@ -8015,7 +8055,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  #define TASK_SIZE		(test_thread_flag(TIF_IA32) ? \
  					IA32_PAGE_OFFSET : TASK_SIZE_MAX)
-@@ -1012,6 +1017,10 @@ extern void start_thread(struct pt_regs
+@@ -1012,6 +1015,10 @@ extern void start_thread(struct pt_regs
   */
  #define TASK_UNMAPPED_BASE	(PAGE_ALIGN(TASK_SIZE / 3))
  
@@ -8314,7 +8354,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/segment.h linux-2.6.32.9-pax/arch/x86/include/asm/segment.h
 --- linux-2.6.32.9/arch/x86/include/asm/segment.h	2009-06-10 08:46:15.000000000 +0200
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/segment.h	2010-02-16 14:41:36.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/include/asm/segment.h	2010-03-03 00:40:07.000000000 +0100
 @@ -62,8 +62,8 @@
   *  26 - ESPFIX small SS
   *  27 - per-cpu			[ offset to per-cpu data area ]
@@ -8357,7 +8397,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  #define GDT_ENTRY_DOUBLEFAULT_TSS	31
  
  /*
-@@ -139,12 +147,13 @@
+@@ -139,7 +147,7 @@
   */
  
  /* Matches PNP_CS32 and PNP_CS16 (they must be consecutive) */
@@ -8366,13 +8406,16 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  
  #else
- #include <asm/cache.h>
+@@ -163,6 +171,8 @@
+ #define __USER32_CS   (GDT_ENTRY_DEFAULT_USER32_CS * 8 + 3)
+ #define __USER32_DS	__USER_DS
  
-+#define GDT_ENTRY_KERNEXEC_KERNEL_CS 0
- #define GDT_ENTRY_KERNEL32_CS 1
- #define GDT_ENTRY_KERNEL_CS 2
- #define GDT_ENTRY_KERNEL_DS 3
-@@ -183,6 +192,7 @@
++#define GDT_ENTRY_KERNEXEC_KERNEL_CS 7
++
+ #define GDT_ENTRY_TSS 8	/* needs two entries */
+ #define GDT_ENTRY_LDT 10 /* needs two entries */
+ #define GDT_ENTRY_TLS_MIN 12
+@@ -183,6 +193,7 @@
  #endif
  
  #define __KERNEL_CS	(GDT_ENTRY_KERNEL_CS * 8)
@@ -10384,9 +10427,52 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  	CFI_ADJUST_CFA_OFFSET -24
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/kernel/entry_64.S linux-2.6.32.9-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.9/arch/x86/kernel/entry_64.S	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/kernel/entry_64.S	2009-12-04 00:54:39.000000000 +0100
-@@ -1068,7 +1068,12 @@ ENTRY(\sym)
++++ linux-2.6.32.9-pax/arch/x86/kernel/entry_64.S	2010-03-03 00:40:07.000000000 +0100
+@@ -53,6 +53,7 @@
+ #include <asm/paravirt.h>
+ #include <asm/ftrace.h>
+ #include <asm/percpu.h>
++#include <asm/pgtable.h>
+ 
+ /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
+ #include <linux/elf-em.h>
+@@ -800,6 +801,7 @@ END(interrupt)
+ 	CFI_ADJUST_CFA_OFFSET 10*8
+ 	call save_args
+ 	PARTIAL_FRAME 0
++	PAX_ENTER_KERNEL
+ 	call \func
+ 	.endm
+ 
+@@ -821,6 +823,7 @@ ret_from_intr:
+ 	CFI_DEF_CFA_REGISTER	rsp
+ 	CFI_ADJUST_CFA_OFFSET	-8
+ exit_intr:
++	PAX_EXIT_KERNEL
+ 	GET_THREAD_INFO(%rcx)
+ 	testl $3,CS-ARGOFFSET(%rsp)
+ 	je retint_kernel
+@@ -1032,6 +1035,7 @@ ENTRY(\sym)
+ 	CFI_ADJUST_CFA_OFFSET 15*8
+ 	call error_entry
+ 	DEFAULT_FRAME 0
++	PAX_ENTER_KERNEL
+ 	movq %rsp,%rdi		/* pt_regs pointer */
+ 	xorl %esi,%esi		/* no error code */
+ 	call \do_sym
+@@ -1049,6 +1053,7 @@ ENTRY(\sym)
+ 	subq $15*8, %rsp
+ 	call save_paranoid
  	TRACE_IRQS_OFF
++	PAX_ENTER_KERNEL
+ 	movq %rsp,%rdi		/* pt_regs pointer */
+ 	xorl %esi,%esi		/* no error code */
+ 	call \do_sym
+@@ -1066,9 +1071,15 @@ ENTRY(\sym)
+ 	subq $15*8, %rsp
+ 	call save_paranoid
+ 	TRACE_IRQS_OFF
++	PAX_ENTER_KERNEL
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
 -	PER_CPU(init_tss, %rbp)
@@ -10399,6 +10485,52 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
+@@ -1085,6 +1096,7 @@ ENTRY(\sym)
+ 	CFI_ADJUST_CFA_OFFSET 15*8
+ 	call error_entry
+ 	DEFAULT_FRAME 0
++	PAX_ENTER_KERNEL
+ 	movq %rsp,%rdi			/* pt_regs pointer */
+ 	movq ORIG_RAX(%rsp),%rsi	/* get error code */
+ 	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
+@@ -1104,6 +1116,7 @@ ENTRY(\sym)
+ 	call save_paranoid
+ 	DEFAULT_FRAME 0
+ 	TRACE_IRQS_OFF
++	PAX_ENTER_KERNEL
+ 	movq %rsp,%rdi			/* pt_regs pointer */
+ 	movq ORIG_RAX(%rsp),%rsi	/* get error code */
+ 	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
+@@ -1408,11 +1421,13 @@ ENTRY(paranoid_exit)
+ 	testl $3,CS(%rsp)
+ 	jnz   paranoid_userspace
+ paranoid_swapgs:
++	PAX_EXIT_KERNEL
+ 	TRACE_IRQS_IRETQ 0
+ 	SWAPGS_UNSAFE_STACK
+ 	RESTORE_ALL 8
+ 	jmp irq_return
+ paranoid_restore:
++	PAX_EXIT_KERNEL
+ 	TRACE_IRQS_IRETQ 0
+ 	RESTORE_ALL 8
+ 	jmp irq_return
+@@ -1529,6 +1544,7 @@ ENTRY(nmi)
+ 	CFI_ADJUST_CFA_OFFSET 15*8
+ 	call save_paranoid
+ 	DEFAULT_FRAME 0
++	PAX_ENTER_KERNEL
+ 	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
+ 	movq %rsp,%rdi
+ 	movq $-1,%rsi
+@@ -1544,6 +1560,7 @@ ENTRY(nmi)
+ nmi_swapgs:
+ 	SWAPGS_UNSAFE_STACK
+ nmi_restore:
++	PAX_EXIT_KERNEL
+ 	RESTORE_ALL 8
+ 	jmp irq_return
+ nmi_userspace:
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/kernel/ftrace.c linux-2.6.32.9-pax/arch/x86/kernel/ftrace.c
 --- linux-2.6.32.9/arch/x86/kernel/ftrace.c	2009-12-03 15:01:41.000000000 +0100
 +++ linux-2.6.32.9-pax/arch/x86/kernel/ftrace.c	2009-12-23 01:00:04.000000000 +0100
@@ -10925,7 +11057,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
 +	.endr
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/kernel/head_64.S linux-2.6.32.9-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.32.9/arch/x86/kernel/head_64.S	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/kernel/head_64.S	2010-02-17 02:06:07.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/kernel/head_64.S	2010-03-03 00:40:07.000000000 +0100
 @@ -38,6 +38,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
  L3_PAGE_OFFSET = pud_index(__PAGE_OFFSET)
  L4_START_KERNEL = pgd_index(__START_KERNEL_map)
@@ -11100,7 +11232,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -390,33 +409,49 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -390,33 +409,55 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -11125,7 +11257,13 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
 +	.quad	0x00cffb000000ffff	/* __USER32_CS */
 +	.quad	0x00cff3000000ffff	/* __USER_DS, __USER32_DS  */
 +	.quad	0x00affb000000ffff	/* __USER_CS */
++
++#ifdef CONFIG_PAX_KERNEXEC
++	.quad	0x00af9b000000ffff	/* __KERNEXEC_KERNEL_CS */
++#else
 +	.quad	0x0			/* unused */
++#endif
++
 +	.quad	0,0			/* TSS */
 +	.quad	0,0			/* LDT */
 +	.quad	0,0,0			/* three TLS descriptors */
@@ -16405,7 +16543,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/mm
  	}
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/mm/init.c linux-2.6.32.9-pax/arch/x86/mm/init.c
 --- linux-2.6.32.9/arch/x86/mm/init.c	2009-12-03 15:01:42.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/mm/init.c	2009-12-04 00:54:40.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/mm/init.c	2010-03-03 00:40:07.000000000 +0100
 @@ -331,7 +331,13 @@ unsigned long __init_refok init_memory_m
   */
  int devmem_is_allowed(unsigned long pagenr)
@@ -16421,7 +16559,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/mm
  		return 1;
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
-@@ -379,6 +385,83 @@ void free_init_pages(char *what, unsigne
+@@ -379,6 +385,87 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -16480,6 +16618,8 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/mm
 +		pgd = pgd_offset_k(addr);
 +		pud = pud_offset(pgd, addr);
 +		pmd = pmd_offset(pud, addr);
++		if (!pmd_present(*pmd))
++			continue;
 +		if ((unsigned long)_text <= addr && addr < (unsigned long)_sdata)
 +			set_pmd(pmd, __pmd(pmd_val(*pmd) & ~_PAGE_RW));
 +		else
@@ -16492,6 +16632,8 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/mm
 +		pgd = pgd_offset_k(addr);
 +		pud = pud_offset(pgd, addr);
 +		pmd = pmd_offset(pud, addr);
++		if (!pmd_present(*pmd))
++			continue;
 +		if ((unsigned long)__va(__pa(_text)) <= addr && addr < (unsigned long)__va(__pa(_sdata)))
 +			set_pmd(pmd, __pmd(pmd_val(*pmd) & ~_PAGE_RW));
 +		else
