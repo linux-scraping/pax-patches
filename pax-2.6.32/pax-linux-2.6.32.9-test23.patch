@@ -7507,7 +7507,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/paravirt.h linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.9/arch/x86/include/asm/paravirt.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h	2010-03-03 00:40:07.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h	2010-03-06 15:49:10.000000000 +0100
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7530,15 +7530,6 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  #if defined(CONFIG_SMP) && defined(CONFIG_PARAVIRT_SPINLOCKS)
  
  static inline int __raw_spin_is_locked(struct raw_spinlock *lock)
-@@ -845,7 +860,7 @@ static inline unsigned long __raw_local_
- 
- static inline void raw_local_irq_restore(unsigned long f)
- {
--	PVOP_VCALLEE1(pv_irq_ops.restore_fl, f);
-+	return PVOP_VCALLEE1(pv_irq_ops.restore_fl, f);
- }
- 
- static inline void raw_local_irq_disable(void)
 @@ -945,7 +960,7 @@ extern void default_banner(void);
  
  #define PARA_PATCH(struct, off)        ((PARAVIRT_PATCH_##struct + (off)) / 4)
@@ -7548,11 +7539,10 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  #endif
  
  #define INTERRUPT_RETURN						\
-@@ -970,6 +985,36 @@ extern void default_banner(void);
- 		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_usergs_sysret32))
+@@ -980,6 +995,34 @@ extern void default_banner(void);
+ 		  CLBR_NONE,						\
+ 		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
  
- #ifdef CONFIG_X86_32
-+
 +#ifdef CONFIG_PAX_KERNEXEC
 +#define PAX_EXIT_KERNEL					\
 +	push %eax; push %ecx;				\
@@ -7581,10 +7571,54 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
 +#define PAX_EXIT_KERNEL
 +#define PAX_ENTER_KERNEL
 +#endif
+ 
+ #else	/* !CONFIG_X86_32 */
+ 
+@@ -1022,6 +1065,44 @@ extern void default_banner(void);
+ 	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
+ 		  CLBR_NONE,						\
+ 		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
 +
- #define GET_CR0_INTO_EAX				\
- 	push %ecx; push %edx;				\
- 	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
++#ifdef CONFIG_PAX_KERNEXEC
++	.macro ljmpq sel, off
++	.byte 0x48; ljmp *1234f(%rip)
++	.pushsection .rodata
++	.align 16
++	1234: .quad \off; .word \sel
++	.popsection
++	.endm
++
++#define PAX_EXIT_KERNEL					\
++	push %rax; push %rcx;				\
++	mov %cs, %rax;					\
++	cmp $__KERNEXEC_KERNEL_CS, %eax;		\
++	jnz 2f;						\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
++	btc $16, %rax;					\
++	ljmpq __KERNEL_CS, 1f;				\
++1:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
++2:	pop %rcx; pop %rax;				\
++
++#define PAX_ENTER_KERNEL				\
++	push %rax; push %rcx;				\
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
++	bts $16, %rax;					\
++	jnc 1f;						\
++	mov %cs, %rcx;					\
++	cmp $__KERNEL_CS, %ecx;				\
++	jz 3f;						\
++	ljmpq __KERNEL_CS, 3f;				\
++1:	ljmpq __KERNEXEC_KERNEL_CS, 2f;			\
++2:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
++3:	pop %rcx; pop %rax;
++#else
++#define PAX_EXIT_KERNEL
++#define PAX_ENTER_KERNEL
++#endif
++
+ #endif	/* CONFIG_X86_32 */
+ 
+ #endif /* __ASSEMBLY__ */
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/paravirt_types.h linux-2.6.32.9-pax/arch/x86/include/asm/paravirt_types.h
 --- linux-2.6.32.9/arch/x86/include/asm/paravirt_types.h	2009-12-03 15:01:40.000000000 +0100
 +++ linux-2.6.32.9-pax/arch/x86/include/asm/paravirt_types.h	2009-12-04 00:54:39.000000000 +0100
@@ -9428,8 +9462,21 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  #ifdef CONFIG_XEN
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/kernel/asm-offsets_64.c linux-2.6.32.9-pax/arch/x86/kernel/asm-offsets_64.c
 --- linux-2.6.32.9/arch/x86/kernel/asm-offsets_64.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/kernel/asm-offsets_64.c	2009-12-04 00:54:39.000000000 +0100
-@@ -115,6 +115,7 @@ int main(void)
++++ linux-2.6.32.9-pax/arch/x86/kernel/asm-offsets_64.c	2010-03-06 15:49:31.000000000 +0100
+@@ -63,6 +63,12 @@ int main(void)
+ 	OFFSET(PV_CPU_irq_enable_sysexit, pv_cpu_ops, irq_enable_sysexit);
+ 	OFFSET(PV_CPU_swapgs, pv_cpu_ops, swapgs);
+ 	OFFSET(PV_MMU_read_cr2, pv_mmu_ops, read_cr2);
++
++#ifdef CONFIG_PAX_KERNEXEC
++	OFFSET(PV_CPU_read_cr0, pv_cpu_ops, read_cr0);
++	OFFSET(PV_CPU_write_cr0, pv_cpu_ops, write_cr0);
++#endif
++
+ #endif
+ 
+ 
+@@ -115,6 +121,7 @@ int main(void)
  	ENTRY(cr8);
  	BLANK();
  #undef ENTRY
@@ -23316,6 +23363,39 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/isd
  		dev_warn(cs->dev, "%s: device not opened\n", __func__);
  		goto out;
  	}
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/isdn/hardware/avm/b1.c linux-2.6.32.9-pax/drivers/isdn/hardware/avm/b1.c
+--- linux-2.6.32.9/drivers/isdn/hardware/avm/b1.c	2009-09-10 19:41:33.000000000 +0200
++++ linux-2.6.32.9-pax/drivers/isdn/hardware/avm/b1.c	2010-03-06 15:49:31.000000000 +0100
+@@ -173,7 +173,7 @@ int b1_load_t4file(avmcard *card, capilo
+ 	}
+ 	if (left) {
+ 		if (t4file->user) {
+-			if (copy_from_user(buf, dp, left))
++			if (left > sizeof buf || copy_from_user(buf, dp, left))
+ 				return -EFAULT;
+ 		} else {
+ 			memcpy(buf, dp, left);
+@@ -221,7 +221,7 @@ int b1_load_config(avmcard *card, capilo
+ 	}
+ 	if (left) {
+ 		if (config->user) {
+-			if (copy_from_user(buf, dp, left))
++			if (left > sizeof buf || copy_from_user(buf, dp, left))
+ 				return -EFAULT;
+ 		} else {
+ 			memcpy(buf, dp, left);
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/isdn/icn/icn.c linux-2.6.32.9-pax/drivers/isdn/icn/icn.c
+--- linux-2.6.32.9/drivers/isdn/icn/icn.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.32.9-pax/drivers/isdn/icn/icn.c	2010-03-06 15:49:31.000000000 +0100
+@@ -1044,7 +1044,7 @@ icn_writecmd(const u_char * buf, int len
+ 		if (count > len)
+ 			count = len;
+ 		if (user) {
+-			if (copy_from_user(msg, buf, count))
++			if (count > sizeof msg || copy_from_user(msg, buf, count))
+ 				return -EFAULT;
+ 		} else
+ 			memcpy(msg, buf, count);
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/lguest/core.c linux-2.6.32.9-pax/drivers/lguest/core.c
 --- linux-2.6.32.9/drivers/lguest/core.c	2009-12-03 15:01:53.000000000 +0100
 +++ linux-2.6.32.9-pax/drivers/lguest/core.c	2009-12-04 00:54:41.000000000 +0100
@@ -23468,6 +23548,18 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/med
  	struct file_operations *dvbdevfops;
  	struct device *clsdev;
  	int minor;
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/media/radio/radio-cadet.c linux-2.6.32.9-pax/drivers/media/radio/radio-cadet.c
+--- linux-2.6.32.9/drivers/media/radio/radio-cadet.c	2009-12-03 15:01:54.000000000 +0100
++++ linux-2.6.32.9-pax/drivers/media/radio/radio-cadet.c	2010-03-06 15:49:31.000000000 +0100
+@@ -347,7 +347,7 @@ static ssize_t cadet_read(struct file *f
+ 	while (i < count && dev->rdsin != dev->rdsout)
+ 		readbuf[i++] = dev->rdsbuf[dev->rdsout++];
+ 
+-	if (copy_to_user(data, readbuf, i))
++	if (i > sizeof readbuf || copy_to_user(data, readbuf, i))
+ 		return -EFAULT;
+ 	return i;
+ }
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/media/video/usbvideo/konicawc.c linux-2.6.32.9-pax/drivers/media/video/usbvideo/konicawc.c
 --- linux-2.6.32.9/drivers/media/video/usbvideo/konicawc.c	2009-09-10 19:41:40.000000000 +0200
 +++ linux-2.6.32.9-pax/drivers/media/video/usbvideo/konicawc.c	2009-12-04 00:54:41.000000000 +0100
@@ -24215,6 +24307,27 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/net
  #define  CHIPREV_ID_5750_C2		 0x4202
  #define  CHIPREV_ID_5752_A0_HW		 0x5000
  #define  CHIPREV_ID_5752_A0		 0x6000
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/net/tulip/de4x5.c linux-2.6.32.9-pax/drivers/net/tulip/de4x5.c
+--- linux-2.6.32.9/drivers/net/tulip/de4x5.c	2009-12-03 15:02:04.000000000 +0100
++++ linux-2.6.32.9-pax/drivers/net/tulip/de4x5.c	2010-03-06 15:49:31.000000000 +0100
+@@ -5472,7 +5472,7 @@ de4x5_ioctl(struct net_device *dev, stru
+ 	for (i=0; i<ETH_ALEN; i++) {
+ 	    tmp.addr[i] = dev->dev_addr[i];
+ 	}
+-	if (copy_to_user(ioc->data, tmp.addr, ioc->len)) return -EFAULT;
++	if (ioc->len > sizeof tmp.addr || copy_to_user(ioc->data, tmp.addr, ioc->len)) return -EFAULT;
+ 	break;
+ 
+     case DE4X5_SET_HWADDR:           /* Set the hardware address */
+@@ -5512,7 +5512,7 @@ de4x5_ioctl(struct net_device *dev, stru
+ 	spin_lock_irqsave(&lp->lock, flags);
+ 	memcpy(&statbuf, &lp->pktStats, ioc->len);
+ 	spin_unlock_irqrestore(&lp->lock, flags);
+-	if (copy_to_user(ioc->data, &statbuf, ioc->len))
++	if (ioc->len > sizeof statbuf || copy_to_user(ioc->data, &statbuf, ioc->len))
+ 		return -EFAULT;
+ 	break;
+     }
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/net/usb/hso.c linux-2.6.32.9-pax/drivers/net/usb/hso.c
 --- linux-2.6.32.9/drivers/net/usb/hso.c	2009-12-03 15:02:05.000000000 +0100
 +++ linux-2.6.32.9-pax/drivers/net/usb/hso.c	2009-12-04 00:54:41.000000000 +0100
@@ -24538,6 +24651,27 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/par
  	.show = pdcspath_attr_show,
  	.store = pdcspath_attr_store,
  };
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/parport/procfs.c linux-2.6.32.9-pax/drivers/parport/procfs.c
+--- linux-2.6.32.9/drivers/parport/procfs.c	2009-12-03 15:02:09.000000000 +0100
++++ linux-2.6.32.9-pax/drivers/parport/procfs.c	2010-03-06 15:49:31.000000000 +0100
+@@ -64,7 +64,7 @@ static int do_active_device(ctl_table *t
+ 
+ 	*ppos += len;
+ 
+-	return copy_to_user(result, buffer, len) ? -EFAULT : 0;
++	return (len > sizeof buffer || copy_to_user(result, buffer, len)) ? -EFAULT : 0;
+ }
+ 
+ #ifdef CONFIG_PARPORT_1284
+@@ -106,7 +106,7 @@ static int do_autoprobe(ctl_table *table
+ 
+ 	*ppos += len;
+ 
+-	return copy_to_user (result, buffer, len) ? -EFAULT : 0;
++	return (len > sizeof buffer || copy_to_user (result, buffer, len)) ? -EFAULT : 0;
+ }
+ #endif /* IEEE1284.3 support. */
+ 
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/drivers/pci/hotplug/acpiphp_glue.c linux-2.6.32.9-pax/drivers/pci/hotplug/acpiphp_glue.c
 --- linux-2.6.32.9/drivers/pci/hotplug/acpiphp_glue.c	2009-12-03 15:02:09.000000000 +0100
 +++ linux-2.6.32.9-pax/drivers/pci/hotplug/acpiphp_glue.c	2009-12-04 00:55:25.000000000 +0100
@@ -30041,6 +30175,18 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/fs/udf/ball
  		udf_debug("%d < %d || %d + %d > %d\n",
  			  bloc.logicalBlockNum, 0, bloc.logicalBlockNum, count,
  			  partmap->s_partition_len);
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/fs/xfs/linux-2.6/xfs_ioctl.c linux-2.6.32.9-pax/fs/xfs/linux-2.6/xfs_ioctl.c
+--- linux-2.6.32.9/fs/xfs/linux-2.6/xfs_ioctl.c	2009-09-10 19:42:37.000000000 +0200
++++ linux-2.6.32.9-pax/fs/xfs/linux-2.6/xfs_ioctl.c	2010-03-06 15:49:31.000000000 +0100
+@@ -134,7 +134,7 @@ xfs_find_handle(
+ 	}
+ 
+ 	error = -EFAULT;
+-	if (copy_to_user(hreq->ohandle, &handle, hsize) ||
++	if (hsize > sizeof handle || copy_to_user(hreq->ohandle, &handle, hsize) ||
+ 	    copy_to_user(hreq->ohandlen, &hsize, sizeof(__s32)))
+ 		goto out_put;
+ 
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/fs/xfs/linux-2.6/xfs_iops.c linux-2.6.32.9-pax/fs/xfs/linux-2.6/xfs_iops.c
 --- linux-2.6.32.9/fs/xfs/linux-2.6/xfs_iops.c	2009-12-03 15:02:39.000000000 +0100
 +++ linux-2.6.32.9-pax/fs/xfs/linux-2.6/xfs_iops.c	2009-12-04 00:54:42.000000000 +0100
@@ -37843,6 +37989,27 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/dccp/dc
  #endif
  
  extern struct inet_hashinfo dccp_hashinfo;
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/decnet/sysctl_net_decnet.c linux-2.6.32.9-pax/net/decnet/sysctl_net_decnet.c
+--- linux-2.6.32.9/net/decnet/sysctl_net_decnet.c	2009-12-03 15:02:50.000000000 +0100
++++ linux-2.6.32.9-pax/net/decnet/sysctl_net_decnet.c	2010-03-06 15:49:31.000000000 +0100
+@@ -206,7 +206,7 @@ static int dn_node_address_handler(ctl_t
+ 
+ 	if (len > *lenp) len = *lenp;
+ 
+-	if (copy_to_user(buffer, addr, len))
++	if (len > sizeof addr || copy_to_user(buffer, addr, len))
+ 		return -EFAULT;
+ 
+ 	*lenp = len;
+@@ -327,7 +327,7 @@ static int dn_def_dev_handler(ctl_table
+ 
+ 	if (len > *lenp) len = *lenp;
+ 
+-	if (copy_to_user(buffer, devname, len))
++	if (len > sizeof devname || copy_to_user(buffer, devname, len))
+ 		return -EFAULT;
+ 
+ 	*lenp = len;
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/ipv4/netfilter/nf_nat_snmp_basic.c linux-2.6.32.9-pax/net/ipv4/netfilter/nf_nat_snmp_basic.c
 --- linux-2.6.32.9/net/ipv4/netfilter/nf_nat_snmp_basic.c	2009-06-10 08:47:21.000000000 +0200
 +++ linux-2.6.32.9-pax/net/ipv4/netfilter/nf_nat_snmp_basic.c	2009-12-04 00:54:44.000000000 +0100
@@ -37855,6 +38022,18 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/ipv4/ne
  	if (*octets == NULL) {
  		if (net_ratelimit())
  			printk("OOM in bsalg (%d)\n", __LINE__);
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/ipv4/tcp_probe.c linux-2.6.32.9-pax/net/ipv4/tcp_probe.c
+--- linux-2.6.32.9/net/ipv4/tcp_probe.c	2009-06-10 08:47:22.000000000 +0200
++++ linux-2.6.32.9-pax/net/ipv4/tcp_probe.c	2010-03-06 15:49:31.000000000 +0100
+@@ -200,7 +200,7 @@ static ssize_t tcpprobe_read(struct file
+ 		if (cnt + width >= len)
+ 			break;
+ 
+-		if (copy_to_user(buf + cnt, tbuf, width))
++		if (width > sizeof tbuf || copy_to_user(buf + cnt, tbuf, width))
+ 			return -EFAULT;
+ 		cnt += width;
+ 	}
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/ipv6/exthdrs.c linux-2.6.32.9-pax/net/ipv6/exthdrs.c
 --- linux-2.6.32.9/net/ipv6/exthdrs.c	2010-01-19 00:50:09.000000000 +0100
 +++ linux-2.6.32.9-pax/net/ipv6/exthdrs.c	2010-01-19 00:50:25.000000000 +0100
@@ -38141,6 +38320,18 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/sctp/so
  
  		SCTP_DEBUG_PRINTK("sctp_get_port() found a possible match\n");
  		if (pp->fastreuse && sk->sk_reuse &&
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/net/sunrpc/xprtrdma/svc_rdma.c linux-2.6.32.9-pax/net/sunrpc/xprtrdma/svc_rdma.c
+--- linux-2.6.32.9/net/sunrpc/xprtrdma/svc_rdma.c	2009-12-03 15:02:54.000000000 +0100
++++ linux-2.6.32.9-pax/net/sunrpc/xprtrdma/svc_rdma.c	2010-03-06 15:49:31.000000000 +0100
+@@ -105,7 +105,7 @@ static int read_reset_stat(ctl_table *ta
+ 		len -= *ppos;
+ 		if (len > *lenp)
+ 			len = *lenp;
+-		if (len && copy_to_user(buffer, str_buf, len))
++		if (len > sizeof str_buf || (len && copy_to_user(buffer, str_buf, len)))
+ 			return -EFAULT;
+ 		*lenp = len;
+ 		*ppos += len;
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/samples/kobject/kset-example.c linux-2.6.32.9-pax/samples/kobject/kset-example.c
 --- linux-2.6.32.9/samples/kobject/kset-example.c	2009-03-24 08:35:59.000000000 +0100
 +++ linux-2.6.32.9-pax/samples/kobject/kset-example.c	2009-12-04 00:55:25.000000000 +0100
@@ -39063,6 +39254,18 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/sound/drive
  	int mode[PORTMAN_NUM_INPUT_PORTS];
  	struct snd_rawmidi_substream *midi_input[PORTMAN_NUM_INPUT_PORTS];
  };
+diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/sound/oss/sb_audio.c linux-2.6.32.9-pax/sound/oss/sb_audio.c
+--- linux-2.6.32.9/sound/oss/sb_audio.c	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.32.9-pax/sound/oss/sb_audio.c	2010-03-06 15:49:31.000000000 +0100
+@@ -901,7 +901,7 @@ sb16_copy_from_user(int dev,
+ 		buf16 = (signed short *)(localbuf + localoffs);
+ 		while (c)
+ 		{
+-			locallen = (c >= LBUFCOPYSIZE ? LBUFCOPYSIZE : c);
++			locallen = ((unsigned)c >= LBUFCOPYSIZE ? LBUFCOPYSIZE : c);
+ 			if (copy_from_user(lbuf8,
+ 					   userbuf+useroffs + p,
+ 					   locallen))
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/sound/pci/ac97/ac97_codec.c linux-2.6.32.9-pax/sound/pci/ac97/ac97_codec.c
 --- linux-2.6.32.9/sound/pci/ac97/ac97_codec.c	2009-06-10 08:47:29.000000000 +0200
 +++ linux-2.6.32.9-pax/sound/pci/ac97/ac97_codec.c	2009-12-04 00:55:25.000000000 +0100
