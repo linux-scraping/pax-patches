@@ -1,6 +1,6 @@
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/Documentation/dontdiff linux-2.6.32.9-pax/Documentation/dontdiff
 --- linux-2.6.32.9/Documentation/dontdiff	2009-12-03 15:01:08.000000000 +0100
-+++ linux-2.6.32.9-pax/Documentation/dontdiff	2009-12-04 00:54:38.000000000 +0100
++++ linux-2.6.32.9-pax/Documentation/dontdiff	2010-03-11 15:06:10.000000000 +0100
 @@ -3,6 +3,7 @@
  *.bin
  *.cpio
@@ -7507,7 +7507,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/paravirt.h linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.9/arch/x86/include/asm/paravirt.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h	2010-03-06 15:49:10.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/include/asm/paravirt.h	2010-03-11 18:14:54.000000000 +0100
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7574,7 +7574,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  #else	/* !CONFIG_X86_32 */
  
-@@ -1022,6 +1065,44 @@ extern void default_banner(void);
+@@ -1022,6 +1065,46 @@ extern void default_banner(void);
  	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
  		  CLBR_NONE,						\
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
@@ -7589,28 +7589,30 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
 +	.endm
 +
 +#define PAX_EXIT_KERNEL					\
-+	push %rax; push %rcx;				\
++	PV_SAVE_REGS(CLBR_NONE);			\
 +	mov %cs, %rax;					\
 +	cmp $__KERNEXEC_KERNEL_CS, %eax;		\
 +	jnz 2f;						\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
 +	btc $16, %rax;					\
++	mov %rax, %rdi;					\
 +	ljmpq __KERNEL_CS, 1f;				\
 +1:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
-+2:	pop %rcx; pop %rax;				\
++2:	PV_RESTORE_REGS(CLBR_NONE);
 +
 +#define PAX_ENTER_KERNEL				\
-+	push %rax; push %rcx;				\
++	PV_SAVE_REGS(CLBR_NONE);			\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
 +	bts $16, %rax;					\
 +	jnc 1f;						\
-+	mov %cs, %rcx;					\
-+	cmp $__KERNEL_CS, %ecx;				\
++	mov %cs, %rax;					\
++	cmp $__KERNEL_CS, %eax;				\
 +	jz 3f;						\
 +	ljmpq __KERNEL_CS, 3f;				\
-+1:	ljmpq __KERNEXEC_KERNEL_CS, 2f;			\
++1:	mov %rax, %rdi;					\
++	ljmpq __KERNEXEC_KERNEL_CS, 2f;			\
 +2:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
-+3:	pop %rcx; pop %rax;
++3:	PV_RESTORE_REGS(CLBR_NONE);
 +#else
 +#define PAX_EXIT_KERNEL
 +#define PAX_ENTER_KERNEL
@@ -8586,7 +8588,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  void default_idle(void);
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/include/asm/uaccess.h linux-2.6.32.9-pax/arch/x86/include/asm/uaccess.h
 --- linux-2.6.32.9/arch/x86/include/asm/uaccess.h	2009-09-10 19:41:12.000000000 +0200
-+++ linux-2.6.32.9-pax/arch/x86/include/asm/uaccess.h	2009-12-04 00:54:39.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/include/asm/uaccess.h	2010-03-11 15:05:08.000000000 +0100
 @@ -8,8 +8,11 @@
  #include <linux/thread_info.h>
  #include <linux/prefetch.h>
@@ -8612,7 +8614,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -77,7 +85,29 @@
+@@ -77,7 +85,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -8626,16 +8628,20 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
 +	unsigned long __end_ao = __addr + __size - 1;			\
 +	bool __ret_ao = __range_not_ok(__addr, __size) == 0;		\
 +	if (__ret_ao && unlikely((__end_ao ^ __addr_ao) & PAGE_MASK)) {	\
-+		for (; __addr_ao <= __end_ao; __addr_ao += PAGE_SIZE) {	\
++		while(__addr_ao <= __end_ao) {				\
 +			char __c_ao;					\
++			__addr_ao += PAGE_SIZE;				\
 +			if (__size > PAGE_SIZE)				\
 +				cond_resched();				\
-+			if (__get_user(__c_ao, (char __user *)__addr_ao))\
++			if (__get_user(__c_ao, (char __user *)__addr))	\
 +				break;					\
-+			if (type != VERIFY_WRITE)			\
++			if (type != VERIFY_WRITE) {			\
++				__addr = __addr_ao;			\
 +				continue;				\
-+			if (__put_user(__c_ao, (char __user *)__addr_ao))\
++			}						\
++			if (__put_user(__c_ao, (char __user *)__addr))	\
 +				break;					\
++			__addr = __addr_ao;				\
 +		}							\
 +	}								\
 +	__ret_ao;							\
@@ -8643,7 +8649,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  /*
   * The exception table consists of pairs of addresses: the first is the
-@@ -183,13 +213,21 @@ extern int __get_user_bad(void);
+@@ -183,13 +217,21 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -8668,7 +8674,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
  		     "	jmp 3b\n"					\
-@@ -197,15 +235,18 @@ extern int __get_user_bad(void);
+@@ -197,15 +239,18 @@ extern int __get_user_bad(void);
  		     _ASM_EXTABLE(1b, 4b)				\
  		     _ASM_EXTABLE(2b, 4b)				\
  		     : "=r" (err)					\
@@ -8691,7 +8697,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  #define __put_user_x8(x, ptr, __ret_pu)				\
  	asm volatile("call __put_user_8" : "=a" (__ret_pu)	\
-@@ -374,16 +415,18 @@ do {									\
+@@ -374,16 +419,18 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -8713,7 +8719,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  #define __get_user_size_ex(x, ptr, size)				\
  do {									\
-@@ -407,10 +450,12 @@ do {									\
+@@ -407,10 +454,12 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -8728,7 +8734,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  #define __put_user_nocheck(x, ptr, size)			\
  ({								\
-@@ -424,7 +469,7 @@ do {									\
+@@ -424,7 +473,7 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -8737,7 +8743,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  	__gu_err;							\
  })
  
-@@ -438,21 +483,26 @@ struct __large_struct { unsigned long bu
+@@ -438,21 +487,26 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -8768,7 +8774,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  
  /*
   * uaccess_try and catch
-@@ -530,7 +580,7 @@ struct __large_struct { unsigned long bu
+@@ -530,7 +584,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -8777,7 +8783,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/in
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -567,6 +617,7 @@ extern struct movsl_mask {
+@@ -567,6 +621,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -11101,8 +11107,16 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
 +	.endr
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/kernel/head_64.S linux-2.6.32.9-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.32.9/arch/x86/kernel/head_64.S	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.9-pax/arch/x86/kernel/head_64.S	2010-03-10 21:40:13.000000000 +0100
-@@ -38,6 +38,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
++++ linux-2.6.32.9-pax/arch/x86/kernel/head_64.S	2010-03-11 18:13:25.000000000 +0100
+@@ -19,6 +19,7 @@
+ #include <asm/cache.h>
+ #include <asm/processor-flags.h>
+ #include <asm/percpu.h>
++#include <asm/cpufeature.h>
+ 
+ #ifdef CONFIG_PARAVIRT
+ #include <asm/asm-offsets.h>
+@@ -38,6 +39,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
  L3_PAGE_OFFSET = pud_index(__PAGE_OFFSET)
  L4_START_KERNEL = pgd_index(__START_KERNEL_map)
  L3_START_KERNEL = pud_index(__START_KERNEL_map)
@@ -11113,7 +11127,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  
  	.text
  	__HEAD
-@@ -85,35 +89,22 @@ startup_64:
+@@ -85,35 +90,22 @@ startup_64:
  	 */
  	addq	%rbp, init_level4_pgt + 0(%rip)
  	addq	%rbp, init_level4_pgt + (L4_PAGE_OFFSET*8)(%rip)
@@ -11159,7 +11173,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  
  	/*
  	 * Fixup the kernel text+data virtual addresses. Note that
-@@ -184,9 +175,13 @@ ENTRY(secondary_startup_64)
+@@ -184,9 +176,13 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -11174,7 +11188,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -262,16 +257,16 @@ ENTRY(secondary_startup_64)
+@@ -262,16 +258,16 @@ ENTRY(secondary_startup_64)
  	.quad	x86_64_start_kernel
  	ENTRY(initial_gs)
  	.quad	INIT_PER_CPU_VAR(irq_stack_union)
@@ -11193,7 +11207,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  #ifdef CONFIG_EARLY_PRINTK
  	.globl early_idt_handlers
  early_idt_handlers:
-@@ -316,18 +311,23 @@ ENTRY(early_idt_handler)
+@@ -316,18 +312,23 @@ ENTRY(early_idt_handler)
  #endif /* EARLY_PRINTK */
  1:	hlt
  	jmp 1b
@@ -11218,7 +11232,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -350,13 +350,29 @@ NEXT_PAGE(init_level4_pgt)
+@@ -350,13 +351,29 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
@@ -11248,7 +11262,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -364,20 +380,23 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -364,20 +381,23 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -11280,7 +11294,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/ke
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -390,33 +409,55 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -390,33 +410,55 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -14703,7 +14717,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/li
  		to += 64;
 diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/lib/putuser.S linux-2.6.32.9-pax/arch/x86/lib/putuser.S
 --- linux-2.6.32.9/arch/x86/lib/putuser.S	2008-10-10 09:18:48.000000000 +0200
-+++ linux-2.6.32.9-pax/arch/x86/lib/putuser.S	2009-12-04 00:54:40.000000000 +0100
++++ linux-2.6.32.9-pax/arch/x86/lib/putuser.S	2010-03-11 15:05:11.000000000 +0100
 @@ -15,6 +15,7 @@
  #include <asm/thread_info.h>
  #include <asm/errno.h>
@@ -14712,19 +14726,32 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/li
  
  
  /*
-@@ -39,7 +40,19 @@ ENTRY(__put_user_1)
+@@ -29,59 +30,120 @@
+  * as they get called from within inline assembly.
+  */
+ 
+-#define ENTER	CFI_STARTPROC ; \
+-		GET_THREAD_INFO(%_ASM_BX)
++#define ENTER	CFI_STARTPROC
+ #define EXIT	ret ; \
+ 		CFI_ENDPROC
+ 
+ .text
+ ENTRY(__put_user_1)
  	ENTER
- 	cmp TI_addr_limit(%_ASM_BX),%_ASM_CX
- 	jae bad_put_user
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl $(__USER_DS)
 +	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	cmp TI_addr_limit(%_ASM_BX),%_ASM_CX
+ 	jae bad_put_user
 +#endif
 +
  1:	movb %al,(%_ASM_CX)
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -14732,19 +14759,24 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/li
  	xor %eax,%eax
  	EXIT
  ENDPROC(__put_user_1)
-@@ -50,7 +63,19 @@ ENTRY(__put_user_2)
+ 
+ ENTRY(__put_user_2)
+ 	ENTER
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	pushl $(__USER_DS)
++	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	mov TI_addr_limit(%_ASM_BX),%_ASM_BX
  	sub $1,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
-+
-+#ifdef CONFIG_X86_32
-+	pushl $(__USER_DS)
-+	popl %ds
 +#endif
 +
  2:	movw %ax,(%_ASM_CX)
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -14752,19 +14784,24 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/li
  	xor %eax,%eax
  	EXIT
  ENDPROC(__put_user_2)
-@@ -61,7 +86,19 @@ ENTRY(__put_user_4)
+ 
+ ENTRY(__put_user_4)
+ 	ENTER
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	pushl $(__USER_DS)
++	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	mov TI_addr_limit(%_ASM_BX),%_ASM_BX
  	sub $3,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
-+
-+#ifdef CONFIG_X86_32
-+	pushl $(__USER_DS)
-+	popl %ds
 +#endif
 +
  3:	movl %eax,(%_ASM_CX)
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -14772,14 +14809,19 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/li
  	xor %eax,%eax
  	EXIT
  ENDPROC(__put_user_4)
-@@ -72,16 +109,34 @@ ENTRY(__put_user_8)
+ 
+ ENTRY(__put_user_8)
+ 	ENTER
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	pushl $(__USER_DS)
++	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	mov TI_addr_limit(%_ASM_BX),%_ASM_BX
  	sub $7,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
-+
-+#ifdef CONFIG_X86_32
-+	pushl $(__USER_DS)
-+	popl %ds
 +#endif
 +
  4:	mov %_ASM_AX,(%_ASM_CX)
@@ -14787,7 +14829,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/li
  5:	movl %edx,4(%_ASM_CX)
  #endif
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -14799,7 +14841,7 @@ diff -NurpX linux-2.6.32.9-pax/Documentation/dontdiff linux-2.6.32.9/arch/x86/li
  bad_put_user:
  	CFI_STARTPROC
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
