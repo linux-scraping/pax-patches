@@ -1,6 +1,6 @@
 diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/Documentation/dontdiff linux-2.6.33-pax/Documentation/dontdiff
 --- linux-2.6.33/Documentation/dontdiff	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33-pax/Documentation/dontdiff	2010-02-24 21:52:48.000000000 +0100
++++ linux-2.6.33-pax/Documentation/dontdiff	2010-03-11 01:36:48.000000000 +0100
 @@ -3,6 +3,7 @@
  *.bin
  *.cpio
@@ -44,13 +44,14 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/Documentation/d
  comp*.log
  compile.h*
  conf
-@@ -107,13 +116,14 @@ generated
+@@ -107,13 +116,15 @@ generated
  genheaders
  genksyms
  *_gray256.c
 +hash
  ihex2fw
  ikconfig.h*
++inat-tables.c
  initramfs_data.cpio
 +initramfs_data.cpio.bz2
  initramfs_data.cpio.gz
@@ -60,7 +61,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/Documentation/d
  keywords.c
  ksym.c*
  ksym.h*
-@@ -137,10 +147,13 @@ mkboot
+@@ -137,10 +148,13 @@ mkboot
  mkbugboot
  mkcpustr
  mkdep
@@ -74,7 +75,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/Documentation/d
  modules.order
  modversions.h*
  ncscope.*
-@@ -153,6 +166,7 @@ patches*
+@@ -153,6 +167,7 @@ patches*
  pca200e.bin
  pca200e_ecd.bin2
  piggy.gz
@@ -82,7 +83,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/Documentation/d
  piggyback
  pnmtologo
  ppc_defs.h*
-@@ -167,6 +181,7 @@ setup
+@@ -167,6 +182,7 @@ setup
  setup.bin
  setup.elf
  sImage
@@ -90,7 +91,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/Documentation/d
  sm_tbl*
  split-include
  syscalltab.h
-@@ -190,14 +205,20 @@ version.h*
+@@ -190,14 +206,20 @@ version.h*
  vmlinux
  vmlinux-*
  vmlinux.aout
@@ -7573,7 +7574,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/include/asm/paravirt.h linux-2.6.33-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.33/arch/x86/include/asm/paravirt.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33-pax/arch/x86/include/asm/paravirt.h	2010-03-06 16:41:48.000000000 +0100
++++ linux-2.6.33-pax/arch/x86/include/asm/paravirt.h	2010-03-11 18:17:46.000000000 +0100
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7640,7 +7641,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  
  #else	/* !CONFIG_X86_32 */
  
-@@ -1022,6 +1065,44 @@ extern void default_banner(void);
+@@ -1022,6 +1065,46 @@ extern void default_banner(void);
  	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
  		  CLBR_NONE,						\
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
@@ -7655,28 +7656,30 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
 +	.endm
 +
 +#define PAX_EXIT_KERNEL					\
-+	push %rax; push %rcx;				\
++	PV_SAVE_REGS(CLBR_NONE);			\
 +	mov %cs, %rax;					\
 +	cmp $__KERNEXEC_KERNEL_CS, %eax;		\
 +	jnz 2f;						\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
 +	btc $16, %rax;					\
++	mov %rax, %rdi;					\
 +	ljmpq __KERNEL_CS, 1f;				\
 +1:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
-+2:	pop %rcx; pop %rax;				\
++2:	PV_RESTORE_REGS(CLBR_NONE);
 +
 +#define PAX_ENTER_KERNEL				\
-+	push %rax; push %rcx;				\
++	PV_SAVE_REGS(CLBR_NONE);			\
 +	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0);	\
 +	bts $16, %rax;					\
 +	jnc 1f;						\
-+	mov %cs, %rcx;					\
-+	cmp $__KERNEL_CS, %ecx;				\
++	mov %cs, %rax;					\
++	cmp $__KERNEL_CS, %eax;				\
 +	jz 3f;						\
 +	ljmpq __KERNEL_CS, 3f;				\
-+1:	ljmpq __KERNEXEC_KERNEL_CS, 2f;			\
++1:	mov %rax, %rdi;					\
++	ljmpq __KERNEXEC_KERNEL_CS, 2f;			\
 +2:	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0);\
-+3:	pop %rcx; pop %rax;
++3:	PV_RESTORE_REGS(CLBR_NONE);
 +#else
 +#define PAX_EXIT_KERNEL
 +#define PAX_ENTER_KERNEL
@@ -8643,7 +8646,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  void default_idle(void);
 diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/include/asm/uaccess.h linux-2.6.33-pax/arch/x86/include/asm/uaccess.h
 --- linux-2.6.33/arch/x86/include/asm/uaccess.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33-pax/arch/x86/include/asm/uaccess.h	2010-02-24 21:52:51.000000000 +0100
++++ linux-2.6.33-pax/arch/x86/include/asm/uaccess.h	2010-03-11 14:10:00.000000000 +0100
 @@ -8,8 +8,11 @@
  #include <linux/thread_info.h>
  #include <linux/prefetch.h>
@@ -8669,7 +8672,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -77,7 +85,29 @@
+@@ -77,7 +85,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -8683,16 +8686,20 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
 +	unsigned long __end_ao = __addr + __size - 1;			\
 +	bool __ret_ao = __range_not_ok(__addr, __size) == 0;		\
 +	if (__ret_ao && unlikely((__end_ao ^ __addr_ao) & PAGE_MASK)) {	\
-+		for (; __addr_ao <= __end_ao; __addr_ao += PAGE_SIZE) {	\
++		while(__addr_ao <= __end_ao) {				\
 +			char __c_ao;					\
++			__addr_ao += PAGE_SIZE;				\
 +			if (__size > PAGE_SIZE)				\
 +				cond_resched();				\
-+			if (__get_user(__c_ao, (char __user *)__addr_ao))\
++			if (__get_user(__c_ao, (char __user *)__addr))	\
 +				break;					\
-+			if (type != VERIFY_WRITE)			\
++			if (type != VERIFY_WRITE) {			\
++				__addr = __addr_ao;			\
 +				continue;				\
-+			if (__put_user(__c_ao, (char __user *)__addr_ao))\
++			}						\
++			if (__put_user(__c_ao, (char __user *)__addr))	\
 +				break;					\
++			__addr = __addr_ao;				\
 +		}							\
 +	}								\
 +	__ret_ao;							\
@@ -8700,7 +8707,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  
  /*
   * The exception table consists of pairs of addresses: the first is the
-@@ -183,13 +213,21 @@ extern int __get_user_bad(void);
+@@ -183,13 +217,21 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -8725,7 +8732,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
  		     "	jmp 3b\n"					\
-@@ -197,15 +235,18 @@ extern int __get_user_bad(void);
+@@ -197,15 +239,18 @@ extern int __get_user_bad(void);
  		     _ASM_EXTABLE(1b, 4b)				\
  		     _ASM_EXTABLE(2b, 4b)				\
  		     : "=r" (err)					\
@@ -8748,7 +8755,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  
  #define __put_user_x8(x, ptr, __ret_pu)				\
  	asm volatile("call __put_user_8" : "=a" (__ret_pu)	\
-@@ -374,16 +415,18 @@ do {									\
+@@ -374,16 +419,18 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -8770,7 +8777,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  
  #define __get_user_size_ex(x, ptr, size)				\
  do {									\
-@@ -407,10 +450,12 @@ do {									\
+@@ -407,10 +454,12 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -8785,7 +8792,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  
  #define __put_user_nocheck(x, ptr, size)			\
  ({								\
-@@ -424,7 +469,7 @@ do {									\
+@@ -424,7 +473,7 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -8794,7 +8801,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  	__gu_err;							\
  })
  
-@@ -438,21 +483,26 @@ struct __large_struct { unsigned long bu
+@@ -438,21 +487,26 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -8825,7 +8832,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  
  /*
   * uaccess_try and catch
-@@ -530,7 +580,7 @@ struct __large_struct { unsigned long bu
+@@ -530,7 +584,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -8834,7 +8841,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/includ
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -567,6 +617,7 @@ extern struct movsl_mask {
+@@ -567,6 +621,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -11210,8 +11217,16 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
 +	.endr
 diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel/head_64.S linux-2.6.33-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.33/arch/x86/kernel/head_64.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33-pax/arch/x86/kernel/head_64.S	2010-03-10 17:08:38.000000000 +0100
-@@ -38,6 +38,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
++++ linux-2.6.33-pax/arch/x86/kernel/head_64.S	2010-03-11 18:17:12.000000000 +0100
+@@ -19,6 +19,7 @@
+ #include <asm/cache.h>
+ #include <asm/processor-flags.h>
+ #include <asm/percpu.h>
++#include <asm/cpufeature.h>
+ 
+ #ifdef CONFIG_PARAVIRT
+ #include <asm/asm-offsets.h>
+@@ -38,6 +39,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
  L3_PAGE_OFFSET = pud_index(__PAGE_OFFSET)
  L4_START_KERNEL = pgd_index(__START_KERNEL_map)
  L3_START_KERNEL = pud_index(__START_KERNEL_map)
@@ -11222,7 +11237,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
  
  	.text
  	__HEAD
-@@ -85,35 +89,22 @@ startup_64:
+@@ -85,35 +90,22 @@ startup_64:
  	 */
  	addq	%rbp, init_level4_pgt + 0(%rip)
  	addq	%rbp, init_level4_pgt + (L4_PAGE_OFFSET*8)(%rip)
@@ -11268,7 +11283,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
  
  	/*
  	 * Fixup the kernel text+data virtual addresses. Note that
-@@ -184,9 +175,14 @@ ENTRY(secondary_startup_64)
+@@ -184,9 +176,14 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -11284,7 +11299,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -271,7 +267,7 @@ ENTRY(secondary_startup_64)
+@@ -271,7 +268,7 @@ ENTRY(secondary_startup_64)
  bad_address:
  	jmp bad_address
  
@@ -11293,7 +11308,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
  #ifdef CONFIG_EARLY_PRINTK
  	.globl early_idt_handlers
  early_idt_handlers:
-@@ -316,18 +312,23 @@ ENTRY(early_idt_handler)
+@@ -316,18 +313,23 @@ ENTRY(early_idt_handler)
  #endif /* EARLY_PRINTK */
  1:	hlt
  	jmp 1b
@@ -11318,7 +11333,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -351,13 +352,29 @@ NEXT_PAGE(init_level4_pgt)
+@@ -351,13 +353,29 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
@@ -11348,7 +11363,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -365,20 +382,23 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -365,20 +383,23 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -11380,7 +11395,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/kernel
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -391,33 +411,55 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -391,33 +412,55 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -14467,1043 +14482,6 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/ge
  	xor %edx,%edx
  	mov $(-EFAULT),%_ASM_AX
  	ret
-diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/inat-tables.c linux-2.6.33-pax/arch/x86/lib/inat-tables.c
---- linux-2.6.33/arch/x86/lib/inat-tables.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.33-pax/arch/x86/lib/inat-tables.c	2010-02-24 21:52:51.000000000 +0100
-@@ -0,0 +1,1033 @@
-+/* x86 opcode map generated from x86-opcode-map.txt */
-+/* Do not change this code. */
-+
-+/* Table: one byte opcode */
-+const insn_attr_t inat_primary_table[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x00] = INAT_MODRM,
-+	[0x01] = INAT_MODRM,
-+	[0x02] = INAT_MODRM,
-+	[0x03] = INAT_MODRM,
-+	[0x04] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x05] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x08] = INAT_MODRM,
-+	[0x09] = INAT_MODRM,
-+	[0x0a] = INAT_MODRM,
-+	[0x0b] = INAT_MODRM,
-+	[0x0c] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x0d] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x0f] = INAT_MAKE_ESCAPE(1),
-+	[0x10] = INAT_MODRM,
-+	[0x11] = INAT_MODRM,
-+	[0x12] = INAT_MODRM,
-+	[0x13] = INAT_MODRM,
-+	[0x14] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x15] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x18] = INAT_MODRM,
-+	[0x19] = INAT_MODRM,
-+	[0x1a] = INAT_MODRM,
-+	[0x1b] = INAT_MODRM,
-+	[0x1c] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x1d] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x20] = INAT_MODRM,
-+	[0x21] = INAT_MODRM,
-+	[0x22] = INAT_MODRM,
-+	[0x23] = INAT_MODRM,
-+	[0x24] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x25] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x26] = INAT_MAKE_PREFIX(INAT_PFX_ES),
-+	[0x28] = INAT_MODRM,
-+	[0x29] = INAT_MODRM,
-+	[0x2a] = INAT_MODRM,
-+	[0x2b] = INAT_MODRM,
-+	[0x2c] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x2d] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x2e] = INAT_MAKE_PREFIX(INAT_PFX_CS),
-+	[0x30] = INAT_MODRM,
-+	[0x31] = INAT_MODRM,
-+	[0x32] = INAT_MODRM,
-+	[0x33] = INAT_MODRM,
-+	[0x34] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x35] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x36] = INAT_MAKE_PREFIX(INAT_PFX_SS),
-+	[0x38] = INAT_MODRM,
-+	[0x39] = INAT_MODRM,
-+	[0x3a] = INAT_MODRM,
-+	[0x3b] = INAT_MODRM,
-+	[0x3c] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x3d] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0x3e] = INAT_MAKE_PREFIX(INAT_PFX_DS),
-+	[0x40] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x41] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x42] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x43] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x44] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x45] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x46] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x47] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x48] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x49] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x4a] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x4b] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x4c] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x4d] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x4e] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x4f] = INAT_MAKE_PREFIX(INAT_PFX_REX),
-+	[0x50] = INAT_FORCE64,
-+	[0x51] = INAT_FORCE64,
-+	[0x52] = INAT_FORCE64,
-+	[0x53] = INAT_FORCE64,
-+	[0x54] = INAT_FORCE64,
-+	[0x55] = INAT_FORCE64,
-+	[0x56] = INAT_FORCE64,
-+	[0x57] = INAT_FORCE64,
-+	[0x58] = INAT_FORCE64,
-+	[0x59] = INAT_FORCE64,
-+	[0x5a] = INAT_FORCE64,
-+	[0x5b] = INAT_FORCE64,
-+	[0x5c] = INAT_FORCE64,
-+	[0x5d] = INAT_FORCE64,
-+	[0x5e] = INAT_FORCE64,
-+	[0x5f] = INAT_FORCE64,
-+	[0x62] = INAT_MODRM,
-+	[0x63] = INAT_MODRM | INAT_MODRM,
-+	[0x64] = INAT_MAKE_PREFIX(INAT_PFX_FS),
-+	[0x65] = INAT_MAKE_PREFIX(INAT_PFX_GS),
-+	[0x66] = INAT_MAKE_PREFIX(INAT_PFX_OPNDSZ),
-+	[0x67] = INAT_MAKE_PREFIX(INAT_PFX_ADDRSZ),
-+	[0x68] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x69] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_MODRM,
-+	[0x6a] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_FORCE64,
-+	[0x6b] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM,
-+	[0x70] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x71] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x72] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x73] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x74] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x75] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x76] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x77] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x78] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x79] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x7a] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x7b] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x7c] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x7d] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x7e] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x7f] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0x80] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_MAKE_GROUP(1),
-+	[0x81] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_MODRM | INAT_MAKE_GROUP(1),
-+	[0x82] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_MAKE_GROUP(1),
-+	[0x83] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_MAKE_GROUP(1),
-+	[0x84] = INAT_MODRM,
-+	[0x85] = INAT_MODRM,
-+	[0x86] = INAT_MODRM,
-+	[0x87] = INAT_MODRM,
-+	[0x88] = INAT_MODRM,
-+	[0x89] = INAT_MODRM,
-+	[0x8a] = INAT_MODRM,
-+	[0x8b] = INAT_MODRM,
-+	[0x8c] = INAT_MODRM,
-+	[0x8d] = INAT_MODRM,
-+	[0x8e] = INAT_MODRM,
-+	[0x8f] = INAT_MAKE_GROUP(2) | INAT_MODRM | INAT_FORCE64,
-+	[0x9a] = INAT_MAKE_IMM(INAT_IMM_PTR),
-+	[0x9c] = INAT_FORCE64,
-+	[0x9d] = INAT_FORCE64,
-+	[0xa0] = INAT_MOFFSET,
-+	[0xa1] = INAT_MOFFSET,
-+	[0xa2] = INAT_MOFFSET,
-+	[0xa3] = INAT_MOFFSET,
-+	[0xa8] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xa9] = INAT_MAKE_IMM(INAT_IMM_VWORD32),
-+	[0xb0] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb1] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb2] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb3] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb4] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb5] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb6] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb7] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xb8] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xb9] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xba] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xbb] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xbc] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xbd] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xbe] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xbf] = INAT_MAKE_IMM(INAT_IMM_VWORD),
-+	[0xc0] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_MAKE_GROUP(3),
-+	[0xc1] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_MAKE_GROUP(3),
-+	[0xc2] = INAT_MAKE_IMM(INAT_IMM_WORD) | INAT_FORCE64,
-+	[0xc4] = INAT_MODRM | INAT_MAKE_PREFIX(INAT_PFX_VEX3),
-+	[0xc5] = INAT_MODRM | INAT_MAKE_PREFIX(INAT_PFX_VEX2),
-+	[0xc6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_MAKE_GROUP(4),
-+	[0xc7] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_MODRM | INAT_MAKE_GROUP(4),
-+	[0xc8] = INAT_MAKE_IMM(INAT_IMM_WORD) | INAT_SCNDIMM,
-+	[0xc9] = INAT_FORCE64,
-+	[0xca] = INAT_MAKE_IMM(INAT_IMM_WORD),
-+	[0xcd] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xd0] = INAT_MODRM | INAT_MAKE_GROUP(3),
-+	[0xd1] = INAT_MODRM | INAT_MAKE_GROUP(3),
-+	[0xd2] = INAT_MODRM | INAT_MAKE_GROUP(3),
-+	[0xd3] = INAT_MODRM | INAT_MAKE_GROUP(3),
-+	[0xd4] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xd5] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xd8] = INAT_MODRM,
-+	[0xd9] = INAT_MODRM,
-+	[0xda] = INAT_MODRM,
-+	[0xdb] = INAT_MODRM,
-+	[0xdc] = INAT_MODRM,
-+	[0xdd] = INAT_MODRM,
-+	[0xde] = INAT_MODRM,
-+	[0xdf] = INAT_MODRM,
-+	[0xe0] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_FORCE64,
-+	[0xe1] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_FORCE64,
-+	[0xe2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_FORCE64,
-+	[0xe3] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_FORCE64,
-+	[0xe4] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xe5] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xe6] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xe7] = INAT_MAKE_IMM(INAT_IMM_BYTE),
-+	[0xe8] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0xe9] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0xea] = INAT_MAKE_IMM(INAT_IMM_PTR),
-+	[0xeb] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_FORCE64,
-+	[0xf0] = INAT_MAKE_PREFIX(INAT_PFX_LOCK),
-+	[0xf2] = INAT_MAKE_PREFIX(INAT_PFX_REPNE),
-+	[0xf3] = INAT_MAKE_PREFIX(INAT_PFX_REPE),
-+	[0xf6] = INAT_MODRM | INAT_MAKE_GROUP(5),
-+	[0xf7] = INAT_MODRM | INAT_MAKE_GROUP(6),
-+	[0xfe] = INAT_MAKE_GROUP(7),
-+	[0xff] = INAT_MAKE_GROUP(8),
-+};
-+
-+/* Table: 2-byte opcode (0x0f) */
-+const insn_attr_t inat_escape_table_1[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x00] = INAT_MAKE_GROUP(9),
-+	[0x01] = INAT_MAKE_GROUP(10),
-+	[0x02] = INAT_MODRM,
-+	[0x03] = INAT_MODRM,
-+	[0x0d] = INAT_MODRM | INAT_MAKE_GROUP(11),
-+	[0x0f] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM,
-+	[0x10] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x11] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x12] = INAT_MODRM | INAT_VEXOK | INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x13] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x14] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x15] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x16] = INAT_MODRM | INAT_VEXOK | INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x17] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x18] = INAT_MAKE_GROUP(12),
-+	[0x1f] = INAT_MODRM,
-+	[0x20] = INAT_MODRM,
-+	[0x21] = INAT_MODRM,
-+	[0x22] = INAT_MODRM,
-+	[0x23] = INAT_MODRM,
-+	[0x28] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x29] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x2a] = INAT_MODRM | INAT_VARIANT,
-+	[0x2b] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x2c] = INAT_MODRM | INAT_VARIANT,
-+	[0x2d] = INAT_MODRM | INAT_VARIANT,
-+	[0x2e] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x2f] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x38] = INAT_MAKE_ESCAPE(2),
-+	[0x3a] = INAT_MAKE_ESCAPE(3),
-+	[0x40] = INAT_MODRM,
-+	[0x41] = INAT_MODRM,
-+	[0x42] = INAT_MODRM,
-+	[0x43] = INAT_MODRM,
-+	[0x44] = INAT_MODRM,
-+	[0x45] = INAT_MODRM,
-+	[0x46] = INAT_MODRM,
-+	[0x47] = INAT_MODRM,
-+	[0x48] = INAT_MODRM,
-+	[0x49] = INAT_MODRM,
-+	[0x4a] = INAT_MODRM,
-+	[0x4b] = INAT_MODRM,
-+	[0x4c] = INAT_MODRM,
-+	[0x4d] = INAT_MODRM,
-+	[0x4e] = INAT_MODRM,
-+	[0x4f] = INAT_MODRM,
-+	[0x50] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x51] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x52] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x53] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x54] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x55] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x56] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x57] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x58] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x59] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x5a] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x5b] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x5c] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x5d] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x5e] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x5f] = INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0x60] = INAT_MODRM | INAT_VARIANT,
-+	[0x61] = INAT_MODRM | INAT_VARIANT,
-+	[0x62] = INAT_MODRM | INAT_VARIANT,
-+	[0x63] = INAT_MODRM | INAT_VARIANT,
-+	[0x64] = INAT_MODRM | INAT_VARIANT,
-+	[0x65] = INAT_MODRM | INAT_VARIANT,
-+	[0x66] = INAT_MODRM | INAT_VARIANT,
-+	[0x67] = INAT_MODRM | INAT_VARIANT,
-+	[0x68] = INAT_MODRM | INAT_VARIANT,
-+	[0x69] = INAT_MODRM | INAT_VARIANT,
-+	[0x6a] = INAT_MODRM | INAT_VARIANT,
-+	[0x6b] = INAT_MODRM | INAT_VARIANT,
-+	[0x6c] = INAT_VARIANT,
-+	[0x6d] = INAT_VARIANT,
-+	[0x6e] = INAT_MODRM | INAT_VARIANT,
-+	[0x6f] = INAT_MODRM | INAT_VARIANT,
-+	[0x70] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x71] = INAT_MAKE_GROUP(13),
-+	[0x72] = INAT_MAKE_GROUP(14),
-+	[0x73] = INAT_MAKE_GROUP(15),
-+	[0x74] = INAT_MODRM | INAT_VARIANT,
-+	[0x75] = INAT_MODRM | INAT_VARIANT,
-+	[0x76] = INAT_MODRM | INAT_VARIANT,
-+	[0x77] = INAT_VEXOK,
-+	[0x78] = INAT_MODRM,
-+	[0x79] = INAT_MODRM,
-+	[0x7c] = INAT_VARIANT,
-+	[0x7d] = INAT_VARIANT,
-+	[0x7e] = INAT_MODRM | INAT_VARIANT,
-+	[0x7f] = INAT_MODRM | INAT_VARIANT,
-+	[0x80] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x81] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x82] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x83] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x84] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x85] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x86] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x87] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x88] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x89] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x8a] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x8b] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x8c] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x8d] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x8e] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x8f] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_FORCE64,
-+	[0x90] = INAT_MODRM,
-+	[0x91] = INAT_MODRM,
-+	[0x92] = INAT_MODRM,
-+	[0x93] = INAT_MODRM,
-+	[0x94] = INAT_MODRM,
-+	[0x95] = INAT_MODRM,
-+	[0x96] = INAT_MODRM,
-+	[0x97] = INAT_MODRM,
-+	[0x98] = INAT_MODRM,
-+	[0x99] = INAT_MODRM,
-+	[0x9a] = INAT_MODRM,
-+	[0x9b] = INAT_MODRM,
-+	[0x9c] = INAT_MODRM,
-+	[0x9d] = INAT_MODRM,
-+	[0x9e] = INAT_MODRM,
-+	[0x9f] = INAT_MODRM,
-+	[0xa0] = INAT_FORCE64,
-+	[0xa1] = INAT_FORCE64,
-+	[0xa3] = INAT_MODRM,
-+	[0xa4] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM,
-+	[0xa5] = INAT_MODRM,
-+	[0xa6] = INAT_MAKE_GROUP(16),
-+	[0xa7] = INAT_MAKE_GROUP(17),
-+	[0xa8] = INAT_FORCE64,
-+	[0xa9] = INAT_FORCE64,
-+	[0xab] = INAT_MODRM,
-+	[0xac] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM,
-+	[0xad] = INAT_MODRM,
-+	[0xae] = INAT_MAKE_GROUP(18),
-+	[0xaf] = INAT_MODRM,
-+	[0xb0] = INAT_MODRM,
-+	[0xb1] = INAT_MODRM,
-+	[0xb2] = INAT_MODRM,
-+	[0xb3] = INAT_MODRM,
-+	[0xb4] = INAT_MODRM,
-+	[0xb5] = INAT_MODRM,
-+	[0xb6] = INAT_MODRM,
-+	[0xb7] = INAT_MODRM,
-+	[0xb8] = INAT_VARIANT,
-+	[0xb9] = INAT_MAKE_GROUP(19),
-+	[0xba] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_MAKE_GROUP(20),
-+	[0xbb] = INAT_MODRM,
-+	[0xbc] = INAT_MODRM,
-+	[0xbd] = INAT_MODRM,
-+	[0xbe] = INAT_MODRM,
-+	[0xbf] = INAT_MODRM,
-+	[0xc0] = INAT_MODRM,
-+	[0xc1] = INAT_MODRM,
-+	[0xc2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0xc3] = INAT_MODRM,
-+	[0xc4] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0xc5] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0xc6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VARIANT,
-+	[0xc7] = INAT_MAKE_GROUP(21),
-+	[0xd0] = INAT_VARIANT,
-+	[0xd1] = INAT_MODRM | INAT_VARIANT,
-+	[0xd2] = INAT_MODRM | INAT_VARIANT,
-+	[0xd3] = INAT_MODRM | INAT_VARIANT,
-+	[0xd4] = INAT_MODRM | INAT_VARIANT,
-+	[0xd5] = INAT_MODRM | INAT_VARIANT,
-+	[0xd6] = INAT_VARIANT,
-+	[0xd7] = INAT_MODRM | INAT_VARIANT,
-+	[0xd8] = INAT_MODRM | INAT_VARIANT,
-+	[0xd9] = INAT_MODRM | INAT_VARIANT,
-+	[0xda] = INAT_MODRM | INAT_VARIANT,
-+	[0xdb] = INAT_MODRM | INAT_VARIANT,
-+	[0xdc] = INAT_MODRM | INAT_VARIANT,
-+	[0xdd] = INAT_MODRM | INAT_VARIANT,
-+	[0xde] = INAT_MODRM | INAT_VARIANT,
-+	[0xdf] = INAT_MODRM | INAT_VARIANT,
-+	[0xe0] = INAT_MODRM | INAT_VARIANT,
-+	[0xe1] = INAT_MODRM | INAT_VARIANT,
-+	[0xe2] = INAT_MODRM | INAT_VARIANT,
-+	[0xe3] = INAT_MODRM | INAT_VARIANT,
-+	[0xe4] = INAT_MODRM | INAT_VARIANT,
-+	[0xe5] = INAT_MODRM | INAT_VARIANT,
-+	[0xe6] = INAT_VARIANT,
-+	[0xe7] = INAT_MODRM | INAT_VARIANT,
-+	[0xe8] = INAT_MODRM | INAT_VARIANT,
-+	[0xe9] = INAT_MODRM | INAT_VARIANT,
-+	[0xea] = INAT_MODRM | INAT_VARIANT,
-+	[0xeb] = INAT_MODRM | INAT_VARIANT,
-+	[0xec] = INAT_MODRM | INAT_VARIANT,
-+	[0xed] = INAT_MODRM | INAT_VARIANT,
-+	[0xee] = INAT_MODRM | INAT_VARIANT,
-+	[0xef] = INAT_MODRM | INAT_VARIANT,
-+	[0xf0] = INAT_VARIANT,
-+	[0xf1] = INAT_MODRM | INAT_VARIANT,
-+	[0xf2] = INAT_MODRM | INAT_VARIANT,
-+	[0xf3] = INAT_MODRM | INAT_VARIANT,
-+	[0xf4] = INAT_MODRM | INAT_VARIANT,
-+	[0xf5] = INAT_MODRM | INAT_VARIANT,
-+	[0xf6] = INAT_MODRM | INAT_VARIANT,
-+	[0xf7] = INAT_MODRM | INAT_VARIANT,
-+	[0xf8] = INAT_MODRM | INAT_VARIANT,
-+	[0xf9] = INAT_MODRM | INAT_VARIANT,
-+	[0xfa] = INAT_MODRM | INAT_VARIANT,
-+	[0xfb] = INAT_MODRM | INAT_VARIANT,
-+	[0xfc] = INAT_MODRM | INAT_VARIANT,
-+	[0xfd] = INAT_MODRM | INAT_VARIANT,
-+	[0xfe] = INAT_MODRM | INAT_VARIANT,
-+};
-+const insn_attr_t inat_escape_table_1_1[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x10] = INAT_MODRM | INAT_VEXOK,
-+	[0x11] = INAT_MODRM | INAT_VEXOK,
-+	[0x12] = INAT_MODRM | INAT_VEXOK,
-+	[0x13] = INAT_MODRM | INAT_VEXOK,
-+	[0x14] = INAT_MODRM | INAT_VEXOK,
-+	[0x15] = INAT_MODRM | INAT_VEXOK,
-+	[0x16] = INAT_MODRM | INAT_VEXOK,
-+	[0x17] = INAT_MODRM | INAT_VEXOK,
-+	[0x28] = INAT_MODRM | INAT_VEXOK,
-+	[0x29] = INAT_MODRM | INAT_VEXOK,
-+	[0x2a] = INAT_MODRM,
-+	[0x2b] = INAT_MODRM | INAT_VEXOK,
-+	[0x2c] = INAT_MODRM,
-+	[0x2d] = INAT_MODRM,
-+	[0x2e] = INAT_MODRM | INAT_VEXOK,
-+	[0x2f] = INAT_MODRM | INAT_VEXOK,
-+	[0x50] = INAT_MODRM | INAT_VEXOK,
-+	[0x51] = INAT_MODRM | INAT_VEXOK,
-+	[0x54] = INAT_MODRM | INAT_VEXOK,
-+	[0x55] = INAT_MODRM | INAT_VEXOK,
-+	[0x56] = INAT_MODRM | INAT_VEXOK,
-+	[0x57] = INAT_MODRM | INAT_VEXOK,
-+	[0x58] = INAT_MODRM | INAT_VEXOK,
-+	[0x59] = INAT_MODRM | INAT_VEXOK,
-+	[0x5a] = INAT_MODRM | INAT_VEXOK,
-+	[0x5b] = INAT_MODRM | INAT_VEXOK,
-+	[0x5c] = INAT_MODRM | INAT_VEXOK,
-+	[0x5d] = INAT_MODRM | INAT_VEXOK,
-+	[0x5e] = INAT_MODRM | INAT_VEXOK,
-+	[0x5f] = INAT_MODRM | INAT_VEXOK,
-+	[0x60] = INAT_MODRM | INAT_VEXOK,
-+	[0x61] = INAT_MODRM | INAT_VEXOK,
-+	[0x62] = INAT_MODRM | INAT_VEXOK,
-+	[0x63] = INAT_MODRM | INAT_VEXOK,
-+	[0x64] = INAT_MODRM | INAT_VEXOK,
-+	[0x65] = INAT_MODRM | INAT_VEXOK,
-+	[0x66] = INAT_MODRM | INAT_VEXOK,
-+	[0x67] = INAT_MODRM | INAT_VEXOK,
-+	[0x68] = INAT_MODRM | INAT_VEXOK,
-+	[0x69] = INAT_MODRM | INAT_VEXOK,
-+	[0x6a] = INAT_MODRM | INAT_VEXOK,
-+	[0x6b] = INAT_MODRM | INAT_VEXOK,
-+	[0x6c] = INAT_MODRM | INAT_VEXOK,
-+	[0x6d] = INAT_MODRM | INAT_VEXOK,
-+	[0x6e] = INAT_MODRM | INAT_VEXOK,
-+	[0x6f] = INAT_MODRM | INAT_VEXOK,
-+	[0x70] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x74] = INAT_MODRM | INAT_VEXOK,
-+	[0x75] = INAT_MODRM | INAT_VEXOK,
-+	[0x76] = INAT_MODRM | INAT_VEXOK,
-+	[0x7c] = INAT_MODRM | INAT_VEXOK,
-+	[0x7d] = INAT_MODRM | INAT_VEXOK,
-+	[0x7e] = INAT_MODRM | INAT_VEXOK,
-+	[0x7f] = INAT_MODRM | INAT_VEXOK,
-+	[0xc2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0xc4] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0xc5] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0xc6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0xd0] = INAT_MODRM | INAT_VEXOK,
-+	[0xd1] = INAT_MODRM | INAT_VEXOK,
-+	[0xd2] = INAT_MODRM | INAT_VEXOK,
-+	[0xd3] = INAT_MODRM | INAT_VEXOK,
-+	[0xd4] = INAT_MODRM | INAT_VEXOK,
-+	[0xd5] = INAT_MODRM | INAT_VEXOK,
-+	[0xd6] = INAT_MODRM | INAT_VEXOK,
-+	[0xd7] = INAT_MODRM | INAT_VEXOK,
-+	[0xd8] = INAT_MODRM | INAT_VEXOK,
-+	[0xd9] = INAT_MODRM | INAT_VEXOK,
-+	[0xda] = INAT_MODRM | INAT_VEXOK,
-+	[0xdb] = INAT_MODRM | INAT_VEXOK,
-+	[0xdc] = INAT_MODRM | INAT_VEXOK,
-+	[0xdd] = INAT_MODRM | INAT_VEXOK,
-+	[0xde] = INAT_MODRM | INAT_VEXOK,
-+	[0xdf] = INAT_MODRM | INAT_VEXOK,
-+	[0xe0] = INAT_MODRM | INAT_VEXOK,
-+	[0xe1] = INAT_MODRM | INAT_VEXOK,
-+	[0xe2] = INAT_MODRM | INAT_VEXOK,
-+	[0xe3] = INAT_MODRM | INAT_VEXOK,
-+	[0xe4] = INAT_MODRM | INAT_VEXOK,
-+	[0xe5] = INAT_MODRM | INAT_VEXOK,
-+	[0xe6] = INAT_MODRM | INAT_VEXOK,
-+	[0xe7] = INAT_MODRM | INAT_VEXOK,
-+	[0xe8] = INAT_MODRM | INAT_VEXOK,
-+	[0xe9] = INAT_MODRM | INAT_VEXOK,
-+	[0xea] = INAT_MODRM | INAT_VEXOK,
-+	[0xeb] = INAT_MODRM | INAT_VEXOK,
-+	[0xec] = INAT_MODRM | INAT_VEXOK,
-+	[0xed] = INAT_MODRM | INAT_VEXOK,
-+	[0xee] = INAT_MODRM | INAT_VEXOK,
-+	[0xef] = INAT_MODRM | INAT_VEXOK,
-+	[0xf1] = INAT_MODRM | INAT_VEXOK,
-+	[0xf2] = INAT_MODRM | INAT_VEXOK,
-+	[0xf3] = INAT_MODRM | INAT_VEXOK,
-+	[0xf4] = INAT_MODRM | INAT_VEXOK,
-+	[0xf5] = INAT_MODRM | INAT_VEXOK,
-+	[0xf6] = INAT_MODRM | INAT_VEXOK,
-+	[0xf7] = INAT_MODRM | INAT_VEXOK,
-+	[0xf8] = INAT_MODRM | INAT_VEXOK,
-+	[0xf9] = INAT_MODRM | INAT_VEXOK,
-+	[0xfa] = INAT_MODRM | INAT_VEXOK,
-+	[0xfb] = INAT_MODRM | INAT_VEXOK,
-+	[0xfc] = INAT_MODRM | INAT_VEXOK,
-+	[0xfd] = INAT_MODRM | INAT_VEXOK,
-+	[0xfe] = INAT_MODRM | INAT_VEXOK,
-+};
-+const insn_attr_t inat_escape_table_1_2[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x10] = INAT_MODRM | INAT_VEXOK,
-+	[0x11] = INAT_MODRM | INAT_VEXOK,
-+	[0x12] = INAT_MODRM | INAT_VEXOK,
-+	[0x16] = INAT_MODRM | INAT_VEXOK,
-+	[0x2a] = INAT_MODRM | INAT_VEXOK,
-+	[0x2c] = INAT_MODRM | INAT_VEXOK,
-+	[0x2d] = INAT_MODRM | INAT_VEXOK,
-+	[0x51] = INAT_MODRM | INAT_VEXOK,
-+	[0x52] = INAT_MODRM | INAT_VEXOK,
-+	[0x53] = INAT_MODRM | INAT_VEXOK,
-+	[0x58] = INAT_MODRM | INAT_VEXOK,
-+	[0x59] = INAT_MODRM | INAT_VEXOK,
-+	[0x5a] = INAT_MODRM | INAT_VEXOK,
-+	[0x5b] = INAT_MODRM | INAT_VEXOK,
-+	[0x5c] = INAT_MODRM | INAT_VEXOK,
-+	[0x5d] = INAT_MODRM | INAT_VEXOK,
-+	[0x5e] = INAT_MODRM | INAT_VEXOK,
-+	[0x5f] = INAT_MODRM | INAT_VEXOK,
-+	[0x6f] = INAT_MODRM | INAT_VEXOK,
-+	[0x70] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x7e] = INAT_MODRM | INAT_VEXOK,
-+	[0x7f] = INAT_MODRM | INAT_VEXOK,
-+	[0xb8] = INAT_MODRM,
-+	[0xc2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0xd6] = INAT_MODRM,
-+	[0xe6] = INAT_MODRM | INAT_VEXOK,
-+};
-+const insn_attr_t inat_escape_table_1_3[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x10] = INAT_MODRM | INAT_VEXOK,
-+	[0x11] = INAT_MODRM | INAT_VEXOK,
-+	[0x12] = INAT_MODRM | INAT_VEXOK,
-+	[0x2a] = INAT_MODRM | INAT_VEXOK,
-+	[0x2c] = INAT_MODRM | INAT_VEXOK,
-+	[0x2d] = INAT_MODRM | INAT_VEXOK,
-+	[0x51] = INAT_MODRM | INAT_VEXOK,
-+	[0x58] = INAT_MODRM | INAT_VEXOK,
-+	[0x59] = INAT_MODRM | INAT_VEXOK,
-+	[0x5a] = INAT_MODRM | INAT_VEXOK,
-+	[0x5c] = INAT_MODRM | INAT_VEXOK,
-+	[0x5d] = INAT_MODRM | INAT_VEXOK,
-+	[0x5e] = INAT_MODRM | INAT_VEXOK,
-+	[0x5f] = INAT_MODRM | INAT_VEXOK,
-+	[0x70] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x7c] = INAT_MODRM | INAT_VEXOK,
-+	[0x7d] = INAT_MODRM | INAT_VEXOK,
-+	[0xc2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0xd0] = INAT_MODRM | INAT_VEXOK,
-+	[0xd6] = INAT_MODRM,
-+	[0xe6] = INAT_MODRM | INAT_VEXOK,
-+	[0xf0] = INAT_MODRM | INAT_VEXOK,
-+};
-+
-+/* Table: 3-byte opcode 1 (0x0f 0x38) */
-+const insn_attr_t inat_escape_table_2[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x00] = INAT_MODRM | INAT_VARIANT,
-+	[0x01] = INAT_MODRM | INAT_VARIANT,
-+	[0x02] = INAT_MODRM | INAT_VARIANT,
-+	[0x03] = INAT_MODRM | INAT_VARIANT,
-+	[0x04] = INAT_MODRM | INAT_VARIANT,
-+	[0x05] = INAT_MODRM | INAT_VARIANT,
-+	[0x06] = INAT_MODRM | INAT_VARIANT,
-+	[0x07] = INAT_MODRM | INAT_VARIANT,
-+	[0x08] = INAT_MODRM | INAT_VARIANT,
-+	[0x09] = INAT_MODRM | INAT_VARIANT,
-+	[0x0a] = INAT_MODRM | INAT_VARIANT,
-+	[0x0b] = INAT_MODRM | INAT_VARIANT,
-+	[0x0c] = INAT_VARIANT,
-+	[0x0d] = INAT_VARIANT,
-+	[0x0e] = INAT_VARIANT,
-+	[0x0f] = INAT_VARIANT,
-+	[0x10] = INAT_VARIANT,
-+	[0x14] = INAT_VARIANT,
-+	[0x15] = INAT_VARIANT,
-+	[0x17] = INAT_VARIANT,
-+	[0x18] = INAT_VARIANT,
-+	[0x19] = INAT_VARIANT,
-+	[0x1a] = INAT_VARIANT,
-+	[0x1c] = INAT_MODRM | INAT_VARIANT,
-+	[0x1d] = INAT_MODRM | INAT_VARIANT,
-+	[0x1e] = INAT_MODRM | INAT_VARIANT,
-+	[0x20] = INAT_VARIANT,
-+	[0x21] = INAT_VARIANT,
-+	[0x22] = INAT_VARIANT,
-+	[0x23] = INAT_VARIANT,
-+	[0x24] = INAT_VARIANT,
-+	[0x25] = INAT_VARIANT,
-+	[0x28] = INAT_VARIANT,
-+	[0x29] = INAT_VARIANT,
-+	[0x2a] = INAT_VARIANT,
-+	[0x2b] = INAT_VARIANT,
-+	[0x2c] = INAT_VARIANT,
-+	[0x2d] = INAT_VARIANT,
-+	[0x2e] = INAT_VARIANT,
-+	[0x2f] = INAT_VARIANT,
-+	[0x30] = INAT_VARIANT,
-+	[0x31] = INAT_VARIANT,
-+	[0x32] = INAT_VARIANT,
-+	[0x33] = INAT_VARIANT,
-+	[0x34] = INAT_VARIANT,
-+	[0x35] = INAT_VARIANT,
-+	[0x37] = INAT_VARIANT,
-+	[0x38] = INAT_VARIANT,
-+	[0x39] = INAT_VARIANT,
-+	[0x3a] = INAT_VARIANT,
-+	[0x3b] = INAT_VARIANT,
-+	[0x3c] = INAT_VARIANT,
-+	[0x3d] = INAT_VARIANT,
-+	[0x3e] = INAT_VARIANT,
-+	[0x3f] = INAT_VARIANT,
-+	[0x40] = INAT_VARIANT,
-+	[0x41] = INAT_VARIANT,
-+	[0x80] = INAT_VARIANT,
-+	[0x81] = INAT_VARIANT,
-+	[0x96] = INAT_VARIANT,
-+	[0x97] = INAT_VARIANT,
-+	[0x98] = INAT_VARIANT,
-+	[0x99] = INAT_VARIANT,
-+	[0x9a] = INAT_VARIANT,
-+	[0x9b] = INAT_VARIANT,
-+	[0x9c] = INAT_VARIANT,
-+	[0x9d] = INAT_VARIANT,
-+	[0x9e] = INAT_VARIANT,
-+	[0x9f] = INAT_VARIANT,
-+	[0xa6] = INAT_VARIANT,
-+	[0xa7] = INAT_VARIANT,
-+	[0xa8] = INAT_VARIANT,
-+	[0xa9] = INAT_VARIANT,
-+	[0xaa] = INAT_VARIANT,
-+	[0xab] = INAT_VARIANT,
-+	[0xac] = INAT_VARIANT,
-+	[0xad] = INAT_VARIANT,
-+	[0xae] = INAT_VARIANT,
-+	[0xaf] = INAT_VARIANT,
-+	[0xb6] = INAT_VARIANT,
-+	[0xb7] = INAT_VARIANT,
-+	[0xb8] = INAT_VARIANT,
-+	[0xb9] = INAT_VARIANT,
-+	[0xba] = INAT_VARIANT,
-+	[0xbb] = INAT_VARIANT,
-+	[0xbc] = INAT_VARIANT,
-+	[0xbd] = INAT_VARIANT,
-+	[0xbe] = INAT_VARIANT,
-+	[0xbf] = INAT_VARIANT,
-+	[0xdb] = INAT_VARIANT,
-+	[0xdc] = INAT_VARIANT,
-+	[0xdd] = INAT_VARIANT,
-+	[0xde] = INAT_VARIANT,
-+	[0xdf] = INAT_VARIANT,
-+	[0xf0] = INAT_MODRM | INAT_VARIANT,
-+	[0xf1] = INAT_MODRM | INAT_VARIANT,
-+};
-+const insn_attr_t inat_escape_table_2_1[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x00] = INAT_MODRM | INAT_VEXOK,
-+	[0x01] = INAT_MODRM | INAT_VEXOK,
-+	[0x02] = INAT_MODRM | INAT_VEXOK,
-+	[0x03] = INAT_MODRM | INAT_VEXOK,
-+	[0x04] = INAT_MODRM | INAT_VEXOK,
-+	[0x05] = INAT_MODRM | INAT_VEXOK,
-+	[0x06] = INAT_MODRM | INAT_VEXOK,
-+	[0x07] = INAT_MODRM | INAT_VEXOK,
-+	[0x08] = INAT_MODRM | INAT_VEXOK,
-+	[0x09] = INAT_MODRM | INAT_VEXOK,
-+	[0x0a] = INAT_MODRM | INAT_VEXOK,
-+	[0x0b] = INAT_MODRM | INAT_VEXOK,
-+	[0x0c] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x0d] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x0e] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x0f] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x10] = INAT_MODRM,
-+	[0x14] = INAT_MODRM,
-+	[0x15] = INAT_MODRM,
-+	[0x17] = INAT_MODRM | INAT_VEXOK,
-+	[0x18] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x19] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x1a] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x1c] = INAT_MODRM | INAT_VEXOK,
-+	[0x1d] = INAT_MODRM | INAT_VEXOK,
-+	[0x1e] = INAT_MODRM | INAT_VEXOK,
-+	[0x20] = INAT_MODRM | INAT_VEXOK,
-+	[0x21] = INAT_MODRM | INAT_VEXOK,
-+	[0x22] = INAT_MODRM | INAT_VEXOK,
-+	[0x23] = INAT_MODRM | INAT_VEXOK,
-+	[0x24] = INAT_MODRM | INAT_VEXOK,
-+	[0x25] = INAT_MODRM | INAT_VEXOK,
-+	[0x28] = INAT_MODRM | INAT_VEXOK,
-+	[0x29] = INAT_MODRM | INAT_VEXOK,
-+	[0x2a] = INAT_MODRM | INAT_VEXOK,
-+	[0x2b] = INAT_MODRM | INAT_VEXOK,
-+	[0x2c] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x2d] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x2e] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x2f] = INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x30] = INAT_MODRM | INAT_VEXOK,
-+	[0x31] = INAT_MODRM | INAT_VEXOK,
-+	[0x32] = INAT_MODRM | INAT_VEXOK,
-+	[0x33] = INAT_MODRM | INAT_VEXOK,
-+	[0x34] = INAT_MODRM | INAT_VEXOK,
-+	[0x35] = INAT_MODRM | INAT_VEXOK,
-+	[0x37] = INAT_MODRM | INAT_VEXOK,
-+	[0x38] = INAT_MODRM | INAT_VEXOK,
-+	[0x39] = INAT_MODRM | INAT_VEXOK,
-+	[0x3a] = INAT_MODRM | INAT_VEXOK,
-+	[0x3b] = INAT_MODRM | INAT_VEXOK,
-+	[0x3c] = INAT_MODRM | INAT_VEXOK,
-+	[0x3d] = INAT_MODRM | INAT_VEXOK,
-+	[0x3e] = INAT_MODRM | INAT_VEXOK,
-+	[0x3f] = INAT_MODRM | INAT_VEXOK,
-+	[0x40] = INAT_MODRM | INAT_VEXOK,
-+	[0x41] = INAT_MODRM | INAT_VEXOK,
-+	[0x80] = INAT_MODRM,
-+	[0x81] = INAT_MODRM,
-+	[0x96] = INAT_MODRM | INAT_VEXOK,
-+	[0x97] = INAT_MODRM | INAT_VEXOK,
-+	[0x98] = INAT_MODRM | INAT_VEXOK,
-+	[0x99] = INAT_MODRM | INAT_VEXOK,
-+	[0x9a] = INAT_MODRM | INAT_VEXOK,
-+	[0x9b] = INAT_MODRM | INAT_VEXOK,
-+	[0x9c] = INAT_MODRM | INAT_VEXOK,
-+	[0x9d] = INAT_MODRM | INAT_VEXOK,
-+	[0x9e] = INAT_MODRM | INAT_VEXOK,
-+	[0x9f] = INAT_MODRM | INAT_VEXOK,
-+	[0xa6] = INAT_MODRM | INAT_VEXOK,
-+	[0xa7] = INAT_MODRM | INAT_VEXOK,
-+	[0xa8] = INAT_MODRM | INAT_VEXOK,
-+	[0xa9] = INAT_MODRM | INAT_VEXOK,
-+	[0xaa] = INAT_MODRM | INAT_VEXOK,
-+	[0xab] = INAT_MODRM | INAT_VEXOK,
-+	[0xac] = INAT_MODRM | INAT_VEXOK,
-+	[0xad] = INAT_MODRM | INAT_VEXOK,
-+	[0xae] = INAT_MODRM | INAT_VEXOK,
-+	[0xaf] = INAT_MODRM | INAT_VEXOK,
-+	[0xb6] = INAT_MODRM | INAT_VEXOK,
-+	[0xb7] = INAT_MODRM | INAT_VEXOK,
-+	[0xb8] = INAT_MODRM | INAT_VEXOK,
-+	[0xb9] = INAT_MODRM | INAT_VEXOK,
-+	[0xba] = INAT_MODRM | INAT_VEXOK,
-+	[0xbb] = INAT_MODRM | INAT_VEXOK,
-+	[0xbc] = INAT_MODRM | INAT_VEXOK,
-+	[0xbd] = INAT_MODRM | INAT_VEXOK,
-+	[0xbe] = INAT_MODRM | INAT_VEXOK,
-+	[0xbf] = INAT_MODRM | INAT_VEXOK,
-+	[0xdb] = INAT_MODRM | INAT_VEXOK,
-+	[0xdc] = INAT_MODRM | INAT_VEXOK,
-+	[0xdd] = INAT_MODRM | INAT_VEXOK,
-+	[0xde] = INAT_MODRM | INAT_VEXOK,
-+	[0xdf] = INAT_MODRM | INAT_VEXOK,
-+};
-+const insn_attr_t inat_escape_table_2_3[INAT_OPCODE_TABLE_SIZE] = {
-+	[0xf0] = INAT_MODRM,
-+	[0xf1] = INAT_MODRM,
-+};
-+
-+/* Table: 3-byte opcode 2 (0x0f 0x3a) */
-+const insn_attr_t inat_escape_table_3[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x04] = INAT_VARIANT,
-+	[0x05] = INAT_VARIANT,
-+	[0x06] = INAT_VARIANT,
-+	[0x08] = INAT_VARIANT,
-+	[0x09] = INAT_VARIANT,
-+	[0x0a] = INAT_VARIANT,
-+	[0x0b] = INAT_VARIANT,
-+	[0x0c] = INAT_VARIANT,
-+	[0x0d] = INAT_VARIANT,
-+	[0x0e] = INAT_VARIANT,
-+	[0x0f] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x14] = INAT_VARIANT,
-+	[0x15] = INAT_VARIANT,
-+	[0x16] = INAT_VARIANT,
-+	[0x17] = INAT_VARIANT,
-+	[0x18] = INAT_VARIANT,
-+	[0x19] = INAT_VARIANT,
-+	[0x20] = INAT_VARIANT,
-+	[0x21] = INAT_VARIANT,
-+	[0x22] = INAT_VARIANT,
-+	[0x40] = INAT_VARIANT,
-+	[0x41] = INAT_VARIANT,
-+	[0x42] = INAT_VARIANT,
-+	[0x44] = INAT_VARIANT,
-+	[0x4a] = INAT_VARIANT,
-+	[0x4b] = INAT_VARIANT,
-+	[0x4c] = INAT_VARIANT,
-+	[0x60] = INAT_VARIANT,
-+	[0x61] = INAT_VARIANT,
-+	[0x62] = INAT_VARIANT,
-+	[0x63] = INAT_VARIANT,
-+	[0xdf] = INAT_VARIANT,
-+};
-+const insn_attr_t inat_escape_table_3_1[INAT_OPCODE_TABLE_SIZE] = {
-+	[0x04] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x05] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x06] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x08] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x09] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x0a] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x0b] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x0c] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x0d] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x0e] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x0f] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x14] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x15] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x16] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x17] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x18] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x19] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x20] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x21] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x22] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x40] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x41] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x42] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x44] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x4a] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x4b] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x4c] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK | INAT_VEXONLY,
-+	[0x60] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x61] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x62] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x63] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0xdf] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+};
-+
-+/* GrpTable: Grp1 */
-+
-+/* GrpTable: Grp1A */
-+
-+/* GrpTable: Grp2 */
-+
-+/* GrpTable: Grp3_1 */
-+const insn_attr_t inat_group_table_5[INAT_GROUP_TABLE_SIZE] = {
-+	[0x0] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM,
-+	[0x2] = INAT_MODRM,
-+	[0x3] = INAT_MODRM,
-+	[0x4] = INAT_MODRM,
-+	[0x5] = INAT_MODRM,
-+	[0x6] = INAT_MODRM,
-+	[0x7] = INAT_MODRM,
-+};
-+
-+/* GrpTable: Grp3_2 */
-+const insn_attr_t inat_group_table_6[INAT_GROUP_TABLE_SIZE] = {
-+	[0x0] = INAT_MAKE_IMM(INAT_IMM_VWORD32) | INAT_MODRM,
-+	[0x2] = INAT_MODRM,
-+	[0x3] = INAT_MODRM,
-+	[0x4] = INAT_MODRM,
-+	[0x5] = INAT_MODRM,
-+	[0x6] = INAT_MODRM,
-+	[0x7] = INAT_MODRM,
-+};
-+
-+/* GrpTable: Grp4 */
-+const insn_attr_t inat_group_table_7[INAT_GROUP_TABLE_SIZE] = {
-+	[0x0] = INAT_MODRM,
-+	[0x1] = INAT_MODRM,
-+};
-+
-+/* GrpTable: Grp5 */
-+const insn_attr_t inat_group_table_8[INAT_GROUP_TABLE_SIZE] = {
-+	[0x0] = INAT_MODRM,
-+	[0x1] = INAT_MODRM,
-+	[0x2] = INAT_MODRM | INAT_FORCE64,
-+	[0x3] = INAT_MODRM,
-+	[0x4] = INAT_MODRM | INAT_FORCE64,
-+	[0x5] = INAT_MODRM,
-+	[0x6] = INAT_MODRM | INAT_FORCE64,
-+};
-+
-+/* GrpTable: Grp6 */
-+const insn_attr_t inat_group_table_9[INAT_GROUP_TABLE_SIZE] = {
-+	[0x0] = INAT_MODRM,
-+	[0x1] = INAT_MODRM,
-+	[0x2] = INAT_MODRM,
-+	[0x3] = INAT_MODRM,
-+	[0x4] = INAT_MODRM,
-+	[0x5] = INAT_MODRM,
-+};
-+
-+/* GrpTable: Grp7 */
-+const insn_attr_t inat_group_table_10[INAT_GROUP_TABLE_SIZE] = {
-+	[0x0] = INAT_MODRM,
-+	[0x1] = INAT_MODRM,
-+	[0x2] = INAT_MODRM,
-+	[0x3] = INAT_MODRM,
-+	[0x4] = INAT_MODRM,
-+	[0x6] = INAT_MODRM,
-+	[0x7] = INAT_MODRM,
-+};
-+
-+/* GrpTable: Grp8 */
-+
-+/* GrpTable: Grp9 */
-+const insn_attr_t inat_group_table_21[INAT_GROUP_TABLE_SIZE] = {
-+	[0x1] = INAT_MODRM,
-+	[0x6] = INAT_MODRM | INAT_VARIANT,
-+	[0x7] = INAT_MODRM,
-+};
-+const insn_attr_t inat_group_table_21_1[INAT_GROUP_TABLE_SIZE] = {
-+	[0x6] = INAT_MODRM,
-+};
-+const insn_attr_t inat_group_table_21_2[INAT_GROUP_TABLE_SIZE] = {
-+	[0x6] = INAT_MODRM,
-+};
-+
-+/* GrpTable: Grp10 */
-+
-+/* GrpTable: Grp11 */
-+
-+/* GrpTable: Grp12 */
-+const insn_attr_t inat_group_table_13[INAT_GROUP_TABLE_SIZE] = {
-+	[0x2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x4] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+};
-+const insn_attr_t inat_group_table_13_1[INAT_GROUP_TABLE_SIZE] = {
-+	[0x2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x4] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+};
-+
-+/* GrpTable: Grp13 */
-+const insn_attr_t inat_group_table_14[INAT_GROUP_TABLE_SIZE] = {
-+	[0x2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x4] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+};
-+const insn_attr_t inat_group_table_14_1[INAT_GROUP_TABLE_SIZE] = {
-+	[0x2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x4] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+};
-+
-+/* GrpTable: Grp14 */
-+const insn_attr_t inat_group_table_15[INAT_GROUP_TABLE_SIZE] = {
-+	[0x2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x3] = INAT_VARIANT,
-+	[0x6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VARIANT,
-+	[0x7] = INAT_VARIANT,
-+};
-+const insn_attr_t inat_group_table_15_1[INAT_GROUP_TABLE_SIZE] = {
-+	[0x2] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x3] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x6] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+	[0x7] = INAT_MAKE_IMM(INAT_IMM_BYTE) | INAT_MODRM | INAT_VEXOK,
-+};
-+
-+/* GrpTable: Grp15 */
-+const insn_attr_t inat_group_table_18[INAT_GROUP_TABLE_SIZE] = {
-+	[0x2] = INAT_VEXOK,
-+	[0x3] = INAT_VEXOK,
-+};
-+
-+/* GrpTable: Grp16 */
-+const insn_attr_t inat_group_table_12[INAT_GROUP_TABLE_SIZE] = {
-+	[0x0] = INAT_MODRM,
-+	[0x1] = INAT_MODRM,
-+	[0x2] = INAT_MODRM,
-+	[0x3] = INAT_MODRM,
-+};
-+
-+/* GrpTable: GrpP */
-+
-+/* GrpTable: GrpPDLK */
-+
-+/* GrpTable: GrpRNG */
-+
-+/* Escape opcode map array */
-+const insn_attr_t const *inat_escape_tables[INAT_ESC_MAX + 1][INAT_LSTPFX_MAX + 1] = {
-+	[1][0] = inat_escape_table_1,
-+	[1][1] = inat_escape_table_1_1,
-+	[1][2] = inat_escape_table_1_2,
-+	[1][3] = inat_escape_table_1_3,
-+	[2][0] = inat_escape_table_2,
-+	[2][1] = inat_escape_table_2_1,
-+	[2][3] = inat_escape_table_2_3,
-+	[3][0] = inat_escape_table_3,
-+	[3][1] = inat_escape_table_3_1,
-+};
-+
-+/* Group opcode map array */
-+const insn_attr_t const *inat_group_tables[INAT_GRP_MAX + 1][INAT_LSTPFX_MAX + 1] = {
-+	[5][0] = inat_group_table_5,
-+	[6][0] = inat_group_table_6,
-+	[7][0] = inat_group_table_7,
-+	[8][0] = inat_group_table_8,
-+	[9][0] = inat_group_table_9,
-+	[10][0] = inat_group_table_10,
-+	[12][0] = inat_group_table_12,
-+	[13][0] = inat_group_table_13,
-+	[13][1] = inat_group_table_13_1,
-+	[14][0] = inat_group_table_14,
-+	[14][1] = inat_group_table_14_1,
-+	[15][0] = inat_group_table_15,
-+	[15][1] = inat_group_table_15_1,
-+	[18][0] = inat_group_table_18,
-+	[21][0] = inat_group_table_21,
-+	[21][1] = inat_group_table_21_1,
-+	[21][2] = inat_group_table_21_2,
-+};
-+
-+/* AVX opcode map array */
-+const insn_attr_t const *inat_avx_tables[X86_VEX_M_MAX + 1][INAT_LSTPFX_MAX + 1] = {
-+	[1][0] = inat_escape_table_1,
-+	[1][1] = inat_escape_table_1_1,
-+	[1][2] = inat_escape_table_1_2,
-+	[1][3] = inat_escape_table_1_3,
-+	[2][0] = inat_escape_table_2,
-+	[2][1] = inat_escape_table_2_1,
-+	[2][3] = inat_escape_table_2_3,
-+	[3][0] = inat_escape_table_3,
-+	[3][1] = inat_escape_table_3_1,
-+};
 diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/memcpy_64.S linux-2.6.33-pax/arch/x86/lib/memcpy_64.S
 --- linux-2.6.33/arch/x86/lib/memcpy_64.S	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33-pax/arch/x86/lib/memcpy_64.S	2010-02-24 21:52:51.000000000 +0100
@@ -15848,7 +14826,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/mm
  		to += 64;
 diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/putuser.S linux-2.6.33-pax/arch/x86/lib/putuser.S
 --- linux-2.6.33/arch/x86/lib/putuser.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33-pax/arch/x86/lib/putuser.S	2010-02-24 21:52:51.000000000 +0100
++++ linux-2.6.33-pax/arch/x86/lib/putuser.S	2010-03-11 01:41:34.000000000 +0100
 @@ -15,6 +15,7 @@
  #include <asm/thread_info.h>
  #include <asm/errno.h>
@@ -15857,19 +14835,32 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/pu
  
  
  /*
-@@ -39,7 +40,19 @@ ENTRY(__put_user_1)
+@@ -29,59 +30,120 @@
+  * as they get called from within inline assembly.
+  */
+ 
+-#define ENTER	CFI_STARTPROC ; \
+-		GET_THREAD_INFO(%_ASM_BX)
++#define ENTER	CFI_STARTPROC
+ #define EXIT	ret ; \
+ 		CFI_ENDPROC
+ 
+ .text
+ ENTRY(__put_user_1)
  	ENTER
- 	cmp TI_addr_limit(%_ASM_BX),%_ASM_CX
- 	jae bad_put_user
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl $(__USER_DS)
 +	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	cmp TI_addr_limit(%_ASM_BX),%_ASM_CX
+ 	jae bad_put_user
 +#endif
 +
  1:	movb %al,(%_ASM_CX)
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -15877,19 +14868,24 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/pu
  	xor %eax,%eax
  	EXIT
  ENDPROC(__put_user_1)
-@@ -50,7 +63,19 @@ ENTRY(__put_user_2)
+ 
+ ENTRY(__put_user_2)
+ 	ENTER
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	pushl $(__USER_DS)
++	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	mov TI_addr_limit(%_ASM_BX),%_ASM_BX
  	sub $1,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
-+
-+#ifdef CONFIG_X86_32
-+	pushl $(__USER_DS)
-+	popl %ds
 +#endif
 +
  2:	movw %ax,(%_ASM_CX)
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -15897,19 +14893,24 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/pu
  	xor %eax,%eax
  	EXIT
  ENDPROC(__put_user_2)
-@@ -61,7 +86,19 @@ ENTRY(__put_user_4)
+ 
+ ENTRY(__put_user_4)
+ 	ENTER
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	pushl $(__USER_DS)
++	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	mov TI_addr_limit(%_ASM_BX),%_ASM_BX
  	sub $3,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
-+
-+#ifdef CONFIG_X86_32
-+	pushl $(__USER_DS)
-+	popl %ds
 +#endif
 +
  3:	movl %eax,(%_ASM_CX)
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -15917,14 +14918,19 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/pu
  	xor %eax,%eax
  	EXIT
  ENDPROC(__put_user_4)
-@@ -72,16 +109,34 @@ ENTRY(__put_user_8)
+ 
+ ENTRY(__put_user_8)
+ 	ENTER
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	pushl $(__USER_DS)
++	popl %ds
++#else
++	GET_THREAD_INFO(%_ASM_BX)
+ 	mov TI_addr_limit(%_ASM_BX),%_ASM_BX
  	sub $7,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
-+
-+#ifdef CONFIG_X86_32
-+	pushl $(__USER_DS)
-+	popl %ds
 +#endif
 +
  4:	mov %_ASM_AX,(%_ASM_CX)
@@ -15932,7 +14938,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/pu
  5:	movl %edx,4(%_ASM_CX)
  #endif
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
@@ -15944,7 +14950,7 @@ diff -NurpX linux-2.6.33-pax/Documentation/dontdiff linux-2.6.33/arch/x86/lib/pu
  bad_put_user:
  	CFI_STARTPROC
 +
-+#ifdef CONFIG_X86_32
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	pushl %ss
 +	popl %ds
 +#endif
