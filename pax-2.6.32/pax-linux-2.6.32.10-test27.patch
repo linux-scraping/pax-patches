@@ -6986,23 +6986,28 @@ diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/arch/x86/
  extern int iommu_pass_through;
 diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/arch/x86/include/asm/irqflags.h linux-2.6.32.10-pax/arch/x86/include/asm/irqflags.h
 --- linux-2.6.32.10/arch/x86/include/asm/irqflags.h	2009-12-03 15:01:39.000000000 +0100
-+++ linux-2.6.32.10-pax/arch/x86/include/asm/irqflags.h	2010-03-20 17:29:48.000000000 +0100
-@@ -142,10 +142,77 @@ static inline unsigned long __raw_local_
++++ linux-2.6.32.10-pax/arch/x86/include/asm/irqflags.h	2010-03-21 20:52:08.000000000 +0100
+@@ -142,10 +142,81 @@ static inline unsigned long __raw_local_
  	sti;					\
  	sysexit
  
 +/* PaX: special register usage in entry_64.S, beware */
 +#ifdef CONFIG_PAX_KERNEXEC
 +	.macro ljmpq sel, off
++#if defined(CONFIG_MCORE2) || defined (CONFIG_MATOM)
 +	.byte 0x48; ljmp *1234f(%rip)
 +	.pushsection .rodata
 +	.align 16
 +	1234: .quad \off; .word \sel
 +	.popsection
++#else
++	push $\sel
++	push $\off
++	lretq
++#endif
 +	.endm
 +
 +#define PAX_EXIT_KERNEL			\
-+	push %rsi;			\
 +	mov %cs, %rsi;			\
 +	cmp $__KERNEXEC_KERNEL_CS, %esi;\
 +	jnz 2f;				\
@@ -7010,10 +7015,9 @@ diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/arch/x86/
 +	btc $16, %rsi;			\
 +	ljmpq __KERNEL_CS, 1f;		\
 +1:	mov %rsi, %cr0;			\
-+2:	pop %rsi
++2:
 +
 +#define PAX_ENTER_KERNEL		\
-+	push %rsi;			\
 +	mov %cr0, %rsi;			\
 +	bts $16, %rsi;			\
 +	jnc 1f;				\
@@ -7023,7 +7027,7 @@ diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/arch/x86/
 +	ljmpq __KERNEL_CS, 3f;		\
 +1:	ljmpq __KERNEXEC_KERNEL_CS, 2f;	\
 +2:	mov %rsi, %cr0;			\
-+3:	pop %rsi
++3:
 +#else
 +#define PAX_EXIT_KERNEL
 +#define PAX_ENTER_KERNEL
@@ -7491,7 +7495,7 @@ diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/arch/x86/
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/arch/x86/include/asm/paravirt.h linux-2.6.32.10-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.10/arch/x86/include/asm/paravirt.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.10-pax/arch/x86/include/asm/paravirt.h	2010-03-11 18:14:54.000000000 +0100
++++ linux-2.6.32.10-pax/arch/x86/include/asm/paravirt.h	2010-03-21 20:52:08.000000000 +0100
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7558,18 +7562,24 @@ diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/arch/x86/
  
  #else	/* !CONFIG_X86_32 */
  
-@@ -1022,6 +1065,46 @@ extern void default_banner(void);
+@@ -1022,6 +1065,52 @@ extern void default_banner(void);
  	PARA_SITE(PARA_PATCH(pv_cpu_ops, PV_CPU_irq_enable_sysexit),	\
  		  CLBR_NONE,						\
  		  jmp PARA_INDIRECT(pv_cpu_ops+PV_CPU_irq_enable_sysexit))
 +
 +#ifdef CONFIG_PAX_KERNEXEC
 +	.macro ljmpq sel, off
++#if defined(CONFIG_MCORE2) || defined (CONFIG_MATOM)
 +	.byte 0x48; ljmp *1234f(%rip)
 +	.pushsection .rodata
 +	.align 16
 +	1234: .quad \off; .word \sel
 +	.popsection
++#else
++	push $\sel
++	push $\off
++	lretq
++#endif
 +	.endm
 +
 +#define PAX_EXIT_KERNEL					\
@@ -29740,6 +29750,18 @@ diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/fs/proc/a
  	return 0;
  }
  
+diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/fs/proc/base.c linux-2.6.32.10-pax/fs/proc/base.c
+--- linux-2.6.32.10/fs/proc/base.c	2010-03-20 18:05:46.000000000 +0100
++++ linux-2.6.32.10-pax/fs/proc/base.c	2010-03-20 19:17:22.000000000 +0100
+@@ -2319,7 +2319,7 @@ static void *proc_self_follow_link(struc
+ static void proc_self_put_link(struct dentry *dentry, struct nameidata *nd,
+ 				void *cookie)
+ {
+-	char *s = nd_get_link(nd);
++	const char *s = nd_get_link(nd);
+ 	if (!IS_ERR(s))
+ 		__putname(s);
+ }
 diff -NurpX linux-2.6.32.10-pax/Documentation/dontdiff linux-2.6.32.10/fs/proc/meminfo.c linux-2.6.32.10-pax/fs/proc/meminfo.c
 --- linux-2.6.32.10/fs/proc/meminfo.c	2009-12-03 15:02:39.000000000 +0100
 +++ linux-2.6.32.10-pax/fs/proc/meminfo.c	2009-12-26 18:56:27.000000000 +0100
