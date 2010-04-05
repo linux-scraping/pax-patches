@@ -5656,6 +5656,103 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ia
  	};
  
  	frame = get_sigframe(ka, regs, sizeof(*frame), &fpstate);
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ia32/ia32entry.S linux-2.6.33.2-pax/arch/x86/ia32/ia32entry.S
+--- linux-2.6.33.2/arch/x86/ia32/ia32entry.S	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/ia32/ia32entry.S	2010-04-05 02:17:16.000000000 +0200
+@@ -13,6 +13,7 @@
+ #include <asm/thread_info.h>	
+ #include <asm/segment.h>
+ #include <asm/irqflags.h>
++#include <asm/pgtable.h>
+ #include <linux/linkage.h>
+ 
+ /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
+@@ -114,6 +115,11 @@ ENTRY(ia32_sysenter_target)
+ 	SWAPGS_UNSAFE_STACK
+ 	movq	PER_CPU_VAR(kernel_stack), %rsp
+ 	addq	$(KERNEL_STACK_OFFSET),%rsp
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_enter_kernel_user
++#endif
++
+ 	/*
+ 	 * No need to follow this irqs on/off section: the syscall
+ 	 * disabled irqs, here we enable it straight after entry:
+@@ -144,6 +150,12 @@ ENTRY(ia32_sysenter_target)
+ 	SAVE_ARGS 0,0,1
+  	/* no need to do an access_ok check here because rbp has been
+  	   32bit zero extended */ 
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	mov $PAX_USER_SHADOW_BASE,%r10
++	add %r10,%rbp
++#endif
++
+ 1:	movl	(%rbp),%ebp
+  	.section __ex_table,"a"
+  	.quad 1b,ia32_badarg
+@@ -166,6 +178,11 @@ sysenter_dispatch:
+ 	testl	$_TIF_ALLWORK_MASK,TI_flags(%r10)
+ 	jnz	sysexit_audit
+ sysexit_from_sys_call:
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_exit_kernel_user
++#endif
++
+ 	andl    $~TS_COMPAT,TI_status(%r10)
+ 	/* clear IF, that popfq doesn't enable interrupts early */
+ 	andl  $~0x200,EFLAGS-R11(%rsp) 
+@@ -284,6 +301,11 @@ ENTRY(ia32_cstar_target)
+ 	movl	%esp,%r8d
+ 	CFI_REGISTER	rsp,r8
+ 	movq	PER_CPU_VAR(kernel_stack),%rsp
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_enter_kernel_user
++#endif
++
+ 	/*
+ 	 * No need to follow this irqs on/off section: the syscall
+ 	 * disabled irqs and here we enable it straight after entry:
+@@ -305,6 +327,12 @@ ENTRY(ia32_cstar_target)
+ 	/* no need to do an access_ok check here because r8 has been
+ 	   32bit zero extended */ 
+ 	/* hardware stack frame is complete now */	
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	mov $PAX_USER_SHADOW_BASE,%r10
++	add %r10,%r8
++#endif
++
+ 1:	movl	(%r8),%r9d
+ 	.section __ex_table,"a"
+ 	.quad 1b,ia32_badarg
+@@ -327,6 +355,11 @@ cstar_dispatch:
+ 	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
+ 	jnz sysretl_audit
+ sysretl_from_sys_call:
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_exit_kernel_user
++#endif
++
+ 	andl $~TS_COMPAT,TI_status(%r10)
+ 	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
+ 	movl RIP-ARGOFFSET(%rsp),%ecx
+@@ -409,6 +442,11 @@ ENTRY(ia32_syscall)
+ 	CFI_REL_OFFSET	rip,RIP-RIP
+ 	PARAVIRT_ADJUST_EXCEPTION_FRAME
+ 	SWAPGS
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_enter_kernel_user
++#endif
++
+ 	/*
+ 	 * No need to follow this irqs on/off section: the syscall
+ 	 * disabled irqs and here we enable it straight after entry:
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/alternative.h linux-2.6.33.2-pax/arch/x86/include/asm/alternative.h
 --- linux-2.6.33.2/arch/x86/include/asm/alternative.h	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/include/asm/alternative.h	2010-02-24 21:52:51.000000000 +0100
@@ -6850,7 +6947,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  #ifdef __KERNEL__
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/elf.h linux-2.6.33.2-pax/arch/x86/include/asm/elf.h
 --- linux-2.6.33.2/arch/x86/include/asm/elf.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/elf.h	2010-02-24 21:52:51.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/include/asm/elf.h	2010-04-05 02:17:15.000000000 +0200
 @@ -237,7 +237,25 @@ extern int force_personality32;
     the loader.  We need to make sure that it is out of the way of the program
     that it will "exec", and that there is sufficient room for the brk.  */
@@ -6870,8 +6967,8 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +#else
 +#define PAX_ELF_ET_DYN_BASE	0x400000UL
 +
-+#define PAX_DELTA_MMAP_LEN	((test_thread_flag(TIF_IA32)) ? 16 : 32)
-+#define PAX_DELTA_STACK_LEN	((test_thread_flag(TIF_IA32)) ? 16 : 32)
++#define PAX_DELTA_MMAP_LEN	((test_thread_flag(TIF_IA32)) ? 16 : TASK_SIZE_MAX_SHIFT - PAGE_SHIFT - 3)
++#define PAX_DELTA_STACK_LEN	((test_thread_flag(TIF_IA32)) ? 16 : TASK_SIZE_MAX_SHIFT - PAGE_SHIFT - 3)
 +#endif
 +#endif
  
@@ -6906,13 +7003,13 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  #endif /* _ASM_X86_ELF_H */
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/futex.h linux-2.6.33.2-pax/arch/x86/include/asm/futex.h
 --- linux-2.6.33.2/arch/x86/include/asm/futex.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/futex.h	2010-04-04 20:03:43.000000000 +0200
-@@ -11,6 +11,40 @@
++++ linux-2.6.33.2-pax/arch/x86/include/asm/futex.h	2010-04-05 02:17:15.000000000 +0200
+@@ -11,17 +11,54 @@
  #include <asm/processor.h>
  #include <asm/system.h>
  
 +#ifdef CONFIG_X86_32
-+#define __futex_atomic_op1(insn, ret, oldval, uaddr, oparg)	\
+ #define __futex_atomic_op1(insn, ret, oldval, uaddr, oparg)	\
 +	asm volatile(						\
 +		     "movw\t%w6, %%ds\n"			\
 +		     "1:\t" insn "\n"				\
@@ -6945,12 +7042,31 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +		       "+m" (*uaddr), "=&r" (tem)		\
 +		     : "r" (oparg), "i" (-EFAULT), "1" (0), "r" (__USER_DS))
 +#else
- #define __futex_atomic_op1(insn, ret, oldval, uaddr, oparg)	\
++#define __futex_atomic_op1(insn, ret, oldval, uaddr, oparg)	\
++	typecheck(u32 *, uaddr);				\
  	asm volatile("1:\t" insn "\n"				\
  		     "2:\t.section .fixup,\"ax\"\n"		\
-@@ -36,8 +70,9 @@
+ 		     "3:\tmov\t%3, %1\n"			\
+ 		     "\tjmp\t2b\n"				\
+ 		     "\t.previous\n"				\
+ 		     _ASM_EXTABLE(1b, 3b)			\
+-		     : "=r" (oldval), "=r" (ret), "+m" (*uaddr)	\
++		     : "=r" (oldval), "=r" (ret),		\
++		       "+m" (*(uaddr + PAX_USER_SHADOW_BASE / 4))\
+ 		     : "i" (-EFAULT), "0" (oparg), "1" (0))
+ 
+ #define __futex_atomic_op2(insn, ret, oldval, uaddr, oparg)	\
++	typecheck(u32 *, uaddr);				\
+ 	asm volatile("1:\tmovl	%2, %0\n"			\
+ 		     "\tmovl\t%0, %3\n"				\
+ 		     "\t" insn "\n"				\
+@@ -34,10 +71,12 @@
+ 		     _ASM_EXTABLE(1b, 4b)			\
+ 		     _ASM_EXTABLE(2b, 4b)			\
  		     : "=&a" (oldval), "=&r" (ret),		\
- 		       "+m" (*uaddr), "=&r" (tem)		\
+-		       "+m" (*uaddr), "=&r" (tem)		\
++		       "+m" (*(uaddr + PAX_USER_SHADOW_BASE / 4)),\
++		       "=&r" (tem)				\
  		     : "r" (oparg), "i" (-EFAULT), "1" (0))
 +#endif
  
@@ -6959,7 +7075,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  {
  	int op = (encoded_op >> 28) & 7;
  	int cmp = (encoded_op >> 24) & 15;
-@@ -61,11 +96,20 @@ static inline int futex_atomic_op_inuser
+@@ -61,11 +100,20 @@ static inline int futex_atomic_op_inuser
  
  	switch (op) {
  	case FUTEX_OP_SET:
@@ -6980,7 +7096,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  		break;
  	case FUTEX_OP_OR:
  		__futex_atomic_op2("orl %4, %3", ret, oldval, uaddr, oparg);
-@@ -109,7 +153,7 @@ static inline int futex_atomic_op_inuser
+@@ -109,7 +157,7 @@ static inline int futex_atomic_op_inuser
  	return ret;
  }
  
@@ -6989,7 +7105,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  						int newval)
  {
  
-@@ -119,17 +163,30 @@ static inline int futex_atomic_cmpxchg_i
+@@ -119,17 +167,31 @@ static inline int futex_atomic_cmpxchg_i
  		return -ENOSYS;
  #endif
  
@@ -7014,10 +7130,11 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  		     "\tjmp     2b\n"
  		     "\t.previous\n"
  		     _ASM_EXTABLE(1b, 3b)
- 		     : "=a" (oldval), "+m" (*uaddr)
 +#ifdef CONFIG_X86_32
+ 		     : "=a" (oldval), "+m" (*uaddr)
 +		     : "i" (-EFAULT), "r" (newval), "0" (oldval), "r" (__USER_DS)
 +#else
++		     : "=a" (oldval), "+m" (*(uaddr + PAX_USER_SHADOW_BASE / 4))
  		     : "i" (-EFAULT), "r" (newval), "0" (oldval)
 +#endif
  		     : "memory"
@@ -7025,8 +7142,32 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/i387.h linux-2.6.33.2-pax/arch/x86/include/asm/i387.h
 --- linux-2.6.33.2/arch/x86/include/asm/i387.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/i387.h	2010-02-24 21:52:51.000000000 +0100
-@@ -197,13 +197,8 @@ static inline int fxrstor_checking(struc
++++ linux-2.6.33.2-pax/arch/x86/include/asm/i387.h	2010-04-05 02:17:16.000000000 +0200
+@@ -62,6 +62,11 @@ static inline int fxrstor_checking(struc
+ {
+ 	int err;
+ 
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	if ((unsigned long)fx < PAX_USER_SHADOW_BASE)
++		fx = (struct i387_fxsave_struct *)((void *)fx + PAX_USER_SHADOW_BASE);
++#endif
++
+ 	asm volatile("1:  rex64/fxrstor (%[fx])\n\t"
+ 		     "2:\n"
+ 		     ".section .fixup,\"ax\"\n"
+@@ -107,6 +112,11 @@ static inline int fxsave_user(struct i38
+ {
+ 	int err;
+ 
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	if ((unsigned long)fx < PAX_USER_SHADOW_BASE)
++		fx = (struct i387_fxsave_struct __user *)((void __user *)fx + PAX_USER_SHADOW_BASE);
++#endif
++
+ 	asm volatile("1:  rex64/fxsave (%[fx])\n\t"
+ 		     "2:\n"
+ 		     ".section .fixup,\"ax\"\n"
+@@ -197,13 +207,8 @@ static inline int fxrstor_checking(struc
  }
  
  /* We need a safe address that is cheap to find and that is already
@@ -7406,8 +7547,31 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  #ifdef CONFIG_SMP
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/mmu_context.h linux-2.6.33.2-pax/arch/x86/include/asm/mmu_context.h
 --- linux-2.6.33.2/arch/x86/include/asm/mmu_context.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/mmu_context.h	2010-02-24 21:52:51.000000000 +0100
-@@ -34,11 +34,17 @@ static inline void switch_mm(struct mm_s
++++ linux-2.6.33.2-pax/arch/x86/include/asm/mmu_context.h	2010-04-05 02:17:16.000000000 +0200
+@@ -24,6 +24,22 @@ void destroy_context(struct mm_struct *m
+ 
+ static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
+ {
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	unsigned int i;
++	pgd_t *pgd;
++
++	pax_open_kernel();
++	pgd = get_cpu_pgd(smp_processor_id());
++	for (i = USER_PGD_PTRS; i < 2 * USER_PGD_PTRS; ++i)
++#ifdef CONFIG_PARAVIRT
++		set_pgd(pgd+i, native_make_pgd(0));
++#else
++		pgd[i] = native_make_pgd(0);
++#endif
++	pax_close_kernel();
++#endif
++
+ #ifdef CONFIG_SMP
+ 	if (percpu_read(cpu_tlbstate.state) == TLBSTATE_OK)
+ 		percpu_write(cpu_tlbstate.state, TLBSTATE_LAZY);
+@@ -34,37 +50,96 @@ static inline void switch_mm(struct mm_s
  			     struct task_struct *tsk)
  {
  	unsigned cpu = smp_processor_id();
@@ -7425,7 +7589,21 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  		percpu_write(cpu_tlbstate.state, TLBSTATE_OK);
  		percpu_write(cpu_tlbstate.active_mm, next);
  #endif
-@@ -52,6 +58,26 @@ static inline void switch_mm(struct mm_s
+ 		cpumask_set_cpu(cpu, mm_cpumask(next));
+ 
+ 		/* Re-load page tables */
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		pax_open_kernel();
++		__clone_user_pgds(get_cpu_pgd(cpu), next->pgd, USER_PGD_PTRS);
++		__shadow_user_pgds(get_cpu_pgd(cpu) + USER_PGD_PTRS, next->pgd, USER_PGD_PTRS);
++		pax_close_kernel();
++		load_cr3(get_cpu_pgd(cpu));
++#else
+ 		load_cr3(next->pgd);
++#endif
+ 
+ 		/*
+ 		 * load the LDT, if the LDT is different:
  		 */
  		if (unlikely(prev->context.ldt != next->context.ldt))
  			load_LDT_nolock(&next->context);
@@ -7452,9 +7630,27 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  	}
  #ifdef CONFIG_SMP
  	else {
-@@ -65,6 +91,19 @@ static inline void switch_mm(struct mm_s
+ 		percpu_write(cpu_tlbstate.state, TLBSTATE_OK);
+ 		BUG_ON(percpu_read(cpu_tlbstate.active_mm) != next);
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		pax_open_kernel();
++		__clone_user_pgds(get_cpu_pgd(cpu), next->pgd, USER_PGD_PTRS);
++		__shadow_user_pgds(get_cpu_pgd(cpu) + USER_PGD_PTRS, next->pgd, USER_PGD_PTRS);
++		pax_close_kernel();
++		load_cr3(get_cpu_pgd(cpu));
++#endif
++
+ 		if (!cpumask_test_and_set_cpu(cpu, mm_cpumask(next))) {
+ 			/* We were in lazy tlb mode and leave_mm disabled
+ 			 * tlb flush IPI delivery. We must reload CR3
+ 			 * to make sure to use no freed page tables.
  			 */
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
  			load_cr3(next->pgd);
++#endif
++
  			load_LDT_nolock(&next->context);
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_PAGEEXEC)
@@ -7474,8 +7670,20 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  #endif
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/module.h linux-2.6.33.2-pax/arch/x86/include/asm/module.h
 --- linux-2.6.33.2/arch/x86/include/asm/module.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/module.h	2010-04-04 20:03:44.000000000 +0200
-@@ -65,7 +65,17 @@
++++ linux-2.6.33.2-pax/arch/x86/include/asm/module.h	2010-04-05 02:17:16.000000000 +0200
+@@ -59,13 +59,26 @@
+ #error unknown processor family
+ #endif
+ 
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++#define MODULE_PAX_UDEREF "UDEREF "
++#else
++#define MODULE_PAX_UDEREF ""
++#endif
++
+ #ifdef CONFIG_X86_32
+ # ifdef CONFIG_4KSTACKS
+ #  define MODULE_STACKSIZE "4KSTACKS "
  # else
  #  define MODULE_STACKSIZE ""
  # endif
@@ -7485,12 +7693,9 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +# else
 +#  define MODULE_PAX_KERNEXEC ""
 +# endif
-+# ifdef CONFIG_PAX_MEMORY_UDEREF
-+#  define MODULE_PAX_UDEREF "UDEREF "
-+# else
-+#  define MODULE_PAX_UDEREF ""
-+# endif
 +# define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY MODULE_STACKSIZE MODULE_PAX_KERNEXEC MODULE_PAX_UDEREF
++#else
++# define MODULE_ARCH_VERMAGIC MODULE_PAX_UDEREF
  #endif
  
  #endif /* _ASM_X86_MODULE_H */
@@ -7648,7 +7853,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  /*
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/pgtable.h linux-2.6.33.2-pax/arch/x86/include/asm/pgtable.h
 --- linux-2.6.33.2/arch/x86/include/asm/pgtable.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/pgtable.h	2010-03-02 21:12:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/include/asm/pgtable.h	2010-04-05 02:17:16.000000000 +0200
 @@ -76,12 +76,51 @@ extern struct list_head pgd_list;
  
  #define arch_end_context_switch(prev)	do {} while(0)
@@ -7732,7 +7937,23 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -474,7 +533,7 @@ static inline pud_t *pud_offset(pgd_t *p
+@@ -304,6 +363,15 @@ pte_t *populate_extra_pte(unsigned long
+ #endif
+ 
+ #ifndef __ASSEMBLY__
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++extern pgd_t cpu_pgd[NR_CPUS][PTRS_PER_PGD];
++static inline pgd_t *get_cpu_pgd(unsigned int cpu)
++{
++	return cpu_pgd[cpu];
++}
++#endif
++
+ #include <linux/mm_types.h>
+ 
+ static inline int pte_none(pte_t pte)
+@@ -474,7 +542,7 @@ static inline pud_t *pud_offset(pgd_t *p
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -7741,7 +7962,42 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -613,9 +672,12 @@ static inline void ptep_set_wrprotect(st
+@@ -497,7 +565,12 @@ static inline int pgd_none(pgd_t pgd)
+  * pgd_offset() returns a (pgd_t *)
+  * pgd_index() is used get the offset into the pgd page's array of pgd_t's;
+  */
+-#define pgd_offset(mm, address) ((mm)->pgd + pgd_index((address)))
++#define pgd_offset(mm, address) ((mm)->pgd + pgd_index(address))
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++#define pgd_offset_cpu(cpu, address) (get_cpu_pgd(cpu) + pgd_index(address))
++#endif
++
+ /*
+  * a shortcut which implies the use of the kernel's pgd, instead
+  * of a process's
+@@ -508,6 +581,20 @@ static inline int pgd_none(pgd_t pgd)
+ #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
+ #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
+ 
++#ifdef CONFIG_X86_32
++#define USER_PGD_PTRS		KERNEL_PGD_BOUNDARY
++#else
++#define TASK_SIZE_MAX_SHIFT CONFIG_TASK_SIZE_MAX_SHIFT
++#define USER_PGD_PTRS		(_AC(1,UL) << (TASK_SIZE_MAX_SHIFT - PGDIR_SHIFT))
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++#define PAX_USER_SHADOW_BASE	(_AC(1,UL) << TASK_SIZE_MAX_SHIFT)
++#else
++#define PAX_USER_SHADOW_BASE	(_AC(0,UL))
++#endif
++
++#endif
++
+ #ifndef __ASSEMBLY__
+ 
+ extern int direct_gbpages;
+@@ -613,11 +700,18 @@ static inline void ptep_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -7755,7 +8011,13 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +	pax_close_kernel();
  }
  
++#ifdef CONFIG_PAX_PER_CPU_PGD
++extern void __clone_user_pgds(pgd_t *dst, const pgd_t *src, int count);
++extern void __shadow_user_pgds(pgd_t *dst, const pgd_t *src, int count);
++#endif
  
+ #include <asm-generic/pgtable.h>
+ #endif	/* __ASSEMBLY__ */
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/pgtable_32.h linux-2.6.33.2-pax/arch/x86/include/asm/pgtable_32.h
 --- linux-2.6.33.2/arch/x86/include/asm/pgtable_32.h	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/include/asm/pgtable_32.h	2010-02-24 21:52:51.000000000 +0100
@@ -7834,8 +8096,8 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  #define MODULES_LEN	(MODULES_VADDR - MODULES_END)
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/pgtable_64.h linux-2.6.33.2-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-2.6.33.2/arch/x86/include/asm/pgtable_64.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/pgtable_64.h	2010-02-24 21:52:51.000000000 +0100
-@@ -16,9 +16,12 @@
++++ linux-2.6.33.2-pax/arch/x86/include/asm/pgtable_64.h	2010-04-05 02:17:16.000000000 +0200
+@@ -16,10 +16,13 @@
  
  extern pud_t level3_kernel_pgt[512];
  extern pud_t level3_ident_pgt[512];
@@ -7845,10 +8107,12 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  extern pmd_t level2_kernel_pgt[512];
  extern pmd_t level2_fixmap_pgt[512];
 -extern pmd_t level2_ident_pgt[512];
+-extern pgd_t init_level4_pgt[];
 +extern pmd_t level2_ident_pgt[512*2];
- extern pgd_t init_level4_pgt[];
++extern pgd_t init_level4_pgt[512];
  
  #define swapper_pg_dir init_level4_pgt
+ 
 @@ -74,7 +77,9 @@ static inline pte_t native_ptep_get_and_
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
@@ -7859,7 +8123,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  }
  
  static inline void native_pmd_clear(pmd_t *pmd)
-@@ -94,7 +99,9 @@ static inline void native_pud_clear(pud_
+@@ -94,12 +99,18 @@ static inline void native_pud_clear(pud_
  
  static inline void native_set_pgd(pgd_t *pgdp, pgd_t pgd)
  {
@@ -7869,6 +8133,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  }
  
  static inline void native_pgd_clear(pgd_t *pgd)
+ {
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
+ 	native_set_pgd(pgd, native_make_pgd(0));
++#endif
++
+ }
+ 
+ /*
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/pgtable_types.h linux-2.6.33.2-pax/arch/x86/include/asm/pgtable_types.h
 --- linux-2.6.33.2/arch/x86/include/asm/pgtable_types.h	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/include/asm/pgtable_types.h	2010-02-24 21:52:51.000000000 +0100
@@ -7949,7 +8222,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  extern pgprot_t pgprot_writecombine(pgprot_t prot);
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/processor.h linux-2.6.33.2-pax/arch/x86/include/asm/processor.h
 --- linux-2.6.33.2/arch/x86/include/asm/processor.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/processor.h	2010-03-02 21:24:45.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/include/asm/processor.h	2010-04-05 02:17:16.000000000 +0200
 @@ -273,7 +273,7 @@ struct tss_struct {
  
  } ____cacheline_aligned;
@@ -8007,7 +8280,14 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
         __regs__ - 1;                                                   \
  })
  
-@@ -977,7 +980,7 @@ extern unsigned long thread_saved_pc(str
+@@ -971,13 +974,13 @@ extern unsigned long thread_saved_pc(str
+ /*
+  * User space process size. 47bits minus one guard page.
+  */
+-#define TASK_SIZE_MAX	((1UL << 47) - PAGE_SIZE)
++#define TASK_SIZE_MAX	((1UL << TASK_SIZE_MAX_SHIFT) - PAGE_SIZE)
+ 
+ /* This decides where the kernel will search for a free chunk of vm
   * space during mmap's.
   */
  #define IA32_PAGE_OFFSET	((current->personality & ADDR_LIMIT_3GB) ? \
@@ -8513,7 +8793,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  void default_idle(void);
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/uaccess.h linux-2.6.33.2-pax/arch/x86/include/asm/uaccess.h
 --- linux-2.6.33.2/arch/x86/include/asm/uaccess.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/uaccess.h	2010-03-11 14:10:00.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/include/asm/uaccess.h	2010-04-05 02:17:16.000000000 +0200
 @@ -8,8 +8,11 @@
  #include <linux/thread_info.h>
  #include <linux/prefetch.h>
@@ -8659,7 +8939,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  
  #define __put_user_nocheck(x, ptr, size)			\
  ({								\
-@@ -424,7 +473,7 @@ do {									\
+@@ -424,13 +473,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -8668,7 +8948,25 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  	__gu_err;							\
  })
  
-@@ -438,21 +487,26 @@ struct __large_struct { unsigned long bu
+ /* FIXME: this hack is definitely wrong -AK */
+ struct __large_struct { unsigned long buf[100]; };
+-#define __m(x) (*(struct __large_struct __user *)(x))
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++#define ____m(x)					\
++({							\
++	unsigned long ____x = (unsigned long)(x);	\
++	if (____x < PAX_USER_SHADOW_BASE)		\
++		____x += PAX_USER_SHADOW_BASE;		\
++	(void __user *)____x;				\
++})
++#else
++#define ____m(x) (x)
++#endif
++#define __m(x) (*(struct __large_struct __user *)____m(x))
+ 
+ /*
+  * Tell gcc we read from memory instead of writing: this is because
+@@ -438,21 +498,26 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -8699,7 +8997,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  
  /*
   * uaccess_try and catch
-@@ -530,7 +584,7 @@ struct __large_struct { unsigned long bu
+@@ -530,7 +595,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -8708,7 +9006,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -567,6 +621,7 @@ extern struct movsl_mask {
+@@ -567,6 +632,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -8877,17 +9175,18 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/uaccess_64.h linux-2.6.33.2-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-2.6.33.2/arch/x86/include/asm/uaccess_64.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/include/asm/uaccess_64.h	2010-03-06 15:32:47.000000000 +0100
-@@ -10,6 +10,8 @@
++++ linux-2.6.33.2-pax/arch/x86/include/asm/uaccess_64.h	2010-04-05 02:23:37.000000000 +0200
+@@ -9,6 +9,9 @@
+ #include <linux/prefetch.h>
  #include <linux/lockdep.h>
  #include <asm/page.h>
- 
-+#define set_fs(x)	(current_thread_info()->addr_limit = (x))
++#include <asm/pgtable.h>
 +
++#define set_fs(x)	(current_thread_info()->addr_limit = (x))
+ 
  /*
   * Copy To/From Userspace
-  */
-@@ -18,26 +20,26 @@
+@@ -18,26 +21,26 @@
  __must_check unsigned long
  copy_user_generic(void *to, const void *from, unsigned len);
  
@@ -8927,7 +9226,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  	return n;
  }
  
-@@ -46,17 +48,33 @@ int copy_to_user(void __user *dst, const
+@@ -46,17 +49,35 @@ int copy_to_user(void __user *dst, const
  {
  	might_fault();
  
@@ -8960,12 +9259,21 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(dst, size, false);
++		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
++			src += PAX_USER_SHADOW_BASE;
  		return copy_user_generic(dst, (__force void *)src, size);
 +	}
  	switch (size) {
  	case 1:__get_user_asm(*(u8 *)dst, (u8 __user *)src,
  			      ret, "b", "b", "=q", 1);
-@@ -94,13 +112,27 @@ int __copy_from_user(void *dst, const vo
+@@ -89,18 +110,36 @@ int __copy_from_user(void *dst, const vo
+ 			       ret, "q", "", "=r", 8);
+ 		return ret;
+ 	default:
++		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
++			src += PAX_USER_SHADOW_BASE;
+ 		return copy_user_generic(dst, (__force void *)src, size);
+ 	}
  }
  
  static __always_inline __must_check
@@ -8991,12 +9299,21 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(src, size, true);
++		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
++			dst += PAX_USER_SHADOW_BASE;
  		return copy_user_generic((__force void *)dst, src, size);
 +	}
  	switch (size) {
  	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
  			      ret, "b", "b", "iq", 1);
-@@ -138,11 +170,15 @@ int __copy_to_user(void __user *dst, con
+@@ -133,19 +172,30 @@ int __copy_to_user(void __user *dst, con
+ 			       ret, "q", "", "er", 8);
+ 		return ret;
+ 	default:
++		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
++			dst += PAX_USER_SHADOW_BASE;
+ 		return copy_user_generic((__force void *)dst, src, size);
+ 	}
  }
  
  static __always_inline __must_check
@@ -9007,14 +9324,39 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +	unsigned ret = 0;
  
  	might_fault();
+-	if (!__builtin_constant_p(size))
 +
 +	if ((int)size < 0)
 +		return size;
 +
- 	if (!__builtin_constant_p(size))
++	if (!__builtin_constant_p(size)) {
++		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
++			src += PAX_USER_SHADOW_BASE;
++		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
++			dst += PAX_USER_SHADOW_BASE;
  		return copy_user_generic((__force void *)dst,
  					 (__force void *)src, size);
-@@ -206,30 +242,38 @@ __copy_from_user_inatomic(void *dst, con
++	}
+ 	switch (size) {
+ 	case 1: {
+ 		u8 tmp;
+@@ -185,6 +235,10 @@ int __copy_in_user(void __user *dst, con
+ 		return ret;
+ 	}
+ 	default:
++		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
++			src += PAX_USER_SHADOW_BASE;
++		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
++			dst += PAX_USER_SHADOW_BASE;
+ 		return copy_user_generic((__force void *)dst,
+ 					 (__force void *)src, size);
+ 	}
+@@ -203,33 +257,45 @@ __must_check unsigned long __clear_user(
+ static __must_check __always_inline int
+ __copy_from_user_inatomic(void *dst, const void __user *src, unsigned size)
+ {
++	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
++		src += PAX_USER_SHADOW_BASE;
  	return copy_user_generic(dst, (__force const void *)src, size);
  }
  
@@ -9025,6 +9367,8 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
 +	if ((int)size < 0)
 +		return size;
 +
++	if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
++		dst += PAX_USER_SHADOW_BASE;
  	return copy_user_generic((__force void *)dst, src, size);
  }
  
@@ -9115,6 +9459,34 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/in
  #endif /* __KERNEL__ */
  
  #endif /* _ASM_X86_VSYSCALL_H */
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/include/asm/xsave.h linux-2.6.33.2-pax/arch/x86/include/asm/xsave.h
+--- linux-2.6.33.2/arch/x86/include/asm/xsave.h	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/include/asm/xsave.h	2010-04-05 02:17:16.000000000 +0200
+@@ -56,6 +56,12 @@ static inline int xrstor_checking(struct
+ static inline int xsave_user(struct xsave_struct __user *buf)
+ {
+ 	int err;
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	if ((unsigned long)buf < PAX_USER_SHADOW_BASE)
++		buf = (struct xsave_struct __user *)((void __user*)buf + PAX_USER_SHADOW_BASE);
++#endif
++
+ 	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x27\n"
+ 			     "2:\n"
+ 			     ".section .fixup,\"ax\"\n"
+@@ -82,6 +88,11 @@ static inline int xrestore_user(struct x
+ 	u32 lmask = mask;
+ 	u32 hmask = mask >> 32;
+ 
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	if ((unsigned long)xstate < PAX_USER_SHADOW_BASE)
++		xstate = (struct xsave_struct *)((void *)xstate + PAX_USER_SHADOW_BASE);
++#endif
++
+ 	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x2f\n"
+ 			     "2:\n"
+ 			     ".section .fixup,\"ax\"\n"
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/acpi/boot.c linux-2.6.33.2-pax/arch/x86/kernel/acpi/boot.c
 --- linux-2.6.33.2/arch/x86/kernel/acpi/boot.c	2010-03-20 18:16:52.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/kernel/acpi/boot.c	2010-03-20 18:17:15.000000000 +0100
@@ -9435,8 +9807,8 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  #ifdef CONFIG_XEN
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/asm-offsets_64.c linux-2.6.33.2-pax/arch/x86/kernel/asm-offsets_64.c
 --- linux-2.6.33.2/arch/x86/kernel/asm-offsets_64.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/kernel/asm-offsets_64.c	2010-03-06 15:32:47.000000000 +0100
-@@ -63,6 +63,12 @@ int main(void)
++++ linux-2.6.33.2-pax/arch/x86/kernel/asm-offsets_64.c	2010-04-05 02:17:16.000000000 +0200
+@@ -63,6 +63,18 @@ int main(void)
  	OFFSET(PV_CPU_irq_enable_sysexit, pv_cpu_ops, irq_enable_sysexit);
  	OFFSET(PV_CPU_swapgs, pv_cpu_ops, swapgs);
  	OFFSET(PV_MMU_read_cr2, pv_mmu_ops, read_cr2);
@@ -9446,10 +9818,16 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
 +	OFFSET(PV_CPU_write_cr0, pv_cpu_ops, write_cr0);
 +#endif
 +
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	OFFSET(PV_MMU_read_cr3, pv_mmu_ops, read_cr3);
++	OFFSET(PV_MMU_write_cr3, pv_mmu_ops, write_cr3);
++	OFFSET(PV_MMU_set_pgd, pv_mmu_ops, set_pgd);
++#endif
++
  #endif
  
  
-@@ -115,6 +121,7 @@ int main(void)
+@@ -115,6 +127,7 @@ int main(void)
  	ENTRY(cr8);
  	BLANK();
  #undef ENTRY
@@ -10532,7 +10910,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  	CFI_ADJUST_CFA_OFFSET -24
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/entry_64.S linux-2.6.33.2-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.33.2/arch/x86/kernel/entry_64.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/kernel/entry_64.S	2010-04-04 20:03:43.000000000 +0200
++++ linux-2.6.33.2-pax/arch/x86/kernel/entry_64.S	2010-04-05 02:21:24.000000000 +0200
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -10541,7 +10919,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -174,6 +175,91 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +175,200 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -10630,47 +11008,230 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
 +
 +	retq
 +ENDPROC(pax_exit_kernel)
++
++ENTRY(pax_enter_kernel_user)
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	push %rax
++	push %rdi
++
++#ifdef CONFIG_PARAVIRT
++	PV_SAVE_REGS(CLBR_NONE | CLBR_RAX | CLBR_RDI)
++	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_read_cr3)
++#else
++	mov %cr3,%rax
++#endif
++
++	mov %rax,%rdi
++	add $__START_KERNEL_map,%rax
++	sub phys_base(%rip),%rax
++
++	i = 0
++	.rept USER_PGD_PTRS
++#ifdef CONFIG_PARAVIRT
++	mov i*8(%rax),%rsi
++	mov $0,$sil
++	lea i*8(%rax),%rdi
++	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set+pgd)
++#else
++	movb $0,i*8(%rax)
++#endif
++	i = i + 1
++	.endr
++
++#ifdef CONFIG_PARAVIRT
++	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_write_cr3)
++	PV_RESTORE_REGS(CLBR_NONE | CLBR_RAX | CLBR_RDI)
++#else
++	mov %rdi,%cr3
++#endif
++
++#ifdef CONFIG_PAX_KERNEXEC
++#ifdef CONFIG_PARAVIRT
++	PV_SAVE_REGS(CLBR_NONE | CLBR_RAX | CLBR_RDI)
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0)
++	mov %rax,%rdi
++#else
++	mov %cr0,%rdi
++#endif
++	bts $16,%rdi
++#ifdef CONFIG_PARAVIRT
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0)
++	PV_RESTORE_REGS(CLBR_NONE | CLBR_RAX | CLBR_RDI)
++#else
++	mov %rdi,%cr0
++#endif
++#endif
++
++	pop %rdi
++	pop %rax
++#endif
++
++	retq
++ENDPROC(pax_enter_kernel_user)
++
++ENTRY(pax_exit_kernel_user)
++	push %rax
++	push %rdi
++
++#ifdef CONFIG_PAX_KERNEXEC
++#ifdef CONFIG_PARAVIRT
++	PV_SAVE_REGS(CLBR_NONE | CLBR_RAX | CLBR_RDI)
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_read_cr0)
++	mov %rax,%rdi
++#else
++	mov %cr0,%rdi
++#endif
++	btr $16,%rdi
++#ifdef CONFIG_PARAVIRT
++	call PARA_INDIRECT(pv_cpu_ops+PV_CPU_write_cr0)
++	PV_RESTORE_REGS(CLBR_NONE | CLBR_RAX | CLBR_RDI)
++#else
++	mov %rdi,%cr0
++#endif
++#endif
++
++#ifdef CONFIG_PARAVIRT
++	PV_SAVE_REGS(CLBR_NONE | CLBR_RAX | CLBR_RDI)
++	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_read_cr3)
++#else
++	mov %cr3,%rax
++#endif
++	add $__START_KERNEL_map,%rax
++	sub phys_base(%rip),%rax
++
++	i = 0
++	.rept USER_PGD_PTRS
++#ifdef CONFIG_PARAVIRT
++	mov i*8(%rax),%rsi
++	mov $0x67,$sil
++	lea i*8(%rax),%rdi
++	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set+pgd)
++#else
++	movb $0x67,i*8(%rax)
++#endif
++	i = i + 1
++	.endr
++
++	pop %rdi
++	pop %rax
++	retq
++ENDPROC(pax_exit_kernel_user)
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -800,6 +886,7 @@ END(interrupt)
+@@ -468,6 +663,11 @@ ENTRY(system_call_after_swapgs)
+ 
+ 	movq	%rsp,PER_CPU_VAR(old_rsp)
+ 	movq	PER_CPU_VAR(kernel_stack),%rsp
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_enter_kernel_user
++#endif
++
+ 	/*
+ 	 * No need to follow this irqs off/on section - it's straight
+ 	 * and short:
+@@ -502,6 +702,11 @@ sysret_check:
+ 	andl %edi,%edx
+ 	jnz  sysret_careful
+ 	CFI_REMEMBER_STATE
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_exit_kernel_user
++#endif
++
+ 	/*
+ 	 * sysretq will re-enable interrupts:
+ 	 */
+@@ -800,7 +1005,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
+-	call \func
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testl $3, CS(%rdi)
++	jnz 1f
 +	call pax_enter_kernel
- 	call \func
++	jmp 2f
++1:	call pax_enter_kernel_user
++#else
++	call pax_enter_kernel
++#endif
++2:	call \func
  	.endm
  
-@@ -825,6 +912,7 @@ ret_from_intr:
- 	CFI_DEF_CFA_REGISTER	rsp
- 	CFI_ADJUST_CFA_OFFSET	-8
- exit_intr:
+ /*
+@@ -848,12 +1062,18 @@ retint_swapgs:		/* return to user-space
+ 	 * The iretq could re-enable interrupts:
+ 	 */
+ 	DISABLE_INTERRUPTS(CLBR_ANY)
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_exit_kernel_user
++#endif
++
+ 	TRACE_IRQS_IRETQ
+ 	SWAPGS
+ 	jmp restore_args
+ 
+ retint_restore_args:	/* return to kernel space */
+ 	DISABLE_INTERRUPTS(CLBR_ANY)
 +	call pax_exit_kernel
- 	GET_THREAD_INFO(%rcx)
- 	testl $3,CS-ARGOFFSET(%rsp)
- 	je retint_kernel
-@@ -1040,6 +1128,7 @@ ENTRY(\sym)
+ 	/*
+ 	 * The iretq could re-enable interrupts:
+ 	 */
+@@ -1040,7 +1260,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
+-	movq %rsp,%rdi		/* pt_regs pointer */
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testl $3, CS(%rsp)
++	jnz 1f
 +	call pax_enter_kernel
- 	movq %rsp,%rdi		/* pt_regs pointer */
++	jmp 2f
++1:	call pax_enter_kernel_user
++#else
++	call pax_enter_kernel
++#endif
++2:	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1057,6 +1146,7 @@ ENTRY(\sym)
+ 	jmp error_exit		/* %ebx: no swapgs flag */
+@@ -1057,7 +1286,16 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
+-	movq %rsp,%rdi		/* pt_regs pointer */
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testl $3, CS(%rsp)
++	jnz 1f
 +	call pax_enter_kernel
- 	movq %rsp,%rdi		/* pt_regs pointer */
++	jmp 2f
++1:	call pax_enter_kernel_user
++#else
++	call pax_enter_kernel
++#endif
++2:	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1074,9 +1164,15 @@ ENTRY(\sym)
+ 	jmp paranoid_exit	/* %ebx: no swapgs flag */
+@@ -1074,9 +1312,23 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
+-	movq %rsp,%rdi		/* pt_regs pointer */
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testl $3, CS(%rsp)
++	jnz 1f
 +	call pax_enter_kernel
- 	movq %rsp,%rdi		/* pt_regs pointer */
++	jmp 2f
++1:	call pax_enter_kernel_user
++#else
++	call pax_enter_kernel
++#endif
++2:	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
 -	PER_CPU(init_tss, %r12)
 +#ifdef CONFIG_SMP
@@ -10682,23 +11243,43 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%r12)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%r12)
-@@ -1093,6 +1189,7 @@ ENTRY(\sym)
+@@ -1093,7 +1345,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
+-	movq %rsp,%rdi			/* pt_regs pointer */
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testl $3, CS(%rsp)
++	jnz 1f
 +	call pax_enter_kernel
- 	movq %rsp,%rdi			/* pt_regs pointer */
++	jmp 2f
++1:	call pax_enter_kernel_user
++#else
++	call pax_enter_kernel
++#endif
++2:	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1112,6 +1209,7 @@ ENTRY(\sym)
+ 	call \do_sym
+@@ -1112,7 +1373,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
+-	movq %rsp,%rdi			/* pt_regs pointer */
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testl $3, CS(%rsp)
++	jnz 1f
 +	call pax_enter_kernel
- 	movq %rsp,%rdi			/* pt_regs pointer */
++	jmp 2f
++1:	call pax_enter_kernel_user
++#else
++	call pax_enter_kernel
++#endif
++2:	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1373,11 +1471,13 @@ ENTRY(paranoid_exit)
+ 	call \do_sym
+@@ -1373,11 +1643,13 @@ ENTRY(paranoid_exit)
  	testl $3,CS(%rsp)
  	jnz   paranoid_userspace
  paranoid_swapgs:
@@ -10712,15 +11293,24 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
-@@ -1499,6 +1599,7 @@ ENTRY(nmi)
+@@ -1499,6 +1771,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testl $3, CS(%rsp)
++	jnz 1f
 +	call pax_enter_kernel
++	jmp 2f
++1:	call pax_enter_kernel_user
++#else
++	call pax_enter_kernel
++#endif
++2:
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1514,6 +1615,7 @@ ENTRY(nmi)
+@@ -1514,6 +1796,7 @@ ENTRY(nmi)
  nmi_swapgs:
  	SWAPGS_UNSAFE_STACK
  nmi_restore:
@@ -10816,9 +11406,26 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  
  #ifdef CONFIG_BLK_DEV_INITRD
  	/* Reserve INITRD */
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/head64.c linux-2.6.33.2-pax/arch/x86/kernel/head64.c
+--- linux-2.6.33.2/arch/x86/kernel/head64.c	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/kernel/head64.c	2010-04-05 02:17:16.000000000 +0200
+@@ -29,7 +29,13 @@
+ static void __init zap_identity_mappings(void)
+ {
+ 	pgd_t *pgd = pgd_offset_k(0UL);
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	set_pgd(pgd, native_make_pgd(0));
++#else
+ 	pgd_clear(pgd);
++#endif
++
+ 	__flush_tlb_all();
+ }
+ 
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/head_32.S linux-2.6.33.2-pax/arch/x86/kernel/head_32.S
 --- linux-2.6.33.2/arch/x86/kernel/head_32.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/kernel/head_32.S	2010-03-10 13:57:35.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/kernel/head_32.S	2010-04-05 02:17:16.000000000 +0200
 @@ -21,10 +21,17 @@
  #include <asm/msr-index.h>
  #include <asm/cpufeature.h>
@@ -11100,7 +11707,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -612,27 +682,37 @@ ENTRY(initial_code)
+@@ -612,27 +682,45 @@ ENTRY(initial_code)
  /*
   * BSS section
   */
@@ -11140,10 +11747,18 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
 -	/* Page-aligned for the benefit of paravirt? */
 -	.align PAGE_SIZE_asm
 +.section .swapper_pg_dir,"a",@progbits
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++ENTRY(cpu_pgd)
++	.rept NR_CPUS
++	.fill	512,8,0
++	.endr
++#endif
++
  ENTRY(swapper_pg_dir)
  	.long	pa(swapper_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -655,11 +735,12 @@ ENTRY(swapper_pg_dir)
+@@ -655,11 +743,12 @@ ENTRY(swapper_pg_dir)
  
  .data
  ENTRY(stack_start)
@@ -11157,7 +11772,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  early_recursion_flag:
  	.long 0
  
-@@ -695,7 +776,7 @@ fault_msg:
+@@ -695,7 +784,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -11166,7 +11781,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -706,7 +787,7 @@ idt_descr:
+@@ -706,7 +795,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -11175,7 +11790,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -715,5 +796,65 @@ ENTRY(early_gdt_descr)
+@@ -715,5 +804,65 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -11245,7 +11860,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
 +	.endr
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/head_64.S linux-2.6.33.2-pax/arch/x86/kernel/head_64.S
 --- linux-2.6.33.2/arch/x86/kernel/head_64.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/kernel/head_64.S	2010-04-04 20:03:44.000000000 +0200
++++ linux-2.6.33.2-pax/arch/x86/kernel/head_64.S	2010-04-05 02:17:16.000000000 +0200
 @@ -19,6 +19,7 @@
  #include <asm/cache.h>
  #include <asm/processor-flags.h>
@@ -11372,7 +11987,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -351,13 +353,29 @@ NEXT_PAGE(init_level4_pgt)
+@@ -351,13 +353,36 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
@@ -11384,6 +11999,13 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  	/* (2^48-(2*1024*1024*1024))/(2^39) = 511 */
  	.quad	level3_kernel_pgt - __START_KERNEL_map + _PAGE_TABLE
  
++#ifdef CONFIG_PAX_PER_CPU_PGD
++NEXT_PAGE(cpu_pgd)
++	.rept NR_CPUS
++	.fill	512,8,0
++	.endr
++#endif
++
  NEXT_PAGE(level3_ident_pgt)
  	.quad	level2_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
 +#ifdef CONFIG_XEN
@@ -11402,7 +12024,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -365,20 +383,23 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -365,20 +390,23 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -11434,7 +12056,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -391,33 +412,55 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -391,33 +419,55 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -11771,6 +12393,23 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  
  	relocate_kernel_ptr = control_page;
  	page_list[PA_CONTROL_PAGE] = __pa(control_page);
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/machine_kexec_64.c linux-2.6.33.2-pax/arch/x86/kernel/machine_kexec_64.c
+--- linux-2.6.33.2/arch/x86/kernel/machine_kexec_64.c	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/kernel/machine_kexec_64.c	2010-04-05 02:17:16.000000000 +0200
+@@ -127,7 +127,13 @@ static int init_level4_page(struct kimag
+ 	}
+ 	/* clear the unused entries */
+ 	while (addr < end_addr) {
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		set_pgd(level4p++, native_make_pgd(0));
++#else
+ 		pgd_clear(level4p++);
++#endif
++
+ 		addr += PGDIR_SIZE;
+ 	}
+ out:
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/microcode_amd.c linux-2.6.33.2-pax/arch/x86/kernel/microcode_amd.c
 --- linux-2.6.33.2/arch/x86/kernel/microcode_amd.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/kernel/microcode_amd.c	2010-02-24 22:56:35.000000000 +0100
@@ -12668,7 +13307,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  	if (current_thread_info()->status & TS_RESTORE_SIGMASK)
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/smpboot.c linux-2.6.33.2-pax/arch/x86/kernel/smpboot.c
 --- linux-2.6.33.2/arch/x86/kernel/smpboot.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/kernel/smpboot.c	2010-02-24 21:52:51.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/kernel/smpboot.c	2010-04-05 02:17:16.000000000 +0200
 @@ -750,7 +750,11 @@ do_rest:
  		(unsigned long)task_stack_page(c_idle.idle) -
  		KERNEL_STACK_OFFSET + THREAD_SIZE;
@@ -12681,6 +13320,19 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/ke
  	initial_code = (unsigned long)start_secondary;
  	stack_start.sp = (void *) c_idle.idle->thread.sp;
  
+@@ -883,6 +887,12 @@ int __cpuinit native_cpu_up(unsigned int
+ 
+ 	per_cpu(cpu_state, cpu) = CPU_UP_PREPARE;
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	clone_pgd_range(get_cpu_pgd(cpu) + KERNEL_PGD_BOUNDARY,
++			swapper_pg_dir + KERNEL_PGD_BOUNDARY,
++			KERNEL_PGD_PTRS);
++#endif
++
+ #ifdef CONFIG_X86_32
+ 	/* init low mem mapping */
+ 	clone_pgd_range(swapper_pg_dir, swapper_pg_dir + KERNEL_PGD_BOUNDARY,
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/kernel/step.c linux-2.6.33.2-pax/arch/x86/kernel/step.c
 --- linux-2.6.33.2/arch/x86/kernel/step.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/kernel/step.c	2010-02-24 21:52:51.000000000 +0100
@@ -14374,8 +15026,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  2:
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/lib/copy_user_64.S linux-2.6.33.2-pax/arch/x86/lib/copy_user_64.S
 --- linux-2.6.33.2/arch/x86/lib/copy_user_64.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/lib/copy_user_64.S	2010-02-24 21:52:51.000000000 +0100
-@@ -21,7 +21,7 @@
++++ linux-2.6.33.2-pax/arch/x86/lib/copy_user_64.S	2010-04-05 02:17:16.000000000 +0200
+@@ -15,13 +15,14 @@
+ #include <asm/asm-offsets.h>
+ #include <asm/thread_info.h>
+ #include <asm/cpufeature.h>
++#include <asm/pgtable.h>
+ 
+ 	.macro ALTERNATIVE_JUMP feature,orig,alt
+ 0:
  	.byte 0xe9	/* 32bit jump */
  	.long \orig-1f	/* by default jump to orig */
  1:
@@ -14384,7 +15043,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  2:	.byte 0xe9			/* near jump with 32bit immediate */
  	.long \alt-1b /* offset */   /* or alternatively to alt */
  	.previous
-@@ -64,32 +64,6 @@
+@@ -64,32 +65,6 @@
  #endif
  	.endm
  
@@ -14417,7 +15076,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  ENTRY(copy_user_generic)
  	CFI_STARTPROC
  	ALTERNATIVE_JUMP X86_FEATURE_REP_GOOD,copy_user_generic_unrolled,copy_user_generic_string
-@@ -101,6 +75,8 @@ ENDPROC(copy_user_generic)
+@@ -101,6 +76,8 @@ ENDPROC(copy_user_generic)
  ENTRY(bad_from_user)
  bad_from_user:
  	CFI_STARTPROC
@@ -14426,14 +15085,63 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	movl %edx,%ecx
  	xorl %eax,%eax
  	rep
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/lib/copy_user_nocache_64.S linux-2.6.33.2-pax/arch/x86/lib/copy_user_nocache_64.S
+--- linux-2.6.33.2/arch/x86/lib/copy_user_nocache_64.S	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/lib/copy_user_nocache_64.S	2010-04-05 02:17:16.000000000 +0200
+@@ -14,6 +14,7 @@
+ #include <asm/current.h>
+ #include <asm/asm-offsets.h>
+ #include <asm/thread_info.h>
++#include <asm/pgtable.h>
+ 
+ 	.macro ALIGN_DESTINATION
+ #ifdef FIX_ALIGNMENT
+@@ -50,6 +51,15 @@
+  */
+ ENTRY(__copy_user_nocache)
+ 	CFI_STARTPROC
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	mov $PAX_USER_SHADOW_BASE,%rcx
++	cmp %rcx,%rsi
++	jae 1f
++	add %rcx,%rsi
++1:
++#endif
++
+ 	cmpl $8,%edx
+ 	jb 20f		/* less then 8 bytes, go to byte copy loop */
+ 	ALIGN_DESTINATION
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/lib/csum-wrappers_64.c linux-2.6.33.2-pax/arch/x86/lib/csum-wrappers_64.c
+--- linux-2.6.33.2/arch/x86/lib/csum-wrappers_64.c	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/lib/csum-wrappers_64.c	2010-04-05 02:17:16.000000000 +0200
+@@ -52,6 +52,8 @@ csum_partial_copy_from_user(const void _
+ 			len -= 2;
+ 		}
+ 	}
++	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
++		src += PAX_USER_SHADOW_BASE;
+ 	isum = csum_partial_copy_generic((__force const void *)src,
+ 				dst, len, isum, errp, NULL);
+ 	if (unlikely(*errp))
+@@ -105,6 +107,8 @@ csum_partial_copy_to_user(const void *sr
+ 	}
+ 
+ 	*errp = 0;
++	if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
++		dst += PAX_USER_SHADOW_BASE;
+ 	return csum_partial_copy_generic(src, (void __force *)dst,
+ 					 len, isum, NULL, errp);
+ }
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/lib/getuser.S linux-2.6.33.2-pax/arch/x86/lib/getuser.S
 --- linux-2.6.33.2/arch/x86/lib/getuser.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/lib/getuser.S	2010-02-24 21:52:51.000000000 +0100
-@@ -33,14 +33,28 @@
++++ linux-2.6.33.2-pax/arch/x86/lib/getuser.S	2010-04-05 02:17:16.000000000 +0200
+@@ -33,14 +33,38 @@
  #include <asm/asm-offsets.h>
  #include <asm/thread_info.h>
  #include <asm/asm.h>
 +#include <asm/segment.h>
++#include <asm/pgtable.h>
  
  	.text
  ENTRY(__get_user_1)
@@ -14446,6 +15154,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae bad_get_user
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	cmp %_ASM_DX,%_ASM_AX
++	jae 1234f
++	add %_ASM_DX,%_ASM_AX
++1234:
++#endif
++
 +#endif
 +
  1:	movzb (%_ASM_AX),%edx
@@ -14458,7 +15175,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	xor %eax,%eax
  	ret
  	CFI_ENDPROC
-@@ -49,11 +63,24 @@ ENDPROC(__get_user_1)
+@@ -49,11 +73,33 @@ ENDPROC(__get_user_1)
  ENTRY(__get_user_2)
  	CFI_STARTPROC
  	add $1,%_ASM_AX
@@ -14471,6 +15188,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae bad_get_user
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	cmp %_ASM_DX,%_ASM_AX
++	jae 1234f
++	add %_ASM_DX,%_ASM_AX
++1234:
++#endif
++
 +#endif
 +
  2:	movzwl -1(%_ASM_AX),%edx
@@ -14483,7 +15209,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	xor %eax,%eax
  	ret
  	CFI_ENDPROC
-@@ -62,11 +89,24 @@ ENDPROC(__get_user_2)
+@@ -62,11 +108,33 @@ ENDPROC(__get_user_2)
  ENTRY(__get_user_4)
  	CFI_STARTPROC
  	add $3,%_ASM_AX
@@ -14496,6 +15222,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae bad_get_user
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	cmp %_ASM_DX,%_ASM_AX
++	jae 1234f
++	add %_ASM_DX,%_ASM_AX
++1234:
++#endif
++
 +#endif
 +
  3:	mov -3(%_ASM_AX),%edx
@@ -14508,7 +15243,23 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	xor %eax,%eax
  	ret
  	CFI_ENDPROC
-@@ -89,6 +129,12 @@ ENDPROC(__get_user_8)
+@@ -80,6 +148,15 @@ ENTRY(__get_user_8)
+ 	GET_THREAD_INFO(%_ASM_DX)
+ 	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
+ 	jae	bad_get_user
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	cmp %_ASM_DX,%_ASM_AX
++	jae 1234f
++	add %_ASM_DX,%_ASM_AX
++1234:
++#endif
++
+ 4:	movq -7(%_ASM_AX),%_ASM_DX
+ 	xor %eax,%eax
+ 	ret
+@@ -89,6 +166,12 @@ ENDPROC(__get_user_8)
  
  bad_get_user:
  	CFI_STARTPROC
@@ -14865,16 +15616,18 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  		to += 64;
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/lib/putuser.S linux-2.6.33.2-pax/arch/x86/lib/putuser.S
 --- linux-2.6.33.2/arch/x86/lib/putuser.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/lib/putuser.S	2010-03-11 01:41:34.000000000 +0100
-@@ -15,6 +15,7 @@
++++ linux-2.6.33.2-pax/arch/x86/lib/putuser.S	2010-04-05 02:17:16.000000000 +0200
+@@ -15,7 +15,8 @@
  #include <asm/thread_info.h>
  #include <asm/errno.h>
  #include <asm/asm.h>
+-
 +#include <asm/segment.h>
- 
++#include <asm/pgtable.h>
  
  /*
-@@ -29,59 +30,120 @@
+  * __put_user_X
+@@ -29,59 +30,156 @@
   * as they get called from within inline assembly.
   */
  
@@ -14895,6 +15648,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
 +	GET_THREAD_INFO(%_ASM_BX)
  	cmp TI_addr_limit(%_ASM_BX),%_ASM_CX
  	jae bad_put_user
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	cmp %_ASM_BX,%_ASM_CX
++	jae 1234f
++	add %_ASM_BX,%_ASM_CX
++1234:
++#endif
++
 +#endif
 +
  1:	movb %al,(%_ASM_CX)
@@ -14920,6 +15682,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	sub $1,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	cmp %_ASM_BX,%_ASM_CX
++	jae 1234f
++	add %_ASM_BX,%_ASM_CX
++1234:
++#endif
++
 +#endif
 +
  2:	movw %ax,(%_ASM_CX)
@@ -14945,6 +15716,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	sub $3,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	cmp %_ASM_BX,%_ASM_CX
++	jae 1234f
++	add %_ASM_BX,%_ASM_CX
++1234:
++#endif
++
 +#endif
 +
  3:	movl %eax,(%_ASM_CX)
@@ -14970,6 +15750,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
  	sub $7,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	cmp %_ASM_BX,%_ASM_CX
++	jae 1234f
++	add %_ASM_BX,%_ASM_CX
++1234:
++#endif
++
 +#endif
 +
  4:	mov %_ASM_AX,(%_ASM_CX)
@@ -15984,6 +16773,45 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/li
 +#endif
 +
 +EXPORT_SYMBOL(set_fs);
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/lib/usercopy_64.c linux-2.6.33.2-pax/arch/x86/lib/usercopy_64.c
+--- linux-2.6.33.2/arch/x86/lib/usercopy_64.c	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/lib/usercopy_64.c	2010-04-05 02:17:16.000000000 +0200
+@@ -42,6 +42,8 @@ long
+ __strncpy_from_user(char *dst, const char __user *src, long count)
+ {
+ 	long res;
++	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
++		src += PAX_USER_SHADOW_BASE;
+ 	__do_strncpy_from_user(dst, src, count, res);
+ 	return res;
+ }
+@@ -65,6 +67,8 @@ unsigned long __clear_user(void __user *
+ {
+ 	long __d0;
+ 	might_fault();
++	if ((unsigned long)addr < PAX_USER_SHADOW_BASE)
++		addr += PAX_USER_SHADOW_BASE;
+ 	/* no memory constraint because it doesn't change any memory gcc knows
+ 	   about */
+ 	asm volatile(
+@@ -151,10 +155,14 @@ EXPORT_SYMBOL(strlen_user);
+ 
+ unsigned long copy_in_user(void __user *to, const void __user *from, unsigned len)
+ {
+-	if (access_ok(VERIFY_WRITE, to, len) && access_ok(VERIFY_READ, from, len)) { 
++	if (access_ok(VERIFY_WRITE, to, len) && access_ok(VERIFY_READ, from, len)) {
++		if ((unsigned long)to < PAX_USER_SHADOW_BASE)
++			to += PAX_USER_SHADOW_BASE;
++		if ((unsigned long)from < PAX_USER_SHADOW_BASE)
++			from += PAX_USER_SHADOW_BASE;
+ 		return copy_user_generic((__force void *)to, (__force void *)from, len);
+-	} 
+-	return len;		
++	}
++	return len;
+ }
+ EXPORT_SYMBOL(copy_in_user);
+ 
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm/extable.c linux-2.6.33.2-pax/arch/x86/mm/extable.c
 --- linux-2.6.33.2/arch/x86/mm/extable.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/mm/extable.c	2010-02-24 21:52:51.000000000 +0100
@@ -16062,8 +16890,8 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm/fault.c linux-2.6.33.2-pax/arch/x86/mm/fault.c
 --- linux-2.6.33.2/arch/x86/mm/fault.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/mm/fault.c	2010-02-24 21:52:51.000000000 +0100
-@@ -11,10 +11,14 @@
++++ linux-2.6.33.2-pax/arch/x86/mm/fault.c	2010-04-05 02:17:16.000000000 +0200
+@@ -11,10 +11,19 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
  #include <linux/perf_event.h>		/* perf_sw_event		*/
@@ -16075,10 +16903,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  #include <asm/kmemcheck.h>		/* kmemcheck_*(), ...		*/
 +#include <asm/vsyscall.h>
 +#include <asm/tlbflush.h>
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++#include <asm/stacktrace.h>
++#include "../kernel/dumpstack.h"
++#endif
  
  /*
   * Page fault error code bits:
-@@ -52,7 +56,7 @@ static inline int __kprobes notify_page_
+@@ -52,7 +61,7 @@ static inline int __kprobes notify_page_
  	int ret = 0;
  
  	/* kprobe_running() needs smp_processor_id() */
@@ -16087,7 +16920,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  		preempt_disable();
  		if (kprobe_running() && kprobe_fault_handler(regs, 14))
  			ret = 1;
-@@ -173,6 +177,30 @@ force_sig_info_fault(int si_signo, int s
+@@ -173,6 +182,30 @@ force_sig_info_fault(int si_signo, int s
  	force_sig_info(si_signo, &info, tsk);
  }
  
@@ -16118,7 +16951,50 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  DEFINE_SPINLOCK(pgd_lock);
  LIST_HEAD(pgd_list);
  
-@@ -536,7 +564,7 @@ static int is_errata93(struct pt_regs *r
+@@ -333,15 +366,27 @@ void vmalloc_sync_all(void)
+ 
+ 		const pgd_t *pgd_ref = pgd_offset_k(address);
+ 		unsigned long flags;
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		unsigned long cpu;
++#else
+ 		struct page *page;
++#endif
+ 
+ 		if (pgd_none(*pgd_ref))
+ 			continue;
+ 
+ 		spin_lock_irqsave(&pgd_lock, flags);
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		for (cpu = 0; cpu < NR_CPUS; ++cpu) {
++			pgd_t *pgd = pgd_offset_cpu(cpu, address);
++#else
+ 		list_for_each_entry(page, &pgd_list, lru) {
+ 			pgd_t *pgd;
+ 			pgd = (pgd_t *)page_address(page) + pgd_index(address);
++#endif
++
+ 			if (pgd_none(*pgd))
+ 				set_pgd(pgd, *pgd_ref);
+ 			else
+@@ -374,7 +419,14 @@ static noinline __kprobes int vmalloc_fa
+ 	 * happen within a race in page table update. In the later
+ 	 * case just flush:
+ 	 */
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	BUG_ON(__pa(get_cpu_pgd(smp_processor_id())) != (read_cr3() & PHYSICAL_PAGE_MASK));
++	pgd = pgd_offset_cpu(smp_processor_id(), address);
++#else
+ 	pgd = pgd_offset(current->active_mm, address);
++#endif
++
+ 	pgd_ref = pgd_offset_k(address);
+ 	if (pgd_none(*pgd_ref))
+ 		return -1;
+@@ -536,7 +588,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -16127,7 +17003,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  		return 1;
  #endif
  	return 0;
-@@ -563,7 +591,7 @@ static int is_f00f_bug(struct pt_regs *r
+@@ -563,7 +615,7 @@ static int is_f00f_bug(struct pt_regs *r
  }
  
  static const char nx_warning[] = KERN_CRIT
@@ -16136,7 +17012,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  
  static void
  show_fault_oops(struct pt_regs *regs, unsigned long error_code,
-@@ -572,15 +600,21 @@ show_fault_oops(struct pt_regs *regs, un
+@@ -572,15 +624,21 @@ show_fault_oops(struct pt_regs *regs, un
  	if (!oops_may_print())
  		return;
  
@@ -16160,7 +17036,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -705,6 +739,68 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -705,6 +763,68 @@ __bad_area_nosemaphore(struct pt_regs *r
  		       unsigned long address, int si_code)
  {
  	struct task_struct *tsk = current;
@@ -16229,7 +17105,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
-@@ -849,6 +945,106 @@ static int spurious_fault_check(unsigned
+@@ -849,6 +969,106 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -16336,7 +17212,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -915,6 +1111,9 @@ int show_unhandled_signals = 1;
+@@ -915,6 +1135,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, int write, struct vm_area_struct *vma)
  {
@@ -16346,7 +17222,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	if (write) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -948,17 +1147,16 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -948,17 +1171,29 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -16356,7 +17232,20 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	int fault;
  
 +	/* Get the faulting address: */
-+	const unsigned long address = read_cr2();
++	unsigned long address = read_cr2();
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	if (!user_mode(regs)) {
++		if (address < PAX_USER_SHADOW_BASE) {
++			if (search_exception_tables(regs->ip)) {
++				printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
++				printk(KERN_ERR "PAX: faulting IP: %pS\n", (void *)regs->ip);
++				show_trace_log_lvl(NULL, NULL, (void *)regs->sp, regs->bp, KERN_ERR);
++			}
++		} else if (address < 2 * PAX_USER_SHADOW_BASE)
++			address -= PAX_USER_SHADOW_BASE;
++	}
++#endif
 +
  	tsk = current;
  	mm = tsk->mm;
@@ -16367,7 +17256,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1018,7 +1216,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1018,7 +1253,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -16376,7 +17265,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1072,6 +1270,11 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1072,6 +1307,11 @@ do_page_fault(struct pt_regs *regs, unsi
  		might_sleep();
  	}
  
@@ -16388,7 +17277,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1083,18 +1286,24 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1083,18 +1323,24 @@ do_page_fault(struct pt_regs *regs, unsi
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -16412,19 +17301,19 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
 +	if (unlikely(address + 65536 + 32 * sizeof(unsigned long) < task_pt_regs(tsk)->sp)) {
 +		bad_area(regs, error_code, address);
 +		return;
-+	}
+ 	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (unlikely((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)) {
 +		bad_area(regs, error_code, address);
 +		return;
- 	}
++	}
 +#endif
 +
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1138,3 +1347,199 @@ good_area:
+@@ -1138,3 +1384,199 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -16908,7 +17797,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  			(unsigned long)(&__init_end));
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm/init_32.c linux-2.6.33.2-pax/arch/x86/mm/init_32.c
 --- linux-2.6.33.2/arch/x86/mm/init_32.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/mm/init_32.c	2010-03-10 19:50:21.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/mm/init_32.c	2010-04-05 02:17:16.000000000 +0200
 @@ -72,36 +72,6 @@ static __init void *alloc_low_page(void)
  }
  
@@ -17152,7 +18041,20 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  				 PAGE_SIZE);
  	if (bootmap == -1L)
  		panic("Cannot find bootmem map of size %ld\n", bootmap_size);
-@@ -881,7 +880,7 @@ void __init mem_init(void)
+@@ -864,6 +863,12 @@ void __init mem_init(void)
+ 
+ 	pci_iommu_alloc();
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	clone_pgd_range(get_cpu_pgd(0) + KERNEL_PGD_BOUNDARY,
++			swapper_pg_dir + KERNEL_PGD_BOUNDARY,
++			KERNEL_PGD_PTRS);
++#endif
++
+ #ifdef CONFIG_FLATMEM
+ 	BUG_ON(!mem_map);
+ #endif
+@@ -881,7 +886,7 @@ void __init mem_init(void)
  	set_highmem_pages_init();
  
  	codesize =  (unsigned long) &_etext - (unsigned long) &_text;
@@ -17161,7 +18063,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
  
  	printk(KERN_INFO "Memory: %luk/%luk available (%dk kernel code, "
-@@ -922,10 +921,10 @@ void __init mem_init(void)
+@@ -922,10 +927,10 @@ void __init mem_init(void)
  		((unsigned long)&__init_end -
  		 (unsigned long)&__init_begin) >> 10,
  
@@ -17175,7 +18077,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  		((unsigned long)&_etext - (unsigned long)&_text) >> 10);
  
  	/*
-@@ -1006,6 +1005,7 @@ void set_kernel_text_rw(void)
+@@ -1006,6 +1011,7 @@ void set_kernel_text_rw(void)
  	if (!kernel_set_to_readonly)
  		return;
  
@@ -17183,7 +18085,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	pr_debug("Set kernel text: %lx - %lx for read write\n",
  		 start, start+size);
  
-@@ -1020,6 +1020,7 @@ void set_kernel_text_ro(void)
+@@ -1020,6 +1026,7 @@ void set_kernel_text_ro(void)
  	if (!kernel_set_to_readonly)
  		return;
  
@@ -17191,7 +18093,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	pr_debug("Set kernel text: %lx - %lx for read only\n",
  		 start, start+size);
  
-@@ -1031,6 +1032,7 @@ void mark_rodata_ro(void)
+@@ -1031,6 +1038,7 @@ void mark_rodata_ro(void)
  	unsigned long start = PFN_ALIGN(_text);
  	unsigned long size = PFN_ALIGN(_etext) - start;
  
@@ -17201,7 +18103,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  		size >> 10);
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm/init_64.c linux-2.6.33.2-pax/arch/x86/mm/init_64.c
 --- linux-2.6.33.2/arch/x86/mm/init_64.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/mm/init_64.c	2010-02-24 21:52:51.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/mm/init_64.c	2010-04-05 02:17:16.000000000 +0200
 @@ -73,7 +73,7 @@ early_param("gbpages", parse_direct_gbpa
   * around without checking the pgd every time.
   */
@@ -17238,7 +18140,20 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  		}
  		pmd = pmd_offset(pud, phys);
  		BUG_ON(!pmd_none(*pmd));
-@@ -882,8 +882,8 @@ int kern_addr_valid(unsigned long addr)
+@@ -676,6 +676,12 @@ void __init mem_init(void)
+ 
+ 	pci_iommu_alloc();
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	clone_pgd_range(get_cpu_pgd(0) + KERNEL_PGD_BOUNDARY,
++			swapper_pg_dir + KERNEL_PGD_BOUNDARY,
++			KERNEL_PGD_PTRS);
++#endif
++
+ 	/* clear_bss() already clear the empty_zero_page */
+ 
+ 	reservedpages = 0;
+@@ -882,8 +888,8 @@ int kern_addr_valid(unsigned long addr)
  static struct vm_area_struct gate_vma = {
  	.vm_start	= VSYSCALL_START,
  	.vm_end		= VSYSCALL_START + (VSYSCALL_MAPPED_PAGES * PAGE_SIZE),
@@ -17249,7 +18164,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  };
  
  struct vm_area_struct *get_gate_vma(struct task_struct *tsk)
-@@ -917,7 +917,7 @@ int in_gate_area_no_task(unsigned long a
+@@ -917,7 +923,7 @@ int in_gate_area_no_task(unsigned long a
  
  const char *arch_vma_name(struct vm_area_struct *vma)
  {
@@ -17517,6 +18432,279 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  				cattr_name(want_flags),
  				(unsigned long long)paddr,
  				(unsigned long long)(paddr + size),
+diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm/pgtable.c linux-2.6.33.2-pax/arch/x86/mm/pgtable.c
+--- linux-2.6.33.2/arch/x86/mm/pgtable.c	2010-03-20 18:16:52.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/mm/pgtable.c	2010-04-05 02:17:17.000000000 +0200
+@@ -63,8 +63,12 @@ void ___pmd_free_tlb(struct mmu_gather *
+ #if PAGETABLE_LEVELS > 3
+ void ___pud_free_tlb(struct mmu_gather *tlb, pud_t *pud)
+ {
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
+ 	paravirt_release_pud(__pa(pud) >> PAGE_SHIFT);
+ 	tlb_remove_page(tlb, virt_to_page(pud));
++#endif
++
+ }
+ #endif	/* PAGETABLE_LEVELS > 3 */
+ #endif	/* PAGETABLE_LEVELS > 2 */
+@@ -83,8 +87,62 @@ static inline void pgd_list_del(pgd_t *p
+ 	list_del(&page->lru);
+ }
+ 
+-#define UNSHARED_PTRS_PER_PGD				\
+-	(SHARED_KERNEL_PMD ? KERNEL_PGD_BOUNDARY : PTRS_PER_PGD)
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++pteval_t clone_pgd_mask __read_only = ~_PAGE_PRESENT;
++#endif
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++void __clone_user_pgds(pgd_t *dst, const pgd_t *src, int count)
++{
++	while (count--)
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++		*dst++ = __pgd(pgd_val(*src++) & clone_pgd_mask);
++#else
++		*dst++ = *src++;
++#endif
++
++}
++
++void __shadow_user_pgds(pgd_t *dst, const pgd_t *src, int count)
++{
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	while (count--)
++		*dst++ = __pgd((pgd_val(*src++) | _PAGE_NX) & ~_PAGE_USER);
++#endif
++
++}
++#endif
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++static inline void pgd_ctor(pgd_t *pgd) {}
++static inline void pgd_dtor(pgd_t *pgd) {}
++#ifdef CONFIG_X86_64
++#define pxd_t				pud_t
++#define pyd_t				pgd_t
++#define paravirt_release_pxd(pfn)	paravirt_release_pud(pfn)
++#define pxd_free(mm, pud)		pud_free((mm), (pud))
++#define pyd_populate(mm, pgd, pud)	pgd_populate((mm), (pgd), (pud))
++#define pyd_offset(mm ,address)		pgd_offset((mm), (address))
++#define PYD_SIZE			PGDIR_SIZE
++#else
++#define pxd_t				pmd_t
++#define pyd_t				pud_t
++#define paravirt_release_pxd(pfn)	paravirt_release_pmd(pfn)
++#define pxd_free(mm, pud)		pmd_free((mm), (pud))
++#define pyd_populate(mm, pgd, pud)	pud_populate((mm), (pgd), (pud))
++#define pyd_offset(mm ,address)		pud_offset((mm), (address))
++#define PYD_SIZE			PUD_SIZE
++#endif
++#else
++#define pxd_t				pmd_t
++#define pyd_t				pud_t
++#define paravirt_release_pxd(pfn)	paravirt_release_pmd(pfn)
++#define pxd_free(mm, pmd)		pmd_free((mm), (pmd))
++#define pyd_populate(mm, pud, pmd)	pud_populate((mm), (pud), (pmd))
++#define pyd_offset(mm ,address)		pud_offset((mm), (address))
++#define PYD_SIZE			PUD_SIZE
+ 
+ static void pgd_ctor(pgd_t *pgd)
+ {
+@@ -119,6 +177,7 @@ static void pgd_dtor(pgd_t *pgd)
+ 	pgd_list_del(pgd);
+ 	spin_unlock_irqrestore(&pgd_lock, flags);
+ }
++#endif
+ 
+ /*
+  * List of all pgd's needed for non-PAE so it can invalidate entries
+@@ -131,7 +190,7 @@ static void pgd_dtor(pgd_t *pgd)
+  * -- wli
+  */
+ 
+-#ifdef CONFIG_X86_PAE
++#if defined(CONFIG_X86_32) && defined(CONFIG_X86_PAE)
+ /*
+  * In PAE mode, we need to do a cr3 reload (=tlb flush) when
+  * updating the top-level pagetable entries to guarantee the
+@@ -143,7 +202,7 @@ static void pgd_dtor(pgd_t *pgd)
+  * not shared between pagetables (!SHARED_KERNEL_PMDS), we allocate
+  * and initialize the kernel pmds here.
+  */
+-#define PREALLOCATED_PMDS	UNSHARED_PTRS_PER_PGD
++#define PREALLOCATED_PXDS	(SHARED_KERNEL_PMD ? KERNEL_PGD_BOUNDARY : PTRS_PER_PGD)
+ 
+ void pud_populate(struct mm_struct *mm, pud_t *pudp, pmd_t *pmd)
+ {
+@@ -162,36 +221,38 @@ void pud_populate(struct mm_struct *mm,
+ 	if (mm == current->active_mm)
+ 		write_cr3(read_cr3());
+ }
++#elif defined(CONFIG_X86_64) && defined(CONFIG_PAX_PER_CPU_PGD)
++#define PREALLOCATED_PXDS	USER_PGD_PTRS
+ #else  /* !CONFIG_X86_PAE */
+ 
+ /* No need to prepopulate any pagetable entries in non-PAE modes. */
+-#define PREALLOCATED_PMDS	0
++#define PREALLOCATED_PXDS	0
+ 
+ #endif	/* CONFIG_X86_PAE */
+ 
+-static void free_pmds(pmd_t *pmds[])
++static void free_pxds(pxd_t *pxds[])
+ {
+ 	int i;
+ 
+-	for(i = 0; i < PREALLOCATED_PMDS; i++)
+-		if (pmds[i])
+-			free_page((unsigned long)pmds[i]);
++	for(i = 0; i < PREALLOCATED_PXDS; i++)
++		if (pxds[i])
++			free_page((unsigned long)pxds[i]);
+ }
+ 
+-static int preallocate_pmds(pmd_t *pmds[])
++static int preallocate_pxds(pxd_t *pxds[])
+ {
+ 	int i;
+ 	bool failed = false;
+ 
+-	for(i = 0; i < PREALLOCATED_PMDS; i++) {
+-		pmd_t *pmd = (pmd_t *)__get_free_page(PGALLOC_GFP);
+-		if (pmd == NULL)
++	for(i = 0; i < PREALLOCATED_PXDS; i++) {
++		pxd_t *pxd = (pxd_t *)__get_free_page(PGALLOC_GFP);
++		if (pxd == NULL)
+ 			failed = true;
+-		pmds[i] = pmd;
++		pxds[i] = pxd;
+ 	}
+ 
+ 	if (failed) {
+-		free_pmds(pmds);
++		free_pxds(pxds);
+ 		return -ENOMEM;
+ 	}
+ 
+@@ -204,51 +265,56 @@ static int preallocate_pmds(pmd_t *pmds[
+  * preallocate which never got a corresponding vma will need to be
+  * freed manually.
+  */
+-static void pgd_mop_up_pmds(struct mm_struct *mm, pgd_t *pgdp)
++static void pgd_mop_up_pxds(struct mm_struct *mm, pgd_t *pgdp)
+ {
+ 	int i;
+ 
+-	for(i = 0; i < PREALLOCATED_PMDS; i++) {
++	for(i = 0; i < PREALLOCATED_PXDS; i++) {
+ 		pgd_t pgd = pgdp[i];
+ 
+ 		if (pgd_val(pgd) != 0) {
+-			pmd_t *pmd = (pmd_t *)pgd_page_vaddr(pgd);
++			pxd_t *pxd = (pxd_t *)pgd_page_vaddr(pgd);
+ 
+-			pgdp[i] = native_make_pgd(0);
++			set_pgd(pgdp + i, native_make_pgd(0));
+ 
+-			paravirt_release_pmd(pgd_val(pgd) >> PAGE_SHIFT);
+-			pmd_free(mm, pmd);
++			paravirt_release_pxd(pgd_val(pgd) >> PAGE_SHIFT);
++			pxd_free(mm, pxd);
+ 		}
+ 	}
+ }
+ 
+-static void pgd_prepopulate_pmd(struct mm_struct *mm, pgd_t *pgd, pmd_t *pmds[])
++static void pgd_prepopulate_pxd(struct mm_struct *mm, pgd_t *pgd, pxd_t *pxds[])
+ {
+-	pud_t *pud;
++	pyd_t *pyd;
+ 	unsigned long addr;
+ 	int i;
+ 
+-	if (PREALLOCATED_PMDS == 0) /* Work around gcc-3.4.x bug */
++	if (PREALLOCATED_PXDS == 0) /* Work around gcc-3.4.x bug */
+ 		return;
+ 
+-	pud = pud_offset(pgd, 0);
+-
+- 	for (addr = i = 0; i < PREALLOCATED_PMDS;
+-	     i++, pud++, addr += PUD_SIZE) {
+-		pmd_t *pmd = pmds[i];
++#ifdef CONFIG_X86_64
++	pyd = pyd_offset(mm, 0L);
++#else
++	pyd = pyd_offset(pgd, 0L);
++#endif
++
++ 	for (addr = i = 0; i < PREALLOCATED_PXDS;
++	     i++, pyd++, addr += PYD_SIZE) {
++		pxd_t *pxd = pxds[i];
+ 
+ 		if (i >= KERNEL_PGD_BOUNDARY)
+-			memcpy(pmd, (pmd_t *)pgd_page_vaddr(swapper_pg_dir[i]),
+-			       sizeof(pmd_t) * PTRS_PER_PMD);
++			memcpy(pxd, (pxd_t *)pgd_page_vaddr(swapper_pg_dir[i]),
++			       sizeof(pxd_t) * PTRS_PER_PMD);
+ 
+-		pud_populate(mm, pud, pmd);
++		pyd_populate(mm, pyd, pxd);
+ 	}
+ }
+ 
+ pgd_t *pgd_alloc(struct mm_struct *mm)
+ {
+ 	pgd_t *pgd;
+-	pmd_t *pmds[PREALLOCATED_PMDS];
++	pxd_t *pxds[PREALLOCATED_PXDS];
++
+ 	unsigned long flags;
+ 
+ 	pgd = (pgd_t *)__get_free_page(PGALLOC_GFP);
+@@ -258,11 +324,11 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+ 
+ 	mm->pgd = pgd;
+ 
+-	if (preallocate_pmds(pmds) != 0)
++	if (preallocate_pxds(pxds) != 0)
+ 		goto out_free_pgd;
+ 
+ 	if (paravirt_pgd_alloc(mm) != 0)
+-		goto out_free_pmds;
++		goto out_free_pxds;
+ 
+ 	/*
+ 	 * Make sure that pre-populating the pmds is atomic with
+@@ -272,14 +338,14 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
+ 	spin_lock_irqsave(&pgd_lock, flags);
+ 
+ 	pgd_ctor(pgd);
+-	pgd_prepopulate_pmd(mm, pgd, pmds);
++	pgd_prepopulate_pxd(mm, pgd, pxds);
+ 
+ 	spin_unlock_irqrestore(&pgd_lock, flags);
+ 
+ 	return pgd;
+ 
+-out_free_pmds:
+-	free_pmds(pmds);
++out_free_pxds:
++	free_pxds(pxds);
+ out_free_pgd:
+ 	free_page((unsigned long)pgd);
+ out:
+@@ -288,7 +354,7 @@ out:
+ 
+ void pgd_free(struct mm_struct *mm, pgd_t *pgd)
+ {
+-	pgd_mop_up_pmds(mm, pgd);
++	pgd_mop_up_pxds(mm, pgd);
+ 	pgd_dtor(pgd);
+ 	paravirt_pgd_free(mm, pgd);
+ 	free_page((unsigned long)pgd);
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm/pgtable_32.c linux-2.6.33.2-pax/arch/x86/mm/pgtable_32.c
 --- linux-2.6.33.2/arch/x86/mm/pgtable_32.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/mm/pgtable_32.c	2010-02-24 21:52:51.000000000 +0100
@@ -17536,7 +18724,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  	 * It's enough to flush this one mapping.
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm/tlb.c linux-2.6.33.2-pax/arch/x86/mm/tlb.c
 --- linux-2.6.33.2/arch/x86/mm/tlb.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/arch/x86/mm/tlb.c	2010-02-24 21:52:51.000000000 +0100
++++ linux-2.6.33.2-pax/arch/x86/mm/tlb.c	2010-04-05 02:17:16.000000000 +0200
 @@ -13,7 +13,7 @@
  #include <asm/uv/uv.h>
  
@@ -17546,6 +18734,18 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/mm
  
  /*
   *	Smarter SMP flushing macros.
+@@ -62,7 +62,11 @@ void leave_mm(int cpu)
+ 		BUG();
+ 	cpumask_clear_cpu(cpu,
+ 			  mm_cpumask(percpu_read(cpu_tlbstate.active_mm)));
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
+ 	load_cr3(swapper_pg_dir);
++#endif
++
+ }
+ EXPORT_SYMBOL_GPL(leave_mm);
+ 
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/arch/x86/oprofile/backtrace.c linux-2.6.33.2-pax/arch/x86/oprofile/backtrace.c
 --- linux-2.6.33.2/arch/x86/oprofile/backtrace.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.2-pax/arch/x86/oprofile/backtrace.c	2010-03-20 16:35:43.000000000 +0100
@@ -32988,14 +34188,21 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/init/initra
  	return 0;
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/init/main.c linux-2.6.33.2-pax/init/main.c
 --- linux-2.6.33.2/init/main.c	2010-04-04 21:20:33.000000000 +0200
-+++ linux-2.6.33.2-pax/init/main.c	2010-04-04 21:25:55.000000000 +0200
-@@ -183,6 +183,35 @@ static int __init set_reset_devices(char
++++ linux-2.6.33.2-pax/init/main.c	2010-04-05 02:17:16.000000000 +0200
+@@ -183,6 +183,50 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
  
-+#if defined(CONFIG_PAX_MEMORY_UDEREF) && defined(CONFIG_X86_32)
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++extern void pax_enter_kernel_user(void);
++extern void pax_exit_kernel_user(void);
++extern pteval_t clone_pgd_mask;
++#endif
++
++#if defined(CONFIG_X86) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +static int __init setup_pax_nouderef(char *str)
 +{
++#ifdef CONFIG_X86_32
 +	unsigned int cpu;
 +
 +	for (cpu = 0; cpu < NR_CPUS; cpu++) {
@@ -33005,6 +34212,14 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/init/main.c
 +	asm("mov %0, %%ds" : : "r" (__KERNEL_DS) : "memory");
 +	asm("mov %0, %%es" : : "r" (__KERNEL_DS) : "memory");
 +	asm("mov %0, %%ss" : : "r" (__KERNEL_DS) : "memory");
++#else
++	char *p;
++	p = (char *)pax_enter_kernel_user;
++	*p = 0xc3;
++	p = (char *)pax_exit_kernel_user;
++	*p = 0xc3;
++	clone_pgd_mask = ~(pteval_t)0UL;
++#endif
 +
 +	return 0;
 +}
@@ -33025,7 +34240,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/init/main.c
  static char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -697,52 +726,53 @@ int initcall_debug;
+@@ -697,52 +741,53 @@ int initcall_debug;
  core_param(initcall_debug, initcall_debug, bool, 0644);
  
  static char msgbuf[64];
@@ -33095,7 +34310,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/init/main.c
  }
  
  
-@@ -881,7 +911,7 @@ static int __init kernel_init(void * unu
+@@ -881,7 +926,7 @@ static int __init kernel_init(void * unu
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -38467,8 +39682,8 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/scripts/pnm
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/security/Kconfig linux-2.6.33.2-pax/security/Kconfig
 --- linux-2.6.33.2/security/Kconfig	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.2-pax/security/Kconfig	2010-03-20 16:35:44.000000000 +0100
-@@ -4,6 +4,483 @@
++++ linux-2.6.33.2-pax/security/Kconfig	2010-04-05 02:17:16.000000000 +0200
+@@ -4,6 +4,494 @@
  
  menu "Security options"
  
@@ -38557,6 +39772,15 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/security/Kc
 +	config PAX_HOOK_ACL_FLAGS
 +		bool 'hook'
 +endchoice
++
++	config PAX_PER_CPU_PGD
++	bool
++
++	config TASK_SIZE_MAX_SHIFT
++	int
++	depends on X86_64
++	default 47 if !PAX_PER_CPU_PGD
++	default 42 if PAX_PER_CPU_PGD
 +
 +endmenu
 +
@@ -38759,6 +39983,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/security/Kc
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
 +	depends on PAX_NOEXEC && (PPC || X86) && !EFI && !COMPAT_VDSO && !XEN && (!X86_32 || X86_WP_WORKS_OK)
++	select PAX_PER_CPU_PGD if X86_64 || (X86_32 && X86_PAE)
 +	help
 +	  This is the kernel land equivalent of PAGEEXEC and MPROTECT,
 +	  that is, enabling this option will make it harder to inject
@@ -38894,7 +40119,8 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/security/Kc
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
-+	depends on X86_32 && !COMPAT_VDSO && !UML_X86 && !XEN
++	depends on X86 && !COMPAT_VDSO && !UML_X86 && !XEN
++	select PAX_PER_CPU_PGD if X86_64
 +	help
 +	  By saying Y here the kernel will be prevented from dereferencing
 +	  userland pointers in contexts where the kernel expects only kernel
@@ -38952,7 +40178,7 @@ diff -NurpX linux-2.6.33.2-pax/Documentation/dontdiff linux-2.6.33.2/security/Kc
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -124,7 +601,7 @@ config INTEL_TXT
+@@ -124,7 +612,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
