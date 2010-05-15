@@ -8301,6 +8301,17 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/in
  }
  
  /*
+diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/include/asm/pgtable_64_types.h linux-2.6.33.3-pax/arch/x86/include/asm/pgtable_64_types.h
+--- linux-2.6.33.3/arch/x86/include/asm/pgtable_64_types.h	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.3-pax/arch/x86/include/asm/pgtable_64_types.h	2010-05-11 11:17:59.000000000 +0200
+@@ -59,5 +59,7 @@ typedef struct { pteval_t pte; } pte_t;
+ #define MODULES_VADDR    _AC(0xffffffffa0000000, UL)
+ #define MODULES_END      _AC(0xffffffffff000000, UL)
+ #define MODULES_LEN   (MODULES_END - MODULES_VADDR)
++#define MODULES_EXEC_VADDR MODULES_VADDR
++#define MODULES_EXEC_END MODULES_END
+ 
+ #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/include/asm/pgtable_types.h linux-2.6.33.3-pax/arch/x86/include/asm/pgtable_types.h
 --- linux-2.6.33.3/arch/x86/include/asm/pgtable_types.h	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.3-pax/arch/x86/include/asm/pgtable_types.h	2010-04-05 03:56:19.000000000 +0200
@@ -11072,7 +11083,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  	CFI_ADJUST_CFA_OFFSET -24
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/kernel/entry_64.S linux-2.6.33.3-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.33.3/arch/x86/kernel/entry_64.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.3-pax/arch/x86/kernel/entry_64.S	2010-04-07 18:43:57.000000000 +0200
++++ linux-2.6.33.3-pax/arch/x86/kernel/entry_64.S	2010-05-14 11:29:16.000000000 +0200
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -11271,6 +11282,24 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
+@@ -317,7 +501,7 @@ ENTRY(save_args)
+ 	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
+ 	movq_cfi rbp, 8		/* push %rbp */
+ 	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
+-	testl $3, CS(%rdi)
++	testb $3, CS(%rdi)
+ 	je 1f
+ 	SWAPGS
+ 	/*
+@@ -409,7 +593,7 @@ ENTRY(ret_from_fork)
+ 
+ 	RESTORE_REST
+ 
+-	testl $3, CS-ARGOFFSET(%rsp)		# from kernel_thread?
++	testb $3, CS-ARGOFFSET(%rsp)		# from kernel_thread?
+ 	je   int_ret_from_sys_call
+ 
+ 	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
 @@ -468,6 +652,11 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
@@ -11295,25 +11324,42 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -800,7 +994,16 @@ END(interrupt)
+@@ -613,7 +807,7 @@ tracesys:
+ GLOBAL(int_ret_from_sys_call)
+ 	DISABLE_INTERRUPTS(CLBR_NONE)
+ 	TRACE_IRQS_OFF
+-	testl $3,CS-ARGOFFSET(%rsp)
++	testb $3,CS-ARGOFFSET(%rsp)
+ 	je retint_restore_args
+ 	movl $_TIF_ALLWORK_MASK,%edi
+ 	/* edi:	mask to check */
+@@ -800,6 +994,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
--	call \func
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testl $3, CS(%rdi)
++	testb $3, CS(%rdi)
 +	jnz 1f
 +	call pax_enter_kernel
 +	jmp 2f
 +1:	call pax_enter_kernel_user
++2:
 +#else
 +	call pax_enter_kernel
 +#endif
-+2:	call \func
+ 	call \func
  	.endm
  
- /*
-@@ -848,12 +1051,18 @@ retint_swapgs:		/* return to user-space
+@@ -826,7 +1030,7 @@ ret_from_intr:
+ 	CFI_ADJUST_CFA_OFFSET	-8
+ exit_intr:
+ 	GET_THREAD_INFO(%rcx)
+-	testl $3,CS-ARGOFFSET(%rsp)
++	testb $3,CS-ARGOFFSET(%rsp)
+ 	je retint_kernel
+ 
+ 	/* Interrupt came from user space */
+@@ -848,12 +1052,18 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -11332,57 +11378,55 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1040,7 +1249,16 @@ ENTRY(\sym)
+@@ -1040,6 +1250,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
--	movq %rsp,%rdi		/* pt_regs pointer */
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testl $3, CS(%rsp)
++	testb $3, CS(%rsp)
 +	jnz 1f
 +	call pax_enter_kernel
 +	jmp 2f
 +1:	call pax_enter_kernel_user
++2:
 +#else
 +	call pax_enter_kernel
 +#endif
-+2:	movq %rsp,%rdi		/* pt_regs pointer */
+ 	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
- 	jmp error_exit		/* %ebx: no swapgs flag */
-@@ -1057,7 +1275,16 @@ ENTRY(\sym)
+@@ -1057,6 +1277,16 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
--	movq %rsp,%rdi		/* pt_regs pointer */
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testl $3, CS(%rsp)
++	testb $3, CS(%rsp)
 +	jnz 1f
 +	call pax_enter_kernel
 +	jmp 2f
 +1:	call pax_enter_kernel_user
++2:
 +#else
 +	call pax_enter_kernel
 +#endif
-+2:	movq %rsp,%rdi		/* pt_regs pointer */
+ 	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
- 	jmp paranoid_exit	/* %ebx: no swapgs flag */
-@@ -1074,9 +1301,23 @@ ENTRY(\sym)
+@@ -1074,9 +1304,24 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
--	movq %rsp,%rdi		/* pt_regs pointer */
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testl $3, CS(%rsp)
++	testb $3, CS(%rsp)
 +	jnz 1f
 +	call pax_enter_kernel
 +	jmp 2f
 +1:	call pax_enter_kernel_user
++2:
 +#else
 +	call pax_enter_kernel
 +#endif
-+2:	movq %rsp,%rdi		/* pt_regs pointer */
+ 	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
 -	PER_CPU(init_tss, %r12)
 +#ifdef CONFIG_SMP
@@ -11394,47 +11438,60 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%r12)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%r12)
-@@ -1093,7 +1334,16 @@ ENTRY(\sym)
+@@ -1093,6 +1338,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
--	movq %rsp,%rdi			/* pt_regs pointer */
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testl $3, CS(%rsp)
++	testb $3, CS(%rsp)
 +	jnz 1f
 +	call pax_enter_kernel
 +	jmp 2f
 +1:	call pax_enter_kernel_user
++2:
 +#else
 +	call pax_enter_kernel
 +#endif
-+2:	movq %rsp,%rdi			/* pt_regs pointer */
+ 	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
- 	call \do_sym
-@@ -1112,7 +1362,16 @@ ENTRY(\sym)
+@@ -1112,6 +1367,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
--	movq %rsp,%rdi			/* pt_regs pointer */
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testl $3, CS(%rsp)
++	testb $3, CS(%rsp)
 +	jnz 1f
 +	call pax_enter_kernel
 +	jmp 2f
 +1:	call pax_enter_kernel_user
++2:
 +#else
 +	call pax_enter_kernel
 +#endif
-+2:	movq %rsp,%rdi			/* pt_regs pointer */
+ 	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
- 	call \do_sym
-@@ -1373,11 +1632,13 @@ ENTRY(paranoid_exit)
- 	testl $3,CS(%rsp)
+@@ -1370,14 +1635,27 @@ ENTRY(paranoid_exit)
+ 	TRACE_IRQS_OFF
+ 	testl %ebx,%ebx				/* swapgs needed? */
+ 	jnz paranoid_restore
+-	testl $3,CS(%rsp)
++	testb $3,CS(%rsp)
  	jnz   paranoid_userspace
- paranoid_swapgs:
++#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	call pax_exit_kernel
++	TRACE_IRQS_IRETQ 0
++	SWAPGS_UNSAFE_STACK
++	RESTORE_ALL 8
++	jmp irq_return
++#endif
+ paranoid_swapgs:
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_exit_kernel_user
++#else
++	call pax_exit_kernel
++#endif
  	TRACE_IRQS_IRETQ 0
  	SWAPGS_UNSAFE_STACK
  	RESTORE_ALL 8
@@ -11444,24 +11501,39 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
-@@ -1499,6 +1760,16 @@ ENTRY(nmi)
+@@ -1435,7 +1713,7 @@ ENTRY(error_entry)
+ 	movq_cfi r14, R14+8
+ 	movq_cfi r15, R15+8
+ 	xorl %ebx,%ebx
+-	testl $3,CS+8(%rsp)
++	testb $3,CS+8(%rsp)
+ 	je error_kernelspace
+ error_swapgs:
+ 	SWAPGS
+@@ -1499,6 +1777,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testl $3, CS(%rsp)
++	testb $3, CS(%rsp)
 +	jnz 1f
 +	call pax_enter_kernel
 +	jmp 2f
 +1:	call pax_enter_kernel_user
++2:
 +#else
 +	call pax_enter_kernel
 +#endif
-+2:
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1514,6 +1785,7 @@ ENTRY(nmi)
+@@ -1509,11 +1797,12 @@ ENTRY(nmi)
+ 	DISABLE_INTERRUPTS(CLBR_NONE)
+ 	testl %ebx,%ebx				/* swapgs needed? */
+ 	jnz nmi_restore
+-	testl $3,CS(%rsp)
++	testb $3,CS(%rsp)
+ 	jnz nmi_userspace
  nmi_swapgs:
  	SWAPGS_UNSAFE_STACK
  nmi_restore:
@@ -12364,7 +12436,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  	.flags			= KGDB_HW_BREAKPOINT,
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/kernel/kprobes.c linux-2.6.33.3-pax/arch/x86/kernel/kprobes.c
 --- linux-2.6.33.3/arch/x86/kernel/kprobes.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.3-pax/arch/x86/kernel/kprobes.c	2010-04-05 03:56:24.000000000 +0200
++++ linux-2.6.33.3-pax/arch/x86/kernel/kprobes.c	2010-05-14 14:17:41.000000000 +0200
 @@ -113,9 +113,13 @@ static void __kprobes set_jmp_op(void *f
  		char op;
  		s32 raddr;
@@ -12380,7 +12452,16 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  }
  
  /*
-@@ -323,16 +327,18 @@ static void __kprobes fix_riprel(struct
+@@ -316,23 +320,27 @@ static void __kprobes fix_riprel(struct
+ 			  (u8 *) p->ainsn.insn;
+ 		BUG_ON((s64) (s32) newdisp != newdisp); /* Sanity check.  */
+ 		disp = (u8 *) p->ainsn.insn + insn_offset_displacement(&insn);
++		pax_open_kernel();
+ 		*(s32 *) disp = (s32) newdisp;
++		pax_close_kernel();
+ 	}
+ #endif
+ }
  
  static void __kprobes arch_copy_kprobe(struct kprobe *p)
  {
@@ -12402,7 +12483,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  }
  
  int __kprobes arch_prepare_kprobe(struct kprobe *p)
-@@ -412,7 +418,7 @@ static void __kprobes prepare_singlestep
+@@ -412,7 +420,7 @@ static void __kprobes prepare_singlestep
  	if (p->opcode == BREAKPOINT_INSTRUCTION)
  		regs->ip = (unsigned long)p->addr;
  	else
@@ -12411,7 +12492,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  }
  
  void __kprobes arch_prepare_kretprobe(struct kretprobe_instance *ri,
-@@ -433,7 +439,7 @@ static void __kprobes setup_singlestep(s
+@@ -433,7 +441,7 @@ static void __kprobes setup_singlestep(s
  	if (p->ainsn.boostable == 1 && !p->post_handler) {
  		/* Boost up -- we can execute copied instructions directly */
  		reset_current_kprobe();
@@ -12420,7 +12501,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  		preempt_enable_no_resched();
  		return;
  	}
-@@ -490,7 +496,7 @@ static int __kprobes kprobe_handler(stru
+@@ -490,7 +498,7 @@ static int __kprobes kprobe_handler(stru
  	struct kprobe_ctlblk *kcb;
  
  	addr = (kprobe_opcode_t *)(regs->ip - sizeof(kprobe_opcode_t));
@@ -12429,7 +12510,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  		/*
  		 * The breakpoint instruction was removed right
  		 * after we hit it.  Another cpu has removed
-@@ -742,7 +748,7 @@ static void __kprobes resume_execution(s
+@@ -742,7 +750,7 @@ static void __kprobes resume_execution(s
  		struct pt_regs *regs, struct kprobe_ctlblk *kcb)
  {
  	unsigned long *tos = stack_addr(regs);
@@ -12438,7 +12519,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/ke
  	unsigned long orig_ip = (unsigned long)p->addr;
  	kprobe_opcode_t *insn = p->ainsn.insn;
  
-@@ -925,7 +931,7 @@ int __kprobes kprobe_exceptions_notify(s
+@@ -925,7 +933,7 @@ int __kprobes kprobe_exceptions_notify(s
  	struct die_args *args = data;
  	int ret = NOTIFY_DONE;
  
@@ -14732,7 +14813,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/kv
  	.hardware_setup = svm_hardware_setup,
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/kvm/vmx.c linux-2.6.33.3-pax/arch/x86/kvm/vmx.c
 --- linux-2.6.33.3/arch/x86/kvm/vmx.c	2010-04-30 00:24:05.000000000 +0200
-+++ linux-2.6.33.3-pax/arch/x86/kvm/vmx.c	2010-04-30 00:24:13.000000000 +0200
++++ linux-2.6.33.3-pax/arch/x86/kvm/vmx.c	2010-05-11 22:38:38.000000000 +0200
 @@ -582,7 +582,11 @@ static void reload_tss(void)
  
  	kvm_get_gdt(&gdt);
@@ -14781,7 +14862,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/kv
  		/* Save guest registers, load host registers, keep flags */
  		"xchg %0,     (%%"R"sp) \n\t"
  		"mov %%"R"ax, %c[rax](%0) \n\t"
-@@ -3807,6 +3820,11 @@ static void vmx_vcpu_run(struct kvm_vcpu
+@@ -3807,8 +3820,13 @@ static void vmx_vcpu_run(struct kvm_vcpu
  		[r15]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R15])),
  #endif
  		[cr2]"i"(offsetof(struct vcpu_vmx, vcpu.arch.cr2))
@@ -14791,8 +14872,11 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/kv
 +#endif
 +
  	      : "cc", "memory"
- 		, R"bx", R"di", R"si"
+-		, R"bx", R"di", R"si"
++		, R"ax", R"bx", R"di", R"si"
  #ifdef CONFIG_X86_64
+ 		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+ #endif
 @@ -3825,7 +3843,7 @@ static void vmx_vcpu_run(struct kvm_vcpu
  	if (vmx->rmode.irq.pending)
  		fixup_rmode_irq(vmx);
@@ -17063,7 +17147,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm/fault.c linux-2.6.33.3-pax/arch/x86/mm/fault.c
 --- linux-2.6.33.3/arch/x86/mm/fault.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.3-pax/arch/x86/mm/fault.c	2010-04-12 23:38:27.000000000 +0200
++++ linux-2.6.33.3-pax/arch/x86/mm/fault.c	2010-05-08 02:55:50.000000000 +0200
 @@ -11,10 +11,19 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
@@ -17124,7 +17208,43 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  DEFINE_SPINLOCK(pgd_lock);
  LIST_HEAD(pgd_list);
  
-@@ -333,15 +366,27 @@ void vmalloc_sync_all(void)
+@@ -225,11 +258,24 @@ void vmalloc_sync_all(void)
+ 	     address += PMD_SIZE) {
+ 
+ 		unsigned long flags;
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		unsigned long cpu;
++#else
+ 		struct page *page;
++#endif
+ 
+ 		spin_lock_irqsave(&pgd_lock, flags);
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		for (cpu = 0; cpu < NR_CPUS; ++cpu) {
++			pgd_t *pgd = get_cpu_pgd(cpu);
++#else
+ 		list_for_each_entry(page, &pgd_list, lru) {
+-			if (!vmalloc_sync_one(page_address(page), address))
++			pgd_t *pgd = page_address(page);
++#endif
++
++			if (!vmalloc_sync_one(pgd, address))
+ 				break;
+ 		}
+ 		spin_unlock_irqrestore(&pgd_lock, flags);
+@@ -258,6 +304,9 @@ static noinline __kprobes int vmalloc_fa
+ 	 * Do _not_ use "current" here. We might be inside
+ 	 * an interrupt in the middle of a task switch..
+ 	 */
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	BUG_ON(__pa(get_cpu_pgd(smp_processor_id())) != (read_cr3() & PHYSICAL_PAGE_MASK));
++#endif
+ 	pgd_paddr = read_cr3();
+ 	pmd_k = vmalloc_sync_one(__va(pgd_paddr), address);
+ 	if (!pmd_k)
+@@ -333,15 +382,27 @@ void vmalloc_sync_all(void)
  
  		const pgd_t *pgd_ref = pgd_offset_k(address);
  		unsigned long flags;
@@ -17152,7 +17272,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  			if (pgd_none(*pgd))
  				set_pgd(pgd, *pgd_ref);
  			else
-@@ -374,7 +419,14 @@ static noinline __kprobes int vmalloc_fa
+@@ -374,7 +435,14 @@ static noinline __kprobes int vmalloc_fa
  	 * happen within a race in page table update. In the later
  	 * case just flush:
  	 */
@@ -17167,7 +17287,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  	pgd_ref = pgd_offset_k(address);
  	if (pgd_none(*pgd_ref))
  		return -1;
-@@ -536,7 +588,7 @@ static int is_errata93(struct pt_regs *r
+@@ -536,7 +604,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -17176,7 +17296,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  		return 1;
  #endif
  	return 0;
-@@ -563,7 +615,7 @@ static int is_f00f_bug(struct pt_regs *r
+@@ -563,7 +631,7 @@ static int is_f00f_bug(struct pt_regs *r
  }
  
  static const char nx_warning[] = KERN_CRIT
@@ -17185,7 +17305,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  
  static void
  show_fault_oops(struct pt_regs *regs, unsigned long error_code,
-@@ -572,15 +624,21 @@ show_fault_oops(struct pt_regs *regs, un
+@@ -572,15 +640,21 @@ show_fault_oops(struct pt_regs *regs, un
  	if (!oops_may_print())
  		return;
  
@@ -17209,7 +17329,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -705,6 +763,68 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -705,6 +779,68 @@ __bad_area_nosemaphore(struct pt_regs *r
  		       unsigned long address, int si_code)
  {
  	struct task_struct *tsk = current;
@@ -17278,7 +17398,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
-@@ -849,6 +969,106 @@ static int spurious_fault_check(unsigned
+@@ -849,6 +985,106 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -17385,7 +17505,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -915,6 +1135,9 @@ int show_unhandled_signals = 1;
+@@ -915,6 +1151,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, int write, struct vm_area_struct *vma)
  {
@@ -17395,7 +17515,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  	if (write) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -948,17 +1171,31 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -948,17 +1187,31 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -17431,7 +17551,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1018,7 +1255,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1018,7 +1271,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -17440,7 +17560,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1072,6 +1309,11 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1072,6 +1325,11 @@ do_page_fault(struct pt_regs *regs, unsi
  		might_sleep();
  	}
  
@@ -17452,7 +17572,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1083,18 +1325,24 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1083,18 +1341,24 @@ do_page_fault(struct pt_regs *regs, unsi
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -17476,19 +17596,19 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
 +	if (unlikely(address + 65536 + 32 * sizeof(unsigned long) < task_pt_regs(tsk)->sp)) {
 +		bad_area(regs, error_code, address);
 +		return;
-+	}
+ 	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (unlikely((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)) {
 +		bad_area(regs, error_code, address);
 +		return;
- 	}
++	}
 +#endif
 +
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1138,3 +1386,199 @@ good_area:
+@@ -1138,3 +1402,199 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -18897,6 +19017,25 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm
  
  	/*
  	 * It's enough to flush this one mapping.
+diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm/setup_nx.c linux-2.6.33.3-pax/arch/x86/mm/setup_nx.c
+--- linux-2.6.33.3/arch/x86/mm/setup_nx.c	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.3-pax/arch/x86/mm/setup_nx.c	2010-05-11 15:56:29.000000000 +0200
+@@ -7,6 +7,7 @@
+ 
+ static int disable_nx __cpuinitdata;
+ 
++#if defined(CONFIG_X86_PAE) && !defined(CONFIG_PAX_PAGEEXEC)
+ /*
+  * noexec = on|off
+  *
+@@ -28,6 +29,7 @@ static int __init noexec_setup(char *str
+ 	return 0;
+ }
+ early_param("noexec", noexec_setup);
++#endif
+ 
+ void __cpuinit x86_configure_nx(void)
+ {
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/mm/tlb.c linux-2.6.33.3-pax/arch/x86/mm/tlb.c
 --- linux-2.6.33.3/arch/x86/mm/tlb.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.3-pax/arch/x86/mm/tlb.c	2010-04-05 03:56:29.000000000 +0200
@@ -19716,7 +19855,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/vd
 -__setup("vdso=", vdso_setup);
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/xen/enlighten.c linux-2.6.33.3-pax/arch/x86/xen/enlighten.c
 --- linux-2.6.33.3/arch/x86/xen/enlighten.c	2010-03-21 00:54:29.000000000 +0100
-+++ linux-2.6.33.3-pax/arch/x86/xen/enlighten.c	2010-04-05 03:56:29.000000000 +0200
++++ linux-2.6.33.3-pax/arch/x86/xen/enlighten.c	2010-05-11 15:52:06.000000000 +0200
 @@ -73,8 +73,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -19735,7 +19874,23 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/arch/x86/xe
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
-@@ -1133,13 +1131,6 @@ asmlinkage void __init xen_start_kernel(
+@@ -1103,6 +1101,15 @@ asmlinkage void __init xen_start_kernel(
+ 
+ 	/* Work out if we support NX */
+ 	x86_configure_nx();
++#if defined (CONFIG_X86_64) || defined(CONFIG_X86_PAE)
++	if (cpu_has_nx) {
++		unsigned l, h;
++
++		rdmsr(MSR_EFER, l, h);
++		l |= EFER_NX;
++		wrmsr(MSR_EFER, l, h);
++	}
++#endif
+ 
+ 	xen_setup_features();
+ 
+@@ -1133,13 +1140,6 @@ asmlinkage void __init xen_start_kernel(
  
  	machine_ops = xen_machine_ops;
  
@@ -34195,13 +34350,13 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/include/lin
  #endif		/* __LINUX_UACCESS_H__ */
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/include/linux/vmalloc.h linux-2.6.33.3-pax/include/linux/vmalloc.h
 --- linux-2.6.33.3/include/linux/vmalloc.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.3-pax/include/linux/vmalloc.h	2010-04-05 03:57:12.000000000 +0200
++++ linux-2.6.33.3-pax/include/linux/vmalloc.h	2010-05-11 11:42:11.000000000 +0200
 @@ -13,6 +13,11 @@ struct vm_area_struct;		/* vma defining
  #define VM_MAP		0x00000004	/* vmap()ed pages */
  #define VM_USERMAP	0x00000008	/* suitable for remap_vmalloc_range */
  #define VM_VPAGES	0x00000010	/* buffer for pages was vmalloc'ed */
 +
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_MODULES) && defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
 +#define VM_KERNEXEC	0x00000020	/* allocate from executable kernel memory range */
 +#endif
 +
@@ -39284,7 +39439,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/mm/util.c l
  }
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/mm/vmalloc.c linux-2.6.33.3-pax/mm/vmalloc.c
 --- linux-2.6.33.3/mm/vmalloc.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.3-pax/mm/vmalloc.c	2010-04-05 03:57:21.000000000 +0200
++++ linux-2.6.33.3-pax/mm/vmalloc.c	2010-05-12 13:15:43.000000000 +0200
 @@ -40,8 +40,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -39396,12 +39551,12 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/mm/vmalloc.
  
  	BUG_ON(in_interrupt());
 +
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_MODULES) && defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
 +	if (flags & VM_KERNEXEC) {
 +		if (start != VMALLOC_START || end != VMALLOC_END)
 +			return NULL;
-+		start = (unsigned long)&MODULES_EXEC_VADDR;
-+		end = (unsigned long)&MODULES_EXEC_END;
++		start = (unsigned long)MODULES_EXEC_VADDR;
++		end = (unsigned long)MODULES_EXEC_END;
 +	}
 +#endif
 +
@@ -39412,7 +39567,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/mm/vmalloc.
  	if (count > totalram_pages)
  		return NULL;
  
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_MODULES) && defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
 +	if (!(pgprot_val(prot) & _PAGE_NX))
 +		flags |= VM_KERNEXEC;
 +#endif
@@ -39424,7 +39579,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/mm/vmalloc.
  	if (!size || (size >> PAGE_SHIFT) > totalram_pages)
  		return NULL;
  
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_MODULES) && defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
 +	if (!(pgprot_val(prot) & _PAGE_NX))
 +		area = __get_vm_area_node(size, align, VM_ALLOC | VM_KERNEXEC, VMALLOC_START, VMALLOC_END,
 +						node, gfp_mask, caller);
@@ -40143,6 +40298,18 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/net/tipc/so
 +		}
  		sock->state = SS_DISCONNECTING;
  	}
+ 
+diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/net/wireless/wext-core.c linux-2.6.33.3-pax/net/wireless/wext-core.c
+--- linux-2.6.33.3/net/wireless/wext-core.c	2010-02-24 19:52:17.000000000 +0100
++++ linux-2.6.33.3-pax/net/wireless/wext-core.c	2010-05-13 22:59:46.000000000 +0200
+@@ -760,7 +760,7 @@ static int ioctl_standard_iw_point(struc
+ 	}
+ 
+ 	/* kzalloc() ensures NULL-termination for essid_compat. */
+-	extra = kzalloc(extra_size, GFP_KERNEL);
++	extra = kzalloc(extra_size + essid_compat * descr->token_size, GFP_KERNEL);
+ 	if (!extra)
+ 		return -ENOMEM;
  
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/net/xfrm/xfrm_policy.c linux-2.6.33.3-pax/net/xfrm/xfrm_policy.c
 --- linux-2.6.33.3/net/xfrm/xfrm_policy.c	2010-04-05 03:47:28.000000000 +0200
@@ -41512,6 +41679,7 @@ diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/sound/pci/i
  };
  
  static int __devinit snd_intel8x0m_probe(struct pci_dev *pci,
+Binary files linux-2.6.33.3/tools/perf/perf and linux-2.6.33.3-pax/tools/perf/perf differ
 diff -NurpX linux-2.6.33.3-pax/Documentation/dontdiff linux-2.6.33.3/usr/gen_init_cpio.c linux-2.6.33.3-pax/usr/gen_init_cpio.c
 --- linux-2.6.33.3/usr/gen_init_cpio.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.3-pax/usr/gen_init_cpio.c	2010-04-05 03:57:22.000000000 +0200
