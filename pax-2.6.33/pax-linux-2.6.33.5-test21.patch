@@ -38451,7 +38451,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mprotect.c linux-2.6.33.5-pax/mm/mprotect.c
 --- linux-2.6.33.5/mm/mprotect.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/mm/mprotect.c	2010-05-12 16:07:58.000000000 +0200
++++ linux-2.6.33.5-pax/mm/mprotect.c	2010-05-29 11:32:47.000000000 +0200
 @@ -24,10 +24,16 @@
  #include <linux/mmu_notifier.h>
  #include <linux/migrate.h>
@@ -38572,9 +38572,16 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mprotect
  	/*
  	 * First try to merge with previous and/or next vma.
  	 */
-@@ -196,8 +284,14 @@ success:
+@@ -195,9 +283,21 @@ success:
+ 	 * vm_flags and vm_page_prot are protected by the mmap_sem
  	 * held in write mode.
  	 */
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && (newflags & VM_EXEC) && ((vma->vm_flags ^ newflags) & VM_READ))
++		pax_find_mirror_vma(vma)->vm_flags ^= VM_READ;
++#endif
++
  	vma->vm_flags = newflags;
 +
 +#ifdef CONFIG_PAX_MPROTECT
@@ -38588,7 +38595,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mprotect
  
  	if (vma_wants_writenotify(vma)) {
  		vma->vm_page_prot = vm_get_page_prot(newflags & ~VM_SHARED);
-@@ -238,6 +332,17 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
+@@ -238,6 +338,17 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
  	end = start + len;
  	if (end <= start)
  		return -ENOMEM;
@@ -38606,7 +38613,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mprotect
  	if (!arch_validate_prot(prot))
  		return -EINVAL;
  
-@@ -245,7 +350,7 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
+@@ -245,7 +356,7 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
  	/*
  	 * Does the application expect PROT_READ to imply PROT_EXEC:
  	 */
@@ -38615,7 +38622,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mprotect
  		prot |= PROT_EXEC;
  
  	vm_flags = calc_vm_prot_bits(prot);
-@@ -277,6 +382,11 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
+@@ -277,6 +388,11 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
  	if (start > vma->vm_start)
  		prev = vma;
  
@@ -38627,7 +38634,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mprotect
  	for (nstart = start ; ; ) {
  		unsigned long newflags;
  
-@@ -301,6 +411,9 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
+@@ -301,6 +417,9 @@ SYSCALL_DEFINE3(mprotect, unsigned long,
  		if (error)
  			goto out;
  		perf_event_mmap(vma);
@@ -39271,7 +39278,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slob.c l
  	trace_kmem_cache_free(_RET_IP_, b);
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c linux-2.6.33.5-pax/mm/slub.c
 --- linux-2.6.33.5/mm/slub.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/mm/slub.c	2010-05-28 22:13:10.000000000 +0200
++++ linux-2.6.33.5-pax/mm/slub.c	2010-05-29 02:13:23.000000000 +0200
 @@ -1893,6 +1893,8 @@ void kmem_cache_free(struct kmem_cache *
  
  	page = virt_to_head_page(x);
@@ -39309,7 +39316,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  		list_del(&s->list);
  		up_write(&slub_lock);
  		if (kmem_cache_close(s)) {
-@@ -2915,6 +2916,46 @@ void *__kmalloc_node(size_t size, gfp_t
+@@ -2915,6 +2916,43 @@ void *__kmalloc_node(size_t size, gfp_t
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -39320,9 +39327,6 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
 +	struct page *page;
 +	struct kmem_cache *s;
 +	unsigned long offset;
-+
-+//	if (!n)
-+//		return;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
 +		goto report;
@@ -39356,7 +39360,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3186,7 +3227,7 @@ void __init kmem_cache_init(void)
+@@ -3186,7 +3224,7 @@ void __init kmem_cache_init(void)
  	 */
  	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
  		sizeof(struct kmem_cache_node), GFP_NOWAIT);
@@ -39365,7 +39369,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  	caches++;
  
  	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
-@@ -3293,7 +3334,7 @@ static int slab_unmergeable(struct kmem_
+@@ -3293,7 +3331,7 @@ static int slab_unmergeable(struct kmem_
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -39374,7 +39378,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  		return 1;
  
  	return 0;
-@@ -3353,7 +3394,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3353,7 +3391,7 @@ struct kmem_cache *kmem_cache_create(con
  	if (s) {
  		int cpu;
  
@@ -39383,7 +39387,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3372,7 +3413,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3372,7 +3410,7 @@ struct kmem_cache *kmem_cache_create(con
  
  		if (sysfs_slab_alias(s, name)) {
  			down_write(&slub_lock);
@@ -39392,7 +39396,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  			up_write(&slub_lock);
  			goto err;
  		}
-@@ -4101,7 +4142,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4101,7 +4139,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -39401,7 +39405,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -4519,7 +4560,7 @@ static void kmem_cache_release(struct ko
+@@ -4519,7 +4557,7 @@ static void kmem_cache_release(struct ko
  	kfree(s);
  }
  
@@ -39410,7 +39414,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/slub.c l
  	.show = slab_attr_show,
  	.store = slab_attr_store,
  };
-@@ -4538,7 +4579,7 @@ static int uevent_filter(struct kset *ks
+@@ -4538,7 +4576,7 @@ static int uevent_filter(struct kset *ks
  	return 0;
  }
  
