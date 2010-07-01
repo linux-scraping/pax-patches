@@ -3227,7 +3227,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sh/mm/
  static int __init dma_init(void)
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/include/asm/atomic_64.h linux-2.6.33.5-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-2.6.33.5/arch/sparc/include/asm/atomic_64.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/arch/sparc/include/asm/atomic_64.h	2010-05-12 16:07:52.000000000 +0200
++++ linux-2.6.33.5-pax/arch/sparc/include/asm/atomic_64.h	2010-06-27 00:45:41.000000000 +0200
 @@ -14,18 +14,38 @@
  #define ATOMIC64_INIT(i)	{ (i) }
  
@@ -3275,7 +3275,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
  
  #define atomic_sub_return(i, v) atomic_sub_ret(i, v)
  #define atomic64_sub_return(i, v) atomic64_sub_ret(i, v)
-@@ -59,7 +80,15 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -59,10 +80,26 @@ extern int atomic64_sub_ret(int, atomic6
  #define atomic64_dec_and_test(v) (atomic64_sub_ret(1, v) == 0)
  
  #define atomic_inc(v) atomic_add(1, v)
@@ -3290,8 +3290,19 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
 +}
  
  #define atomic_dec(v) atomic_sub(1, v)
++static inline void atomic_dec_unchecked(atomic_unchecked_t *v)
++{
++	atomic_sub_unchecked(1, v);
++}
  #define atomic64_dec(v) atomic64_sub(1, v)
-@@ -72,17 +101,28 @@ extern int atomic64_sub_ret(int, atomic6
++static inline void atomic64_dec_unchecked(atomic64_unchecked_t *v)
++{
++	atomic64_sub_unchecked(1, v);
++}
+ 
+ #define atomic_add_negative(i, v) (atomic_add_ret(i, v) < 0)
+ #define atomic64_add_negative(i, v) (atomic64_add_ret(i, v) < 0)
+@@ -72,17 +109,28 @@ extern int atomic64_sub_ret(int, atomic6
  
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -3324,7 +3335,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -93,17 +133,28 @@ static inline int atomic_add_unless(atom
+@@ -93,17 +141,28 @@ static inline int atomic_add_unless(atom
  
  static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -3867,7 +3878,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
  	sprintf (buffer, "Bad trap %lx at tl>0", lvl);
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/lib/atomic_64.S linux-2.6.33.5-pax/arch/sparc/lib/atomic_64.S
 --- linux-2.6.33.5/arch/sparc/lib/atomic_64.S	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/arch/sparc/lib/atomic_64.S	2010-05-12 16:07:52.000000000 +0200
++++ linux-2.6.33.5-pax/arch/sparc/lib/atomic_64.S	2010-06-27 00:47:36.000000000 +0200
 @@ -18,7 +18,12 @@
  atomic_add: /* %o0 = increment, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
@@ -4012,7 +4023,27 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -110,7 +185,12 @@ atomic64_sub: /* %o0 = decrement, %o1 =
+@@ -105,12 +180,32 @@ atomic64_sub: /* %o0 = decrement, %o1 =
+ 2:	BACKOFF_SPIN(%o2, %o3, 1b)
+ 	.size	atomic64_sub, .-atomic64_sub
+ 
++	.globl	atomic64_sub_unchecked
++	.type	atomic64_sub_unchecked,#function
++atomic64_sub_unchecked: /* %o0 = decrement, %o1 = atomic_ptr */
++	BACKOFF_SETUP(%o2)
++1:	ldx	[%o1], %g1
++	subcc	%g1, %o0, %g7
++	casx	[%o1], %g1, %g7
++	cmp	%g1, %g7
++	bne,pn	%xcc, 2f
++	 nop
++	retl
++	 nop
++2:	BACKOFF_SPIN(%o2, %o3, 1b)
++	.size	atomic64_sub_unchecked, .-atomic64_sub_unchecked
++
+ 	.globl	atomic64_add_ret
+ 	.type	atomic64_add_ret,#function
  atomic64_add_ret: /* %o0 = increment, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
  1:	ldx	[%o1], %g1
@@ -4026,7 +4057,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -121,12 +201,33 @@ atomic64_add_ret: /* %o0 = increment, %o
+@@ -121,12 +216,33 @@ atomic64_add_ret: /* %o0 = increment, %o
  2:	BACKOFF_SPIN(%o2, %o3, 1b)
  	.size	atomic64_add_ret, .-atomic64_add_ret
  
@@ -4063,8 +4094,8 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
  	bne,pn	%xcc, 2f
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/lib/ksyms.c linux-2.6.33.5-pax/arch/sparc/lib/ksyms.c
 --- linux-2.6.33.5/arch/sparc/lib/ksyms.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/arch/sparc/lib/ksyms.c	2010-05-12 16:07:52.000000000 +0200
-@@ -142,8 +142,10 @@ EXPORT_SYMBOL(__downgrade_write);
++++ linux-2.6.33.5-pax/arch/sparc/lib/ksyms.c	2010-06-27 00:48:13.000000000 +0200
+@@ -142,12 +142,15 @@ EXPORT_SYMBOL(__downgrade_write);
  
  /* Atomic counter implementation. */
  EXPORT_SYMBOL(atomic_add);
@@ -4075,6 +4106,11 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/
  EXPORT_SYMBOL(atomic_sub_ret);
  EXPORT_SYMBOL(atomic64_add);
  EXPORT_SYMBOL(atomic64_add_ret);
+ EXPORT_SYMBOL(atomic64_sub);
++EXPORT_SYMBOL(atomic64_sub_unchecked);
+ EXPORT_SYMBOL(atomic64_sub_ret);
+ 
+ /* Atomic bit operations. */
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/sparc/lib/rwsem_64.S linux-2.6.33.5-pax/arch/sparc/lib/rwsem_64.S
 --- linux-2.6.33.5/arch/sparc/lib/rwsem_64.S	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.5-pax/arch/sparc/lib/rwsem_64.S	2010-05-12 16:07:52.000000000 +0200
@@ -5812,7 +5848,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		"popl %%edi\n\t"
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/include/asm/atomic_32.h linux-2.6.33.5-pax/arch/x86/include/asm/atomic_32.h
 --- linux-2.6.33.5/arch/x86/include/asm/atomic_32.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/arch/x86/include/asm/atomic_32.h	2010-05-12 16:07:52.000000000 +0200
++++ linux-2.6.33.5-pax/arch/x86/include/asm/atomic_32.h	2010-06-27 00:51:11.000000000 +0200
 @@ -25,6 +25,17 @@ static inline int atomic_read(const atom
  }
  
@@ -5962,7 +5998,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "+m" (v->counter));
  }
  
-@@ -103,7 +202,18 @@ static inline void atomic_inc(atomic_t *
+@@ -103,7 +202,30 @@ static inline void atomic_inc(atomic_t *
   */
  static inline void atomic_dec(atomic_t *v)
  {
@@ -5979,10 +6015,22 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
 +		     _ASM_EXTABLE(0b, 1b)
 +#endif
 +
++		     : "+m" (v->counter));
++}
++
++/**
++ * atomic_dec_unchecked - decrement atomic variable
++ * @v: pointer of type atomic_t
++ *
++ * Atomically decrements @v by 1.
++ */
++static inline void atomic_dec_unchecked(atomic_unchecked_t *v)
++{
++	asm volatile(LOCK_PREFIX "decl %0\n"
  		     : "+m" (v->counter));
  }
  
-@@ -119,7 +229,19 @@ static inline int atomic_dec_and_test(at
+@@ -119,7 +241,19 @@ static inline int atomic_dec_and_test(at
  {
  	unsigned char c;
  
@@ -6003,7 +6051,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "+m" (v->counter), "=qm" (c)
  		     : : "memory");
  	return c != 0;
-@@ -137,7 +259,19 @@ static inline int atomic_inc_and_test(at
+@@ -137,7 +271,19 @@ static inline int atomic_inc_and_test(at
  {
  	unsigned char c;
  
@@ -6024,7 +6072,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "+m" (v->counter), "=qm" (c)
  		     : : "memory");
  	return c != 0;
-@@ -156,7 +290,16 @@ static inline int atomic_add_negative(in
+@@ -156,7 +302,16 @@ static inline int atomic_add_negative(in
  {
  	unsigned char c;
  
@@ -6042,7 +6090,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "+m" (v->counter), "=qm" (c)
  		     : "ir" (i) : "memory");
  	return c;
-@@ -179,6 +322,46 @@ static inline int atomic_add_return(int
+@@ -179,6 +334,46 @@ static inline int atomic_add_return(int
  #endif
  	/* Modern 486+ processor */
  	__i = i;
@@ -6089,7 +6137,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  	asm volatile(LOCK_PREFIX "xaddl %0, %1"
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
-@@ -227,22 +410,34 @@ static inline int atomic_xchg(atomic_t *
+@@ -227,22 +422,34 @@ static inline int atomic_xchg(atomic_t *
   */
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -6128,7 +6176,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  #define atomic_dec_return(v)  (atomic_sub_return(1, v))
  
  /* These are x86-specific, used by some header files */
-@@ -266,6 +461,14 @@ typedef struct {
+@@ -266,6 +473,14 @@ typedef struct {
  	u64 __aligned(8) counter;
  } atomic64_t;
  
@@ -6145,7 +6193,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  extern u64 atomic64_cmpxchg(atomic64_t *ptr, u64 old_val, u64 new_val);
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/include/asm/atomic_64.h linux-2.6.33.5-pax/arch/x86/include/asm/atomic_64.h
 --- linux-2.6.33.5/arch/x86/include/asm/atomic_64.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/arch/x86/include/asm/atomic_64.h	2010-05-12 16:07:52.000000000 +0200
++++ linux-2.6.33.5-pax/arch/x86/include/asm/atomic_64.h	2010-07-01 03:05:21.000000000 +0200
 @@ -24,6 +24,17 @@ static inline int atomic_read(const atom
  }
  
@@ -6297,7 +6345,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -103,7 +204,19 @@ static inline void atomic_inc(atomic_t *
+@@ -103,7 +204,32 @@ static inline void atomic_inc(atomic_t *
   */
  static inline void atomic_dec(atomic_t *v)
  {
@@ -6315,10 +6363,23 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
 +		     _ASM_EXTABLE(0b, 1b)
 +#endif
 +
++		     : "=m" (v->counter)
++		     : "m" (v->counter));
++}
++
++/**
++ * atomic_dec_unchecked - decrement atomic variable
++ * @v: pointer of type atomic_t
++ *
++ * Atomically decrements @v by 1.
++ */
++static inline void atomic_dec_unchecked(atomic_unchecked_t *v)
++{
++	asm volatile(LOCK_PREFIX "decl %0\n"
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -120,7 +233,20 @@ static inline int atomic_dec_and_test(at
+@@ -120,7 +246,20 @@ static inline int atomic_dec_and_test(at
  {
  	unsigned char c;
  
@@ -6340,7 +6401,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -138,7 +264,20 @@ static inline int atomic_inc_and_test(at
+@@ -138,7 +277,20 @@ static inline int atomic_inc_and_test(at
  {
  	unsigned char c;
  
@@ -6362,7 +6423,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -157,7 +296,16 @@ static inline int atomic_add_negative(in
+@@ -157,7 +309,16 @@ static inline int atomic_add_negative(in
  {
  	unsigned char c;
  
@@ -6380,7 +6441,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter), "=qm" (c)
  		     : "ir" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -173,7 +321,15 @@ static inline int atomic_add_negative(in
+@@ -173,7 +334,15 @@ static inline int atomic_add_negative(in
  static inline int atomic_add_return(int i, atomic_t *v)
  {
  	int __i = i;
@@ -6397,7 +6458,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-@@ -204,6 +360,18 @@ static inline long atomic64_read(const a
+@@ -204,6 +373,18 @@ static inline long atomic64_read(const a
  }
  
  /**
@@ -6416,7 +6477,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
   * atomic64_set - set atomic64 variable
   * @v: pointer to type atomic64_t
   * @i: required value
-@@ -216,6 +384,18 @@ static inline void atomic64_set(atomic64
+@@ -216,6 +397,18 @@ static inline void atomic64_set(atomic64
  }
  
  /**
@@ -6435,7 +6496,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
   * atomic64_add - add integer to atomic64 variable
   * @i: integer value to add
   * @v: pointer to type atomic64_t
-@@ -224,6 +404,28 @@ static inline void atomic64_set(atomic64
+@@ -224,6 +417,28 @@ static inline void atomic64_set(atomic64
   */
  static inline void atomic64_add(long i, atomic64_t *v)
  {
@@ -6464,7 +6525,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  	asm volatile(LOCK_PREFIX "addq %1,%0"
  		     : "=m" (v->counter)
  		     : "er" (i), "m" (v->counter));
-@@ -238,7 +440,15 @@ static inline void atomic64_add(long i,
+@@ -238,7 +453,15 @@ static inline void atomic64_add(long i,
   */
  static inline void atomic64_sub(long i, atomic64_t *v)
  {
@@ -6481,7 +6542,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter)
  		     : "er" (i), "m" (v->counter));
  }
-@@ -256,7 +466,16 @@ static inline int atomic64_sub_and_test(
+@@ -256,7 +479,16 @@ static inline int atomic64_sub_and_test(
  {
  	unsigned char c;
  
@@ -6499,7 +6560,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter), "=qm" (c)
  		     : "er" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -270,6 +489,31 @@ static inline int atomic64_sub_and_test(
+@@ -270,6 +502,31 @@ static inline int atomic64_sub_and_test(
   */
  static inline void atomic64_inc(atomic64_t *v)
  {
@@ -6531,7 +6592,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  	asm volatile(LOCK_PREFIX "incq %0"
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
-@@ -283,7 +527,19 @@ static inline void atomic64_inc(atomic64
+@@ -283,7 +540,32 @@ static inline void atomic64_inc(atomic64
   */
  static inline void atomic64_dec(atomic64_t *v)
  {
@@ -6549,10 +6610,23 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
 +		     _ASM_EXTABLE(0b, 1b)
 +#endif
 +
++		     : "=m" (v->counter)
++		     : "m" (v->counter));
++}
++
++/**
++ * atomic64_dec_unchecked - decrement atomic64 variable
++ * @v: pointer to type atomic64_t
++ *
++ * Atomically decrements @v by 1.
++ */
++static inline void atomic64_dec_unchecked(atomic64_unhecked_t *v)
++{
++	asm volatile(LOCK_PREFIX "decq %0\n"
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -300,7 +556,20 @@ static inline int atomic64_dec_and_test(
+@@ -300,7 +582,20 @@ static inline int atomic64_dec_and_test(
  {
  	unsigned char c;
  
@@ -6574,7 +6648,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -318,7 +587,20 @@ static inline int atomic64_inc_and_test(
+@@ -318,7 +613,20 @@ static inline int atomic64_inc_and_test(
  {
  	unsigned char c;
  
@@ -6596,7 +6670,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -337,7 +619,16 @@ static inline int atomic64_add_negative(
+@@ -337,7 +645,16 @@ static inline int atomic64_add_negative(
  {
  	unsigned char c;
  
@@ -6614,7 +6688,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "=m" (v->counter), "=qm" (c)
  		     : "er" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -353,7 +644,31 @@ static inline int atomic64_add_negative(
+@@ -353,7 +670,31 @@ static inline int atomic64_add_negative(
  static inline long atomic64_add_return(long i, atomic64_t *v)
  {
  	long __i = i;
@@ -6647,7 +6721,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-@@ -365,6 +680,7 @@ static inline long atomic64_sub_return(l
+@@ -365,6 +706,7 @@ static inline long atomic64_sub_return(l
  }
  
  #define atomic64_inc_return(v)  (atomic64_add_return(1, (v)))
@@ -6655,7 +6729,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  #define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
  
  static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
-@@ -398,17 +714,29 @@ static inline long atomic_xchg(atomic_t
+@@ -398,17 +740,29 @@ static inline long atomic_xchg(atomic_t
   */
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -6689,7 +6763,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/in
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -424,17 +752,29 @@ static inline int atomic_add_unless(atom
+@@ -424,17 +778,29 @@ static inline int atomic_add_unless(atom
   */
  static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -17931,7 +18005,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/mm
  	}
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/mm/init.c linux-2.6.33.5-pax/arch/x86/mm/init.c
 --- linux-2.6.33.5/arch/x86/mm/init.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/arch/x86/mm/init.c	2010-06-15 16:40:55.000000000 +0200
++++ linux-2.6.33.5-pax/arch/x86/mm/init.c	2010-06-27 00:16:37.000000000 +0200
 @@ -69,11 +69,7 @@ static void __init find_early_table_spac
  	 * cause a hotspot and fill up ZONE_DMA. The page tables
  	 * need roughly 0.5KB per GB.
@@ -17960,16 +18034,12 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/mm
  		return 1;
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
-@@ -375,6 +377,89 @@ void free_init_pages(char *what, unsigne
+@@ -375,6 +377,88 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
 +
 +#ifdef CONFIG_PAX_KERNEXEC
-+	pgd_t *pgd;
-+	pud_t *pud;
-+	pmd_t *pmd;
-+
 +#ifdef CONFIG_X86_32
 +	/* PaX: limit KERNEL_CS to actual size */
 +	unsigned long addr, limit;
@@ -18014,6 +18084,9 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/mm
 +#endif
 +
 +#else
++	pgd_t *pgd;
++	pud_t *pud;
++	pmd_t *pmd;
 +	unsigned long addr, end;
 +
 +	/* PaX: make kernel code/rodata read-only, rest non-executable */
@@ -18624,7 +18697,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/mm
  struct split_state {
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/mm/pageattr.c linux-2.6.33.5-pax/arch/x86/mm/pageattr.c
 --- linux-2.6.33.5/arch/x86/mm/pageattr.c	2010-04-04 21:20:29.000000000 +0200
-+++ linux-2.6.33.5-pax/arch/x86/mm/pageattr.c	2010-06-15 16:40:55.000000000 +0200
++++ linux-2.6.33.5-pax/arch/x86/mm/pageattr.c	2010-06-27 00:24:53.000000000 +0200
 @@ -261,16 +261,17 @@ static inline pgprot_t static_protection
  	 * PCI BIOS based config access (CONFIG_PCI_GOBIOS) support.
  	 */
@@ -18690,7 +18763,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/arch/x86/mm
 +#else
  		list_for_each_entry(page, &pgd_list, lru) {
 -			pgd_t *pgd;
-+			pgd_t *pgd = (pgd_t *)page_address(page);;
++			pgd_t *pgd = (pgd_t *)page_address(page);
 +#endif
 +
  			pud_t *pud;
@@ -32156,7 +32229,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/acp
  	return -ENODEV;
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm-generic/atomic-long.h linux-2.6.33.5-pax/include/asm-generic/atomic-long.h
 --- linux-2.6.33.5/include/asm-generic/atomic-long.h	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/include/asm-generic/atomic-long.h	2010-05-12 16:07:57.000000000 +0200
++++ linux-2.6.33.5-pax/include/asm-generic/atomic-long.h	2010-06-27 00:44:47.000000000 +0200
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -32218,7 +32291,23 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline void atomic_long_dec(atomic_long_t *l)
  {
  	atomic64_t *v = (atomic64_t *)l;
-@@ -59,6 +92,15 @@ static inline void atomic_long_add(long
+@@ -52,6 +85,15 @@ static inline void atomic_long_dec(atomi
+ 	atomic64_dec(v);
+ }
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++static inline void atomic_long_dec_unchecked(atomic_long_unchecked_t *l)
++{
++	atomic64_unchecked_t *v = (atomic64_unchecked_t *)l;
++
++	atomic64_dec_unchecked(v);
++}
++#endif
++
+ static inline void atomic_long_add(long i, atomic_long_t *l)
+ {
+ 	atomic64_t *v = (atomic64_t *)l;
+@@ -59,6 +101,15 @@ static inline void atomic_long_add(long
  	atomic64_add(i, v);
  }
  
@@ -32234,7 +32323,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline void atomic_long_sub(long i, atomic_long_t *l)
  {
  	atomic64_t *v = (atomic64_t *)l;
-@@ -115,6 +157,15 @@ static inline long atomic_long_inc_retur
+@@ -115,6 +166,15 @@ static inline long atomic_long_inc_retur
  	return (long)atomic64_inc_return(v);
  }
  
@@ -32250,7 +32339,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic64_t *v = (atomic64_t *)l;
-@@ -140,6 +191,12 @@ static inline long atomic_long_add_unles
+@@ -140,6 +200,12 @@ static inline long atomic_long_add_unles
  
  typedef atomic_t atomic_long_t;
  
@@ -32263,7 +32352,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  #define ATOMIC_LONG_INIT(i)	ATOMIC_INIT(i)
  static inline long atomic_long_read(atomic_long_t *l)
  {
-@@ -148,6 +205,15 @@ static inline long atomic_long_read(atom
+@@ -148,6 +214,15 @@ static inline long atomic_long_read(atom
  	return (long)atomic_read(v);
  }
  
@@ -32279,7 +32368,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline void atomic_long_set(atomic_long_t *l, long i)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -155,6 +221,15 @@ static inline void atomic_long_set(atomi
+@@ -155,6 +230,15 @@ static inline void atomic_long_set(atomi
  	atomic_set(v, i);
  }
  
@@ -32295,7 +32384,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline void atomic_long_inc(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -162,6 +237,15 @@ static inline void atomic_long_inc(atomi
+@@ -162,6 +246,15 @@ static inline void atomic_long_inc(atomi
  	atomic_inc(v);
  }
  
@@ -32311,7 +32400,23 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline void atomic_long_dec(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -176,6 +260,15 @@ static inline void atomic_long_add(long
+@@ -169,6 +262,15 @@ static inline void atomic_long_dec(atomi
+ 	atomic_dec(v);
+ }
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++static inline void atomic_long_dec_unchecked(atomic_long_unchecked_t *l)
++{
++	atomic_unchecked_t *v = (atomic_unchecked_t *)l;
++
++	atomic_dec_unchecked(v);
++}
++#endif
++
+ static inline void atomic_long_add(long i, atomic_long_t *l)
+ {
+ 	atomic_t *v = (atomic_t *)l;
+@@ -176,6 +278,15 @@ static inline void atomic_long_add(long
  	atomic_add(i, v);
  }
  
@@ -32327,7 +32432,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline void atomic_long_sub(long i, atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -232,6 +325,15 @@ static inline long atomic_long_inc_retur
+@@ -232,6 +343,15 @@ static inline long atomic_long_inc_retur
  	return (long)atomic_inc_return(v);
  }
  
@@ -32343,7 +32448,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -255,4 +357,33 @@ static inline long atomic_long_add_unles
+@@ -255,4 +375,35 @@ static inline long atomic_long_add_unles
  
  #endif  /*  BITS_PER_LONG == 64  */
  
@@ -32361,6 +32466,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
 +	atomic_long_add_unchecked(0, (atomic_long_unchecked_t *)NULL);
 +	atomic_long_inc_unchecked((atomic_long_unchecked_t *)NULL);
 +	atomic_long_inc_return_unchecked((atomic_long_unchecked_t *)NULL);
++	atomic_long_dec_unchecked((atomic_long_unchecked_t *)NULL);
 +}
 +#else
 +#define atomic_read_unchecked(v) atomic_read(v)
@@ -32374,6 +32480,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/include/asm
 +#define atomic_long_add_unchecked(i, v) atomic_long_add((i), (v))
 +#define atomic_long_inc_unchecked(v) atomic_long_inc(v)
 +#define atomic_long_inc_return_unchecked(v) atomic_long_inc_return(v)
++#define atomic_long_dec_unchecked(v) atomic_long_dec(v)
 +#endif
 +
  #endif  /*  _ASM_GENERIC_ATOMIC_LONG_H  */
@@ -36923,7 +37030,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/madvise.
  		goto out;
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/memory-failure.c linux-2.6.33.5-pax/mm/memory-failure.c
 --- linux-2.6.33.5/mm/memory-failure.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/mm/memory-failure.c	2010-05-12 16:07:58.000000000 +0200
++++ linux-2.6.33.5-pax/mm/memory-failure.c	2010-06-27 00:52:07.000000000 +0200
 @@ -50,7 +50,7 @@ int sysctl_memory_failure_early_kill __r
  
  int sysctl_memory_failure_recovery __read_mostly = 1;
@@ -36942,6 +37049,42 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/memory-f
  
  	/*
  	 * We need/can do nothing about count=0 pages.
+@@ -999,7 +999,7 @@ int __memory_failure(unsigned long pfn,
+ 	}
+ 	if (hwpoison_filter(p)) {
+ 		if (TestClearPageHWPoison(p))
+-			atomic_long_dec(&mce_bad_pages);
++			atomic_long_dec_unchecked(&mce_bad_pages);
+ 		unlock_page(p);
+ 		put_page(p);
+ 		return 0;
+@@ -1092,7 +1092,7 @@ int unpoison_memory(unsigned long pfn)
+ 
+ 	if (!get_page_unless_zero(page)) {
+ 		if (TestClearPageHWPoison(p))
+-			atomic_long_dec(&mce_bad_pages);
++			atomic_long_dec_unchecked(&mce_bad_pages);
+ 		pr_debug("MCE: Software-unpoisoned free page %#lx\n", pfn);
+ 		return 0;
+ 	}
+@@ -1106,7 +1106,7 @@ int unpoison_memory(unsigned long pfn)
+ 	 */
+ 	if (TestClearPageHWPoison(p)) {
+ 		pr_debug("MCE: Software-unpoisoned page %#lx\n", pfn);
+-		atomic_long_dec(&mce_bad_pages);
++		atomic_long_dec_unchecked(&mce_bad_pages);
+ 		freeit = 1;
+ 	}
+ 	unlock_page(page);
+@@ -1287,7 +1287,7 @@ int soft_offline_page(struct page *page,
+ 		return ret;
+ 
+ done:
+-	atomic_long_add(1, &mce_bad_pages);
++	atomic_long_add_unchecked(1, &mce_bad_pages);
+ 	SetPageHWPoison(page);
+ 	/* keep elevated page count for bad page */
+ 	return ret;
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/memory.c linux-2.6.33.5-pax/mm/memory.c
 --- linux-2.6.33.5/mm/memory.c	2010-02-24 19:52:17.000000000 +0100
 +++ linux-2.6.33.5-pax/mm/memory.c	2010-06-15 16:40:55.000000000 +0200
@@ -37474,7 +37617,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mlock.c 
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c linux-2.6.33.5-pax/mm/mmap.c
 --- linux-2.6.33.5/mm/mmap.c	2010-02-24 19:52:17.000000000 +0100
-+++ linux-2.6.33.5-pax/mm/mmap.c	2010-05-12 16:07:58.000000000 +0200
++++ linux-2.6.33.5-pax/mm/mmap.c	2010-06-27 13:38:47.000000000 +0200
 @@ -44,6 +44,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -38303,19 +38446,15 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2052,6 +2381,11 @@ unsigned long do_brk(unsigned long addr,
+@@ -2052,6 +2381,7 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
 +	unsigned long charged;
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	struct vm_area_struct *vma_m = NULL;
-+#endif
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2063,16 +2397,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -2063,16 +2393,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -38347,7 +38486,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2089,22 +2437,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2089,22 +2433,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -38374,7 +38513,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2118,10 +2466,21 @@ unsigned long do_brk(unsigned long addr,
+@@ -2118,7 +2462,7 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -38383,21 +38522,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  		return -ENOMEM;
  	}
  
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	if ((mm->pax_flags & MF_PAX_SEGMEXEC) && (flags & VM_EXEC)) {
-+		vma_m = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
-+		if (!vma_m) {
-+			kmem_cache_free(vm_area_cachep, vma);
-+			vm_unacct_memory(charged);
-+			return -ENOMEM;
-+		}
-+	}
-+#endif
-+
- 	vma->vm_mm = mm;
- 	vma->vm_start = addr;
- 	vma->vm_end = addr + len;
-@@ -2130,11 +2489,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2130,11 +2474,12 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -38412,7 +38537,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  	return addr;
  }
  
-@@ -2181,8 +2541,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2181,8 +2526,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -38424,7 +38549,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2196,6 +2558,10 @@ int insert_vm_struct(struct mm_struct *
+@@ -2196,6 +2543,10 @@ int insert_vm_struct(struct mm_struct *
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -38435,7 +38560,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2218,7 +2584,22 @@ int insert_vm_struct(struct mm_struct *
+@@ -2218,7 +2569,22 @@ int insert_vm_struct(struct mm_struct *
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -38458,7 +38583,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  	return 0;
  }
  
-@@ -2236,6 +2617,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2236,6 +2602,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -38467,7 +38592,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2279,6 +2662,35 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2279,6 +2647,35 @@ struct vm_area_struct *copy_vma(struct v
  	return new_vma;
  }
  
@@ -38503,7 +38628,7 @@ diff -NurpX linux-2.6.33.5-pax/Documentation/dontdiff linux-2.6.33.5/mm/mmap.c l
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2358,6 +2770,15 @@ int install_special_mapping(struct mm_st
+@@ -2358,6 +2755,15 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
