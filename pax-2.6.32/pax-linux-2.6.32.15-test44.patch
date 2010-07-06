@@ -1076,7 +1076,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/ia64
  	}
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/ia64/kernel/pci-dma.c linux-2.6.32.15-pax/arch/ia64/kernel/pci-dma.c
 --- linux-2.6.32.15/arch/ia64/kernel/pci-dma.c	2009-09-10 19:40:46.000000000 +0200
-+++ linux-2.6.32.15-pax/arch/ia64/kernel/pci-dma.c	2010-05-12 15:50:22.000000000 +0200
++++ linux-2.6.32.15-pax/arch/ia64/kernel/pci-dma.c	2010-07-04 16:03:56.000000000 +0200
 @@ -43,7 +43,7 @@ struct device fallback_dev = {
  	.dma_mask = &fallback_dev.coherent_dma_mask,
  };
@@ -1086,6 +1086,40 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/ia64
  
  static int __init pci_iommu_init(void)
  {
+@@ -96,15 +96,26 @@ int iommu_dma_supported(struct device *d
+ }
+ EXPORT_SYMBOL(iommu_dma_supported);
+ 
++static const struct dma_map_ops intel_iommu_dma_ops = {
++	/* from drivers/pci/intel-iommu.c:intel_dma_ops */
++	.alloc_coherent = intel_alloc_coherent,
++	.free_coherent = intel_free_coherent,
++	.map_sg = intel_map_sg,
++	.unmap_sg = intel_unmap_sg,
++	.map_page = intel_map_page,
++	.unmap_page = intel_unmap_page,
++	.mapping_error = intel_mapping_error,
++
++	.sync_single_for_cpu = machvec_dma_sync_single,
++	.sync_sg_for_cpu = machvec_dma_sync_sg,
++	.sync_single_for_device = machvec_dma_sync_single,
++	.sync_sg_for_device = machvec_dma_sync_sg,
++	.dma_supported = iommu_dma_supported,
++};
++
+ void __init pci_iommu_alloc(void)
+ {
+-	dma_ops = &intel_dma_ops;
+-
+-	dma_ops->sync_single_for_cpu = machvec_dma_sync_single;
+-	dma_ops->sync_sg_for_cpu = machvec_dma_sync_sg;
+-	dma_ops->sync_single_for_device = machvec_dma_sync_single;
+-	dma_ops->sync_sg_for_device = machvec_dma_sync_sg;
+-	dma_ops->dma_supported = iommu_dma_supported;
++	dma_ops = &intel_iommu_dma_ops;
+ 
+ 	/*
+ 	 * The order of these functions is important for
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/ia64/kernel/pci-swiotlb.c linux-2.6.32.15-pax/arch/ia64/kernel/pci-swiotlb.c
 --- linux-2.6.32.15/arch/ia64/kernel/pci-swiotlb.c	2009-12-03 15:01:23.000000000 +0100
 +++ linux-2.6.32.15-pax/arch/ia64/kernel/pci-swiotlb.c	2010-05-12 15:50:22.000000000 +0200
@@ -2004,8 +2038,17 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/powe
  
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/powerpc/include/asm/uaccess.h linux-2.6.32.15-pax/arch/powerpc/include/asm/uaccess.h
 --- linux-2.6.32.15/arch/powerpc/include/asm/uaccess.h	2008-10-10 09:18:43.000000000 +0200
-+++ linux-2.6.32.15-pax/arch/powerpc/include/asm/uaccess.h	2010-05-12 15:50:22.000000000 +0200
-@@ -327,52 +327,6 @@ do {								\
++++ linux-2.6.32.15-pax/arch/powerpc/include/asm/uaccess.h	2010-07-06 12:36:37.000000000 +0200
+@@ -13,6 +13,8 @@
+ #define VERIFY_READ	0
+ #define VERIFY_WRITE	1
+ 
++extern void check_object_size(const void *ptr, unsigned long n, bool to);
++
+ /*
+  * The fs value determines whether argument validity checking should be
+  * performed or not.  If get_fs() == USER_DS, checking is performed, with
+@@ -327,52 +329,6 @@ do {								\
  extern unsigned long __copy_tofrom_user(void __user *to,
  		const void __user *from, unsigned long size);
  
@@ -2058,7 +2101,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/powe
  static inline unsigned long __copy_from_user_inatomic(void *to,
  		const void __user *from, unsigned long n)
  {
-@@ -396,6 +350,10 @@ static inline unsigned long __copy_from_
+@@ -396,6 +352,10 @@ static inline unsigned long __copy_from_
  		if (ret == 0)
  			return 0;
  	}
@@ -2069,7 +2112,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/powe
  	return __copy_tofrom_user((__force void __user *)to, from, n);
  }
  
-@@ -422,6 +380,10 @@ static inline unsigned long __copy_to_us
+@@ -422,6 +382,10 @@ static inline unsigned long __copy_to_us
  		if (ret == 0)
  			return 0;
  	}
@@ -2080,7 +2123,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/powe
  	return __copy_tofrom_user(to, (__force const void __user *)from, n);
  }
  
-@@ -439,6 +401,92 @@ static inline unsigned long __copy_to_us
+@@ -439,6 +403,92 @@ static inline unsigned long __copy_to_us
  	return __copy_to_user_inatomic(to, from, size);
  }
  
@@ -3137,8 +3180,8 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/sh/k
  	.gdb_bpt_instr		= { 0x3c, 0xc3 },
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/sparc/include/asm/atomic_64.h linux-2.6.32.15-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-2.6.32.15/arch/sparc/include/asm/atomic_64.h	2009-09-10 19:41:08.000000000 +0200
-+++ linux-2.6.32.15-pax/arch/sparc/include/asm/atomic_64.h	2010-07-01 03:21:51.000000000 +0200
-@@ -14,18 +14,38 @@
++++ linux-2.6.32.15-pax/arch/sparc/include/asm/atomic_64.h	2010-07-03 21:30:19.000000000 +0200
+@@ -14,18 +14,39 @@
  #define ATOMIC64_INIT(i)	{ (i) }
  
  #define atomic_read(v)		((v)->counter)
@@ -3170,6 +3213,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  extern void atomic_sub(int, atomic_t *);
 +extern void atomic_sub_unchecked(int, atomic_unchecked_t *);
  extern void atomic64_sub(int, atomic64_t *);
++extern void atomic64_sub_unchecked(int, atomic64_unchecked_t *);
  
  extern int atomic_add_ret(int, atomic_t *);
  extern int atomic64_add_ret(int, atomic64_t *);
@@ -3177,7 +3221,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  extern int atomic_sub_ret(int, atomic_t *);
  extern int atomic64_sub_ret(int, atomic64_t *);
  
-@@ -34,6 +54,7 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -34,6 +55,7 @@ extern int atomic64_sub_ret(int, atomic6
  
  #define atomic_inc_return(v) atomic_add_ret(1, v)
  #define atomic64_inc_return(v) atomic64_add_ret(1, v)
@@ -3185,7 +3229,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  
  #define atomic_sub_return(i, v) atomic_sub_ret(i, v)
  #define atomic64_sub_return(i, v) atomic64_sub_ret(i, v)
-@@ -59,10 +80,26 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -59,10 +81,26 @@ extern int atomic64_sub_ret(int, atomic6
  #define atomic64_dec_and_test(v) (atomic64_sub_ret(1, v) == 0)
  
  #define atomic_inc(v) atomic_add(1, v)
@@ -3212,7 +3256,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  
  #define atomic_add_negative(i, v) (atomic_add_ret(i, v) < 0)
  #define atomic64_add_negative(i, v) (atomic64_add_ret(i, v) < 0)
-@@ -72,17 +109,28 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -72,17 +110,28 @@ extern int atomic64_sub_ret(int, atomic6
  
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -3245,7 +3289,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -93,17 +141,28 @@ static inline int atomic_add_unless(atom
+@@ -93,17 +142,28 @@ static inline int atomic_add_unless(atom
  
  static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -3450,6 +3494,18 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  "	cas	[%2], %0, %1\n"
  "	cmp	%0, %1\n"
  "	bne,pn	%%xcc, 1b\n"
+diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/sparc/include/asm/uaccess.h linux-2.6.32.15-pax/arch/sparc/include/asm/uaccess.h
+--- linux-2.6.32.15/arch/sparc/include/asm/uaccess.h	2008-10-10 09:18:46.000000000 +0200
++++ linux-2.6.32.15-pax/arch/sparc/include/asm/uaccess.h	2010-07-06 12:36:38.000000000 +0200
+@@ -1,5 +1,8 @@
+ #ifndef ___ASM_SPARC_UACCESS_H
+ #define ___ASM_SPARC_UACCESS_H
++
++extern void check_object_size(const void *ptr, unsigned long n, bool to);
++
+ #if defined(__sparc__) && defined(__arch64__)
+ #include <asm/uaccess_64.h>
+ #else
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/sparc/include/asm/uaccess_32.h linux-2.6.32.15-pax/arch/sparc/include/asm/uaccess_32.h
 --- linux-2.6.32.15/arch/sparc/include/asm/uaccess_32.h	2009-09-10 19:41:08.000000000 +0200
 +++ linux-2.6.32.15-pax/arch/sparc/include/asm/uaccess_32.h	2010-05-12 15:50:22.000000000 +0200
@@ -3506,7 +3562,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/sparc/include/asm/uaccess_64.h linux-2.6.32.15-pax/arch/sparc/include/asm/uaccess_64.h
 --- linux-2.6.32.15/arch/sparc/include/asm/uaccess_64.h	2009-12-03 15:01:37.000000000 +0100
-+++ linux-2.6.32.15-pax/arch/sparc/include/asm/uaccess_64.h	2010-05-12 15:50:22.000000000 +0200
++++ linux-2.6.32.15-pax/arch/sparc/include/asm/uaccess_64.h	2010-07-06 12:38:59.000000000 +0200
 @@ -9,6 +9,7 @@
  #include <linux/compiler.h>
  #include <linux/string.h>
@@ -3515,15 +3571,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  #include <asm/asi.h>
  #include <asm/system.h>
  #include <asm/spitfire.h>
-@@ -203,6 +204,7 @@ __asm__ __volatile__(							\
-        : "=r" (x) : "r" (__m(addr)), "i" (retval))
- 
- extern int __get_user_bad(void);
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
- 
- extern unsigned long __must_check ___copy_from_user(void *to,
- 						    const void __user *from,
-@@ -212,8 +214,15 @@ extern unsigned long copy_from_user_fixu
+@@ -212,8 +213,15 @@ extern unsigned long copy_from_user_fixu
  static inline unsigned long __must_check
  copy_from_user(void *to, const void __user *from, unsigned long size)
  {
@@ -3540,7 +3588,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/spar
  	if (unlikely(ret))
  		ret = copy_from_user_fixup(to, from, size);
  	return ret;
-@@ -228,8 +237,15 @@ extern unsigned long copy_to_user_fixup(
+@@ -228,8 +236,15 @@ extern unsigned long copy_to_user_fixup(
  static inline unsigned long __must_check
  copy_to_user(void __user *to, const void *from, unsigned long size)
  {
@@ -6108,7 +6156,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  extern u64 atomic64_cmpxchg(atomic64_t *ptr, u64 old_val, u64 new_val);
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/include/asm/atomic_64.h linux-2.6.32.15-pax/arch/x86/include/asm/atomic_64.h
 --- linux-2.6.32.15/arch/x86/include/asm/atomic_64.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.32.15-pax/arch/x86/include/asm/atomic_64.h	2010-07-01 03:21:51.000000000 +0200
++++ linux-2.6.32.15-pax/arch/x86/include/asm/atomic_64.h	2010-07-01 23:18:33.000000000 +0200
 @@ -24,6 +24,17 @@ static inline int atomic_read(const atom
  }
  
@@ -6535,7 +6583,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
 + *
 + * Atomically decrements @v by 1.
 + */
-+static inline void atomic64_dec_unchecked(atomic64_unhecked_t *v)
++static inline void atomic64_dec_unchecked(atomic64_unchecked_t *v)
 +{
 +	asm volatile(LOCK_PREFIX "decq %0\n"
  		     : "=m" (v->counter)
@@ -6702,7 +6750,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
 +			     : "=r" (new)
 +			     : "0" (c), "er" (a));
 +
-+		old = atomic64_cmpxchg((v), c, new);
++		old = atomic64_cmpxchg(v, c, new);
  		if (likely(old == c))
  			break;
  		c = old;
@@ -7854,7 +7902,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/include/asm/paravirt.h linux-2.6.32.15-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.15/arch/x86/include/asm/paravirt.h	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.15-pax/arch/x86/include/asm/paravirt.h	2010-06-14 00:14:15.000000000 +0200
++++ linux-2.6.32.15-pax/arch/x86/include/asm/paravirt.h	2010-07-06 12:36:38.000000000 +0200
 @@ -729,6 +729,21 @@ static inline void __set_fixmap(unsigned
  	pv_mmu_ops.set_fixmap(idx, phys, flags);
  }
@@ -7862,12 +7910,12 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
 +#ifdef CONFIG_PAX_KERNEXEC
 +static inline unsigned long pax_open_kernel(void)
 +{
-+	return pv_mmu_ops.pax_open_kernel();
++	return PVOP_CALL0(unsigned long, pv_mmu_ops.pax_open_kernel);
 +}
 +
 +static inline unsigned long pax_close_kernel(void)
 +{
-+	return pv_mmu_ops.pax_close_kernel();
++	return PVOP_CALL0(unsigned long, pv_mmu_ops.pax_close_kernel);
 +}
 +#else
 +static inline unsigned long pax_open_kernel(void) { return 0; }
@@ -8960,17 +9008,24 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  void default_idle(void);
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/include/asm/uaccess.h linux-2.6.32.15-pax/arch/x86/include/asm/uaccess.h
 --- linux-2.6.32.15/arch/x86/include/asm/uaccess.h	2009-09-10 19:41:12.000000000 +0200
-+++ linux-2.6.32.15-pax/arch/x86/include/asm/uaccess.h	2010-05-28 20:58:16.000000000 +0200
-@@ -8,6 +8,8 @@
++++ linux-2.6.32.15-pax/arch/x86/include/asm/uaccess.h	2010-07-06 12:36:38.000000000 +0200
+@@ -8,12 +8,15 @@
  #include <linux/thread_info.h>
  #include <linux/prefetch.h>
  #include <linux/string.h>
 +#include <linux/sched.h>
-+#include <linux/slab.h>
  #include <asm/asm.h>
  #include <asm/page.h>
  
-@@ -29,7 +31,12 @@
+ #define VERIFY_READ 0
+ #define VERIFY_WRITE 1
+ 
++extern void check_object_size(const void *ptr, unsigned long n, bool to);
++
+ /*
+  * The fs value determines whether argument validity checking should be
+  * performed or not.  If get_fs() == USER_DS, checking is performed, with
+@@ -29,7 +32,12 @@
  
  #define get_ds()	(KERNEL_DS)
  #define get_fs()	(current_thread_info()->addr_limit)
@@ -8983,7 +9038,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -77,7 +84,33 @@
+@@ -77,7 +85,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -9018,7 +9073,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  
  /*
   * The exception table consists of pairs of addresses: the first is the
-@@ -183,13 +216,21 @@ extern int __get_user_bad(void);
+@@ -183,13 +217,21 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -9043,7 +9098,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
  		     "	jmp 3b\n"					\
-@@ -197,15 +238,18 @@ extern int __get_user_bad(void);
+@@ -197,15 +239,18 @@ extern int __get_user_bad(void);
  		     _ASM_EXTABLE(1b, 4b)				\
  		     _ASM_EXTABLE(2b, 4b)				\
  		     : "=r" (err)					\
@@ -9066,7 +9121,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  
  #define __put_user_x8(x, ptr, __ret_pu)				\
  	asm volatile("call __put_user_8" : "=a" (__ret_pu)	\
-@@ -374,16 +418,18 @@ do {									\
+@@ -374,16 +419,18 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -9088,7 +9143,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  
  #define __get_user_size_ex(x, ptr, size)				\
  do {									\
-@@ -407,10 +453,12 @@ do {									\
+@@ -407,10 +454,12 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -9103,7 +9158,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  
  #define __put_user_nocheck(x, ptr, size)			\
  ({								\
-@@ -424,13 +472,24 @@ do {									\
+@@ -424,13 +473,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -9130,7 +9185,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -438,21 +497,26 @@ struct __large_struct { unsigned long bu
+@@ -438,21 +498,26 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -9161,7 +9216,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  
  /*
   * uaccess_try and catch
-@@ -530,7 +594,7 @@ struct __large_struct { unsigned long bu
+@@ -530,7 +595,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -9170,7 +9225,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -567,6 +631,7 @@ extern struct movsl_mask {
+@@ -567,6 +632,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -9679,7 +9734,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  	jmp	bogus_magic
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/kernel/alternative.c linux-2.6.32.15-pax/arch/x86/kernel/alternative.c
 --- linux-2.6.32.15/arch/x86/kernel/alternative.c	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.15-pax/arch/x86/kernel/alternative.c	2010-05-12 15:50:22.000000000 +0200
++++ linux-2.6.32.15-pax/arch/x86/kernel/alternative.c	2010-07-06 12:36:38.000000000 +0200
 @@ -407,7 +407,7 @@ void __init_or_module apply_paravirt(str
  
  		BUG_ON(p->len > MAX_PATCH_LEN);
@@ -9689,6 +9744,15 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/arch/x86/
  		used = pv_init_ops.patch(p->instrtype, p->clobbers, insnbuf,
  					 (unsigned long)p->instr, p->len);
  
+@@ -475,7 +475,7 @@ void __init alternative_instructions(voi
+ 	if (smp_alt_once)
+ 		free_init_pages("SMP alternatives",
+ 				(unsigned long)__smp_locks,
+-				(unsigned long)__smp_locks_end);
++				PAGE_ALIGN((unsigned long)__smp_locks_end));
+ 
+ 	restart_nmi();
+ }
 @@ -492,12 +492,16 @@ void __init alternative_instructions(voi
   * instructions. And on the local CPU you need to be protected again NMI or MCE
   * handlers seeing an inconsistent instruction while you patch.
@@ -26638,7 +26702,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/drivers/p
  	.release = &legacy_release,
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/drivers/pci/intel-iommu.c linux-2.6.32.15-pax/drivers/pci/intel-iommu.c
 --- linux-2.6.32.15/drivers/pci/intel-iommu.c	2009-12-20 06:24:01.000000000 +0100
-+++ linux-2.6.32.15-pax/drivers/pci/intel-iommu.c	2010-05-12 15:50:23.000000000 +0200
++++ linux-2.6.32.15-pax/drivers/pci/intel-iommu.c	2010-07-04 16:00:09.000000000 +0200
 @@ -2950,7 +2950,7 @@ static int intel_mapping_error(struct de
  	return !dma_addr;
  }
@@ -33166,7 +33230,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/include/l
  #define large_malloc(a) vmalloc(a)
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/include/linux/dma-mapping.h linux-2.6.32.15-pax/include/linux/dma-mapping.h
 --- linux-2.6.32.15/include/linux/dma-mapping.h	2009-12-03 15:02:40.000000000 +0100
-+++ linux-2.6.32.15-pax/include/linux/dma-mapping.h	2010-05-12 15:50:23.000000000 +0200
++++ linux-2.6.32.15-pax/include/linux/dma-mapping.h	2010-07-04 16:02:43.000000000 +0200
 @@ -16,50 +16,50 @@ enum dma_data_direction {
  };
  
@@ -39866,7 +39930,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/util.c
  }
 diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmalloc.c linux-2.6.32.15-pax/mm/vmalloc.c
 --- linux-2.6.32.15/mm/vmalloc.c	2010-02-17 23:58:58.000000000 +0100
-+++ linux-2.6.32.15-pax/mm/vmalloc.c	2010-05-12 15:50:24.000000000 +0200
++++ linux-2.6.32.15-pax/mm/vmalloc.c	2010-07-06 12:36:38.000000000 +0200
 @@ -40,8 +40,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -39897,7 +39961,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  
  	/*
  	 * nr is a running index into the array which helps higher level
-@@ -101,17 +113,30 @@ static int vmap_pte_range(pmd_t *pmd, un
+@@ -101,17 +113,32 @@ static int vmap_pte_range(pmd_t *pmd, un
  	pte = pte_alloc_kernel(pmd, addr);
  	if (!pte)
  		return -ENOMEM;
@@ -39911,7 +39975,9 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
 -		if (WARN_ON(!page))
 -			return -ENOMEM;
 +#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+		if (pgprot_val(prot) & _PAGE_NX)
++		if (!(pgprot_val(prot) & _PAGE_NX))
++			BUG_ON(!pte_exec(*pte) || pte_pfn(*pte) != __pa(addr) >> PAGE_SHIFT);
++		else
 +#endif
 +
 +		if (WARN_ON(!pte_none(*pte))) {
@@ -39933,7 +39999,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  }
  
  static int vmap_pmd_range(pud_t *pud, unsigned long addr,
-@@ -192,11 +217,20 @@ int is_vmalloc_or_module_addr(const void
+@@ -192,11 +219,20 @@ int is_vmalloc_or_module_addr(const void
  	 * and fall back on vmalloc() if that fails. Others
  	 * just put it in the vmalloc space.
  	 */
@@ -39955,7 +40021,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  	return is_vmalloc_addr(x);
  }
  
-@@ -292,13 +326,13 @@ static void __insert_vmap_area(struct vm
+@@ -292,13 +328,13 @@ static void __insert_vmap_area(struct vm
  	struct rb_node *tmp;
  
  	while (*p) {
@@ -39973,7 +40039,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  			p = &(*p)->rb_right;
  		else
  			BUG();
-@@ -1223,6 +1257,16 @@ static struct vm_struct *__get_vm_area_n
+@@ -1223,6 +1259,16 @@ static struct vm_struct *__get_vm_area_n
  	struct vm_struct *area;
  
  	BUG_ON(in_interrupt());
@@ -39990,7 +40056,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  	if (flags & VM_IOREMAP) {
  		int bit = fls(size);
  
-@@ -1448,6 +1492,11 @@ void *vmap(struct page **pages, unsigned
+@@ -1448,6 +1494,11 @@ void *vmap(struct page **pages, unsigned
  	if (count > totalram_pages)
  		return NULL;
  
@@ -40002,7 +40068,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  	area = get_vm_area_caller((count << PAGE_SHIFT), flags,
  					__builtin_return_address(0));
  	if (!area)
-@@ -1558,6 +1607,13 @@ static void *__vmalloc_node(unsigned lon
+@@ -1558,6 +1609,13 @@ static void *__vmalloc_node(unsigned lon
  	if (!size || (size >> PAGE_SHIFT) > totalram_pages)
  		return NULL;
  
@@ -40016,7 +40082,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  	area = __get_vm_area_node(size, align, VM_ALLOC, VMALLOC_START,
  				  VMALLOC_END, node, gfp_mask, caller);
  
-@@ -1576,6 +1632,7 @@ static void *__vmalloc_node(unsigned lon
+@@ -1576,6 +1634,7 @@ static void *__vmalloc_node(unsigned lon
  	return addr;
  }
  
@@ -40024,7 +40090,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot)
  {
  	return __vmalloc_node(size, 1, gfp_mask, prot, -1,
-@@ -1592,6 +1649,7 @@ EXPORT_SYMBOL(__vmalloc);
+@@ -1592,6 +1651,7 @@ EXPORT_SYMBOL(__vmalloc);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -40032,7 +40098,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  void *vmalloc(unsigned long size)
  {
  	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL,
-@@ -1606,6 +1664,7 @@ EXPORT_SYMBOL(vmalloc);
+@@ -1606,6 +1666,7 @@ EXPORT_SYMBOL(vmalloc);
   * The resulting memory area is zeroed so it can be mapped to userspace
   * without leaking data.
   */
@@ -40040,7 +40106,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  void *vmalloc_user(unsigned long size)
  {
  	struct vm_struct *area;
-@@ -1633,6 +1692,7 @@ EXPORT_SYMBOL(vmalloc_user);
+@@ -1633,6 +1694,7 @@ EXPORT_SYMBOL(vmalloc_user);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -40048,7 +40114,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  void *vmalloc_node(unsigned long size, int node)
  {
  	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL,
-@@ -1655,10 +1715,10 @@ EXPORT_SYMBOL(vmalloc_node);
+@@ -1655,10 +1717,10 @@ EXPORT_SYMBOL(vmalloc_node);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -40061,7 +40127,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  			      -1, __builtin_return_address(0));
  }
  
-@@ -1677,6 +1737,7 @@ void *vmalloc_exec(unsigned long size)
+@@ -1677,6 +1739,7 @@ void *vmalloc_exec(unsigned long size)
   *	Allocate enough 32bit PA addressable pages to cover @size from the
   *	page level allocator and map them into contiguous kernel virtual space.
   */
@@ -40069,7 +40135,7 @@ diff -NurpX linux-2.6.32.15-pax/Documentation/dontdiff linux-2.6.32.15/mm/vmallo
  void *vmalloc_32(unsigned long size)
  {
  	return __vmalloc_node(size, 1, GFP_VMALLOC32, PAGE_KERNEL,
-@@ -1691,6 +1752,7 @@ EXPORT_SYMBOL(vmalloc_32);
+@@ -1691,6 +1754,7 @@ EXPORT_SYMBOL(vmalloc_32);
   * The resulting memory area is 32bit addressable and zeroed so it can be
   * mapped to userspace without leaking data.
   */
