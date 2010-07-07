@@ -1147,7 +1147,7 @@ diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/arch/ia64/k
  	}
 diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/arch/ia64/kernel/pci-dma.c linux-2.6.34.1-pax/arch/ia64/kernel/pci-dma.c
 --- linux-2.6.34.1/arch/ia64/kernel/pci-dma.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.1-pax/arch/ia64/kernel/pci-dma.c	2010-05-29 02:02:57.000000000 +0200
++++ linux-2.6.34.1-pax/arch/ia64/kernel/pci-dma.c	2010-07-07 17:38:31.000000000 +0200
 @@ -43,7 +43,7 @@ struct device fallback_dev = {
  	.dma_mask = &fallback_dev.coherent_dma_mask,
  };
@@ -1157,6 +1157,48 @@ diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/arch/ia64/k
  
  static int __init pci_iommu_init(void)
  {
+@@ -96,15 +96,34 @@ int iommu_dma_supported(struct device *d
+ }
+ EXPORT_SYMBOL(iommu_dma_supported);
+ 
++extern void *intel_alloc_coherent(struct device *hwdev, size_t size, dma_addr_t *dma_handle, gfp_t flags);
++extern void intel_free_coherent(struct device *hwdev, size_t size, void *vaddr, dma_addr_t dma_handle);
++extern int intel_map_sg(struct device *hwdev, struct scatterlist *sglist, int nelems, enum dma_data_direction dir, struct dma_attrs *attrs);
++extern void intel_unmap_sg(struct device *hwdev, struct scatterlist *sglist, int nelems, enum dma_data_direction dir, struct dma_attrs *attrs);
++extern dma_addr_t intel_map_page(struct device *dev, struct page *page, unsigned long offset, size_t size, enum dma_data_direction dir, struct dma_attrs *attrs);
++extern void intel_unmap_page(struct device *dev, dma_addr_t dev_addr, size_t size, enum dma_data_direction dir, struct dma_attrs *attrs);
++extern int intel_mapping_error(struct device *dev, dma_addr_t dma_addr);
++
++static const struct dma_map_ops intel_iommu_dma_ops = {
++	/* from drivers/pci/intel-iommu.c:intel_dma_ops */
++	.alloc_coherent = intel_alloc_coherent,
++	.free_coherent = intel_free_coherent,
++	.map_sg = intel_map_sg,
++	.unmap_sg = intel_unmap_sg,
++	.map_page = intel_map_page,
++	.unmap_page = intel_unmap_page,
++	.mapping_error = intel_mapping_error,
++
++	.sync_single_for_cpu = machvec_dma_sync_single,
++	.sync_sg_for_cpu = machvec_dma_sync_sg,
++	.sync_single_for_device = machvec_dma_sync_single,
++	.sync_sg_for_device = machvec_dma_sync_sg,
++	.dma_supported = iommu_dma_supported,
++};
++
+ void __init pci_iommu_alloc(void)
+ {
+-	dma_ops = &intel_dma_ops;
+-
+-	dma_ops->sync_single_for_cpu = machvec_dma_sync_single;
+-	dma_ops->sync_sg_for_cpu = machvec_dma_sync_sg;
+-	dma_ops->sync_single_for_device = machvec_dma_sync_single;
+-	dma_ops->sync_sg_for_device = machvec_dma_sync_sg;
+-	dma_ops->dma_supported = iommu_dma_supported;
++	dma_ops = &intel_iommu_dma_ops;
+ 
+ 	/*
+ 	 * The order of these functions is important for
 diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/arch/ia64/kernel/pci-swiotlb.c linux-2.6.34.1-pax/arch/ia64/kernel/pci-swiotlb.c
 --- linux-2.6.34.1/arch/ia64/kernel/pci-swiotlb.c	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.1-pax/arch/ia64/kernel/pci-swiotlb.c	2010-05-29 02:02:57.000000000 +0200
@@ -9679,7 +9721,7 @@ diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/arch/x86/ke
  	jmp	bogus_magic
 diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/arch/x86/kernel/alternative.c linux-2.6.34.1-pax/arch/x86/kernel/alternative.c
 --- linux-2.6.34.1/arch/x86/kernel/alternative.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.1-pax/arch/x86/kernel/alternative.c	2010-07-07 00:44:04.000000000 +0200
++++ linux-2.6.34.1-pax/arch/x86/kernel/alternative.c	2010-07-08 00:21:49.000000000 +0200
 @@ -429,7 +429,7 @@ void __init_or_module apply_paravirt(str
  
  		BUG_ON(p->len > MAX_PATCH_LEN);
@@ -25870,8 +25912,68 @@ diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/drivers/pci
  	/* initialize our int15 lock */
 diff -NurpX linux-2.6.34.1-pax/Documentation/dontdiff linux-2.6.34.1/drivers/pci/intel-iommu.c linux-2.6.34.1-pax/drivers/pci/intel-iommu.c
 --- linux-2.6.34.1/drivers/pci/intel-iommu.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.1-pax/drivers/pci/intel-iommu.c	2010-05-29 02:03:00.000000000 +0200
-@@ -2940,7 +2940,7 @@ static int intel_mapping_error(struct de
++++ linux-2.6.34.1-pax/drivers/pci/intel-iommu.c	2010-07-07 17:38:31.000000000 +0200
+@@ -2637,7 +2637,7 @@ error:
+ 	return 0;
+ }
+ 
+-static dma_addr_t intel_map_page(struct device *dev, struct page *page,
++dma_addr_t intel_map_page(struct device *dev, struct page *page,
+ 				 unsigned long offset, size_t size,
+ 				 enum dma_data_direction dir,
+ 				 struct dma_attrs *attrs)
+@@ -2713,7 +2713,7 @@ static void add_unmap(struct dmar_domain
+ 	spin_unlock_irqrestore(&async_umap_flush_lock, flags);
+ }
+ 
+-static void intel_unmap_page(struct device *dev, dma_addr_t dev_addr,
++void intel_unmap_page(struct device *dev, dma_addr_t dev_addr,
+ 			     size_t size, enum dma_data_direction dir,
+ 			     struct dma_attrs *attrs)
+ {
+@@ -2762,7 +2762,7 @@ static void intel_unmap_page(struct devi
+ 	}
+ }
+ 
+-static void *intel_alloc_coherent(struct device *hwdev, size_t size,
++void *intel_alloc_coherent(struct device *hwdev, size_t size,
+ 				  dma_addr_t *dma_handle, gfp_t flags)
+ {
+ 	void *vaddr;
+@@ -2794,7 +2794,7 @@ static void *intel_alloc_coherent(struct
+ 	return NULL;
+ }
+ 
+-static void intel_free_coherent(struct device *hwdev, size_t size, void *vaddr,
++void intel_free_coherent(struct device *hwdev, size_t size, void *vaddr,
+ 				dma_addr_t dma_handle)
+ {
+ 	int order;
+@@ -2806,7 +2806,7 @@ static void intel_free_coherent(struct d
+ 	free_pages((unsigned long)vaddr, order);
+ }
+ 
+-static void intel_unmap_sg(struct device *hwdev, struct scatterlist *sglist,
++void intel_unmap_sg(struct device *hwdev, struct scatterlist *sglist,
+ 			   int nelems, enum dma_data_direction dir,
+ 			   struct dma_attrs *attrs)
+ {
+@@ -2866,7 +2866,7 @@ static int intel_nontranslate_map_sg(str
+ 	return nelems;
+ }
+ 
+-static int intel_map_sg(struct device *hwdev, struct scatterlist *sglist, int nelems,
++int intel_map_sg(struct device *hwdev, struct scatterlist *sglist, int nelems,
+ 			enum dma_data_direction dir, struct dma_attrs *attrs)
+ {
+ 	int i;
+@@ -2935,12 +2935,12 @@ static int intel_map_sg(struct device *h
+ 	return nelems;
+ }
+ 
+-static int intel_mapping_error(struct device *dev, dma_addr_t dma_addr)
++int intel_mapping_error(struct device *dev, dma_addr_t dma_addr)
+ {
  	return !dma_addr;
  }
  
