@@ -5320,7 +5320,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  	printf(".section \".rodata.compressed\",\"a\",@progbits\n");
 diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/boot/compressed/relocs.c linux-2.6.32.16-pax/arch/x86/boot/compressed/relocs.c
 --- linux-2.6.32.16/arch/x86/boot/compressed/relocs.c	2009-06-10 08:46:14.000000000 +0200
-+++ linux-2.6.32.16-pax/arch/x86/boot/compressed/relocs.c	2010-05-12 15:50:22.000000000 +0200
++++ linux-2.6.32.16-pax/arch/x86/boot/compressed/relocs.c	2010-07-09 13:43:14.000000000 +0200
 @@ -10,8 +10,11 @@
  #define USE_BSD
  #include <endian.h>
@@ -5492,7 +5492,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
 +			/* Don't relocate actual code, they are relocated implicitly by the base address of KERNEL_CS */
-+			if (!strcmp(sec_name(sym->st_shndx), ".data") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
++			if (!strcmp(sec_name(sym->st_shndx), ".module.text") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".init.text"))
 +				continue;
@@ -14354,21 +14354,12 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  	local_irq_save(flags);
 diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/kernel/vmlinux.lds.S linux-2.6.32.16-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-2.6.32.16/arch/x86/kernel/vmlinux.lds.S	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.16-pax/arch/x86/kernel/vmlinux.lds.S	2010-05-12 15:50:22.000000000 +0200
-@@ -26,6 +26,22 @@
++++ linux-2.6.32.16-pax/arch/x86/kernel/vmlinux.lds.S	2010-07-09 13:46:35.000000000 +0200
+@@ -26,6 +26,13 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
  #include <asm/boot.h>
 +#include <asm/segment.h>
-+
-+#undef PMD_SIZE
-+#undef PMD_SHIFT
-+#if defined(CONFIG_X86_64) || defined(CONFIG_X86_PAE)
-+#define PMD_SHIFT 21
-+#else
-+#define PMD_SHIFT 22
-+#endif
-+#define PMD_SIZE (1 << PMD_SHIFT)
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +#define __KERNEL_TEXT_OFFSET	(LOAD_OFFSET + ____LOAD_PHYSICAL_ADDR)
@@ -14378,7 +14369,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  
  #undef i386     /* in case the preprocessor is a 32bit one */
  
-@@ -34,40 +50,55 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
+@@ -34,40 +41,55 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONF
  #ifdef CONFIG_X86_32
  OUTPUT_ARCH(i386)
  ENTRY(phys_startup_32)
@@ -14394,13 +14385,13 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  PHDRS {
  	text PT_LOAD FLAGS(5);          /* R_E */
 -	data PT_LOAD FLAGS(7);          /* RWE */
++#ifdef CONFIG_X86_32
++	module PT_LOAD FLAGS(5);        /* R_E */
++#endif
 +#ifdef CONFIG_XEN
 +	rodata PT_LOAD FLAGS(5);        /* R_E */
 +#else
 +	rodata PT_LOAD FLAGS(4);        /* R__ */
-+#endif
-+#ifdef CONFIG_X86_32
-+	module PT_LOAD FLAGS(5);        /* R_E */
 +#endif
 +	data PT_LOAD FLAGS(6);          /* RW_ */
  #ifdef CONFIG_X86_64
@@ -14444,7 +14435,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  		HEAD_TEXT
  #ifdef CONFIG_X86_32
  		. = ALIGN(PAGE_SIZE);
-@@ -82,28 +113,64 @@ SECTIONS
+@@ -82,28 +104,69 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -14454,25 +14445,9 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  
 -	NOTES :text :note
 +	. += __KERNEL_TEXT_OFFSET;
-+
-+	. = ALIGN(PAGE_SIZE);
-+	NOTES :rodata :note
  
 -	EXCEPTION_TABLE(16) :text = 0x9090
-+	EXCEPTION_TABLE(16) :rodata
- 
- 	RO_DATA(PAGE_SIZE)
- 
 +#ifdef CONFIG_X86_32
-+	. = ALIGN(PAGE_SIZE);
-+	.rodata.page_aligned : AT(ADDR(.rodata.page_aligned) - LOAD_OFFSET) {
-+		*(.idt)
-+		. = ALIGN(PAGE_SIZE);
-+		*(.empty_zero_page)
-+		*(.swapper_pg_pmd)
-+		*(.swapper_pg_dir)
-+	}
-+
 +	. = ALIGN(PAGE_SIZE);
 +	.vmi.rom : AT(ADDR(.vmi.rom) - LOAD_OFFSET) {
 +		*(.vmi.rom)
@@ -14485,20 +14460,41 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
 +		MODULES_EXEC_VADDR = .;
 +		BYTE(0)
 +		. += (CONFIG_PAX_KERNEXEC_MODULE_TEXT * 1024 * 1024);
-+		. = ALIGN(PMD_SIZE);
++		. = ALIGN(HPAGE_SIZE);
 +		MODULES_EXEC_END = . - 1;
 +#endif
 +
 +	} :module
 +#endif
 +
- 	/* Data */
- 	.data : AT(ADDR(.data) - LOAD_OFFSET) {
++	.text.end : AT(ADDR(.text.end) - LOAD_OFFSET) {
 +		/* End of text section */
 +		_etext = . - __KERNEL_TEXT_OFFSET;
++	}
++
++#ifdef CONFIG_X86_32
++	. = ALIGN(PAGE_SIZE);
++	.rodata.page_aligned : AT(ADDR(.rodata.page_aligned) - LOAD_OFFSET) {
++		*(.idt)
++		. = ALIGN(PAGE_SIZE);
++		*(.empty_zero_page)
++		*(.swapper_pg_pmd)
++		*(.swapper_pg_dir)
++	} :rodata
++#endif
++
++	. = ALIGN(PAGE_SIZE);
++	NOTES :rodata :note
++
++	EXCEPTION_TABLE(16) :rodata
+ 
+ 	RO_DATA(PAGE_SIZE)
+ 
+ 	/* Data */
+ 	.data : AT(ADDR(.data) - LOAD_OFFSET) {
 +
 +#ifdef CONFIG_PAX_KERNEXEC
-+	. = ALIGN(PMD_SIZE);
++	. = ALIGN(HPAGE_SIZE);
 +#else
 +	. = ALIGN(PAGE_SIZE);
 +#endif
@@ -14516,7 +14512,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  
-@@ -166,12 +233,6 @@ SECTIONS
+@@ -166,12 +229,6 @@ SECTIONS
  	}
  	vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -14529,7 +14525,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  	.vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3)) {
  		*(.vsyscall_3)
  	}
-@@ -187,12 +248,19 @@ SECTIONS
+@@ -187,12 +244,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -14538,7 +14534,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
 +		BYTE(0)
 +
 +#ifdef CONFIG_PAX_KERNEXEC
-+		. = ALIGN(PMD_SIZE);
++		. = ALIGN(HPAGE_SIZE);
 +#else
 +		. = ALIGN(PAGE_SIZE);
 +#endif
@@ -14552,7 +14548,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -201,12 +269,27 @@ SECTIONS
+@@ -201,12 +265,27 @@ SECTIONS
  	PERCPU_VADDR(0, :percpu)
  #endif
  
@@ -14568,24 +14564,24 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
 +		VMLINUX_SYMBOL(_einittext) = .;
 +		. = ALIGN(PAGE_SIZE);
 +	} :text.init
-+
+ 
+-	INIT_DATA_SECTION(16)
 +	/*
 +	 * .exit.text is discard at runtime, not link time, to deal with
 +	 *  references from .altinstructions and .eh_frame
 +	 */
-+	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET) {
++	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET + __KERNEL_TEXT_OFFSET) {
 +		EXIT_TEXT
 +		. = ALIGN(16);
 +	} :text.exit
 +	. = init_begin + SIZEOF(.init.text) + SIZEOF(.exit.text);
- 
--	INIT_DATA_SECTION(16)
++
 +	. = ALIGN(PAGE_SIZE);
 +	INIT_DATA_SECTION(16) :init
  
  	.x86_cpu_dev.init : AT(ADDR(.x86_cpu_dev.init) - LOAD_OFFSET) {
  		__x86_cpu_dev_start = .;
-@@ -232,19 +315,11 @@ SECTIONS
+@@ -232,19 +311,11 @@ SECTIONS
  		*(.altinstr_replacement)
  	}
  
@@ -14606,7 +14602,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  	PERCPU(PAGE_SIZE)
  #endif
  
-@@ -267,12 +342,6 @@ SECTIONS
+@@ -267,12 +338,6 @@ SECTIONS
  		. = ALIGN(PAGE_SIZE);
  	}
  
@@ -14619,15 +14615,15 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/arch/x86/
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -288,6 +357,7 @@ SECTIONS
+@@ -288,6 +353,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
-+		. = ALIGN(PMD_SIZE);
++		. = ALIGN(HPAGE_SIZE);
  		__brk_limit = .;
  	}
  
-@@ -316,13 +386,12 @@ SECTIONS
+@@ -316,13 +382,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = per_cpu__##x + __per_cpu_load
@@ -35759,45 +35755,57 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/kernel/hr
  }
 diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/kernel/kallsyms.c linux-2.6.32.16-pax/kernel/kallsyms.c
 --- linux-2.6.32.16/kernel/kallsyms.c	2009-12-03 15:02:45.000000000 +0100
-+++ linux-2.6.32.16-pax/kernel/kallsyms.c	2010-05-12 15:50:24.000000000 +0200
-@@ -51,6 +51,9 @@ extern const unsigned long kallsyms_mark
++++ linux-2.6.32.16-pax/kernel/kallsyms.c	2010-07-09 13:43:14.000000000 +0200
+@@ -51,23 +51,48 @@ extern const unsigned long kallsyms_mark
  
  static inline int is_kernel_inittext(unsigned long addr)
  {
 +	if (system_state != SYSTEM_BOOTING)
 +		return 0;
 +
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++	if (addr >= ktla_ktva((unsigned long)_sinittext)
++	    && addr <= ktla_ktva((unsigned long)_einittext))
++#else
  	if (addr >= (unsigned long)_sinittext
  	    && addr <= (unsigned long)_einittext)
++#endif
  		return 1;
-@@ -67,6 +70,26 @@ static inline int is_kernel_text(unsigne
++
+ 	return 0;
+ }
+ 
+ static inline int is_kernel_text(unsigned long addr)
+ {
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++	if (addr >= ktla_ktva((unsigned long)_stext)
++	    && addr <= ktla_ktva((unsigned long)_etext))
++#else
+ 	if ((addr >= (unsigned long)_stext && addr <= (unsigned long)_etext) ||
+ 	    arch_is_kernel_text(addr))
++#endif
+ 		return 1;
++
+ 	return in_gate_area_no_task(addr);
+ }
  
  static inline int is_kernel(unsigned long addr)
  {
-+	if (is_kernel_inittext(addr))
-+		return 1;
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+#ifdef CONFIG_MODULES
-+	if ((unsigned long)MODULES_EXEC_VADDR <= ktla_ktva(addr) && ktla_ktva(addr) <= (unsigned long)MODULES_EXEC_END)
-+		return 0;
-+#endif
-+
-+	if (is_kernel_text(addr))
++	if (is_kernel_text(addr) || is_kernel_inittext(addr))
 +		return 1;
 +
-+	if (ktla_ktva((unsigned long)_stext) <= addr && addr < ktla_ktva((unsigned long)_etext))
-+		return 1;
-+
-+	if ((addr >= (unsigned long)_sdata && addr <= (unsigned long)_end))
-+		return 1;
-+	return in_gate_area_no_task(addr);
-+#endif
-+
++	if (ktla_ktva((unsigned long)_text) <= addr && addr < (unsigned long)_end)
++#else
  	if (addr >= (unsigned long)_stext && addr <= (unsigned long)_end)
++#endif
++
  		return 1;
  	return in_gate_area_no_task(addr);
-@@ -413,7 +436,6 @@ static unsigned long get_ksymbol_core(st
+ }
+@@ -413,7 +438,6 @@ static unsigned long get_ksymbol_core(st
  
  static void reset_iter(struct kallsym_iter *iter, loff_t new_pos)
  {
@@ -35805,7 +35813,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/kernel/ka
  	iter->nameoff = get_symbol_offset(new_pos);
  	iter->pos = new_pos;
  }
-@@ -501,7 +523,7 @@ static int kallsyms_open(struct inode *i
+@@ -501,7 +525,7 @@ static int kallsyms_open(struct inode *i
  	struct kallsym_iter *iter;
  	int ret;
  
@@ -39998,7 +40006,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/util.c
  }
 diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmalloc.c linux-2.6.32.16-pax/mm/vmalloc.c
 --- linux-2.6.32.16/mm/vmalloc.c	2010-02-17 23:58:58.000000000 +0100
-+++ linux-2.6.32.16-pax/mm/vmalloc.c	2010-07-06 12:36:38.000000000 +0200
++++ linux-2.6.32.16-pax/mm/vmalloc.c	2010-07-09 13:43:14.000000000 +0200
 @@ -40,8 +40,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -40089,7 +40097,22 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  	return is_vmalloc_addr(x);
  }
  
-@@ -292,13 +328,13 @@ static void __insert_vmap_area(struct vm
+@@ -217,8 +253,14 @@ struct page *vmalloc_to_page(const void
+ 
+ 	if (!pgd_none(*pgd)) {
+ 		pud_t *pud = pud_offset(pgd, addr);
++#ifdef CONFIG_X86
++		if (!pud_large(*pud))
++#endif
+ 		if (!pud_none(*pud)) {
+ 			pmd_t *pmd = pmd_offset(pud, addr);
++#ifdef CONFIG_X86
++			if (!pmd_large(*pmd))
++#endif
+ 			if (!pmd_none(*pmd)) {
+ 				pte_t *ptep, pte;
+ 
+@@ -292,13 +334,13 @@ static void __insert_vmap_area(struct vm
  	struct rb_node *tmp;
  
  	while (*p) {
@@ -40107,7 +40130,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  			p = &(*p)->rb_right;
  		else
  			BUG();
-@@ -1223,6 +1259,16 @@ static struct vm_struct *__get_vm_area_n
+@@ -1223,6 +1265,16 @@ static struct vm_struct *__get_vm_area_n
  	struct vm_struct *area;
  
  	BUG_ON(in_interrupt());
@@ -40124,7 +40147,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  	if (flags & VM_IOREMAP) {
  		int bit = fls(size);
  
-@@ -1448,6 +1494,11 @@ void *vmap(struct page **pages, unsigned
+@@ -1448,6 +1500,11 @@ void *vmap(struct page **pages, unsigned
  	if (count > totalram_pages)
  		return NULL;
  
@@ -40136,7 +40159,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  	area = get_vm_area_caller((count << PAGE_SHIFT), flags,
  					__builtin_return_address(0));
  	if (!area)
-@@ -1558,6 +1609,13 @@ static void *__vmalloc_node(unsigned lon
+@@ -1558,6 +1615,13 @@ static void *__vmalloc_node(unsigned lon
  	if (!size || (size >> PAGE_SHIFT) > totalram_pages)
  		return NULL;
  
@@ -40150,7 +40173,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  	area = __get_vm_area_node(size, align, VM_ALLOC, VMALLOC_START,
  				  VMALLOC_END, node, gfp_mask, caller);
  
-@@ -1576,6 +1634,7 @@ static void *__vmalloc_node(unsigned lon
+@@ -1576,6 +1640,7 @@ static void *__vmalloc_node(unsigned lon
  	return addr;
  }
  
@@ -40158,7 +40181,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot)
  {
  	return __vmalloc_node(size, 1, gfp_mask, prot, -1,
-@@ -1592,6 +1651,7 @@ EXPORT_SYMBOL(__vmalloc);
+@@ -1592,6 +1657,7 @@ EXPORT_SYMBOL(__vmalloc);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -40166,7 +40189,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  void *vmalloc(unsigned long size)
  {
  	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL,
-@@ -1606,6 +1666,7 @@ EXPORT_SYMBOL(vmalloc);
+@@ -1606,6 +1672,7 @@ EXPORT_SYMBOL(vmalloc);
   * The resulting memory area is zeroed so it can be mapped to userspace
   * without leaking data.
   */
@@ -40174,7 +40197,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  void *vmalloc_user(unsigned long size)
  {
  	struct vm_struct *area;
-@@ -1633,6 +1694,7 @@ EXPORT_SYMBOL(vmalloc_user);
+@@ -1633,6 +1700,7 @@ EXPORT_SYMBOL(vmalloc_user);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -40182,7 +40205,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  void *vmalloc_node(unsigned long size, int node)
  {
  	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL,
-@@ -1655,10 +1717,10 @@ EXPORT_SYMBOL(vmalloc_node);
+@@ -1655,10 +1723,10 @@ EXPORT_SYMBOL(vmalloc_node);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -40195,7 +40218,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  			      -1, __builtin_return_address(0));
  }
  
-@@ -1677,6 +1739,7 @@ void *vmalloc_exec(unsigned long size)
+@@ -1677,6 +1745,7 @@ void *vmalloc_exec(unsigned long size)
   *	Allocate enough 32bit PA addressable pages to cover @size from the
   *	page level allocator and map them into contiguous kernel virtual space.
   */
@@ -40203,7 +40226,7 @@ diff -NurpX linux-2.6.32.16-pax/Documentation/dontdiff linux-2.6.32.16/mm/vmallo
  void *vmalloc_32(unsigned long size)
  {
  	return __vmalloc_node(size, 1, GFP_VMALLOC32, PAGE_KERNEL,
-@@ -1691,6 +1754,7 @@ EXPORT_SYMBOL(vmalloc_32);
+@@ -1691,6 +1760,7 @@ EXPORT_SYMBOL(vmalloc_32);
   * The resulting memory area is 32bit addressable and zeroed so it can be
   * mapped to userspace without leaking data.
   */
