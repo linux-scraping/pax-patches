@@ -3429,8 +3429,8 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sh/mm/
  static int __init dma_init(void)
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/include/asm/atomic_64.h linux-2.6.34.2-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-2.6.34.2/arch/sparc/include/asm/atomic_64.h	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/arch/sparc/include/asm/atomic_64.h	2010-07-06 12:17:57.000000000 +0200
-@@ -14,18 +14,39 @@
++++ linux-2.6.34.2-pax/arch/sparc/include/asm/atomic_64.h	2010-09-06 13:26:51.000000000 +0200
+@@ -14,18 +14,40 @@
  #define ATOMIC64_INIT(i)	{ (i) }
  
  #define atomic_read(v)		((v)->counter)
@@ -3465,20 +3465,23 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
 +extern void atomic64_sub_unchecked(int, atomic64_unchecked_t *);
  
  extern int atomic_add_ret(int, atomic_t *);
++extern int atomic_add_ret_unchecked(int, atomic_t *);
  extern int atomic64_add_ret(int, atomic64_t *);
 +extern int atomic64_add_ret_unchecked(int, atomic64_unchecked_t *);
  extern int atomic_sub_ret(int, atomic_t *);
  extern int atomic64_sub_ret(int, atomic64_t *);
  
-@@ -34,6 +55,7 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -33,7 +55,9 @@ extern int atomic64_sub_ret(int, atomic6
+ #define atomic64_dec_return(v) atomic64_sub_ret(1, v)
  
  #define atomic_inc_return(v) atomic_add_ret(1, v)
++#define atomic_inc_return_unchecked(v) atomic_add_ret_unchecked(1, v)
  #define atomic64_inc_return(v) atomic64_add_ret(1, v)
 +#define atomic64_inc_return_unchecked(v) atomic64_add_ret_unchecked(1, v)
  
  #define atomic_sub_return(i, v) atomic_sub_ret(i, v)
  #define atomic64_sub_return(i, v) atomic64_sub_ret(i, v)
-@@ -59,10 +81,26 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -59,10 +83,26 @@ extern int atomic64_sub_ret(int, atomic6
  #define atomic64_dec_and_test(v) (atomic64_sub_ret(1, v) == 0)
  
  #define atomic_inc(v) atomic_add(1, v)
@@ -3505,7 +3508,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  
  #define atomic_add_negative(i, v) (atomic_add_ret(i, v) < 0)
  #define atomic64_add_negative(i, v) (atomic64_add_ret(i, v) < 0)
-@@ -72,17 +110,28 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -72,17 +112,28 @@ extern int atomic64_sub_ret(int, atomic6
  
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -3538,7 +3541,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -93,17 +142,28 @@ static inline int atomic_add_unless(atom
+@@ -93,17 +144,28 @@ static inline int atomic_add_unless(atom
  
  static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -4090,7 +4093,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  	sprintf (buffer, "Bad trap %lx at tl>0", lvl);
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/lib/atomic_64.S linux-2.6.34.2-pax/arch/sparc/lib/atomic_64.S
 --- linux-2.6.34.2/arch/sparc/lib/atomic_64.S	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/arch/sparc/lib/atomic_64.S	2010-07-01 03:07:22.000000000 +0200
++++ linux-2.6.34.2-pax/arch/sparc/lib/atomic_64.S	2010-09-06 13:28:24.000000000 +0200
 @@ -18,7 +18,12 @@
  atomic_add: /* %o0 = increment, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
@@ -4173,7 +4176,33 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  	cas	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%icc, 2f
-@@ -64,7 +109,12 @@ atomic_add_ret: /* %o0 = increment, %o1
+@@ -59,12 +104,38 @@ atomic_add_ret: /* %o0 = increment, %o1
+ 2:	BACKOFF_SPIN(%o2, %o3, 1b)
+ 	.size	atomic_add_ret, .-atomic_add_ret
+ 
++	.globl	atomic_add_ret_unchecked
++	.type	atomic_add_ret_unchecked,#function
++atomic_add_ret_unchecked: /* %o0 = increment, %o1 = atomic_ptr */
++	BACKOFF_SETUP(%o2)
++1:	lduw	[%o1], %g1
++	addcc	%g1, %o0, %g7
++
++#ifdef CONFIG_PAX_REFCOUNT
++	tvs	%icc, 6
++#endif
++
++	cas	[%o1], %g1, %g7
++	cmp	%g1, %g7
++	bne,pn	%icc, 2f
++	 add	%g7, %o0, %g7
++	sra	%g7, 0, %o0
++	retl
++	 nop
++2:	BACKOFF_SPIN(%o2, %o3, 1b)
++	.size	atomic_add_ret_unchecked, .-atomic_add_ret_unchecked
++
+ 	.globl	atomic_sub_ret
+ 	.type	atomic_sub_ret,#function
  atomic_sub_ret: /* %o0 = decrement, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
  1:	lduw	[%o1], %g1
@@ -4187,7 +4216,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  	cas	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%icc, 2f
-@@ -80,7 +130,12 @@ atomic_sub_ret: /* %o0 = decrement, %o1
+@@ -80,7 +151,12 @@ atomic_sub_ret: /* %o0 = decrement, %o1
  atomic64_add: /* %o0 = increment, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
  1:	ldx	[%o1], %g1
@@ -4201,7 +4230,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -90,12 +145,32 @@ atomic64_add: /* %o0 = increment, %o1 =
+@@ -90,12 +166,32 @@ atomic64_add: /* %o0 = increment, %o1 =
  2:	BACKOFF_SPIN(%o2, %o3, 1b)
  	.size	atomic64_add, .-atomic64_add
  
@@ -4235,7 +4264,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -105,12 +180,32 @@ atomic64_sub: /* %o0 = decrement, %o1 =
+@@ -105,12 +201,32 @@ atomic64_sub: /* %o0 = decrement, %o1 =
  2:	BACKOFF_SPIN(%o2, %o3, 1b)
  	.size	atomic64_sub, .-atomic64_sub
  
@@ -4269,7 +4298,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/sparc/
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -121,12 +216,33 @@ atomic64_add_ret: /* %o0 = increment, %o
+@@ -121,12 +237,33 @@ atomic64_add_ret: /* %o0 = increment, %o
  2:	BACKOFF_SPIN(%o2, %o3, 1b)
  	.size	atomic64_add_ret, .-atomic64_add_ret
  
@@ -7850,19 +7879,6 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/in
  #ifdef CONFIG_4KSTACKS
  #define THREAD_ORDER	0
  #else
-diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/include/asm/page_64_types.h linux-2.6.34.2-pax/arch/x86/include/asm/page_64_types.h
---- linux-2.6.34.2/arch/x86/include/asm/page_64_types.h	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/arch/x86/include/asm/page_64_types.h	2010-05-29 02:02:36.000000000 +0200
-@@ -39,6 +39,9 @@
- #define __START_KERNEL		(__START_KERNEL_map + __PHYSICAL_START)
- #define __START_KERNEL_map	_AC(0xffffffff80000000, UL)
- 
-+#define ktla_ktva(addr)		(addr)
-+#define ktva_ktla(addr)		(addr)
-+
- /* See Documentation/x86/x86_64/mm.txt for a description of the memory map. */
- #define __PHYSICAL_MASK_SHIFT	46
- #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/include/asm/paravirt.h linux-2.6.34.2-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.34.2/arch/x86/include/asm/paravirt.h	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/arch/x86/include/asm/paravirt.h	2010-07-05 13:50:27.000000000 +0200
@@ -8299,13 +8315,16 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/in
  static inline void native_pgd_clear(pgd_t *pgd)
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/include/asm/pgtable_64_types.h linux-2.6.34.2-pax/arch/x86/include/asm/pgtable_64_types.h
 --- linux-2.6.34.2/arch/x86/include/asm/pgtable_64_types.h	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/arch/x86/include/asm/pgtable_64_types.h	2010-05-29 02:02:36.000000000 +0200
-@@ -59,5 +59,7 @@ typedef struct { pteval_t pte; } pte_t;
++++ linux-2.6.34.2-pax/arch/x86/include/asm/pgtable_64_types.h	2010-08-26 00:32:39.000000000 +0200
+@@ -59,5 +59,10 @@ typedef struct { pteval_t pte; } pte_t;
  #define MODULES_VADDR    _AC(0xffffffffa0000000, UL)
  #define MODULES_END      _AC(0xffffffffff000000, UL)
  #define MODULES_LEN   (MODULES_END - MODULES_VADDR)
 +#define MODULES_EXEC_VADDR MODULES_VADDR
 +#define MODULES_EXEC_END MODULES_END
++
++#define ktla_ktva(addr)		(addr)
++#define ktva_ktla(addr)		(addr)
  
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/include/asm/pgtable_types.h linux-2.6.34.2-pax/arch/x86/include/asm/pgtable_types.h
@@ -9771,7 +9790,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/ke
  	jmp	bogus_magic
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/kernel/alternative.c linux-2.6.34.2-pax/arch/x86/kernel/alternative.c
 --- linux-2.6.34.2/arch/x86/kernel/alternative.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/arch/x86/kernel/alternative.c	2010-07-09 02:14:07.000000000 +0200
++++ linux-2.6.34.2-pax/arch/x86/kernel/alternative.c	2010-08-27 12:19:38.000000000 +0200
 @@ -429,7 +429,7 @@ void __init_or_module apply_paravirt(str
  
  		BUG_ON(p->len > MAX_PATCH_LEN);
@@ -9790,7 +9809,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/ke
  
  	restart_nmi();
  }
-@@ -514,12 +514,16 @@ void __init alternative_instructions(voi
+@@ -514,13 +514,17 @@ void __init alternative_instructions(voi
   * instructions. And on the local CPU you need to be protected again NMI or MCE
   * handlers seeing an inconsistent instruction while you patch.
   */
@@ -9804,11 +9823,12 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/arch/x86/ke
 +
 +	pax_open_kernel();
 +	memcpy(ktla_ktva(addr), opcode, len);
+ 	sync_core();
 +	pax_close_kernel();
 +
- 	sync_core();
  	local_irq_restore(flags);
  	/* Could also do a CLFLUSH here to speed up CPU recovery; but
+ 	   that causes hangs on some VIA CPUs. */
 @@ -542,36 +546,22 @@ static void *__init_or_module text_poke_
   */
  void *__kprobes text_poke(void *addr, const void *opcode, size_t len)
@@ -23002,6 +23022,86 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/cha
  };
  
  MODULE_DEVICE_TABLE(input, kbd_ids);
+diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/char/mem.c linux-2.6.34.2-pax/drivers/char/mem.c
+--- linux-2.6.34.2/drivers/char/mem.c	2010-05-16 23:17:36.000000000 +0200
++++ linux-2.6.34.2-pax/drivers/char/mem.c	2010-09-01 14:10:14.000000000 +0200
+@@ -120,6 +120,7 @@ static ssize_t read_mem(struct file *fil
+ 
+ 	while (count > 0) {
+ 		unsigned long remaining;
++		char *temp;
+ 
+ 		sz = size_inside_page(p, count);
+ 
+@@ -135,7 +136,23 @@ static ssize_t read_mem(struct file *fil
+ 		if (!ptr)
+ 			return -EFAULT;
+ 
+-		remaining = copy_to_user(buf, ptr, sz);
++#ifdef CONFIG_PAX_USERCOPY
++		temp = kmalloc(sz, GFP_KERNEL);
++		if (!temp) {
++			unxlate_dev_mem_ptr(p, ptr);
++			return -ENOMEM;
++		}
++		memcpy(temp, ptr, sz);
++#else
++		temp = ptr;
++#endif
++
++		remaining = copy_to_user(buf, temp, sz);
++
++#ifdef CONFIG_PAX_USERCOPY
++		kfree(temp);
++#endif
++
+ 		unxlate_dev_mem_ptr(p, ptr);
+ 		if (remaining)
+ 			return -EFAULT;
+@@ -398,9 +415,8 @@ static ssize_t read_kmem(struct file *fi
+ 			 size_t count, loff_t *ppos)
+ {
+ 	unsigned long p = *ppos;
+-	ssize_t low_count, read, sz;
++	ssize_t low_count, read, sz, err = 0;
+ 	char * kbuf; /* k-addr because vread() takes vmlist_lock rwlock */
+-	int err = 0;
+ 
+ 	read = 0;
+ 	if (p < (unsigned long) high_memory) {
+@@ -422,6 +438,8 @@ static ssize_t read_kmem(struct file *fi
+ 		}
+ #endif
+ 		while (low_count > 0) {
++			char *temp;
++
+ 			sz = size_inside_page(p, low_count);
+ 
+ 			/*
+@@ -431,7 +449,22 @@ static ssize_t read_kmem(struct file *fi
+ 			 */
+ 			kbuf = xlate_dev_kmem_ptr((char *)p);
+ 
+-			if (copy_to_user(buf, kbuf, sz))
++#ifdef CONFIG_PAX_USERCOPY
++			temp = kmalloc(sz, GFP_KERNEL);
++			if (!temp)
++				return -ENOMEM;
++			memcpy(temp, kbuf, sz);
++#else
++			temp = kbuf;
++#endif
++
++			err = copy_to_user(buf, temp, sz);
++
++#ifdef CONFIG_PAX_USERCOPY
++			kfree(temp);
++#endif
++
++			if (err)
+ 				return -EFAULT;
+ 			buf += sz;
+ 			p += sz;
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/char/n_tty.c linux-2.6.34.2-pax/drivers/char/n_tty.c
 --- linux-2.6.34.2/drivers/char/n_tty.c	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/drivers/char/n_tty.c	2010-05-29 02:02:37.000000000 +0200
@@ -26092,6 +26192,18 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/pci
  					struct device_attribute *attr,
  					char *buf)
  {
+diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/pcmcia/pcmcia_ioctl.c linux-2.6.34.2-pax/drivers/pcmcia/pcmcia_ioctl.c
+--- linux-2.6.34.2/drivers/pcmcia/pcmcia_ioctl.c	2010-05-16 23:17:36.000000000 +0200
++++ linux-2.6.34.2-pax/drivers/pcmcia/pcmcia_ioctl.c	2010-09-01 09:51:38.000000000 +0200
+@@ -856,7 +856,7 @@ static int ds_ioctl(struct inode *inode,
+ 	    return -EFAULT;
+ 	}
+     }
+-    buf = kmalloc(sizeof(ds_ioctl_arg_t), GFP_KERNEL);
++    buf = kzalloc(sizeof(ds_ioctl_arg_t), GFP_KERNEL);
+     if (!buf)
+ 	return -ENOMEM;
+ 
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/pcmcia/ti113x.h linux-2.6.34.2-pax/drivers/pcmcia/ti113x.h
 --- linux-2.6.34.2/drivers/pcmcia/ti113x.h	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/drivers/pcmcia/ti113x.h	2010-05-29 02:02:37.000000000 +0200
@@ -27055,13 +27167,13 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/usb
  MODULE_DEVICE_TABLE(usb, acm_ids);
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/drivers/usb/class/cdc-wdm.c linux-2.6.34.2-pax/drivers/usb/class/cdc-wdm.c
 --- linux-2.6.34.2/drivers/usb/class/cdc-wdm.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/drivers/usb/class/cdc-wdm.c	2010-07-27 01:34:30.000000000 +0200
++++ linux-2.6.34.2-pax/drivers/usb/class/cdc-wdm.c	2010-08-06 16:10:36.000000000 +0200
 @@ -342,7 +342,7 @@ static ssize_t wdm_write
  		goto outnp;
  	}
  
 -	if (!file->f_flags && O_NONBLOCK)
-+	if (!file->f_flags & O_NONBLOCK)
++	if (!(file->f_flags & O_NONBLOCK))
  		r = wait_event_interruptible(desc->wait, !test_bit(WDM_IN_USE,
  								&desc->flags));
  	else
@@ -28039,7 +28151,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/fs/binfmt_a
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/fs/binfmt_elf.c linux-2.6.34.2-pax/fs/binfmt_elf.c
 --- linux-2.6.34.2/fs/binfmt_elf.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/fs/binfmt_elf.c	2010-05-29 02:02:38.000000000 +0200
++++ linux-2.6.34.2-pax/fs/binfmt_elf.c	2010-08-24 18:37:13.000000000 +0200
 @@ -51,6 +51,10 @@ static int elf_core_dump(struct coredump
  #define elf_core_dump	NULL
  #endif
@@ -28596,13 +28708,13 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/fs/binfmt_e
 +	oldflags = vma->vm_flags & (VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_EXEC | VM_WRITE | VM_READ);
 +	newflags &= VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_EXEC | VM_WRITE | VM_READ;
 +
-+#ifdef CONFIG_PAX_NOELFRELOCS
-+	is_textrel_rw = false;
-+	is_textrel_rx = false;
-+#else
++#ifdef CONFIG_PAX_ELFRELOCS
 +	/* possible TEXTREL */
 +	is_textrel_rw = vma->vm_file && !vma->anon_vma && oldflags == (VM_MAYEXEC | VM_MAYREAD | VM_EXEC | VM_READ) && newflags == (VM_WRITE | VM_READ);
 +	is_textrel_rx = vma->vm_file && vma->anon_vma && oldflags == (VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_WRITE | VM_READ) && newflags == (VM_EXEC | VM_READ);
++#else
++	is_textrel_rw = false;
++	is_textrel_rx = false;
 +#endif
 +
 +	/* possible RELRO */
@@ -30724,6 +30836,52 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/fs/proc/bas
  	if (!IS_ERR(s))
  		__putname(s);
  }
+diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/fs/proc/kcore.c linux-2.6.34.2-pax/fs/proc/kcore.c
+--- linux-2.6.34.2/fs/proc/kcore.c	2010-05-16 23:17:36.000000000 +0200
++++ linux-2.6.34.2-pax/fs/proc/kcore.c	2010-09-01 12:29:26.000000000 +0200
+@@ -478,9 +478,10 @@ read_kcore(struct file *file, char __use
+ 	 * the addresses in the elf_phdr on our list.
+ 	 */
+ 	start = kc_offset_to_vaddr(*fpos - elf_buflen);
+-	if ((tsz = (PAGE_SIZE - (start & ~PAGE_MASK))) > buflen)
++	tsz = PAGE_SIZE - (start & ~PAGE_MASK);
++	if (tsz > buflen)
+ 		tsz = buflen;
+-		
++
+ 	while (buflen) {
+ 		struct kcore_list *m;
+ 
+@@ -509,20 +510,18 @@ read_kcore(struct file *file, char __use
+ 			kfree(elf_buf);
+ 		} else {
+ 			if (kern_addr_valid(start)) {
+-				unsigned long n;
++				char *elf_buf;
+ 
+-				n = copy_to_user(buffer, (char *)start, tsz);
+-				/*
+-				 * We cannot distingush between fault on source
+-				 * and fault on destination. When this happens
+-				 * we clear too and hope it will trigger the
+-				 * EFAULT again.
+-				 */
+-				if (n) { 
+-					if (clear_user(buffer + tsz - n,
+-								n))
++				elf_buf = kmalloc(tsz, GFP_KERNEL);
++				if (!elf_buf)
++					return -ENOMEM;
++				if (!__copy_from_user(elf_buf, (const void __user *)start, tsz)) {
++					if (copy_to_user(buffer, elf_buf, tsz)) {
++						kfree(elf_buf);
+ 						return -EFAULT;
++					}
+ 				}
++				kfree(elf_buf);
+ 			} else {
+ 				if (clear_user(buffer, tsz))
+ 					return -EFAULT;
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/fs/proc/meminfo.c linux-2.6.34.2-pax/fs/proc/meminfo.c
 --- linux-2.6.34.2/fs/proc/meminfo.c	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/fs/proc/meminfo.c	2010-05-29 02:02:38.000000000 +0200
@@ -31242,7 +31400,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/acp
  	return -ENODEV;
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/asm-generic/atomic-long.h linux-2.6.34.2-pax/include/asm-generic/atomic-long.h
 --- linux-2.6.34.2/include/asm-generic/atomic-long.h	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/include/asm-generic/atomic-long.h	2010-07-01 03:00:18.000000000 +0200
++++ linux-2.6.34.2-pax/include/asm-generic/atomic-long.h	2010-09-06 13:32:10.000000000 +0200
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -31461,7 +31619,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/asm
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -255,4 +375,35 @@ static inline long atomic_long_add_unles
+@@ -255,4 +375,37 @@ static inline long atomic_long_add_unles
  
  #endif  /*  BITS_PER_LONG == 64  */
  
@@ -31473,6 +31631,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/asm
 +	atomic_add_unchecked(0, (atomic_unchecked_t *)NULL);
 +	atomic_sub_unchecked(0, (atomic_unchecked_t *)NULL);
 +	atomic_inc_unchecked((atomic_unchecked_t *)NULL);
++	atomic_inc_return_unchecked((atomic_unchecked_t *)NULL);
 +
 +	atomic_long_read_unchecked((atomic_long_unchecked_t *)NULL);
 +	atomic_long_set_unchecked((atomic_long_unchecked_t *)NULL, 0);
@@ -31487,6 +31646,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/asm
 +#define atomic_add_unchecked(i, v) atomic_add((i), (v))
 +#define atomic_sub_unchecked(i, v) atomic_sub((i), (v))
 +#define atomic_inc_unchecked(v) atomic_inc(v)
++#define atomic_inc_return_unchecked(v) atomic_inc_return(v)
 +
 +#define atomic_long_read_unchecked(v) atomic_long_read(v)
 +#define atomic_long_set_unchecked(v, i) atomic_long_set((v), (i))
@@ -33031,6 +33191,20 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/lin
  	// tree gets re-balanced
  	unsigned long s_properties;	/* File system properties. Currently holds
  					   on-disk FS format */
+diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/linux/rmap.h linux-2.6.34.2-pax/include/linux/rmap.h
+--- linux-2.6.34.2/include/linux/rmap.h	2010-05-16 23:17:36.000000000 +0200
++++ linux-2.6.34.2-pax/include/linux/rmap.h	2010-09-11 18:06:41.000000000 +0200
+@@ -110,8 +110,8 @@ static inline void anon_vma_unlock(struc
+ void anon_vma_init(void);	/* create anon_vma_cachep */
+ int  anon_vma_prepare(struct vm_area_struct *);
+ void unlink_anon_vmas(struct vm_area_struct *);
+-int anon_vma_clone(struct vm_area_struct *, struct vm_area_struct *);
+-int anon_vma_fork(struct vm_area_struct *, struct vm_area_struct *);
++int anon_vma_clone(struct vm_area_struct *, const struct vm_area_struct *);
++int anon_vma_fork(struct vm_area_struct *, const struct vm_area_struct *);
+ void __anon_vma_link(struct vm_area_struct *);
+ void anon_vma_free(struct anon_vma *);
+ 
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/include/linux/sched.h linux-2.6.34.2-pax/include/linux/sched.h
 --- linux-2.6.34.2/include/linux/sched.h	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/include/linux/sched.h	2010-05-29 02:02:38.000000000 +0200
@@ -34368,7 +34542,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/exit
  	return 0;
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/fork.c linux-2.6.34.2-pax/kernel/fork.c
 --- linux-2.6.34.2/kernel/fork.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/kernel/fork.c	2010-05-29 02:02:38.000000000 +0200
++++ linux-2.6.34.2-pax/kernel/fork.c	2010-09-13 00:56:08.000000000 +0200
 @@ -263,7 +263,7 @@ static struct task_struct *dup_task_stru
  	*stackend = STACK_END_MAGIC;	/* for overflow detection */
  
@@ -34378,7 +34552,88 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/fork
  #endif
  
  	/* One for us, one for whoever does the "release_task()" (usually parent) */
-@@ -303,8 +303,8 @@ static int dup_mmap(struct mm_struct *mm
+@@ -285,13 +285,78 @@ out:
+ }
+ 
+ #ifdef CONFIG_MMU
++static struct vm_area_struct *dup_vma(struct mm_struct *mm, struct vm_area_struct *mpnt)
++{
++	struct vm_area_struct *tmp;
++	unsigned long charge;
++	struct mempolicy *pol;
++	struct file *file;
++
++	charge = 0;
++	if (mpnt->vm_flags & VM_ACCOUNT) {
++		unsigned int len = (mpnt->vm_end - mpnt->vm_start) >> PAGE_SHIFT;
++		if (security_vm_enough_memory(len))
++			goto fail_nomem;
++		charge = len;
++	}
++	tmp = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
++	if (!tmp)
++		goto fail_nomem;
++	*tmp = *mpnt;
++	tmp->vm_mm = mm;
++	INIT_LIST_HEAD(&tmp->anon_vma_chain);
++	pol = mpol_dup(vma_policy(mpnt));
++	if (IS_ERR(pol))
++		goto fail_nomem_policy;
++	vma_set_policy(tmp, pol);
++	if (anon_vma_fork(tmp, mpnt))
++		goto fail_nomem_anon_vma_fork;
++	tmp->vm_flags &= ~VM_LOCKED;
++	tmp->vm_next = NULL;
++	tmp->vm_mirror = NULL;
++	file = tmp->vm_file;
++	if (file) {
++		struct inode *inode = file->f_path.dentry->d_inode;
++		struct address_space *mapping = file->f_mapping;
++
++		get_file(file);
++		if (tmp->vm_flags & VM_DENYWRITE)
++			atomic_dec(&inode->i_writecount);
++		spin_lock(&mapping->i_mmap_lock);
++		if (tmp->vm_flags & VM_SHARED)
++			mapping->i_mmap_writable++;
++		tmp->vm_truncate_count = mpnt->vm_truncate_count;
++		flush_dcache_mmap_lock(mapping);
++		/* insert tmp into the share list, just after mpnt */
++		vma_prio_tree_add(tmp, mpnt);
++		flush_dcache_mmap_unlock(mapping);
++		spin_unlock(&mapping->i_mmap_lock);
++	}
++
++	/*
++	 * Clear hugetlb-related page reserves for children. This only
++	 * affects MAP_PRIVATE mappings. Faults generated by the child
++	 * are not guaranteed to succeed, even if read-only
++	 */
++	if (is_vm_hugetlb_page(tmp))
++		reset_vma_resv_huge_pages(tmp);
++
++	return tmp;
++
++fail_nomem_anon_vma_fork:
++	mpol_put(pol);
++fail_nomem_policy:
++	kmem_cache_free(vm_area_cachep, tmp);
++fail_nomem:
++	vm_unacct_memory(charge);
++	return NULL;
++}
++
+ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
+ {
+ 	struct vm_area_struct *mpnt, *tmp, **pprev;
+ 	struct rb_node **rb_link, *rb_parent;
+ 	int retval;
+-	unsigned long charge;
+-	struct mempolicy *pol;
+ 
+ 	down_write(&oldmm->mmap_sem);
+ 	flush_cache_dup_mm(oldmm);
+@@ -303,8 +368,8 @@ static int dup_mmap(struct mm_struct *mm
  	mm->locked_vm = 0;
  	mm->mmap = NULL;
  	mm->mmap_cache = NULL;
@@ -34389,15 +34644,76 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/fork
  	mm->map_count = 0;
  	cpumask_clear(mm_cpumask(mm));
  	mm->mm_rb = RB_ROOT;
-@@ -347,6 +347,7 @@ static int dup_mmap(struct mm_struct *mm
- 		tmp->vm_flags &= ~VM_LOCKED;
- 		tmp->vm_mm = mm;
- 		tmp->vm_next = NULL;
-+		tmp->vm_mirror = NULL;
- 		file = tmp->vm_file;
- 		if (file) {
- 			struct inode *inode = file->f_path.dentry->d_inode;
-@@ -393,6 +394,31 @@ static int dup_mmap(struct mm_struct *mm
+@@ -316,8 +381,6 @@ static int dup_mmap(struct mm_struct *mm
+ 		goto out;
+ 
+ 	for (mpnt = oldmm->mmap; mpnt; mpnt = mpnt->vm_next) {
+-		struct file *file;
+-
+ 		if (mpnt->vm_flags & VM_DONTCOPY) {
+ 			long pages = vma_pages(mpnt);
+ 			mm->total_vm -= pages;
+@@ -325,54 +388,12 @@ static int dup_mmap(struct mm_struct *mm
+ 								-pages);
+ 			continue;
+ 		}
+-		charge = 0;
+-		if (mpnt->vm_flags & VM_ACCOUNT) {
+-			unsigned int len = (mpnt->vm_end - mpnt->vm_start) >> PAGE_SHIFT;
+-			if (security_vm_enough_memory(len))
+-				goto fail_nomem;
+-			charge = len;
+-		}
+-		tmp = kmem_cache_alloc(vm_area_cachep, GFP_KERNEL);
+-		if (!tmp)
+-			goto fail_nomem;
+-		*tmp = *mpnt;
+-		INIT_LIST_HEAD(&tmp->anon_vma_chain);
+-		pol = mpol_dup(vma_policy(mpnt));
+-		retval = PTR_ERR(pol);
+-		if (IS_ERR(pol))
+-			goto fail_nomem_policy;
+-		vma_set_policy(tmp, pol);
+-		if (anon_vma_fork(tmp, mpnt))
+-			goto fail_nomem_anon_vma_fork;
+-		tmp->vm_flags &= ~VM_LOCKED;
+-		tmp->vm_mm = mm;
+-		tmp->vm_next = NULL;
+-		file = tmp->vm_file;
+-		if (file) {
+-			struct inode *inode = file->f_path.dentry->d_inode;
+-			struct address_space *mapping = file->f_mapping;
+-
+-			get_file(file);
+-			if (tmp->vm_flags & VM_DENYWRITE)
+-				atomic_dec(&inode->i_writecount);
+-			spin_lock(&mapping->i_mmap_lock);
+-			if (tmp->vm_flags & VM_SHARED)
+-				mapping->i_mmap_writable++;
+-			tmp->vm_truncate_count = mpnt->vm_truncate_count;
+-			flush_dcache_mmap_lock(mapping);
+-			/* insert tmp into the share list, just after mpnt */
+-			vma_prio_tree_add(tmp, mpnt);
+-			flush_dcache_mmap_unlock(mapping);
+-			spin_unlock(&mapping->i_mmap_lock);
+-		}
+ 
+-		/*
+-		 * Clear hugetlb-related page reserves for children. This only
+-		 * affects MAP_PRIVATE mappings. Faults generated by the child
+-		 * are not guaranteed to succeed, even if read-only
+-		 */
+-		if (is_vm_hugetlb_page(tmp))
+-			reset_vma_resv_huge_pages(tmp);
++		tmp = dup_vma(mm, mpnt);
++		if (!tmp) {
++			retval = -ENOMEM;
++			goto out;
++		}
+ 
+ 		/*
+ 		 * Link in the new vma and copy the page table entries.
+@@ -393,6 +414,31 @@ static int dup_mmap(struct mm_struct *mm
  		if (retval)
  			goto out;
  	}
@@ -34429,7 +34745,22 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/fork
  	/* a new mm has just been created */
  	arch_dup_mmap(oldmm, mm);
  	retval = 0;
-@@ -744,7 +770,7 @@ static int copy_fs(unsigned long clone_f
+@@ -401,14 +447,6 @@ out:
+ 	flush_tlb_mm(oldmm);
+ 	up_write(&oldmm->mmap_sem);
+ 	return retval;
+-fail_nomem_anon_vma_fork:
+-	mpol_put(pol);
+-fail_nomem_policy:
+-	kmem_cache_free(vm_area_cachep, tmp);
+-fail_nomem:
+-	retval = -ENOMEM;
+-	vm_unacct_memory(charge);
+-	goto out;
+ }
+ 
+ static inline int mm_alloc_pgd(struct mm_struct * mm)
+@@ -744,7 +782,7 @@ static int copy_fs(unsigned long clone_f
  			write_unlock(&fs->lock);
  			return -EAGAIN;
  		}
@@ -34438,7 +34769,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/fork
  		write_unlock(&fs->lock);
  		return 0;
  	}
-@@ -1545,7 +1571,7 @@ static int unshare_fs(unsigned long unsh
+@@ -1545,7 +1583,7 @@ static int unshare_fs(unsigned long unsh
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -34447,7 +34778,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/fork
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1668,7 +1694,7 @@ SYSCALL_DEFINE1(unshare, unsigned long,
+@@ -1668,7 +1706,7 @@ SYSCALL_DEFINE1(unshare, unsigned long,
  			fs = current->fs;
  			write_lock(&fs->lock);
  			current->fs = new_fs;
@@ -34527,40 +34858,42 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/hrti
  }
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/kallsyms.c linux-2.6.34.2-pax/kernel/kallsyms.c
 --- linux-2.6.34.2/kernel/kallsyms.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/kernel/kallsyms.c	2010-07-09 13:22:44.000000000 +0200
-@@ -52,23 +52,48 @@ extern const unsigned long kallsyms_mark
++++ linux-2.6.34.2-pax/kernel/kallsyms.c	2010-08-27 23:05:27.000000000 +0200
+@@ -52,12 +52,33 @@ extern const unsigned long kallsyms_mark
  
  static inline int is_kernel_inittext(unsigned long addr)
  {
 +	if (system_state != SYSTEM_BOOTING)
 +		return 0;
 +
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+	if (addr >= ktla_ktva((unsigned long)_sinittext)
-+	    && addr <= ktla_ktva((unsigned long)_einittext))
-+#else
  	if (addr >= (unsigned long)_sinittext
  	    && addr <= (unsigned long)_einittext)
-+#endif
  		return 1;
-+
  	return 0;
  }
  
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#ifdef CONFIG_MODULES
++static inline int is_module_text(unsigned long addr)
++{
++	if ((unsigned long)MODULES_EXEC_VADDR <= addr && addr <= (unsigned long)MODULES_EXEC_END)
++		return 1;
++
++	addr = ktla_ktva(addr);
++	return (unsigned long)MODULES_EXEC_VADDR <= addr && addr <= (unsigned long)MODULES_EXEC_END;
++}
++#else
++static inline int is_module_text(unsigned long addr)
++{
++	return 0;
++}
++#endif
++#endif
++
  static inline int is_kernel_text(unsigned long addr)
  {
-+
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+	if (addr >= ktla_ktva((unsigned long)_stext)
-+	    && addr <= ktla_ktva((unsigned long)_etext))
-+#else
  	if ((addr >= (unsigned long)_stext && addr <= (unsigned long)_etext) ||
- 	    arch_is_kernel_text(addr))
-+#endif
- 		return 1;
-+
- 	return in_gate_area_no_task(addr);
- }
+@@ -68,13 +89,28 @@ static inline int is_kernel_text(unsigne
  
  static inline int is_kernel(unsigned long addr)
  {
@@ -34577,7 +34910,19 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/kall
  		return 1;
  	return in_gate_area_no_task(addr);
  }
-@@ -415,7 +440,6 @@ static unsigned long get_ksymbol_core(st
+ 
+ static int is_ksym_addr(unsigned long addr)
+ {
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++	if (is_module_text(addr))
++		return 0;
++#endif
++
+ 	if (all_var)
+ 		return is_kernel(addr);
+ 
+@@ -415,7 +451,6 @@ static unsigned long get_ksymbol_core(st
  
  static void reset_iter(struct kallsym_iter *iter, loff_t new_pos)
  {
@@ -34585,7 +34930,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/kall
  	iter->nameoff = get_symbol_offset(new_pos);
  	iter->pos = new_pos;
  }
-@@ -503,7 +527,7 @@ static int kallsyms_open(struct inode *i
+@@ -503,7 +538,7 @@ static int kallsyms_open(struct inode *i
  	struct kallsym_iter *iter;
  	int ret;
  
@@ -35369,18 +35714,6 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/rcut
  {
  	/*
  	 * Memory references from any prior RCU read-side critical sections
-diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/relay.c linux-2.6.34.2-pax/kernel/relay.c
---- linux-2.6.34.2/kernel/relay.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/kernel/relay.c	2010-05-29 02:02:38.000000000 +0200
-@@ -1293,7 +1293,7 @@ static ssize_t subbuf_splice_actor(struc
- 		return 0;
- 
- 	ret = *nonpad_ret = splice_to_pipe(pipe, &spd);
--	if (ret < 0 || ret < total_len)
-+	if ((int)ret < 0 || ret < total_len)
- 		return ret;
- 
-         if (read_start + ret == nonpad_end)
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/kernel/sched_fair.c linux-2.6.34.2-pax/kernel/sched_fair.c
 --- linux-2.6.34.2/kernel/sched_fair.c	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/kernel/sched_fair.c	2010-05-29 02:02:38.000000000 +0200
@@ -35852,7 +36185,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/filemap.
  	vma->vm_flags |= VM_CAN_NONLINEAR;
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/fremap.c linux-2.6.34.2-pax/mm/fremap.c
 --- linux-2.6.34.2/mm/fremap.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/mm/fremap.c	2010-05-29 02:02:38.000000000 +0200
++++ linux-2.6.34.2-pax/mm/fremap.c	2010-09-08 23:37:57.000000000 +0200
 @@ -153,6 +153,11 @@ SYSCALL_DEFINE5(remap_file_pages, unsign
   retry:
  	vma = find_vma(mm, start);
@@ -35865,6 +36198,15 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/fremap.c
  	/*
  	 * Make sure the vma is shared, that it supports prefaulting,
  	 * and that the remapped range is valid and fully within
+@@ -221,7 +226,7 @@ SYSCALL_DEFINE5(remap_file_pages, unsign
+ 		/*
+ 		 * drop PG_Mlocked flag for over-mapped range
+ 		 */
+-		unsigned int saved_flags = vma->vm_flags;
++		unsigned long saved_flags = vma->vm_flags;
+ 		munlock_vma_pages_range(vma, start, start + size);
+ 		vma->vm_flags = saved_flags;
+ 	}
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/highmem.c linux-2.6.34.2-pax/mm/highmem.c
 --- linux-2.6.34.2/mm/highmem.c	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/mm/highmem.c	2010-05-29 02:02:38.000000000 +0200
@@ -36625,40 +36967,19 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mempolic
  	} else if (vma->vm_start <= mm->start_stack &&
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mlock.c linux-2.6.34.2-pax/mm/mlock.c
 --- linux-2.6.34.2/mm/mlock.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/mm/mlock.c	2010-05-29 02:02:38.000000000 +0200
-@@ -432,6 +432,17 @@ static int do_mlock(unsigned long start,
++++ linux-2.6.34.2-pax/mm/mlock.c	2010-09-08 23:48:53.000000000 +0200
+@@ -432,6 +432,9 @@ static int do_mlock(unsigned long start,
  		return -EINVAL;
  	if (end == start)
  		return 0;
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	if (current->mm->pax_flags & MF_PAX_SEGMEXEC) {
-+		if (end > SEGMEXEC_TASK_SIZE)
-+			return -EINVAL;
-+	} else
-+#endif
-+
 +	if (end > TASK_SIZE)
 +		return -EINVAL;
 +
  	vma = find_vma_prev(current->mm, start, &prev);
  	if (!vma || vma->vm_start > start)
  		return -ENOMEM;
-@@ -512,10 +523,10 @@ SYSCALL_DEFINE2(munlock, unsigned long,
- static int do_mlockall(int flags)
- {
- 	struct vm_area_struct * vma, * prev = NULL;
--	unsigned int def_flags = 0;
-+	unsigned int def_flags = current->mm->def_flags & ~VM_LOCKED;
- 
- 	if (flags & MCL_FUTURE)
--		def_flags = VM_LOCKED;
-+		def_flags |= VM_LOCKED;
- 	current->mm->def_flags = def_flags;
- 	if (flags == MCL_FUTURE)
- 		goto out;
-@@ -523,6 +534,12 @@ static int do_mlockall(int flags)
- 	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
+@@ -442,6 +445,11 @@ static int do_mlock(unsigned long start,
+ 	for (nstart = start ; ; ) {
  		unsigned int newflags;
  
 +#ifdef CONFIG_PAX_SEGMEXEC
@@ -36666,13 +36987,40 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mlock.c 
 +			break;
 +#endif
 +
+ 		/* Here we know that  vma->vm_start <= nstart < vma->vm_end. */
+ 
+ 		newflags = vma->vm_flags | VM_LOCKED;
+@@ -512,17 +520,23 @@ SYSCALL_DEFINE2(munlock, unsigned long,
+ static int do_mlockall(int flags)
+ {
+ 	struct vm_area_struct * vma, * prev = NULL;
+-	unsigned int def_flags = 0;
+ 
+ 	if (flags & MCL_FUTURE)
+-		def_flags = VM_LOCKED;
+-	current->mm->def_flags = def_flags;
++		current->mm->def_flags |= VM_LOCKED;
++	else
++		current->mm->def_flags &= ~VM_LOCKED;
+ 	if (flags == MCL_FUTURE)
+ 		goto out;
+ 
+ 	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
+-		unsigned int newflags;
++		unsigned long newflags;
++
++#ifdef CONFIG_PAX_SEGMEXEC
++		if ((current->mm->pax_flags & MF_PAX_SEGMEXEC) && (vma->vm_start >= SEGMEXEC_TASK_SIZE))
++			break;
++#endif
+ 
 +		BUG_ON(vma->vm_end > TASK_SIZE);
  		newflags = vma->vm_flags | VM_LOCKED;
  		if (!(flags & MCL_CURRENT))
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c linux-2.6.34.2-pax/mm/mmap.c
 --- linux-2.6.34.2/mm/mmap.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/mm/mmap.c	2010-08-04 21:07:13.000000000 +0200
++++ linux-2.6.34.2-pax/mm/mmap.c	2010-09-13 00:53:31.000000000 +0200
 @@ -44,6 +44,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -36880,15 +37228,21 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	if (addr & ~PAGE_MASK)
  		return addr;
  
-@@ -993,6 +1068,22 @@ unsigned long do_mmap_pgoff(struct file
+@@ -993,6 +1068,28 @@ unsigned long do_mmap_pgoff(struct file
  	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
  			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
  
 +#ifdef CONFIG_PAX_MPROTECT
 +	if (mm->pax_flags & MF_PAX_MPROTECT) {
-+		if ((prot & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC))
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) == (VM_WRITE | VM_EXEC))
++
++#ifdef CONFIG_PAX_EMUPLT
++			vm_flags &= ~VM_EXEC;
++#else
 +			return -EPERM;
-+		if (!(prot & PROT_EXEC))
++#endif
++
++		if (!(vm_flags & VM_EXEC))
 +			vm_flags &= ~VM_MAYEXEC;
 +		else
 +			vm_flags &= ~VM_MAYWRITE;
@@ -36903,7 +37257,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	if (flags & MAP_LOCKED)
  		if (!can_do_mlock())
  			return -EPERM;
-@@ -1150,10 +1241,10 @@ SYSCALL_DEFINE1(old_mmap, struct mmap_ar
+@@ -1150,10 +1247,10 @@ SYSCALL_DEFINE1(old_mmap, struct mmap_ar
   */
  int vma_wants_writenotify(struct vm_area_struct *vma)
  {
@@ -36916,7 +37270,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		return 0;
  
  	/* The backer wishes to know when pages are first written to? */
-@@ -1202,14 +1293,24 @@ unsigned long mmap_region(struct file *f
+@@ -1202,14 +1299,24 @@ unsigned long mmap_region(struct file *f
  	unsigned long charged = 0;
  	struct inode *inode =  file ? file->f_path.dentry->d_inode : NULL;
  
@@ -36943,7 +37297,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	}
  
  	/* Check against address space limit. */
-@@ -1258,6 +1359,16 @@ munmap_back:
+@@ -1258,6 +1365,16 @@ munmap_back:
  		goto unacct_error;
  	}
  
@@ -36960,7 +37314,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	vma->vm_mm = mm;
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
-@@ -1281,6 +1392,19 @@ munmap_back:
+@@ -1281,6 +1398,19 @@ munmap_back:
  		error = file->f_op->mmap(file, vma);
  		if (error)
  			goto unmap_and_free_vma;
@@ -36980,7 +37334,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		if (vm_flags & VM_EXECUTABLE)
  			added_exe_file_vma(mm);
  
-@@ -1316,6 +1440,11 @@ munmap_back:
+@@ -1316,6 +1446,11 @@ munmap_back:
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  	file = vma->vm_file;
  
@@ -36992,7 +37346,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	/* Once vma denies write, undo our temporary denial count */
  	if (correct_wcount)
  		atomic_inc(&inode->i_writecount);
-@@ -1324,6 +1453,7 @@ out:
+@@ -1324,6 +1459,7 @@ out:
  
  	mm->total_vm += len >> PAGE_SHIFT;
  	vm_stat_account(mm, vm_flags, file, len >> PAGE_SHIFT);
@@ -37000,7 +37354,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	if (vm_flags & VM_LOCKED) {
  		if (!mlock_vma_pages_range(vma, addr, addr + len))
  			mm->locked_vm += (len >> PAGE_SHIFT);
-@@ -1341,6 +1471,12 @@ unmap_and_free_vma:
+@@ -1341,6 +1477,12 @@ unmap_and_free_vma:
  	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
  	charged = 0;
  free_vma:
@@ -37013,7 +37367,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	kmem_cache_free(vm_area_cachep, vma);
  unacct_error:
  	if (charged)
-@@ -1374,6 +1510,10 @@ arch_get_unmapped_area(struct file *filp
+@@ -1374,6 +1516,10 @@ arch_get_unmapped_area(struct file *filp
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -37024,7 +37378,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
  		vma = find_vma(mm, addr);
-@@ -1382,10 +1522,10 @@ arch_get_unmapped_area(struct file *filp
+@@ -1382,10 +1528,10 @@ arch_get_unmapped_area(struct file *filp
  			return addr;
  	}
  	if (len > mm->cached_hole_size) {
@@ -37038,7 +37392,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	}
  
  full_search:
-@@ -1396,9 +1536,8 @@ full_search:
+@@ -1396,9 +1542,8 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -37050,7 +37404,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  				mm->cached_hole_size = 0;
  				goto full_search;
  			}
-@@ -1420,10 +1559,16 @@ full_search:
+@@ -1420,10 +1565,16 @@ full_search:
  
  void arch_unmap_area(struct mm_struct *mm, unsigned long addr)
  {
@@ -37068,7 +37422,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		mm->free_area_cache = addr;
  		mm->cached_hole_size = ~0UL;
  	}
-@@ -1441,7 +1586,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1441,7 +1592,7 @@ arch_get_unmapped_area_topdown(struct fi
  {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
@@ -37077,7 +37431,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -1450,6 +1595,10 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1450,6 +1601,10 @@ arch_get_unmapped_area_topdown(struct fi
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -37088,7 +37442,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	/* requesting a specific address */
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
-@@ -1507,13 +1656,21 @@ bottomup:
+@@ -1507,13 +1662,21 @@ bottomup:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -37112,7 +37466,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	mm->cached_hole_size = ~0UL;
  
  	return addr;
-@@ -1522,6 +1679,12 @@ bottomup:
+@@ -1522,6 +1685,12 @@ bottomup:
  
  void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  {
@@ -37125,7 +37479,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	/*
  	 * Is this a new hole at the highest possible address?
  	 */
-@@ -1529,8 +1692,10 @@ void arch_unmap_area_topdown(struct mm_s
+@@ -1529,8 +1698,10 @@ void arch_unmap_area_topdown(struct mm_s
  		mm->free_area_cache = addr;
  
  	/* dont allow allocations above current base */
@@ -37137,7 +37491,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  }
  
  unsigned long
-@@ -1638,6 +1803,27 @@ out:
+@@ -1638,6 +1809,34 @@ out:
  	return prev ? prev->vm_next : vma;
  }
  
@@ -37156,7 +37510,14 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
 +	BUG_ON(!vma_m || vma_m->vm_mirror != vma);
 +	BUG_ON(vma->vm_file != vma_m->vm_file);
 +	BUG_ON(vma->vm_end - vma->vm_start != vma_m->vm_end - vma_m->vm_start);
-+	BUG_ON(vma->vm_pgoff != vma_m->vm_pgoff || vma->anon_vma != vma_m->anon_vma);
++	BUG_ON(vma->vm_pgoff != vma_m->vm_pgoff);
++	if (vma->anon_vma != vma_m->anon_vma) {
++		struct anon_vma_chain *avc, *avc_m;
++
++		avc = list_entry(vma->anon_vma_chain.prev, struct anon_vma_chain, same_vma);
++		avc_m = list_entry(vma_m->anon_vma_chain.prev, struct anon_vma_chain, same_vma);
++		BUG_ON(avc->anon_vma != avc_m->anon_vma);
++	}
 +	BUG_ON((vma->vm_flags ^ vma_m->vm_flags) & ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED));
 +	return vma_m;
 +}
@@ -37165,7 +37526,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -1699,35 +1885,40 @@ static
+@@ -1699,35 +1898,40 @@ static
  #endif
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
@@ -37216,7 +37577,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1737,6 +1928,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1737,6 +1941,8 @@ int expand_upwards(struct vm_area_struct
  		if (!error)
  			vma->vm_end = address;
  	}
@@ -37225,7 +37586,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	anon_vma_unlock(vma);
  	return error;
  }
-@@ -1748,7 +1941,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1748,7 +1954,8 @@ int expand_upwards(struct vm_area_struct
  static int expand_downwards(struct vm_area_struct *vma,
  				   unsigned long address)
  {
@@ -37235,7 +37596,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1762,6 +1956,15 @@ static int expand_downwards(struct vm_ar
+@@ -1762,6 +1969,15 @@ static int expand_downwards(struct vm_ar
  	if (error)
  		return error;
  
@@ -37251,7 +37612,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	anon_vma_lock(vma);
  
  	/*
-@@ -1771,9 +1974,15 @@ static int expand_downwards(struct vm_ar
+@@ -1771,9 +1987,15 @@ static int expand_downwards(struct vm_ar
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -37268,7 +37629,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1781,9 +1990,20 @@ static int expand_downwards(struct vm_ar
+@@ -1781,9 +2003,20 @@ static int expand_downwards(struct vm_ar
  		if (!error) {
  			vma->vm_start = address;
  			vma->vm_pgoff -= grow;
@@ -37289,7 +37650,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	return error;
  }
  
-@@ -1857,6 +2077,13 @@ static void remove_vma_list(struct mm_st
+@@ -1857,6 +2090,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -37303,7 +37664,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1901,6 +2128,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1901,6 +2141,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	do {
@@ -37320,7 +37681,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1927,14 +2164,33 @@ static int __split_vma(struct mm_struct
+@@ -1927,14 +2177,33 @@ static int __split_vma(struct mm_struct
  	struct vm_area_struct *new;
  	int err = -ENOMEM;
  
@@ -37354,7 +37715,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1947,6 +2203,22 @@ static int __split_vma(struct mm_struct
+@@ -1947,6 +2216,22 @@ static int __split_vma(struct mm_struct
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -37377,7 +37738,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	pol = mpol_dup(vma_policy(vma));
  	if (IS_ERR(pol)) {
  		err = PTR_ERR(pol);
-@@ -1972,6 +2244,42 @@ static int __split_vma(struct mm_struct
+@@ -1972,6 +2257,42 @@ static int __split_vma(struct mm_struct
  	else
  		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -37420,7 +37781,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	/* Success. */
  	if (!err)
  		return 0;
-@@ -1987,6 +2295,15 @@ static int __split_vma(struct mm_struct
+@@ -1987,6 +2308,15 @@ static int __split_vma(struct mm_struct
   out_free_mpol:
  	mpol_put(pol);
   out_free_vma:
@@ -37436,7 +37797,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	kmem_cache_free(vm_area_cachep, new);
   out_err:
  	return err;
-@@ -1999,6 +2316,15 @@ static int __split_vma(struct mm_struct
+@@ -1999,6 +2329,15 @@ static int __split_vma(struct mm_struct
  int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
  	      unsigned long addr, int new_below)
  {
@@ -37452,7 +37813,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -2010,11 +2336,30 @@ int split_vma(struct mm_struct *mm, stru
+@@ -2010,11 +2349,30 @@ int split_vma(struct mm_struct *mm, stru
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -37483,7 +37844,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -2088,6 +2433,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -2088,6 +2446,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -37492,7 +37853,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	return 0;
  }
  
-@@ -2100,22 +2447,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -2100,22 +2460,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  
  	profile_munmap(addr);
  
@@ -37521,7 +37882,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2129,6 +2472,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2129,6 +2485,7 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -37529,7 +37890,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2140,16 +2484,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -2140,16 +2497,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -37561,7 +37922,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		locked += mm->locked_vm;
  		lock_limit = rlimit(RLIMIT_MEMLOCK);
  		lock_limit >>= PAGE_SHIFT;
-@@ -2166,22 +2524,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2166,22 +2537,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -37588,7 +37949,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2195,7 +2553,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2195,7 +2566,7 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -37597,7 +37958,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  		return -ENOMEM;
  	}
  
-@@ -2208,11 +2566,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2208,11 +2579,12 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -37612,7 +37973,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	return addr;
  }
  
-@@ -2259,8 +2618,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2259,8 +2631,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -37624,7 +37985,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2274,6 +2635,10 @@ int insert_vm_struct(struct mm_struct *
+@@ -2274,6 +2648,10 @@ int insert_vm_struct(struct mm_struct *
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -37635,7 +37996,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2296,7 +2661,22 @@ int insert_vm_struct(struct mm_struct *
+@@ -2296,7 +2674,22 @@ int insert_vm_struct(struct mm_struct *
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -37658,7 +38019,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	return 0;
  }
  
-@@ -2314,6 +2694,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2314,6 +2707,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -37667,7 +38028,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2363,6 +2745,39 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2363,6 +2758,39 @@ struct vm_area_struct *copy_vma(struct v
  	kmem_cache_free(vm_area_cachep, new_vma);
  	return NULL;
  }
@@ -37707,7 +38068,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/mmap.c l
  
  /*
   * Return true if the calling process may expand its vm space by the passed
-@@ -2444,6 +2859,17 @@ int install_special_mapping(struct mm_st
+@@ -2444,6 +2872,17 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -38127,8 +38488,8 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/percpu.c
  static const int *pcpu_unit_map __read_mostly;		/* cpu -> unit */
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/rmap.c linux-2.6.34.2-pax/mm/rmap.c
 --- linux-2.6.34.2/mm/rmap.c	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/mm/rmap.c	2010-08-04 21:07:13.000000000 +0200
-@@ -116,15 +116,29 @@ int anon_vma_prepare(struct vm_area_stru
++++ linux-2.6.34.2-pax/mm/rmap.c	2010-09-13 01:20:52.000000000 +0200
+@@ -116,6 +116,10 @@ int anon_vma_prepare(struct vm_area_stru
  	struct anon_vma *anon_vma = vma->anon_vma;
  	struct anon_vma_chain *avc;
  
@@ -38139,13 +38500,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/rmap.c l
  	might_sleep();
  	if (unlikely(!anon_vma)) {
  		struct mm_struct *mm = vma->vm_mm;
- 		struct anon_vma *allocated;
- 
-+#ifdef CONFIG_PAX_SEGMEXEC
-+		struct vm_area_struct *vma_m;
-+#endif
-+
- 		avc = anon_vma_chain_alloc();
+@@ -125,6 +129,12 @@ int anon_vma_prepare(struct vm_area_stru
  		if (!avc)
  			goto out_enomem;
  
@@ -38158,13 +38513,14 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/rmap.c l
  		anon_vma = find_mergeable_anon_vma(vma);
  		allocated = NULL;
  		if (!anon_vma) {
-@@ -138,6 +152,20 @@ int anon_vma_prepare(struct vm_area_stru
+@@ -138,6 +148,21 @@ int anon_vma_prepare(struct vm_area_stru
  		/* page_table_lock to protect against threads */
  		spin_lock(&mm->page_table_lock);
  		if (likely(!vma->anon_vma)) {
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
-+			vma_m = pax_find_mirror_vma(vma);
++			struct vm_area_struct *vma_m = pax_find_mirror_vma(vma);
++
 +			if (vma_m) {
 +				BUG_ON(vma_m->anon_vma);
 +				vma_m->anon_vma = anon_vma;
@@ -38179,7 +38535,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/rmap.c l
  			vma->anon_vma = anon_vma;
  			avc->anon_vma = anon_vma;
  			avc->vma = vma;
-@@ -151,12 +179,24 @@ int anon_vma_prepare(struct vm_area_stru
+@@ -151,12 +176,24 @@ int anon_vma_prepare(struct vm_area_stru
  
  		if (unlikely(allocated))
  			anon_vma_free(allocated);
@@ -38204,6 +38560,24 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/rmap.c l
  	anon_vma_chain_free(avc);
   out_enomem:
  	return -ENOMEM;
+@@ -179,7 +216,7 @@ static void anon_vma_chain_link(struct v
+  * Attach the anon_vmas from src to dst.
+  * Returns 0 on success, -ENOMEM on failure.
+  */
+-int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
++int anon_vma_clone(struct vm_area_struct *dst, const struct vm_area_struct *src)
+ {
+ 	struct anon_vma_chain *avc, *pavc;
+ 
+@@ -201,7 +238,7 @@ int anon_vma_clone(struct vm_area_struct
+  * the corresponding VMA in the parent process is attached to.
+  * Returns 0 on success, non-zero on failure.
+  */
+-int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
++int anon_vma_fork(struct vm_area_struct *vma, const struct vm_area_struct *pvma)
+ {
+ 	struct anon_vma_chain *avc;
+ 	struct anon_vma *anon_vma;
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/mm/slab.c linux-2.6.34.2-pax/mm/slab.c
 --- linux-2.6.34.2/mm/slab.c	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/mm/slab.c	2010-06-09 19:26:26.000000000 +0200
@@ -39624,6 +39998,22 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/net/sctp/so
  
  		SCTP_DEBUG_PRINTK("sctp_get_port() found a possible match\n");
  		if (pp->fastreuse && sk->sk_reuse &&
+diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/net/sunrpc/sched.c linux-2.6.34.2-pax/net/sunrpc/sched.c
+--- linux-2.6.34.2/net/sunrpc/sched.c	2010-05-16 23:17:36.000000000 +0200
++++ linux-2.6.34.2-pax/net/sunrpc/sched.c	2010-08-14 15:25:13.000000000 +0200
+@@ -235,10 +235,10 @@ static int rpc_wait_bit_killable(void *w
+ #ifdef RPC_DEBUG
+ static void rpc_task_set_debuginfo(struct rpc_task *task)
+ {
+-	static atomic_t rpc_pid;
++	static atomic_unchecked_t rpc_pid;
+ 
+ 	task->tk_magic = RPC_TASK_MAGIC_ID;
+-	task->tk_pid = atomic_inc_return(&rpc_pid);
++	task->tk_pid = atomic_inc_return_unchecked(&rpc_pid);
+ }
+ #else
+ static inline void rpc_task_set_debuginfo(struct rpc_task *task)
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/net/sunrpc/xprtrdma/svc_rdma.c linux-2.6.34.2-pax/net/sunrpc/xprtrdma/svc_rdma.c
 --- linux-2.6.34.2/net/sunrpc/xprtrdma/svc_rdma.c	2010-05-16 23:17:36.000000000 +0200
 +++ linux-2.6.34.2-pax/net/sunrpc/xprtrdma/svc_rdma.c	2010-05-29 02:02:38.000000000 +0200
@@ -39940,8 +40330,8 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/scripts/pnm
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kconfig linux-2.6.34.2-pax/security/Kconfig
 --- linux-2.6.34.2/security/Kconfig	2010-05-16 23:17:36.000000000 +0200
-+++ linux-2.6.34.2-pax/security/Kconfig	2010-05-29 02:02:39.000000000 +0200
-@@ -4,6 +4,494 @@
++++ linux-2.6.34.2-pax/security/Kconfig	2010-08-25 22:42:46.000000000 +0200
+@@ -4,6 +4,499 @@
  
  menu "Security options"
  
@@ -40075,7 +40465,8 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kc
 +
 +config PAX_PAGEEXEC
 +	bool "Paging based non-executable pages"
-+	depends on !COMPAT_VDSO && PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
++	depends on !COMPAT_VDSO && PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MATOM || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
++	select X86_PAE if X86_32 && !HIGHMEM4G && (MCORE2 || MPSC || MATOM || MK8)
 +	select S390_SWITCH_AMODE if S390
 +	select S390_EXEC_PROTECT if S390
 +	help
@@ -40168,7 +40559,8 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kc
 +	   - changing the executable status of memory pages that were
 +	     not originally created as executable,
 +	   - making read-only executable pages writable again,
-+	   - creating executable pages from anonymous memory.
++	   - creating executable pages from anonymous memory,
++	   - making read-only-after-relocations (RELRO) data pages writable again.
 +
 +	  You should say Y here to complete the protection provided by
 +	  the enforcement of non-executable pages.
@@ -40176,9 +40568,10 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kc
 +	  NOTE: you can use the 'chpax' or 'paxctl' utilities to control
 +	  this feature on a per file basis.
 +
-+config PAX_NOELFRELOCS
-+	bool "Disallow ELF text relocations"
-+	depends on PAX_MPROTECT && !PAX_ETEXECRELOCS && (IA64 || PPC || X86)
++config PAX_ELFRELOCS
++	bool "Allow ELF text relocations"
++	depends on PAX_MPROTECT
++	default n
 +	help
 +	  Non-executable pages and mprotect() restrictions are effective
 +	  in preventing the introduction of new executable code into an
@@ -40192,7 +40585,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kc
 +	  the former approach is beyond PaX, the latter can be prevented
 +	  by having only PIC ELF libraries on one's system (which do not
 +	  need to relocate their code).  If you are sure this is your case,
-+	  then enable this option otherwise be careful as you may not even
++	  then disable this option otherwise be careful as you may not even
 +	  be able to boot or log on your system (for example, some PAM
 +	  modules are erroneously compiled as non-PIC by default).
 +
@@ -40204,6 +40597,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kc
 +config PAX_ETEXECRELOCS
 +	bool "Allow ELF ET_EXEC text relocations"
 +	depends on PAX_MPROTECT && (ALPHA || IA64 || PARISC)
++	select PAX_ELFRELOCS
 +	default y
 +	help
 +	  On some architectures there are incorrectly created applications
@@ -40429,6 +40823,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kc
 +
 +	  Since this has a negligible performance impact, you should enable
 +	  this feature.
++
 +endmenu
 +
 +endmenu
@@ -40436,7 +40831,7 @@ diff -NurpX linux-2.6.34.2-pax/Documentation/dontdiff linux-2.6.34.2/security/Kc
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -124,7 +612,7 @@ config INTEL_TXT
+@@ -124,7 +617,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
