@@ -3207,8 +3207,8 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/sh/k
  	.gdb_bpt_instr		= { 0x3c, 0xc3 },
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/sparc/include/asm/atomic_64.h linux-2.6.32.17-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-2.6.32.17/arch/sparc/include/asm/atomic_64.h	2009-09-10 19:41:08.000000000 +0200
-+++ linux-2.6.32.17-pax/arch/sparc/include/asm/atomic_64.h	2010-07-03 21:30:19.000000000 +0200
-@@ -14,18 +14,39 @@
++++ linux-2.6.32.17-pax/arch/sparc/include/asm/atomic_64.h	2010-09-13 01:37:59.000000000 +0200
+@@ -14,18 +14,40 @@
  #define ATOMIC64_INIT(i)	{ (i) }
  
  #define atomic_read(v)		((v)->counter)
@@ -3243,20 +3243,23 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
 +extern void atomic64_sub_unchecked(int, atomic64_unchecked_t *);
  
  extern int atomic_add_ret(int, atomic_t *);
++extern int atomic_add_ret_unchecked(int, atomic_t *);
  extern int atomic64_add_ret(int, atomic64_t *);
 +extern int atomic64_add_ret_unchecked(int, atomic64_unchecked_t *);
  extern int atomic_sub_ret(int, atomic_t *);
  extern int atomic64_sub_ret(int, atomic64_t *);
  
-@@ -34,6 +55,7 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -33,7 +55,9 @@ extern int atomic64_sub_ret(int, atomic6
+ #define atomic64_dec_return(v) atomic64_sub_ret(1, v)
  
  #define atomic_inc_return(v) atomic_add_ret(1, v)
++#define atomic_inc_return_unchecked(v) atomic_add_ret_unchecked(1, v)
  #define atomic64_inc_return(v) atomic64_add_ret(1, v)
 +#define atomic64_inc_return_unchecked(v) atomic64_add_ret_unchecked(1, v)
  
  #define atomic_sub_return(i, v) atomic_sub_ret(i, v)
  #define atomic64_sub_return(i, v) atomic64_sub_ret(i, v)
-@@ -59,10 +81,26 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -59,10 +83,26 @@ extern int atomic64_sub_ret(int, atomic6
  #define atomic64_dec_and_test(v) (atomic64_sub_ret(1, v) == 0)
  
  #define atomic_inc(v) atomic_add(1, v)
@@ -3283,7 +3286,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  
  #define atomic_add_negative(i, v) (atomic_add_ret(i, v) < 0)
  #define atomic64_add_negative(i, v) (atomic64_add_ret(i, v) < 0)
-@@ -72,17 +110,28 @@ extern int atomic64_sub_ret(int, atomic6
+@@ -72,17 +112,28 @@ extern int atomic64_sub_ret(int, atomic6
  
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -3316,7 +3319,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -93,17 +142,28 @@ static inline int atomic_add_unless(atom
+@@ -93,17 +144,28 @@ static inline int atomic_add_unless(atom
  
  static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -3865,7 +3868,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  	sprintf (buffer, "Bad trap %lx at tl>0", lvl);
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/sparc/lib/atomic_64.S linux-2.6.32.17-pax/arch/sparc/lib/atomic_64.S
 --- linux-2.6.32.17/arch/sparc/lib/atomic_64.S	2009-03-24 08:35:01.000000000 +0100
-+++ linux-2.6.32.17-pax/arch/sparc/lib/atomic_64.S	2010-07-01 03:21:51.000000000 +0200
++++ linux-2.6.32.17-pax/arch/sparc/lib/atomic_64.S	2010-09-13 01:37:59.000000000 +0200
 @@ -18,7 +18,12 @@
  atomic_add: /* %o0 = increment, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
@@ -3948,7 +3951,33 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  	cas	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%icc, 2f
-@@ -64,7 +109,12 @@ atomic_add_ret: /* %o0 = increment, %o1
+@@ -59,12 +104,38 @@ atomic_add_ret: /* %o0 = increment, %o1
+ 2:	BACKOFF_SPIN(%o2, %o3, 1b)
+ 	.size	atomic_add_ret, .-atomic_add_ret
+ 
++	.globl	atomic_add_ret_unchecked
++	.type	atomic_add_ret_unchecked,#function
++atomic_add_ret_unchecked: /* %o0 = increment, %o1 = atomic_ptr */
++	BACKOFF_SETUP(%o2)
++1:	lduw	[%o1], %g1
++	addcc	%g1, %o0, %g7
++
++#ifdef CONFIG_PAX_REFCOUNT
++	tvs	%icc, 6
++#endif
++
++	cas	[%o1], %g1, %g7
++	cmp	%g1, %g7
++	bne,pn	%icc, 2f
++	 add	%g7, %o0, %g7
++	sra	%g7, 0, %o0
++	retl
++	 nop
++2:	BACKOFF_SPIN(%o2, %o3, 1b)
++	.size	atomic_add_ret_unchecked, .-atomic_add_ret_unchecked
++
+ 	.globl	atomic_sub_ret
+ 	.type	atomic_sub_ret,#function
  atomic_sub_ret: /* %o0 = decrement, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
  1:	lduw	[%o1], %g1
@@ -3962,7 +3991,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  	cas	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%icc, 2f
-@@ -80,7 +130,12 @@ atomic_sub_ret: /* %o0 = decrement, %o1
+@@ -80,7 +151,12 @@ atomic_sub_ret: /* %o0 = decrement, %o1
  atomic64_add: /* %o0 = increment, %o1 = atomic_ptr */
  	BACKOFF_SETUP(%o2)
  1:	ldx	[%o1], %g1
@@ -3976,7 +4005,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -90,12 +145,32 @@ atomic64_add: /* %o0 = increment, %o1 =
+@@ -90,12 +166,32 @@ atomic64_add: /* %o0 = increment, %o1 =
  2:	BACKOFF_SPIN(%o2, %o3, 1b)
  	.size	atomic64_add, .-atomic64_add
  
@@ -4010,7 +4039,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -105,12 +180,32 @@ atomic64_sub: /* %o0 = decrement, %o1 =
+@@ -105,12 +201,32 @@ atomic64_sub: /* %o0 = decrement, %o1 =
  2:	BACKOFF_SPIN(%o2, %o3, 1b)
  	.size	atomic64_sub, .-atomic64_sub
  
@@ -4044,7 +4073,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/spar
  	casx	[%o1], %g1, %g7
  	cmp	%g1, %g7
  	bne,pn	%xcc, 2f
-@@ -121,12 +216,33 @@ atomic64_add_ret: /* %o0 = increment, %o
+@@ -121,12 +237,33 @@ atomic64_add_ret: /* %o0 = increment, %o
  2:	BACKOFF_SPIN(%o2, %o3, 1b)
  	.size	atomic64_add_ret, .-atomic64_add_ret
  
@@ -6188,7 +6217,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  extern u64 atomic64_cmpxchg(atomic64_t *ptr, u64 old_val, u64 new_val);
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/include/asm/atomic_64.h linux-2.6.32.17-pax/arch/x86/include/asm/atomic_64.h
 --- linux-2.6.32.17/arch/x86/include/asm/atomic_64.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.32.17-pax/arch/x86/include/asm/atomic_64.h	2010-07-01 23:18:33.000000000 +0200
++++ linux-2.6.32.17-pax/arch/x86/include/asm/atomic_64.h	2010-08-13 13:57:19.000000000 +0200
 @@ -24,6 +24,17 @@ static inline int atomic_read(const atom
  }
  
@@ -6436,7 +6465,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "ir" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -173,7 +334,15 @@ static inline int atomic_add_negative(in
+@@ -173,7 +334,31 @@ static inline int atomic_add_negative(in
  static inline int atomic_add_return(int i, atomic_t *v)
  {
  	int __i = i;
@@ -6450,10 +6479,34 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
 +		     _ASM_EXTABLE(0b, 0b)
 +#endif
 +
++		     : "+r" (i), "+m" (v->counter)
++		     : : "memory");
++	return i + __i;
++}
++
++/**
++ * atomic_add_return_unchecked - add and return
++ * @i: integer value to add
++ * @v: pointer of type atomic_unchecked_t
++ *
++ * Atomically adds @i to @v and returns @i + @v
++ */
++static inline int atomic_add_return_unchecked(int i, atomic_unchecked_t *v)
++{
++	int __i = i;
++	asm volatile(LOCK_PREFIX "xaddl %0, %1\n"
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-@@ -204,6 +373,18 @@ static inline long atomic64_read(const a
+@@ -185,6 +370,7 @@ static inline int atomic_sub_return(int
+ }
+ 
+ #define atomic_inc_return(v)  (atomic_add_return(1, v))
++#define atomic_inc_return_unchecked(v)  (atomic_add_return_unchecked(1, v))
+ #define atomic_dec_return(v)  (atomic_sub_return(1, v))
+ 
+ /* The 64-bit atomic type */
+@@ -204,6 +390,18 @@ static inline long atomic64_read(const a
  }
  
  /**
@@ -6472,7 +6525,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
   * atomic64_set - set atomic64 variable
   * @v: pointer to type atomic64_t
   * @i: required value
-@@ -216,6 +397,18 @@ static inline void atomic64_set(atomic64
+@@ -216,6 +414,18 @@ static inline void atomic64_set(atomic64
  }
  
  /**
@@ -6491,7 +6544,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
   * atomic64_add - add integer to atomic64 variable
   * @i: integer value to add
   * @v: pointer to type atomic64_t
-@@ -224,6 +417,28 @@ static inline void atomic64_set(atomic64
+@@ -224,6 +434,28 @@ static inline void atomic64_set(atomic64
   */
  static inline void atomic64_add(long i, atomic64_t *v)
  {
@@ -6520,7 +6573,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  	asm volatile(LOCK_PREFIX "addq %1,%0"
  		     : "=m" (v->counter)
  		     : "er" (i), "m" (v->counter));
-@@ -238,7 +453,15 @@ static inline void atomic64_add(long i,
+@@ -238,7 +470,15 @@ static inline void atomic64_add(long i,
   */
  static inline void atomic64_sub(long i, atomic64_t *v)
  {
@@ -6537,7 +6590,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "=m" (v->counter)
  		     : "er" (i), "m" (v->counter));
  }
-@@ -256,7 +479,16 @@ static inline int atomic64_sub_and_test(
+@@ -256,7 +496,16 @@ static inline int atomic64_sub_and_test(
  {
  	unsigned char c;
  
@@ -6555,7 +6608,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "er" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -270,6 +502,31 @@ static inline int atomic64_sub_and_test(
+@@ -270,6 +519,31 @@ static inline int atomic64_sub_and_test(
   */
  static inline void atomic64_inc(atomic64_t *v)
  {
@@ -6587,7 +6640,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  	asm volatile(LOCK_PREFIX "incq %0"
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
-@@ -283,7 +540,32 @@ static inline void atomic64_inc(atomic64
+@@ -283,7 +557,32 @@ static inline void atomic64_inc(atomic64
   */
  static inline void atomic64_dec(atomic64_t *v)
  {
@@ -6621,7 +6674,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "=m" (v->counter)
  		     : "m" (v->counter));
  }
-@@ -300,7 +582,20 @@ static inline int atomic64_dec_and_test(
+@@ -300,7 +599,20 @@ static inline int atomic64_dec_and_test(
  {
  	unsigned char c;
  
@@ -6643,7 +6696,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -318,7 +613,20 @@ static inline int atomic64_inc_and_test(
+@@ -318,7 +630,20 @@ static inline int atomic64_inc_and_test(
  {
  	unsigned char c;
  
@@ -6665,7 +6718,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "m" (v->counter) : "memory");
  	return c != 0;
-@@ -337,7 +645,16 @@ static inline int atomic64_add_negative(
+@@ -337,7 +662,16 @@ static inline int atomic64_add_negative(
  {
  	unsigned char c;
  
@@ -6683,7 +6736,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "=m" (v->counter), "=qm" (c)
  		     : "er" (i), "m" (v->counter) : "memory");
  	return c;
-@@ -353,7 +670,31 @@ static inline int atomic64_add_negative(
+@@ -353,7 +687,31 @@ static inline int atomic64_add_negative(
  static inline long atomic64_add_return(long i, atomic64_t *v)
  {
  	long __i = i;
@@ -6716,7 +6769,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  		     : "+r" (i), "+m" (v->counter)
  		     : : "memory");
  	return i + __i;
-@@ -365,6 +706,7 @@ static inline long atomic64_sub_return(l
+@@ -365,6 +723,7 @@ static inline long atomic64_sub_return(l
  }
  
  #define atomic64_inc_return(v)  (atomic64_add_return(1, (v)))
@@ -6724,7 +6777,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  #define atomic64_dec_return(v)  (atomic64_sub_return(1, (v)))
  
  static inline long atomic64_cmpxchg(atomic64_t *v, long old, long new)
-@@ -398,17 +740,29 @@ static inline long atomic_xchg(atomic_t
+@@ -398,17 +757,29 @@ static inline long atomic_xchg(atomic_t
   */
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -6758,7 +6811,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
-@@ -424,17 +778,29 @@ static inline int atomic_add_unless(atom
+@@ -424,17 +795,29 @@ static inline int atomic_add_unless(atom
   */
  static inline int atomic64_add_unless(atomic64_t *v, long a, long u)
  {
@@ -7919,19 +7972,6 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  #ifdef CONFIG_4KSTACKS
  #define THREAD_ORDER	0
  #else
-diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/include/asm/page_64_types.h linux-2.6.32.17-pax/arch/x86/include/asm/page_64_types.h
---- linux-2.6.32.17/arch/x86/include/asm/page_64_types.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.32.17-pax/arch/x86/include/asm/page_64_types.h	2010-05-12 15:50:22.000000000 +0200
-@@ -39,6 +39,9 @@
- #define __START_KERNEL		(__START_KERNEL_map + __PHYSICAL_START)
- #define __START_KERNEL_map	_AC(0xffffffff80000000, UL)
- 
-+#define ktla_ktva(addr)		(addr)
-+#define ktva_ktla(addr)		(addr)
-+
- /* See Documentation/x86/x86_64/mm.txt for a description of the memory map. */
- #define __PHYSICAL_MASK_SHIFT	46
- #define __VIRTUAL_MASK_SHIFT	47
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/include/asm/paravirt.h linux-2.6.32.17-pax/arch/x86/include/asm/paravirt.h
 --- linux-2.6.32.17/arch/x86/include/asm/paravirt.h	2009-12-03 15:01:40.000000000 +0100
 +++ linux-2.6.32.17-pax/arch/x86/include/asm/paravirt.h	2010-07-06 12:36:38.000000000 +0200
@@ -8368,13 +8408,16 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  static inline void native_pgd_clear(pgd_t *pgd)
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/include/asm/pgtable_64_types.h linux-2.6.32.17-pax/arch/x86/include/asm/pgtable_64_types.h
 --- linux-2.6.32.17/arch/x86/include/asm/pgtable_64_types.h	2009-09-10 19:41:11.000000000 +0200
-+++ linux-2.6.32.17-pax/arch/x86/include/asm/pgtable_64_types.h	2010-05-12 15:50:22.000000000 +0200
-@@ -59,5 +59,7 @@ typedef struct { pteval_t pte; } pte_t;
++++ linux-2.6.32.17-pax/arch/x86/include/asm/pgtable_64_types.h	2010-08-27 23:30:55.000000000 +0200
+@@ -59,5 +59,10 @@ typedef struct { pteval_t pte; } pte_t;
  #define MODULES_VADDR    _AC(0xffffffffa0000000, UL)
  #define MODULES_END      _AC(0xffffffffff000000, UL)
  #define MODULES_LEN   (MODULES_END - MODULES_VADDR)
 +#define MODULES_EXEC_VADDR MODULES_VADDR
 +#define MODULES_EXEC_END MODULES_END
++
++#define ktla_ktva(addr)		(addr)
++#define ktva_ktla(addr)		(addr)
  
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/include/asm/pgtable_types.h linux-2.6.32.17-pax/arch/x86/include/asm/pgtable_types.h
@@ -9802,7 +9845,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  	jmp	bogus_magic
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/kernel/alternative.c linux-2.6.32.17-pax/arch/x86/kernel/alternative.c
 --- linux-2.6.32.17/arch/x86/kernel/alternative.c	2009-12-03 15:01:40.000000000 +0100
-+++ linux-2.6.32.17-pax/arch/x86/kernel/alternative.c	2010-07-06 12:36:38.000000000 +0200
++++ linux-2.6.32.17-pax/arch/x86/kernel/alternative.c	2010-08-27 12:17:50.000000000 +0200
 @@ -407,7 +407,7 @@ void __init_or_module apply_paravirt(str
  
  		BUG_ON(p->len > MAX_PATCH_LEN);
@@ -9821,7 +9864,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  
  	restart_nmi();
  }
-@@ -492,12 +492,16 @@ void __init alternative_instructions(voi
+@@ -492,13 +492,17 @@ void __init alternative_instructions(voi
   * instructions. And on the local CPU you need to be protected again NMI or MCE
   * handlers seeing an inconsistent instruction while you patch.
   */
@@ -9835,11 +9878,12 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
 +
 +	pax_open_kernel();
 +	memcpy(ktla_ktva(addr), opcode, len);
+ 	sync_core();
 +	pax_close_kernel();
 +
- 	sync_core();
  	local_irq_restore(flags);
  	/* Could also do a CLFLUSH here to speed up CPU recovery; but
+ 	   that causes hangs on some VIA CPUs. */
 @@ -520,35 +524,21 @@ static void *__init_or_module text_poke_
   */
  void *__kprobes text_poke(void *addr, const void *opcode, size_t len)
@@ -18018,7 +18062,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  	}
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/mm/init.c linux-2.6.32.17-pax/arch/x86/mm/init.c
 --- linux-2.6.32.17/arch/x86/mm/init.c	2009-12-03 15:01:42.000000000 +0100
-+++ linux-2.6.32.17-pax/arch/x86/mm/init.c	2010-07-01 03:21:51.000000000 +0200
++++ linux-2.6.32.17-pax/arch/x86/mm/init.c	2010-09-01 21:05:04.000000000 +0200
 @@ -69,11 +69,7 @@ static void __init find_early_table_spac
  	 * cause a hotspot and fill up ZONE_DMA. The page tables
  	 * need roughly 0.5KB per GB.
@@ -18032,6 +18076,15 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/arch/x86/
  	e820_table_start = find_e820_area(start, max_pfn_mapped<<PAGE_SHIFT,
  					tables, PAGE_SIZE);
  	if (e820_table_start == -1UL)
+@@ -147,7 +143,7 @@ unsigned long __init_refok init_memory_m
+ #endif
+ 
+ 	set_nx();
+-	if (nx_enabled)
++	if (nx_enabled && cpu_has_nx)
+ 		printk(KERN_INFO "NX (Execute Disable) protection: active\n");
+ 
+ 	/* Enable PSE if available */
 @@ -331,7 +327,13 @@ unsigned long __init_refok init_memory_m
   */
  int devmem_is_allowed(unsigned long pagenr)
@@ -23500,6 +23553,95 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/c
  };
  
  MODULE_DEVICE_TABLE(input, kbd_ids);
+diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/char/mem.c linux-2.6.32.17-pax/drivers/char/mem.c
+--- linux-2.6.32.17/drivers/char/mem.c	2010-02-23 17:45:41.000000000 +0100
++++ linux-2.6.32.17-pax/drivers/char/mem.c	2010-09-01 17:02:30.000000000 +0200
+@@ -155,6 +155,8 @@ static ssize_t read_mem(struct file * fi
+ #endif
+ 
+ 	while (count > 0) {
++		char *temp;
++
+ 		/*
+ 		 * Handle first page in case it's not aligned
+ 		 */
+@@ -177,11 +179,31 @@ static ssize_t read_mem(struct file * fi
+ 		if (!ptr)
+ 			return -EFAULT;
+ 
+-		if (copy_to_user(buf, ptr, sz)) {
++#ifdef CONFIG_PAX_USERCOPY
++		temp = kmalloc(sz, GFP_KERNEL);
++		if (!temp) {
++			unxlate_dev_mem_ptr(p, ptr);
++			return -ENOMEM;
++		}
++		memcpy(temp, ptr, sz);
++#else
++		temp = ptr;
++#endif
++
++		if (copy_to_user(buf, temp, sz)) {
++
++#ifdef CONFIG_PAX_USERCOPY
++			kfree(temp);
++#endif
++
+ 			unxlate_dev_mem_ptr(p, ptr);
+ 			return -EFAULT;
+ 		}
+ 
++#ifdef CONFIG_PAX_USERCOPY
++		kfree(temp);
++#endif
++
+ 		unxlate_dev_mem_ptr(p, ptr);
+ 
+ 		buf += sz;
+@@ -419,9 +441,8 @@ static ssize_t read_kmem(struct file *fi
+ 			 size_t count, loff_t *ppos)
+ {
+ 	unsigned long p = *ppos;
+-	ssize_t low_count, read, sz;
++	ssize_t low_count, read, sz, err = 0;
+ 	char * kbuf; /* k-addr because vread() takes vmlist_lock rwlock */
+-	int err = 0;
+ 
+ 	read = 0;
+ 	if (p < (unsigned long) high_memory) {
+@@ -444,6 +465,8 @@ static ssize_t read_kmem(struct file *fi
+ 		}
+ #endif
+ 		while (low_count > 0) {
++			char *temp;
++
+ 			sz = size_inside_page(p, low_count);
+ 
+ 			/*
+@@ -453,7 +476,22 @@ static ssize_t read_kmem(struct file *fi
+ 			 */
+ 			kbuf = xlate_dev_kmem_ptr((char *)p);
+ 
+-			if (copy_to_user(buf, kbuf, sz))
++#ifdef CONFIG_PAX_USERCOPY
++			temp = kmalloc(sz, GFP_KERNEL);
++			if (!temp)
++				return -ENOMEM;
++			memcpy(temp, kbuf, sz);
++#else
++			temp = kbuf;
++#endif
++
++			err = copy_to_user(buf, temp, sz);
++
++#ifdef CONFIG_PAX_USERCOPY
++			kfree(temp);
++#endif
++
++			if (err)
+ 				return -EFAULT;
+ 			buf += sz;
+ 			p += sz;
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/char/nvram.c linux-2.6.32.17-pax/drivers/char/nvram.c
 --- linux-2.6.32.17/drivers/char/nvram.c	2009-03-24 08:35:07.000000000 +0100
 +++ linux-2.6.32.17-pax/drivers/char/nvram.c	2010-05-12 15:50:23.000000000 +0200
@@ -26902,6 +27044,18 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/p
  	.show = pci_slot_attr_show,
  	.store = pci_slot_attr_store,
  };
+diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/pcmcia/pcmcia_ioctl.c linux-2.6.32.17-pax/drivers/pcmcia/pcmcia_ioctl.c
+--- linux-2.6.32.17/drivers/pcmcia/pcmcia_ioctl.c	2009-12-03 15:02:09.000000000 +0100
++++ linux-2.6.32.17-pax/drivers/pcmcia/pcmcia_ioctl.c	2010-09-01 09:52:28.000000000 +0200
+@@ -819,7 +819,7 @@ static int ds_ioctl(struct inode * inode
+ 	    return -EFAULT;
+ 	}
+     }
+-    buf = kmalloc(sizeof(ds_ioctl_arg_t), GFP_KERNEL);
++    buf = kzalloc(sizeof(ds_ioctl_arg_t), GFP_KERNEL);
+     if (!buf)
+ 	return -ENOMEM;
+ 
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/pcmcia/ti113x.h linux-2.6.32.17-pax/drivers/pcmcia/ti113x.h
 --- linux-2.6.32.17/drivers/pcmcia/ti113x.h	2008-12-25 12:13:35.000000000 +0100
 +++ linux-2.6.32.17-pax/drivers/pcmcia/ti113x.h	2010-05-12 15:50:23.000000000 +0200
@@ -28036,13 +28190,13 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/u
  MODULE_DEVICE_TABLE(usb, acm_ids);
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/drivers/usb/class/cdc-wdm.c linux-2.6.32.17-pax/drivers/usb/class/cdc-wdm.c
 --- linux-2.6.32.17/drivers/usb/class/cdc-wdm.c	2009-12-03 15:02:28.000000000 +0100
-+++ linux-2.6.32.17-pax/drivers/usb/class/cdc-wdm.c	2010-07-27 01:45:02.000000000 +0200
++++ linux-2.6.32.17-pax/drivers/usb/class/cdc-wdm.c	2010-08-27 23:31:47.000000000 +0200
 @@ -314,7 +314,7 @@ static ssize_t wdm_write
  	if (r < 0)
  		goto outnp;
  
 -	if (!file->f_flags && O_NONBLOCK)
-+	if (!file->f_flags & O_NONBLOCK)
++	if (!(file->f_flags & O_NONBLOCK))
  		r = wait_event_interruptible(desc->wait, !test_bit(WDM_IN_USE,
  								&desc->flags));
  	else
@@ -29249,7 +29403,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/fs/binfmt
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/fs/binfmt_elf.c linux-2.6.32.17-pax/fs/binfmt_elf.c
 --- linux-2.6.32.17/fs/binfmt_elf.c	2010-02-17 23:59:03.000000000 +0100
-+++ linux-2.6.32.17-pax/fs/binfmt_elf.c	2010-05-12 15:50:23.000000000 +0200
++++ linux-2.6.32.17-pax/fs/binfmt_elf.c	2010-09-01 10:47:52.000000000 +0200
 @@ -50,6 +50,10 @@ static int elf_core_dump(long signr, str
  #define elf_core_dump	NULL
  #endif
@@ -29792,13 +29946,13 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/fs/binfmt
 +	oldflags = vma->vm_flags & (VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_EXEC | VM_WRITE | VM_READ);
 +	newflags &= VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_EXEC | VM_WRITE | VM_READ;
 +
-+#ifdef CONFIG_PAX_NOELFRELOCS
-+	is_textrel_rw = false;
-+	is_textrel_rx = false;
-+#else
++#ifdef CONFIG_PAX_ELFRELOCS
 +	/* possible TEXTREL */
 +	is_textrel_rw = vma->vm_file && !vma->anon_vma && oldflags == (VM_MAYEXEC | VM_MAYREAD | VM_EXEC | VM_READ) && newflags == (VM_WRITE | VM_READ);
 +	is_textrel_rx = vma->vm_file && vma->anon_vma && oldflags == (VM_MAYEXEC | VM_MAYWRITE | VM_MAYREAD | VM_WRITE | VM_READ) && newflags == (VM_EXEC | VM_READ);
++#else
++	is_textrel_rw = false;
++	is_textrel_rx = false;
 +#endif
 +
 +	/* possible RELRO */
@@ -32003,6 +32157,52 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/fs/proc/b
  	if (!IS_ERR(s))
  		__putname(s);
  }
+diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/fs/proc/kcore.c linux-2.6.32.17-pax/fs/proc/kcore.c
+--- linux-2.6.32.17/fs/proc/kcore.c	2009-12-03 15:02:39.000000000 +0100
++++ linux-2.6.32.17-pax/fs/proc/kcore.c	2010-09-01 17:00:47.000000000 +0200
+@@ -477,9 +477,10 @@ read_kcore(struct file *file, char __use
+ 	 * the addresses in the elf_phdr on our list.
+ 	 */
+ 	start = kc_offset_to_vaddr(*fpos - elf_buflen);
+-	if ((tsz = (PAGE_SIZE - (start & ~PAGE_MASK))) > buflen)
++	tsz = PAGE_SIZE - (start & ~PAGE_MASK);
++	if (tsz > buflen)
+ 		tsz = buflen;
+-		
++
+ 	while (buflen) {
+ 		struct kcore_list *m;
+ 
+@@ -508,20 +509,18 @@ read_kcore(struct file *file, char __use
+ 			kfree(elf_buf);
+ 		} else {
+ 			if (kern_addr_valid(start)) {
+-				unsigned long n;
++				char *elf_buf;
+ 
+-				n = copy_to_user(buffer, (char *)start, tsz);
+-				/*
+-				 * We cannot distingush between fault on source
+-				 * and fault on destination. When this happens
+-				 * we clear too and hope it will trigger the
+-				 * EFAULT again.
+-				 */
+-				if (n) { 
+-					if (clear_user(buffer + tsz - n,
+-								n))
++				elf_buf = kmalloc(tsz, GFP_KERNEL);
++				if (!elf_buf)
++					return -ENOMEM;
++				if (!__copy_from_user(elf_buf, (const void __user *)start, tsz)) {
++					if (copy_to_user(buffer, elf_buf, tsz)) {
++						kfree(elf_buf);
+ 						return -EFAULT;
++					}
+ 				}
++				kfree(elf_buf);
+ 			} else {
+ 				if (clear_user(buffer, tsz))
+ 					return -EFAULT;
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/fs/proc/meminfo.c linux-2.6.32.17-pax/fs/proc/meminfo.c
 --- linux-2.6.32.17/fs/proc/meminfo.c	2009-12-03 15:02:39.000000000 +0100
 +++ linux-2.6.32.17-pax/fs/proc/meminfo.c	2010-05-12 15:50:23.000000000 +0200
@@ -32584,7 +32784,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/include/a
  	return -ENODEV;
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/include/asm-generic/atomic-long.h linux-2.6.32.17-pax/include/asm-generic/atomic-long.h
 --- linux-2.6.32.17/include/asm-generic/atomic-long.h	2009-09-10 19:42:42.000000000 +0200
-+++ linux-2.6.32.17-pax/include/asm-generic/atomic-long.h	2010-07-01 03:21:51.000000000 +0200
++++ linux-2.6.32.17-pax/include/asm-generic/atomic-long.h	2010-09-13 01:37:59.000000000 +0200
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -32803,7 +33003,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/include/a
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -255,4 +375,35 @@ static inline long atomic_long_add_unles
+@@ -255,4 +375,37 @@ static inline long atomic_long_add_unles
  
  #endif  /*  BITS_PER_LONG == 64  */
  
@@ -32815,6 +33015,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/include/a
 +	atomic_add_unchecked(0, (atomic_unchecked_t *)NULL);
 +	atomic_sub_unchecked(0, (atomic_unchecked_t *)NULL);
 +	atomic_inc_unchecked((atomic_unchecked_t *)NULL);
++	atomic_inc_return_unchecked((atomic_unchecked_t *)NULL);
 +
 +	atomic_long_read_unchecked((atomic_long_unchecked_t *)NULL);
 +	atomic_long_set_unchecked((atomic_long_unchecked_t *)NULL, 0);
@@ -32829,6 +33030,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/include/a
 +#define atomic_add_unchecked(i, v) atomic_add((i), (v))
 +#define atomic_sub_unchecked(i, v) atomic_sub((i), (v))
 +#define atomic_inc_unchecked(v) atomic_inc(v)
++#define atomic_inc_return_unchecked(v) atomic_inc_return(v)
 +
 +#define atomic_long_read_unchecked(v) atomic_long_read(v)
 +#define atomic_long_set_unchecked(v, i) atomic_long_set((v), (i))
@@ -35990,40 +36192,42 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/kernel/hr
  }
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/kernel/kallsyms.c linux-2.6.32.17-pax/kernel/kallsyms.c
 --- linux-2.6.32.17/kernel/kallsyms.c	2009-12-03 15:02:45.000000000 +0100
-+++ linux-2.6.32.17-pax/kernel/kallsyms.c	2010-07-09 13:43:14.000000000 +0200
-@@ -51,23 +51,48 @@ extern const unsigned long kallsyms_mark
++++ linux-2.6.32.17-pax/kernel/kallsyms.c	2010-08-27 23:35:59.000000000 +0200
+@@ -51,12 +51,33 @@ extern const unsigned long kallsyms_mark
  
  static inline int is_kernel_inittext(unsigned long addr)
  {
 +	if (system_state != SYSTEM_BOOTING)
 +		return 0;
 +
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+	if (addr >= ktla_ktva((unsigned long)_sinittext)
-+	    && addr <= ktla_ktva((unsigned long)_einittext))
-+#else
  	if (addr >= (unsigned long)_sinittext
  	    && addr <= (unsigned long)_einittext)
-+#endif
  		return 1;
-+
  	return 0;
  }
  
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#ifdef CONFIG_MODULES
++static inline int is_module_text(unsigned long addr)
++{
++	if ((unsigned long)MODULES_EXEC_VADDR <= addr && addr <= (unsigned long)MODULES_EXEC_END)
++		return 1;
++
++	addr = ktla_ktva(addr);
++	return (unsigned long)MODULES_EXEC_VADDR <= addr && addr <= (unsigned long)MODULES_EXEC_END;
++}
++#else
++static inline int is_module_text(unsigned long addr)
++{
++	return 0;
++}
++#endif
++#endif
++
  static inline int is_kernel_text(unsigned long addr)
  {
-+
-+#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+	if (addr >= ktla_ktva((unsigned long)_stext)
-+	    && addr <= ktla_ktva((unsigned long)_etext))
-+#else
  	if ((addr >= (unsigned long)_stext && addr <= (unsigned long)_etext) ||
- 	    arch_is_kernel_text(addr))
-+#endif
- 		return 1;
-+
- 	return in_gate_area_no_task(addr);
- }
+@@ -67,13 +88,28 @@ static inline int is_kernel_text(unsigne
  
  static inline int is_kernel(unsigned long addr)
  {
@@ -36040,7 +36244,19 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/kernel/ka
  		return 1;
  	return in_gate_area_no_task(addr);
  }
-@@ -413,7 +438,6 @@ static unsigned long get_ksymbol_core(st
+ 
+ static int is_ksym_addr(unsigned long addr)
+ {
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++	if (is_module_text(addr))
++		return 0;
++#endif
++
+ 	if (all_var)
+ 		return is_kernel(addr);
+ 
+@@ -413,7 +449,6 @@ static unsigned long get_ksymbol_core(st
  
  static void reset_iter(struct kallsym_iter *iter, loff_t new_pos)
  {
@@ -36048,7 +36264,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/kernel/ka
  	iter->nameoff = get_symbol_offset(new_pos);
  	iter->pos = new_pos;
  }
-@@ -501,7 +525,7 @@ static int kallsyms_open(struct inode *i
+@@ -501,7 +536,7 @@ static int kallsyms_open(struct inode *i
  	struct kallsym_iter *iter;
  	int ret;
  
@@ -36881,16 +37097,24 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/kernel/rc
  	 * Memory references from any prior RCU read-side critical sections
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/kernel/relay.c linux-2.6.32.17-pax/kernel/relay.c
 --- linux-2.6.32.17/kernel/relay.c	2009-12-03 15:02:45.000000000 +0100
-+++ linux-2.6.32.17-pax/kernel/relay.c	2010-05-12 15:50:24.000000000 +0200
-@@ -1292,7 +1292,7 @@ static int subbuf_splice_actor(struct fi
++++ linux-2.6.32.17-pax/kernel/relay.c	2010-09-01 10:39:44.000000000 +0200
+@@ -1222,7 +1222,7 @@ static int subbuf_splice_actor(struct fi
+ 			       unsigned int flags,
+ 			       int *nonpad_ret)
+ {
+-	unsigned int pidx, poff, total_len, subbuf_pages, nr_pages, ret;
++	unsigned int pidx, poff, total_len, subbuf_pages, nr_pages;
+ 	struct rchan_buf *rbuf = in->private_data;
+ 	unsigned int subbuf_size = rbuf->chan->subbuf_size;
+ 	uint64_t pos = (uint64_t) *ppos;
+@@ -1241,6 +1241,7 @@ static int subbuf_splice_actor(struct fi
+ 		.ops = &relay_pipe_buf_ops,
+ 		.spd_release = relay_page_release,
+ 	};
++	ssize_t ret;
+ 
+ 	if (rbuf->subbufs_produced == rbuf->subbufs_consumed)
  		return 0;
- 
- 	ret = *nonpad_ret = splice_to_pipe(pipe, &spd);
--	if (ret < 0 || ret < total_len)
-+	if ((int)ret < 0 || ret < total_len)
- 		return ret;
- 
-         if (read_start + ret == nonpad_end)
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/kernel/sched.c linux-2.6.32.17-pax/kernel/sched.c
 --- linux-2.6.32.17/kernel/sched.c	2010-08-04 23:11:12.000000000 +0200
 +++ linux-2.6.32.17-pax/kernel/sched.c	2010-08-04 23:11:19.000000000 +0200
@@ -37444,7 +37668,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/filema
  	vma->vm_flags |= VM_CAN_NONLINEAR;
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/fremap.c linux-2.6.32.17-pax/mm/fremap.c
 --- linux-2.6.32.17/mm/fremap.c	2009-03-24 08:35:51.000000000 +0100
-+++ linux-2.6.32.17-pax/mm/fremap.c	2010-05-12 15:50:24.000000000 +0200
++++ linux-2.6.32.17-pax/mm/fremap.c	2010-09-13 01:37:59.000000000 +0200
 @@ -153,6 +153,11 @@ SYSCALL_DEFINE5(remap_file_pages, unsign
   retry:
  	vma = find_vma(mm, start);
@@ -37457,6 +37681,15 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/fremap
  	/*
  	 * Make sure the vma is shared, that it supports prefaulting,
  	 * and that the remapped range is valid and fully within
+@@ -221,7 +226,7 @@ SYSCALL_DEFINE5(remap_file_pages, unsign
+ 		/*
+ 		 * drop PG_Mlocked flag for over-mapped range
+ 		 */
+-		unsigned int saved_flags = vma->vm_flags;
++		unsigned long saved_flags = vma->vm_flags;
+ 		munlock_vma_pages_range(vma, start, start + size);
+ 		vma->vm_flags = saved_flags;
+ 	}
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/highmem.c linux-2.6.32.17-pax/mm/highmem.c
 --- linux-2.6.32.17/mm/highmem.c	2009-12-03 15:02:47.000000000 +0100
 +++ linux-2.6.32.17-pax/mm/highmem.c	2010-05-12 15:50:24.000000000 +0200
@@ -38173,40 +38406,19 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mempol
  	} else if (vma->vm_start <= mm->start_stack &&
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mlock.c linux-2.6.32.17-pax/mm/mlock.c
 --- linux-2.6.32.17/mm/mlock.c	2010-01-19 00:50:09.000000000 +0100
-+++ linux-2.6.32.17-pax/mm/mlock.c	2010-05-12 15:50:24.000000000 +0200
-@@ -435,6 +435,17 @@ static int do_mlock(unsigned long start,
++++ linux-2.6.32.17-pax/mm/mlock.c	2010-09-13 01:37:59.000000000 +0200
+@@ -435,6 +435,9 @@ static int do_mlock(unsigned long start,
  		return -EINVAL;
  	if (end == start)
  		return 0;
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	if (current->mm->pax_flags & MF_PAX_SEGMEXEC) {
-+		if (end > SEGMEXEC_TASK_SIZE)
-+			return -EINVAL;
-+	} else
-+#endif
-+
 +	if (end > TASK_SIZE)
 +		return -EINVAL;
 +
  	vma = find_vma_prev(current->mm, start, &prev);
  	if (!vma || vma->vm_start > start)
  		return -ENOMEM;
-@@ -515,10 +526,10 @@ SYSCALL_DEFINE2(munlock, unsigned long,
- static int do_mlockall(int flags)
- {
- 	struct vm_area_struct * vma, * prev = NULL;
--	unsigned int def_flags = 0;
-+	unsigned int def_flags = current->mm->def_flags & ~VM_LOCKED;
- 
- 	if (flags & MCL_FUTURE)
--		def_flags = VM_LOCKED;
-+		def_flags |= VM_LOCKED;
- 	current->mm->def_flags = def_flags;
- 	if (flags == MCL_FUTURE)
- 		goto out;
-@@ -526,6 +537,12 @@ static int do_mlockall(int flags)
- 	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
+@@ -445,6 +448,11 @@ static int do_mlock(unsigned long start,
+ 	for (nstart = start ; ; ) {
  		unsigned int newflags;
  
 +#ifdef CONFIG_PAX_SEGMEXEC
@@ -38214,13 +38426,40 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mlock.
 +			break;
 +#endif
 +
+ 		/* Here we know that  vma->vm_start <= nstart < vma->vm_end. */
+ 
+ 		newflags = vma->vm_flags | VM_LOCKED;
+@@ -515,17 +523,23 @@ SYSCALL_DEFINE2(munlock, unsigned long,
+ static int do_mlockall(int flags)
+ {
+ 	struct vm_area_struct * vma, * prev = NULL;
+-	unsigned int def_flags = 0;
+ 
+ 	if (flags & MCL_FUTURE)
+-		def_flags = VM_LOCKED;
+-	current->mm->def_flags = def_flags;
++		current->mm->def_flags |= VM_LOCKED;
++	else
++		current->mm->def_flags &= ~VM_LOCKED;
+ 	if (flags == MCL_FUTURE)
+ 		goto out;
+ 
+ 	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
+-		unsigned int newflags;
++		unsigned long newflags;
++
++#ifdef CONFIG_PAX_SEGMEXEC
++		if ((current->mm->pax_flags & MF_PAX_SEGMEXEC) && (vma->vm_start >= SEGMEXEC_TASK_SIZE))
++			break;
++#endif
+ 
 +		BUG_ON(vma->vm_end > TASK_SIZE);
  		newflags = vma->vm_flags | VM_LOCKED;
  		if (!(flags & MCL_CURRENT))
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c linux-2.6.32.17-pax/mm/mmap.c
 --- linux-2.6.32.17/mm/mmap.c	2010-01-19 00:50:09.000000000 +0100
-+++ linux-2.6.32.17-pax/mm/mmap.c	2010-08-04 22:47:02.000000000 +0200
++++ linux-2.6.32.17-pax/mm/mmap.c	2010-08-27 23:38:46.000000000 +0200
 @@ -45,6 +45,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -38427,15 +38666,21 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	if (addr & ~PAGE_MASK)
  		return addr;
  
-@@ -959,6 +1034,22 @@ unsigned long do_mmap_pgoff(struct file
+@@ -959,6 +1034,28 @@ unsigned long do_mmap_pgoff(struct file
  	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
  			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
  
 +#ifdef CONFIG_PAX_MPROTECT
 +	if (mm->pax_flags & MF_PAX_MPROTECT) {
-+		if ((prot & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC))
++		if ((vm_flags & (VM_WRITE | VM_EXEC)) == (VM_WRITE | VM_EXEC))
++
++#ifdef CONFIG_PAX_EMUPLT
++			vm_flags &= ~VM_EXEC;
++#else
 +			return -EPERM;
-+		if (!(prot & PROT_EXEC))
++#endif
++
++		if (!(vm_flags & VM_EXEC))
 +			vm_flags &= ~VM_MAYEXEC;
 +		else
 +			vm_flags &= ~VM_MAYWRITE;
@@ -38450,7 +38695,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	if (flags & MAP_LOCKED)
  		if (!can_do_mlock())
  			return -EPERM;
-@@ -1055,10 +1146,10 @@ EXPORT_SYMBOL(do_mmap_pgoff);
+@@ -1055,10 +1152,10 @@ EXPORT_SYMBOL(do_mmap_pgoff);
   */
  int vma_wants_writenotify(struct vm_area_struct *vma)
  {
@@ -38463,7 +38708,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		return 0;
  
  	/* The backer wishes to know when pages are first written to? */
-@@ -1107,14 +1198,24 @@ unsigned long mmap_region(struct file *f
+@@ -1107,14 +1204,24 @@ unsigned long mmap_region(struct file *f
  	unsigned long charged = 0;
  	struct inode *inode =  file ? file->f_path.dentry->d_inode : NULL;
  
@@ -38490,7 +38735,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	}
  
  	/* Check against address space limit. */
-@@ -1163,6 +1264,16 @@ munmap_back:
+@@ -1163,6 +1270,16 @@ munmap_back:
  		goto unacct_error;
  	}
  
@@ -38507,7 +38752,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	vma->vm_mm = mm;
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
-@@ -1185,6 +1296,19 @@ munmap_back:
+@@ -1185,6 +1302,19 @@ munmap_back:
  		error = file->f_op->mmap(file, vma);
  		if (error)
  			goto unmap_and_free_vma;
@@ -38527,7 +38772,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		if (vm_flags & VM_EXECUTABLE)
  			added_exe_file_vma(mm);
  
-@@ -1208,6 +1332,11 @@ munmap_back:
+@@ -1208,6 +1338,11 @@ munmap_back:
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  	file = vma->vm_file;
  
@@ -38539,7 +38784,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	/* Once vma denies write, undo our temporary denial count */
  	if (correct_wcount)
  		atomic_inc(&inode->i_writecount);
-@@ -1216,6 +1345,7 @@ out:
+@@ -1216,6 +1351,7 @@ out:
  
  	mm->total_vm += len >> PAGE_SHIFT;
  	vm_stat_account(mm, vm_flags, file, len >> PAGE_SHIFT);
@@ -38547,7 +38792,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	if (vm_flags & VM_LOCKED) {
  		/*
  		 * makes pages present; downgrades, drops, reacquires mmap_sem
-@@ -1238,6 +1368,12 @@ unmap_and_free_vma:
+@@ -1238,6 +1374,12 @@ unmap_and_free_vma:
  	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
  	charged = 0;
  free_vma:
@@ -38560,7 +38805,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	kmem_cache_free(vm_area_cachep, vma);
  unacct_error:
  	if (charged)
-@@ -1271,6 +1407,10 @@ arch_get_unmapped_area(struct file *filp
+@@ -1271,6 +1413,10 @@ arch_get_unmapped_area(struct file *filp
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -38571,7 +38816,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
  		vma = find_vma(mm, addr);
-@@ -1279,10 +1419,10 @@ arch_get_unmapped_area(struct file *filp
+@@ -1279,10 +1425,10 @@ arch_get_unmapped_area(struct file *filp
  			return addr;
  	}
  	if (len > mm->cached_hole_size) {
@@ -38585,7 +38830,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	}
  
  full_search:
-@@ -1293,9 +1433,8 @@ full_search:
+@@ -1293,9 +1439,8 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -38597,7 +38842,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  				mm->cached_hole_size = 0;
  				goto full_search;
  			}
-@@ -1317,10 +1456,16 @@ full_search:
+@@ -1317,10 +1462,16 @@ full_search:
  
  void arch_unmap_area(struct mm_struct *mm, unsigned long addr)
  {
@@ -38615,7 +38860,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		mm->free_area_cache = addr;
  		mm->cached_hole_size = ~0UL;
  	}
-@@ -1338,7 +1483,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1338,7 +1489,7 @@ arch_get_unmapped_area_topdown(struct fi
  {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
@@ -38624,7 +38869,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -1347,6 +1492,10 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1347,6 +1498,10 @@ arch_get_unmapped_area_topdown(struct fi
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -38635,7 +38880,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	/* requesting a specific address */
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
-@@ -1404,13 +1553,21 @@ bottomup:
+@@ -1404,13 +1559,21 @@ bottomup:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -38659,7 +38904,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	mm->cached_hole_size = ~0UL;
  
  	return addr;
-@@ -1419,6 +1576,12 @@ bottomup:
+@@ -1419,6 +1582,12 @@ bottomup:
  
  void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  {
@@ -38672,7 +38917,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	/*
  	 * Is this a new hole at the highest possible address?
  	 */
-@@ -1426,8 +1589,10 @@ void arch_unmap_area_topdown(struct mm_s
+@@ -1426,8 +1595,10 @@ void arch_unmap_area_topdown(struct mm_s
  		mm->free_area_cache = addr;
  
  	/* dont allow allocations above current base */
@@ -38684,7 +38929,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  }
  
  unsigned long
-@@ -1535,6 +1700,27 @@ out:
+@@ -1535,6 +1706,27 @@ out:
  	return prev ? prev->vm_next : vma;
  }
  
@@ -38712,7 +38957,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -1595,35 +1781,40 @@ static
+@@ -1595,35 +1787,40 @@ static
  #endif
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
@@ -38763,7 +39008,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1633,6 +1824,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1633,6 +1830,8 @@ int expand_upwards(struct vm_area_struct
  		if (!error)
  			vma->vm_end = address;
  	}
@@ -38772,7 +39017,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	anon_vma_unlock(vma);
  	return error;
  }
-@@ -1644,7 +1837,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1644,7 +1843,8 @@ int expand_upwards(struct vm_area_struct
  static int expand_downwards(struct vm_area_struct *vma,
  				   unsigned long address)
  {
@@ -38782,7 +39027,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1658,6 +1852,15 @@ static int expand_downwards(struct vm_ar
+@@ -1658,6 +1858,15 @@ static int expand_downwards(struct vm_ar
  	if (error)
  		return error;
  
@@ -38798,7 +39043,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	anon_vma_lock(vma);
  
  	/*
-@@ -1667,9 +1870,15 @@ static int expand_downwards(struct vm_ar
+@@ -1667,9 +1876,15 @@ static int expand_downwards(struct vm_ar
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -38815,7 +39060,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1677,9 +1886,20 @@ static int expand_downwards(struct vm_ar
+@@ -1677,9 +1892,20 @@ static int expand_downwards(struct vm_ar
  		if (!error) {
  			vma->vm_start = address;
  			vma->vm_pgoff -= grow;
@@ -38836,7 +39081,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	return error;
  }
  
-@@ -1755,6 +1975,13 @@ static void remove_vma_list(struct mm_st
+@@ -1755,6 +1981,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -38850,7 +39095,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1799,6 +2026,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1799,6 +2032,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	do {
@@ -38867,7 +39112,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1824,10 +2061,25 @@ int split_vma(struct mm_struct * mm, str
+@@ -1824,10 +2067,25 @@ int split_vma(struct mm_struct * mm, str
  	struct mempolicy *pol;
  	struct vm_area_struct *new;
  
@@ -38893,7 +39138,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -1835,6 +2087,16 @@ int split_vma(struct mm_struct * mm, str
+@@ -1835,6 +2093,16 @@ int split_vma(struct mm_struct * mm, str
  	if (!new)
  		return -ENOMEM;
  
@@ -38910,7 +39155,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1845,8 +2107,29 @@ int split_vma(struct mm_struct * mm, str
+@@ -1845,8 +2113,29 @@ int split_vma(struct mm_struct * mm, str
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -38940,7 +39185,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		kmem_cache_free(vm_area_cachep, new);
  		return PTR_ERR(pol);
  	}
-@@ -1867,6 +2150,28 @@ int split_vma(struct mm_struct * mm, str
+@@ -1867,6 +2156,28 @@ int split_vma(struct mm_struct * mm, str
  	else
  		vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -38969,7 +39214,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	return 0;
  }
  
-@@ -1875,11 +2180,30 @@ int split_vma(struct mm_struct * mm, str
+@@ -1875,11 +2186,30 @@ int split_vma(struct mm_struct * mm, str
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -39000,7 +39245,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -1943,6 +2267,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -1943,6 +2273,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -39009,7 +39254,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	return 0;
  }
  
-@@ -1955,22 +2281,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -1955,22 +2287,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  
  	profile_munmap(addr);
  
@@ -39038,7 +39283,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -1984,6 +2306,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -1984,6 +2312,7 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -39046,7 +39291,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -1995,16 +2318,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -1995,16 +2324,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -39078,7 +39323,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2021,22 +2358,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2021,22 +2364,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -39105,7 +39350,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2050,7 +2387,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2050,7 +2393,7 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -39114,7 +39359,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  		return -ENOMEM;
  	}
  
-@@ -2062,11 +2399,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2062,11 +2405,12 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -39129,7 +39374,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	return addr;
  }
  
-@@ -2113,8 +2451,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2113,8 +2457,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -39141,7 +39386,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2128,6 +2468,10 @@ int insert_vm_struct(struct mm_struct *
+@@ -2128,6 +2474,10 @@ int insert_vm_struct(struct mm_struct *
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -39152,7 +39397,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2150,7 +2494,22 @@ int insert_vm_struct(struct mm_struct *
+@@ -2150,7 +2500,22 @@ int insert_vm_struct(struct mm_struct *
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -39175,7 +39420,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	return 0;
  }
  
-@@ -2168,6 +2527,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2168,6 +2533,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -39184,7 +39429,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2211,6 +2572,35 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2211,6 +2578,35 @@ struct vm_area_struct *copy_vma(struct v
  	return new_vma;
  }
  
@@ -39220,7 +39465,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/mmap.c
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2290,6 +2680,17 @@ int install_special_mapping(struct mm_st
+@@ -2290,6 +2686,17 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -39628,25 +39873,15 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/percpu
  static const int *pcpu_unit_map __read_mostly;		/* cpu -> unit */
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/mm/rmap.c linux-2.6.32.17-pax/mm/rmap.c
 --- linux-2.6.32.17/mm/rmap.c	2009-12-03 15:02:47.000000000 +0100
-+++ linux-2.6.32.17-pax/mm/rmap.c	2010-05-28 20:58:16.000000000 +0200
-@@ -108,6 +108,10 @@ int anon_vma_prepare(struct vm_area_stru
- 		struct mm_struct *mm = vma->vm_mm;
- 		struct anon_vma *allocated;
- 
-+#ifdef CONFIG_PAX_SEGMEXEC
-+		struct vm_area_struct *vma_m;
-+#endif
-+
- 		anon_vma = find_mergeable_anon_vma(vma);
- 		allocated = NULL;
- 		if (!anon_vma) {
-@@ -121,6 +125,16 @@ int anon_vma_prepare(struct vm_area_stru
++++ linux-2.6.32.17-pax/mm/rmap.c	2010-08-10 17:22:03.000000000 +0200
+@@ -121,6 +121,17 @@ int anon_vma_prepare(struct vm_area_stru
  		/* page_table_lock to protect against threads */
  		spin_lock(&mm->page_table_lock);
  		if (likely(!vma->anon_vma)) {
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
-+			vma_m = pax_find_mirror_vma(vma);
++			struct vm_area_struct *vma_m = pax_find_mirror_vma(vma);
++
 +			if (vma_m) {
 +				BUG_ON(vma_m->anon_vma);
 +				vma_m->anon_vma = anon_vma;
@@ -41044,6 +41279,22 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/net/sctp/
  
  		SCTP_DEBUG_PRINTK("sctp_get_port() found a possible match\n");
  		if (pp->fastreuse && sk->sk_reuse &&
+diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/net/sunrpc/sched.c linux-2.6.32.17-pax/net/sunrpc/sched.c
+--- linux-2.6.32.17/net/sunrpc/sched.c	2009-12-03 15:02:53.000000000 +0100
++++ linux-2.6.32.17-pax/net/sunrpc/sched.c	2010-08-14 01:10:22.000000000 +0200
+@@ -234,10 +234,10 @@ static int rpc_wait_bit_killable(void *w
+ #ifdef RPC_DEBUG
+ static void rpc_task_set_debuginfo(struct rpc_task *task)
+ {
+-	static atomic_t rpc_pid;
++	static atomic_unchecked_t rpc_pid;
+ 
+ 	task->tk_magic = RPC_TASK_MAGIC_ID;
+-	task->tk_pid = atomic_inc_return(&rpc_pid);
++	task->tk_pid = atomic_inc_return_unchecked(&rpc_pid);
+ }
+ #else
+ static inline void rpc_task_set_debuginfo(struct rpc_task *task)
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/net/sunrpc/xprtrdma/svc_rdma.c linux-2.6.32.17-pax/net/sunrpc/xprtrdma/svc_rdma.c
 --- linux-2.6.32.17/net/sunrpc/xprtrdma/svc_rdma.c	2009-12-03 15:02:54.000000000 +0100
 +++ linux-2.6.32.17-pax/net/sunrpc/xprtrdma/svc_rdma.c	2010-05-12 15:50:24.000000000 +0200
@@ -41360,8 +41611,8 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/scripts/p
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/Kconfig linux-2.6.32.17-pax/security/Kconfig
 --- linux-2.6.32.17/security/Kconfig	2009-12-03 15:02:54.000000000 +0100
-+++ linux-2.6.32.17-pax/security/Kconfig	2010-05-12 15:50:24.000000000 +0200
-@@ -4,6 +4,494 @@
++++ linux-2.6.32.17-pax/security/Kconfig	2010-08-27 23:42:43.000000000 +0200
+@@ -4,6 +4,499 @@
  
  menu "Security options"
  
@@ -41495,7 +41746,8 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/
 +
 +config PAX_PAGEEXEC
 +	bool "Paging based non-executable pages"
-+	depends on !COMPAT_VDSO && PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
++	depends on !COMPAT_VDSO && PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MATOM || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
++	select X86_PAE if X86_32 && !HIGHMEM4G && (MCORE2 || MPSC || MATOM || MK8)
 +	select S390_SWITCH_AMODE if S390
 +	select S390_EXEC_PROTECT if S390
 +	help
@@ -41588,7 +41840,8 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/
 +	   - changing the executable status of memory pages that were
 +	     not originally created as executable,
 +	   - making read-only executable pages writable again,
-+	   - creating executable pages from anonymous memory.
++	   - creating executable pages from anonymous memory,
++	   - making read-only-after-relocations (RELRO) data pages writable again.
 +
 +	  You should say Y here to complete the protection provided by
 +	  the enforcement of non-executable pages.
@@ -41596,9 +41849,10 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/
 +	  NOTE: you can use the 'chpax' or 'paxctl' utilities to control
 +	  this feature on a per file basis.
 +
-+config PAX_NOELFRELOCS
-+	bool "Disallow ELF text relocations"
-+	depends on PAX_MPROTECT && !PAX_ETEXECRELOCS && (IA64 || PPC || X86)
++config PAX_ELFRELOCS
++	bool "Allow ELF text relocations"
++	depends on PAX_MPROTECT
++	default n
 +	help
 +	  Non-executable pages and mprotect() restrictions are effective
 +	  in preventing the introduction of new executable code into an
@@ -41612,7 +41866,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/
 +	  the former approach is beyond PaX, the latter can be prevented
 +	  by having only PIC ELF libraries on one's system (which do not
 +	  need to relocate their code).  If you are sure this is your case,
-+	  then enable this option otherwise be careful as you may not even
++	  then disable this option otherwise be careful as you may not even
 +	  be able to boot or log on your system (for example, some PAM
 +	  modules are erroneously compiled as non-PIC by default).
 +
@@ -41624,6 +41878,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/
 +config PAX_ETEXECRELOCS
 +	bool "Allow ELF ET_EXEC text relocations"
 +	depends on PAX_MPROTECT && (ALPHA || IA64 || PARISC)
++	select PAX_ELFRELOCS
 +	default y
 +	help
 +	  On some architectures there are incorrectly created applications
@@ -41849,6 +42104,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/
 +
 +	  Since this has a negligible performance impact, you should enable
 +	  this feature.
++
 +endmenu
 +
 +endmenu
@@ -41856,7 +42112,7 @@ diff -NurpX linux-2.6.32.17-pax/Documentation/dontdiff linux-2.6.32.17/security/
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +634,7 @@ config INTEL_TXT
+@@ -146,7 +639,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
