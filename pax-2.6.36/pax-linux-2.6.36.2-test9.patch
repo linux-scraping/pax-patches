@@ -11227,7 +11227,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  efi_rt_function_ptr:
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/entry_32.S linux-2.6.36.2-pax/arch/x86/kernel/entry_32.S
 --- linux-2.6.36.2/arch/x86/kernel/entry_32.S	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/kernel/entry_32.S	2010-12-15 11:21:21.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/kernel/entry_32.S	2010-12-19 14:33:43.000000000 +0100
 @@ -186,13 +186,81 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -11505,7 +11505,39 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	GET_THREAD_INFO(%ebp)
  	movl $-EFAULT,PT_EAX(%esp)
  	jmp resume_userspace
-@@ -791,8 +911,15 @@ ptregs_clone:
+@@ -782,6 +902,31 @@ ptregs_clone:
+ 	addl $8,%esp
+ 	ret
+ 
++	ALIGN;
++ENTRY(kernel_execve)
++	push %ebp
++	sub $PT_OLDSS+4,%esp
++	push %edi
++	push %ecx
++	push %eax
++	lea 3*4(%esp),%edi
++	mov $PT_OLDSS/4+1,%ecx
++	xorl %eax,%eax
++	rep stosl
++	pop %eax
++	pop %ecx
++	pop %edi
++	movl $X86_EFLAGS_IF,PT_EFLAGS(%esp)
++	push %esp
++	call sys_execve
++	add $4,%esp
++	GET_THREAD_INFO(%ebp)
++	test %eax,%eax
++	jz syscall_exit
++	add $PT_OLDSS+4,%esp
++	pop %ebp
++	ret
++
+ .macro FIXUP_ESPFIX_STACK
+ /*
+  * Switch back for ESPFIX stack to the normal zerobased stack
+@@ -791,8 +936,15 @@ ptregs_clone:
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -11523,7 +11555,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl $__KERNEL_DS
-@@ -1275,7 +1402,6 @@ return_to_handler:
+@@ -1275,7 +1427,6 @@ return_to_handler:
  	jmp *%ecx
  #endif
  
@@ -11531,7 +11563,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1332,9 +1458,12 @@ error_code:
+@@ -1332,9 +1483,12 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -11545,7 +11577,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	TRACE_IRQS_OFF
  	movl %esp,%eax			# pt_regs pointer
  	call *%edi
-@@ -1428,6 +1557,9 @@ nmi_stack_correct:
+@@ -1428,6 +1582,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -11555,7 +11587,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1468,6 +1600,9 @@ nmi_espfix_stack:
+@@ -1468,6 +1625,9 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -13575,7 +13607,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	.free_coherent = swiotlb_free_coherent,
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/process.c linux-2.6.36.2-pax/arch/x86/kernel/process.c
 --- linux-2.6.36.2/arch/x86/kernel/process.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/kernel/process.c	2010-12-16 23:09:57.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/kernel/process.c	2010-12-18 16:47:12.000000000 +0100
 @@ -74,7 +74,7 @@ void exit_thread(void)
  	unsigned long *bp = t->io_bitmap_ptr;
  
@@ -13638,7 +13670,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
 -
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/process_32.c linux-2.6.36.2-pax/arch/x86/kernel/process_32.c
 --- linux-2.6.36.2/arch/x86/kernel/process_32.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/kernel/process_32.c	2010-12-14 21:51:42.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/kernel/process_32.c	2010-12-17 15:50:20.000000000 +0100
 @@ -67,6 +67,7 @@ asmlinkage void ret_from_fork(void) __as
  unsigned long thread_saved_pc(struct task_struct *tsk)
  {
@@ -13647,7 +13679,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  }
  
  #ifndef CONFIG_SMP
-@@ -130,7 +131,7 @@ void __show_regs(struct pt_regs *regs, i
+@@ -130,15 +131,14 @@ void __show_regs(struct pt_regs *regs, i
  	unsigned long sp;
  	unsigned short ss, gs;
  
@@ -13655,8 +13687,17 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
 +	if (user_mode(regs)) {
  		sp = regs->sp;
  		ss = regs->ss & 0xffff;
- 		gs = get_user_gs(regs);
-@@ -200,7 +201,7 @@ int copy_thread(unsigned long clone_flag
+-		gs = get_user_gs(regs);
+ 	} else {
+ 		sp = kernel_stack_pointer(regs);
+ 		savesegment(ss, ss);
+-		savesegment(gs, gs);
+ 	}
++	gs = get_user_gs(regs);
+ 
+ 	show_regs_common();
+ 
+@@ -200,7 +200,7 @@ int copy_thread(unsigned long clone_flag
  	struct task_struct *tsk;
  	int err;
  
@@ -13665,15 +13706,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	*childregs = *regs;
  	childregs->ax = 0;
  	childregs->sp = sp;
-@@ -234,6 +235,7 @@ int copy_thread(unsigned long clone_flag
- 	 * Set a new TLS for the child thread?
- 	 */
- 	if (clone_flags & CLONE_SETTLS)
-+//XXX needs set_fs()?
- 		err = do_set_thread_area(p, -1,
- 			(struct user_desc __user *)childregs->si, 0);
- 
-@@ -297,7 +299,7 @@ __switch_to(struct task_struct *prev_p,
+@@ -297,7 +297,7 @@ __switch_to(struct task_struct *prev_p,
  	struct thread_struct *prev = &prev_p->thread,
  				 *next = &next_p->thread;
  	int cpu = smp_processor_id();
@@ -13682,7 +13715,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	bool preload_fpu;
  
  	/* never put a printk in __switch_to... printk() calls wake_up*() indirectly */
-@@ -332,6 +334,11 @@ __switch_to(struct task_struct *prev_p,
+@@ -332,6 +332,11 @@ __switch_to(struct task_struct *prev_p,
  	 */
  	lazy_save_gs(prev->gs);
  
@@ -13694,7 +13727,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	/*
  	 * Load the per-thread Thread-Local Storage descriptor.
  	 */
-@@ -408,3 +415,27 @@ unsigned long get_wchan(struct task_stru
+@@ -408,3 +413,27 @@ unsigned long get_wchan(struct task_stru
  	return 0;
  }
  
@@ -14115,13 +14148,25 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  			/* 64-bit mode: REX prefix */
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/sys_i386_32.c linux-2.6.36.2-pax/arch/x86/kernel/sys_i386_32.c
 --- linux-2.6.36.2/arch/x86/kernel/sys_i386_32.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/kernel/sys_i386_32.c	2010-10-27 22:58:07.000000000 +0200
-@@ -24,6 +24,228 @@
++++ linux-2.6.36.2-pax/arch/x86/kernel/sys_i386_32.c	2010-12-18 16:50:32.000000000 +0100
+@@ -24,17 +24,224 @@
  
  #include <asm/syscalls.h>
  
+-/*
+- * Do a system call from kernel instead of calling sys_execve so we
+- * end up with proper pt_regs.
+- */
+-int kernel_execve(const char *filename,
+-		  const char *const argv[],
+-		  const char *const envp[])
 +int i386_mmap_check(unsigned long addr, unsigned long len, unsigned long flags)
-+{
+ {
+-	long __res;
+-	asm volatile ("push %%ebx ; movl %2,%%ebx ; int $0x80 ; pop %%ebx"
+-	: "=a" (__res)
+-	: "0" (__NR_execve), "ri" (filename), "c" (argv), "d" (envp) : "memory");
+-	return __res;
 +	unsigned long pax_task_size = TASK_SIZE;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
@@ -14340,11 +14385,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
 +	mm->cached_hole_size = ~0UL;
 +
 +	return addr;
-+}
-+
- /*
-  * Do a system call from kernel instead of calling sys_execve so we
-  * end up with proper pt_regs.
+ }
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/sys_x86_64.c linux-2.6.36.2-pax/arch/x86/kernel/sys_x86_64.c
 --- linux-2.6.36.2/arch/x86/kernel/sys_x86_64.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.2-pax/arch/x86/kernel/sys_x86_64.c	2010-10-27 22:58:07.000000000 +0200
@@ -14581,7 +14622,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	.quad	0x00cf9b000000ffff	# __KERNEL32_CS
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/traps.c linux-2.6.36.2-pax/arch/x86/kernel/traps.c
 --- linux-2.6.36.2/arch/x86/kernel/traps.c	2010-12-14 21:09:00.000000000 +0100
-+++ linux-2.6.36.2-pax/arch/x86/kernel/traps.c	2010-12-16 23:18:28.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/kernel/traps.c	2010-12-19 14:21:20.000000000 +0100
 @@ -70,12 +70,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -16621,7 +16662,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
  	EXIT
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/lib/usercopy_32.c linux-2.6.36.2-pax/arch/x86/lib/usercopy_32.c
 --- linux-2.6.36.2/arch/x86/lib/usercopy_32.c	2010-12-15 21:30:06.000000000 +0100
-+++ linux-2.6.36.2-pax/arch/x86/lib/usercopy_32.c	2010-12-15 22:47:12.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/lib/usercopy_32.c	2010-12-19 11:38:13.000000000 +0100
 @@ -43,7 +43,7 @@ do {									   \
  	__asm__ __volatile__(						   \
  		"	testl %1,%1\n"					   \
@@ -17058,7 +17099,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
  	       "8:\n"
  	       ".section .fixup,\"ax\"\n"
  	       "9:      lea 0(%%eax,%0,4),%0\n"
-@@ -629,17 +742,20 @@ static unsigned long __copy_user_intel_n
+@@ -629,32 +742,36 @@ static unsigned long __copy_user_intel_n
   */
  unsigned long __copy_user_zeroing_intel(void *to, const void __user *from,
  					unsigned long size);
@@ -17081,7 +17122,12 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
  		"	cmp  $7,%0\n"					\
  		"	jbe  1f\n"					\
  		"	movl %1,%0\n"					\
-@@ -651,10 +767,11 @@ do {									\
+ 		"	negl %0\n"					\
+ 		"	andl $7,%0\n"					\
+ 		"	subl %0,%3\n"					\
+-		"4:	rep; movsb\n"					\
++		"4:	rep; movsb "prefix" (%%esi), (%%edi)\n"		\
+ 		"	movl %3,%0\n"					\
  		"	shrl $2,%0\n"					\
  		"	andl $3,%3\n"					\
  		"	.align 2,0x90\n"				\
@@ -24711,6 +24757,30 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/drivers/gpu
  
  static const struct vm_operations_struct ttm_bo_vm_ops = {
  	.fault = ttm_bo_vm_fault,
+diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/drivers/gpu/drm/vmwgfx/vmwgfx_ldu.c linux-2.6.36.2-pax/drivers/gpu/drm/vmwgfx/vmwgfx_ldu.c
+--- linux-2.6.36.2/drivers/gpu/drm/vmwgfx/vmwgfx_ldu.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.2-pax/drivers/gpu/drm/vmwgfx/vmwgfx_ldu.c	2010-12-19 13:08:34.000000000 +0100
+@@ -547,7 +547,7 @@ int vmw_kms_init_legacy_display_system(s
+ 		return -EINVAL;
+ 	}
+ 
+-	dev_priv->ldu_priv = kmalloc(GFP_KERNEL, sizeof(*dev_priv->ldu_priv));
++	dev_priv->ldu_priv = kmalloc(sizeof(*dev_priv->ldu_priv), GFP_KERNEL);
+ 
+ 	if (!dev_priv->ldu_priv)
+ 		return -ENOMEM;
+diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/drivers/gpu/drm/vmwgfx/vmwgfx_overlay.c linux-2.6.36.2-pax/drivers/gpu/drm/vmwgfx/vmwgfx_overlay.c
+--- linux-2.6.36.2/drivers/gpu/drm/vmwgfx/vmwgfx_overlay.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.2-pax/drivers/gpu/drm/vmwgfx/vmwgfx_overlay.c	2010-12-19 13:15:00.000000000 +0100
+@@ -585,7 +585,7 @@ int vmw_overlay_init(struct vmw_private
+ 		return -ENOSYS;
+ 	}
+ 
+-	overlay = kmalloc(GFP_KERNEL, sizeof(*overlay));
++	overlay = kmalloc(sizeof(*overlay), GFP_KERNEL);
+ 	if (!overlay)
+ 		return -ENOMEM;
+ 
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/drivers/hid/usbhid/hiddev.c linux-2.6.36.2-pax/drivers/hid/usbhid/hiddev.c
 --- linux-2.6.36.2/drivers/hid/usbhid/hiddev.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.2-pax/drivers/hid/usbhid/hiddev.c	2010-10-27 22:58:07.000000000 +0200
@@ -29797,7 +29867,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/ecryptfs
  		if (copy_to_user(&buf[i], msg_ctx->msg, msg_ctx->msg_size))
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/exec.c linux-2.6.36.2-pax/fs/exec.c
 --- linux-2.6.36.2/fs/exec.c	2010-12-16 12:42:52.000000000 +0100
-+++ linux-2.6.36.2-pax/fs/exec.c	2010-12-16 12:43:31.000000000 +0100
++++ linux-2.6.36.2-pax/fs/exec.c	2010-12-17 16:34:40.000000000 +0100
 @@ -54,12 +54,24 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -30844,7 +30914,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/locks.c 
  	lock_kernel();
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/namei.c linux-2.6.36.2-pax/fs/namei.c
 --- linux-2.6.36.2/fs/namei.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/fs/namei.c	2010-10-27 22:58:08.000000000 +0200
++++ linux-2.6.36.2-pax/fs/namei.c	2010-12-18 16:46:13.000000000 +0100
 @@ -542,7 +542,7 @@ __do_follow_link(struct path *path, stru
  	*p = dentry->d_inode->i_op->follow_link(dentry, nd);
  	error = PTR_ERR(*p);
@@ -31537,7 +31607,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/proc/bas
  }
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/proc/kcore.c linux-2.6.36.2-pax/fs/proc/kcore.c
 --- linux-2.6.36.2/fs/proc/kcore.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/fs/proc/kcore.c	2010-10-27 22:58:08.000000000 +0200
++++ linux-2.6.36.2-pax/fs/proc/kcore.c	2010-12-19 14:50:02.000000000 +0100
 @@ -478,9 +478,10 @@ read_kcore(struct file *file, char __use
  	 * the addresses in the elf_phdr on our list.
  	 */
@@ -31551,12 +31621,13 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/proc/kco
  	while (buflen) {
  		struct kcore_list *m;
  
-@@ -509,20 +510,18 @@ read_kcore(struct file *file, char __use
+@@ -509,20 +510,23 @@ read_kcore(struct file *file, char __use
  			kfree(elf_buf);
  		} else {
  			if (kern_addr_valid(start)) {
 -				unsigned long n;
 +				char *elf_buf;
++				mm_segment_t oldfs;
  
 -				n = copy_to_user(buffer, (char *)start, tsz);
 -				/*
@@ -31571,12 +31642,16 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/fs/proc/kco
 +				elf_buf = kmalloc(tsz, GFP_KERNEL);
 +				if (!elf_buf)
 +					return -ENOMEM;
++				oldfs = get_fs();
++				set_fs(KERNEL_DS);
 +				if (!__copy_from_user(elf_buf, (const void __user *)start, tsz)) {
++					set_fs(oldfs);
 +					if (copy_to_user(buffer, elf_buf, tsz)) {
 +						kfree(elf_buf);
  						return -EFAULT;
 +					}
  				}
++				set_fs(oldfs);
 +				kfree(elf_buf);
  			} else {
  				if (clear_user(buffer, tsz))
@@ -35454,7 +35529,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/init/initra
  	return 0;
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/init/main.c linux-2.6.36.2-pax/init/main.c
 --- linux-2.6.36.2/init/main.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/init/main.c	2010-12-15 18:20:20.000000000 +0100
++++ linux-2.6.36.2-pax/init/main.c	2010-12-18 16:46:20.000000000 +0100
 @@ -197,6 +197,47 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -35911,7 +35986,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/kernel/fork
  				new_fs = fs;
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/kernel/futex.c linux-2.6.36.2-pax/kernel/futex.c
 --- linux-2.6.36.2/kernel/futex.c	2010-12-14 21:09:00.000000000 +0100
-+++ linux-2.6.36.2-pax/kernel/futex.c	2010-12-14 21:09:09.000000000 +0100
++++ linux-2.6.36.2-pax/kernel/futex.c	2010-12-17 01:09:01.000000000 +0100
 @@ -221,6 +221,11 @@ get_futex_key(u32 __user *uaddr, int fsh
  	struct page *page;
  	int err;
@@ -35941,6 +36016,25 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/kernel/fute
 +				     unsigned int *pi)
  {
  	unsigned long uentry;
+ 
+@@ -2640,6 +2645,7 @@ static int __init futex_init(void)
+ {
+ 	u32 curval;
+ 	int i;
++	mm_segment_t oldfs;
+ 
+ 	/*
+ 	 * This will fail and we want it. Some arch implementations do
+@@ -2651,7 +2657,10 @@ static int __init futex_init(void)
+ 	 * implementation, the non functional ones will return
+ 	 * -ENOSYS.
+ 	 */
++	oldfs = get_fs();
++	set_fs(USER_DS);
+ 	curval = cmpxchg_futex_value_locked(NULL, 0, 0);
++	set_fs(oldfs);
+ 	if (curval == -EFAULT)
+ 		futex_cmpxchg_enabled = 1;
  
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/kernel/gcov/base.c linux-2.6.36.2-pax/kernel/gcov/base.c
 --- linux-2.6.36.2/kernel/gcov/base.c	2010-10-20 22:30:22.000000000 +0200
