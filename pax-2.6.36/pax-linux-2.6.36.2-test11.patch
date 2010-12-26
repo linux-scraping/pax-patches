@@ -9794,7 +9794,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/in
  
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/include/asm/uaccess_64.h linux-2.6.36.2-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-2.6.36.2/arch/x86/include/asm/uaccess_64.h	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/include/asm/uaccess_64.h	2010-12-14 21:18:01.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/include/asm/uaccess_64.h	2010-12-23 17:05:03.000000000 +0100
 @@ -11,6 +11,9 @@
  #include <asm/alternative.h>
  #include <asm/cpufeature.h>
@@ -10104,11 +10104,12 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/in
 +static inline unsigned long __copy_from_user_nocache(void *dst, const void __user *src, unsigned size)
  {
  	might_sleep();
+-	return __copy_user_nocache(dst, src, size, 1);
 +
 +	if ((int)size < 0)
 +		return size;
 +
- 	return __copy_user_nocache(dst, src, size, 1);
++	return __copy_user_nocache(dst, src, size);
  }
  
 -static inline int
@@ -10116,10 +10117,11 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/in
 +static inline unsigned long __copy_from_user_inatomic_nocache(void *dst, const void __user *src,
  				  unsigned size)
  {
+-	return __copy_user_nocache(dst, src, size, 0);
 +	if ((int)size < 0)
 +		return size;
 +
- 	return __copy_user_nocache(dst, src, size, 0);
++	return __copy_user_nocache(dst, src, size);
  }
  
 -unsigned long
@@ -13014,13 +13016,11 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	.flags			= KGDB_HW_BREAKPOINT,
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/kprobes.c linux-2.6.36.2-pax/arch/x86/kernel/kprobes.c
 --- linux-2.6.36.2/arch/x86/kernel/kprobes.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/kernel/kprobes.c	2010-10-27 22:58:07.000000000 +0200
-@@ -114,9 +114,12 @@ static void __kprobes __synthesize_relat
- 		s32 raddr;
++++ linux-2.6.36.2-pax/arch/x86/kernel/kprobes.c	2010-12-23 13:34:34.000000000 +0100
+@@ -115,8 +115,11 @@ static void __kprobes __synthesize_relat
  	} __attribute__((packed)) *insn;
  
--	insn = (struct __arch_relative_insn *)from;
-+	insn = (struct __arch_relative_insn *)(ktla_ktva(from));
+ 	insn = (struct __arch_relative_insn *)from;
 +
 +	pax_open_kernel();
  	insn->raddr = (s32)((long)(to) - ((long)(from) + 5));
@@ -13029,6 +13029,15 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  }
  
  /* Insert a jump instruction at address 'from', which jumps to address 'to'.*/
+@@ -153,7 +156,7 @@ static int __kprobes can_boost(kprobe_op
+ 	kprobe_opcode_t opcode;
+ 	kprobe_opcode_t *orig_opcodes = opcodes;
+ 
+-	if (search_exception_tables((unsigned long)opcodes))
++	if (search_exception_tables(ktva_ktla((unsigned long)opcodes)))
+ 		return 0;	/* Page fault may occur on this address. */
+ 
+ retry:
 @@ -317,7 +320,9 @@ static int __kprobes __copy_instruction(
  		}
  	}
@@ -13109,6 +13118,29 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  		return ret;
  
  	switch (val) {
+@@ -1372,7 +1379,7 @@ int __kprobes arch_prepare_optimized_kpr
+ 	 * Verify if the address gap is in 2GB range, because this uses
+ 	 * a relative jump.
+ 	 */
+-	rel = (long)op->optinsn.insn - (long)op->kp.addr + RELATIVEJUMP_SIZE;
++	rel = (long)op->optinsn.insn - ktla_ktva((long)op->kp.addr) + RELATIVEJUMP_SIZE;
+ 	if (abs(rel) > 0x7fffffff)
+ 		return -ERANGE;
+ 
+@@ -1393,11 +1400,11 @@ int __kprobes arch_prepare_optimized_kpr
+ 	synthesize_set_arg1(buf + TMPL_MOVE_IDX, (unsigned long)op);
+ 
+ 	/* Set probe function call */
+-	synthesize_relcall(buf + TMPL_CALL_IDX, optimized_callback);
++	synthesize_relcall(buf + TMPL_CALL_IDX, ktla_ktva(optimized_callback));
+ 
+ 	/* Set returning jmp instruction at the tail of out-of-line buffer */
+ 	synthesize_reljump(buf + TMPL_END_IDX + op->optinsn.size,
+-			   (u8 *)op->kp.addr + op->optinsn.size);
++			   (u8 *)ktla_ktva(op->kp.addr) + op->optinsn.size);
+ 
+ 	flush_icache_range((unsigned long) buf,
+ 			   (unsigned long) buf + TMPL_END_IDX +
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/ldt.c linux-2.6.36.2-pax/arch/x86/kernel/ldt.c
 --- linux-2.6.36.2/arch/x86/kernel/ldt.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.2-pax/arch/x86/kernel/ldt.c	2010-10-27 22:58:07.000000000 +0200
@@ -14113,7 +14145,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	if (err) {
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/step.c linux-2.6.36.2-pax/arch/x86/kernel/step.c
 --- linux-2.6.36.2/arch/x86/kernel/step.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/kernel/step.c	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.2-pax/arch/x86/kernel/step.c	2010-12-25 22:14:17.000000000 +0100
 @@ -27,10 +27,10 @@ unsigned long convert_ip_to_linear(struc
  		struct desc_struct *desc;
  		unsigned long base;
@@ -14127,7 +14159,17 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  			addr = -1L; /* bogus selector, access would fault */
  		else {
  			desc = child->mm->context.ldt + seg;
-@@ -53,6 +53,9 @@ static int is_setting_trap_flag(struct t
+@@ -42,7 +42,8 @@ unsigned long convert_ip_to_linear(struc
+ 			addr += base;
+ 		}
+ 		mutex_unlock(&child->mm->context.lock);
+-	}
++	} else if (seg == __KERNEL_CS || seg == __KERNEXEC_KERNEL_CS)
++		addr = ktla_ktva(addr);
+ 
+ 	return addr;
+ }
+@@ -53,6 +54,9 @@ static int is_setting_trap_flag(struct t
  	unsigned char opcode[15];
  	unsigned long addr = convert_ip_to_linear(child, regs);
  
@@ -14137,7 +14179,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	copied = access_process_vm(child, addr, opcode, sizeof(opcode), 0);
  	for (i = 0; i < copied; i++) {
  		switch (opcode[i]) {
-@@ -74,7 +77,7 @@ static int is_setting_trap_flag(struct t
+@@ -74,7 +78,7 @@ static int is_setting_trap_flag(struct t
  
  #ifdef CONFIG_X86_64
  		case 0x40 ... 0x4f:
@@ -15695,7 +15737,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
  	jne 1b
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/lib/checksum_32.S linux-2.6.36.2-pax/arch/x86/lib/checksum_32.S
 --- linux-2.6.36.2/arch/x86/lib/checksum_32.S	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/lib/checksum_32.S	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.2-pax/arch/x86/lib/checksum_32.S	2010-12-23 23:32:14.000000000 +0100
 @@ -28,7 +28,8 @@
  #include <linux/linkage.h>
  #include <asm/dwarf2.h>
@@ -15715,14 +15757,14 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
 +
 +ENTRY(csum_partial_copy_generic_to_user)
  	CFI_STARTPROC
-+	pushl $(__USER_DS)
++	pushl %gs
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %es
 +	CFI_ADJUST_CFA_OFFSET -4
 +	jmp csum_partial_copy_generic
 +
 +ENTRY(csum_partial_copy_generic_from_user)
-+	pushl $(__USER_DS)
++	pushl %gs
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %ds
 +	CFI_ADJUST_CFA_OFFSET -4
@@ -15864,14 +15906,14 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
 +
 +ENTRY(csum_partial_copy_generic_to_user)
  	CFI_STARTPROC
-+	pushl $(__USER_DS)
++	pushl %gs
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %es
 +	CFI_ADJUST_CFA_OFFSET -4
 +	jmp csum_partial_copy_generic
 +
 +ENTRY(csum_partial_copy_generic_from_user)
-+	pushl $(__USER_DS)
++	pushl %gs
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %ds
 +	CFI_ADJUST_CFA_OFFSET -4
