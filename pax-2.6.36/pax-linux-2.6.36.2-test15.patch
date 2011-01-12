@@ -161,14 +161,15 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/Documentati
  [ Subsystems should have already defined a struct kobj_type as a
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/Documentation/kernel-parameters.txt linux-2.6.36.2-pax/Documentation/kernel-parameters.txt
 --- linux-2.6.36.2/Documentation/kernel-parameters.txt	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/Documentation/kernel-parameters.txt	2010-10-27 22:58:07.000000000 +0200
-@@ -1835,6 +1835,12 @@ and is between 256 and 4096 characters.
++++ linux-2.6.36.2-pax/Documentation/kernel-parameters.txt	2011-01-05 14:33:58.000000000 +0100
+@@ -1835,6 +1835,13 @@ and is between 256 and 4096 characters.
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
-+	pax_nouderef	[X86-32] disables UDEREF.  Most likely needed under certain
++	pax_nouderef	[X86] disables UDEREF.  Most likely needed under certain
 +			virtualization environments that don't cope well with the
-+			expand down segment used by UDEREF on X86-32.
++			expand down segment used by UDEREF on X86-32 or the frequent
++			page table updates on X86-64.
 +
 +	pax_softmode=	[X86-32] 0/1 to disable/enable PaX softmode on boot already.
 +
@@ -12827,7 +12828,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  	.flags			= KGDB_HW_BREAKPOINT,
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/kprobes.c linux-2.6.36.2-pax/arch/x86/kernel/kprobes.c
 --- linux-2.6.36.2/arch/x86/kernel/kprobes.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/kernel/kprobes.c	2010-12-23 13:34:34.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/kernel/kprobes.c	2011-01-12 14:37:59.000000000 +0100
 @@ -115,8 +115,11 @@ static void __kprobes __synthesize_relat
  	} __attribute__((packed)) *insn;
  
@@ -12952,6 +12953,15 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/ke
  
  	flush_icache_range((unsigned long) buf,
  			   (unsigned long) buf + TMPL_END_IDX +
+@@ -1413,7 +1420,7 @@ int __kprobes arch_optimize_kprobe(struc
+ 			((long)op->kp.addr + RELATIVEJUMP_SIZE));
+ 
+ 	/* Backup instructions which will be replaced by jump address */
+-	memcpy(op->optinsn.copied_insn, op->kp.addr + INT3_SIZE,
++	memcpy(op->optinsn.copied_insn, ktla_ktva(op->kp.addr) + INT3_SIZE,
+ 	       RELATIVE_ADDR_SIZE);
+ 
+ 	jmp_code[0] = RELATIVEJUMP_OPCODE;
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/kernel/ldt.c linux-2.6.36.2-pax/arch/x86/kernel/ldt.c
 --- linux-2.6.36.2/arch/x86/kernel/ldt.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.2-pax/arch/x86/kernel/ldt.c	2010-10-27 22:58:07.000000000 +0200
@@ -15548,7 +15558,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
  	jne 1b
 diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/lib/checksum_32.S linux-2.6.36.2-pax/arch/x86/lib/checksum_32.S
 --- linux-2.6.36.2/arch/x86/lib/checksum_32.S	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.2-pax/arch/x86/lib/checksum_32.S	2011-01-05 02:09:40.000000000 +0100
++++ linux-2.6.36.2-pax/arch/x86/lib/checksum_32.S	2011-01-07 01:12:14.000000000 +0100
 @@ -28,7 +28,8 @@
  #include <linux/linkage.h>
  #include <asm/dwarf2.h>
@@ -15777,7 +15787,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
  	# zero the complete destination (computing the rest is too much work)
  	movl ARGBASE+8(%esp),%edi	# dst
  	movl ARGBASE+12(%esp),%ecx	# len
-@@ -523,10 +572,18 @@ DST(	movb %dl, (%edi)         )
+@@ -523,10 +572,21 @@ DST(	movb %dl, (%edi)         )
  	rep; stosb
  	jmp 7b
  6002:	movl ARGBASE+24(%esp), %ebx	# dst_err_ptr
@@ -15786,6 +15796,7 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
  	jmp  7b			
  .previous				
  
++#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	pushl %ss
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %ds
@@ -15794,10 +15805,12 @@ diff -NurpX linux-2.6.36.2-pax/Documentation/dontdiff linux-2.6.36.2/arch/x86/li
 +	CFI_ADJUST_CFA_OFFSET 4
 +	popl %es
 +	CFI_ADJUST_CFA_OFFSET -4
++#endif
++
  	popl %esi
  	CFI_ADJUST_CFA_OFFSET -4
  	CFI_RESTORE esi
-@@ -538,7 +595,7 @@ DST(	movb %dl, (%edi)         )
+@@ -538,7 +598,7 @@ DST(	movb %dl, (%edi)         )
  	CFI_RESTORE ebx
  	ret
  	CFI_ENDPROC
