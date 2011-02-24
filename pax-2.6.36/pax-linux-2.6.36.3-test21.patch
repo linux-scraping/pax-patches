@@ -1184,6 +1184,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/ia64/i
  #define PAGE_GATE	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_X_RX)
  #define PAGE_KERNEL	__pgprot(__DIRTY_BITS  | _PAGE_PL_0 | _PAGE_AR_RWX)
  #define PAGE_KERNELRX	__pgprot(__ACCESS_BITS | _PAGE_PL_0 | _PAGE_AR_RX)
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/ia64/include/asm/spinlock.h linux-2.6.36.3-pax/arch/ia64/include/asm/spinlock.h
+--- linux-2.6.36.3/arch/ia64/include/asm/spinlock.h	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/arch/ia64/include/asm/spinlock.h	2011-02-08 16:31:44.000000000 +0100
+@@ -72,7 +72,7 @@ static __always_inline void __ticket_spi
+ 	unsigned short	*p = (unsigned short *)&lock->lock + 1, tmp;
+ 
+ 	asm volatile ("ld2.bias %0=[%1]" : "=r"(tmp) : "r"(p));
+-	ACCESS_ONCE(*p) = (tmp + 2) & ~1;
++	ACCESS_ONCE_RW(*p) = (tmp + 2) & ~1;
+ }
+ 
+ static __always_inline void __ticket_spin_unlock_wait(arch_spinlock_t *lock)
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/ia64/include/asm/uaccess.h linux-2.6.36.3-pax/arch/ia64/include/asm/uaccess.h
 --- linux-2.6.36.3/arch/ia64/include/asm/uaccess.h	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/arch/ia64/include/asm/uaccess.h	2010-10-27 22:58:07.000000000 +0200
@@ -2453,6 +2465,17 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/powerp
  #else	/* CONFIG_PCI */
  #define set_pci_dma_ops(d)
  #define get_pci_dma_ops()	NULL
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/powerpc/include/asm/pgtable.h linux-2.6.36.3-pax/arch/powerpc/include/asm/pgtable.h
+--- linux-2.6.36.3/arch/powerpc/include/asm/pgtable.h	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/arch/powerpc/include/asm/pgtable.h	2011-02-24 18:34:28.000000000 +0100
+@@ -2,6 +2,7 @@
+ #define _ASM_POWERPC_PGTABLE_H
+ #ifdef __KERNEL__
+ 
++#include <linux/const.h>
+ #ifndef __ASSEMBLY__
+ #include <asm/processor.h>		/* For TASK_SIZE */
+ #include <asm/mmu.h>
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/powerpc/include/asm/pte-hash32.h linux-2.6.36.3-pax/arch/powerpc/include/asm/pte-hash32.h
 --- linux-2.6.36.3/arch/powerpc/include/asm/pte-hash32.h	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/arch/powerpc/include/asm/pte-hash32.h	2010-10-27 22:58:07.000000000 +0200
@@ -6384,7 +6407,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ia
  	if (err)
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ia32/ia32entry.S linux-2.6.36.3-pax/arch/x86/ia32/ia32entry.S
 --- linux-2.6.36.3/arch/x86/ia32/ia32entry.S	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/ia32/ia32entry.S	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.3-pax/arch/x86/ia32/ia32entry.S	2011-02-24 15:43:20.000000000 +0100
 @@ -13,6 +13,7 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
@@ -6393,19 +6416,34 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ia
  #include <linux/linkage.h>
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
-@@ -120,6 +121,11 @@ ENTRY(ia32_sysenter_target)
- 	SWAPGS_UNSAFE_STACK
- 	movq	PER_CPU_VAR(kernel_stack), %rsp
- 	addq	$(KERNEL_STACK_OFFSET),%rsp
-+
+@@ -93,6 +94,18 @@ ENTRY(native_irq_enable_sysexit)
+ ENDPROC(native_irq_enable_sysexit)
+ #endif
+ 
++	.macro pax_enter_kernel_user
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	call pax_enter_kernel_user
 +#endif
++	.endm
 +
++	.macro pax_exit_kernel_user
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_exit_kernel_user
++#endif
++	.endm
++
+ /*
+  * 32bit SYSENTER instruction entry.
+  *
+@@ -120,6 +133,7 @@ ENTRY(ia32_sysenter_target)
+ 	SWAPGS_UNSAFE_STACK
+ 	movq	PER_CPU_VAR(kernel_stack), %rsp
+ 	addq	$(KERNEL_STACK_OFFSET),%rsp
++	pax_enter_kernel_user
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs, here we enable it straight after entry:
-@@ -150,6 +156,12 @@ ENTRY(ia32_sysenter_target)
+@@ -150,6 +164,12 @@ ENTRY(ia32_sysenter_target)
  	SAVE_ARGS 0,0,1
   	/* no need to do an access_ok check here because rbp has been
   	   32bit zero extended */ 
@@ -6418,31 +6456,27 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ia
  1:	movl	(%rbp),%ebp
   	.section __ex_table,"a"
   	.quad 1b,ia32_badarg
-@@ -172,6 +184,11 @@ sysenter_dispatch:
+@@ -172,6 +192,7 @@ sysenter_dispatch:
  	testl	$_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz	sysexit_audit
  sysexit_from_sys_call:
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_exit_kernel_user
-+#endif
-+
++	pax_exit_kernel_user
  	andl    $~TS_COMPAT,TI_status(%r10)
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
-@@ -290,6 +307,11 @@ ENTRY(ia32_cstar_target)
+@@ -290,6 +311,11 @@ ENTRY(ia32_cstar_target)
  	movl	%esp,%r8d
  	CFI_REGISTER	rsp,r8
  	movq	PER_CPU_VAR(kernel_stack),%rsp
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_enter_kernel_user
++	pax_enter_kernel_user
 +#endif
 +
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
-@@ -311,6 +333,12 @@ ENTRY(ia32_cstar_target)
+@@ -311,6 +337,12 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -6455,27 +6489,19 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ia
  1:	movl	(%r8),%r9d
  	.section __ex_table,"a"
  	.quad 1b,ia32_badarg
-@@ -333,6 +361,11 @@ cstar_dispatch:
+@@ -333,6 +365,7 @@ cstar_dispatch:
  	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz sysretl_audit
  sysretl_from_sys_call:
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_exit_kernel_user
-+#endif
-+
++	pax_exit_kernel_user
  	andl $~TS_COMPAT,TI_status(%r10)
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
-@@ -415,6 +448,11 @@ ENTRY(ia32_syscall)
+@@ -415,6 +448,7 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_enter_kernel_user
-+#endif
-+
++	pax_enter_kernel_user
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
@@ -6514,7 +6540,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  		"popl %%edi\n\t"
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/include/asm/atomic.h linux-2.6.36.3-pax/arch/x86/include/asm/atomic.h
 --- linux-2.6.36.3/arch/x86/include/asm/atomic.h	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/include/asm/atomic.h	2010-12-30 19:20:29.000000000 +0100
++++ linux-2.6.36.3-pax/arch/x86/include/asm/atomic.h	2011-02-24 15:43:20.000000000 +0100
 @@ -22,7 +22,18 @@
   */
  static inline int atomic_read(const atomic_t *v)
@@ -6804,7 +6830,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  #define atomic_dec_return(v)  (atomic_sub_return(1, v))
  
  static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
-@@ -231,17 +418,30 @@ static inline int atomic_xchg(atomic_t *
+@@ -231,21 +418,77 @@ static inline int atomic_xchg(atomic_t *
   */
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -6839,6 +6865,53 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
+ 
++/**
++ * atomic_inc_not_zero_hint - increment if not null
++ * @v: pointer of type atomic_t
++ * @hint: probable value of the atomic before the increment
++ *
++ * This version of atomic_inc_not_zero() gives a hint of probable
++ * value of the atomic. This helps processor to not read the memory
++ * before doing the atomic read/modify/write cycle, lowering
++ * number of bus transactions on some arches.
++ *
++ * Returns: 0 if increment was not done, 1 otherwise.
++ */
++#define atomic_inc_not_zero_hint atomic_inc_not_zero_hint
++static inline int atomic_inc_not_zero_hint(atomic_t *v, int hint)
++{
++	int val, c = hint, new;
++
++	/* sanity test, should be removed by compiler if hint is a constant */
++	if (!hint)
++		return atomic_inc_not_zero(v);
++
++	do {
++		asm volatile("incl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++			     "jno 0f\n"
++			     "decl %0\n"
++			     "int $4\n0:\n"
++			     _ASM_EXTABLE(0b, 0b)
++#endif
++
++			     : "=r" (new)
++			     : "0" (c));
++
++		val = atomic_cmpxchg(v, c, new);
++		if (val == c)
++			return 1;
++		c = val;
++	} while (c);
++
++	return 0;
++}
++
+ /*
+  * atomic_dec_if_positive - decrement by 1 if old value positive
+  * @v: pointer of type atomic_t
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/include/asm/atomic64_32.h linux-2.6.36.3-pax/arch/x86/include/asm/atomic64_32.h
 --- linux-2.6.36.3/arch/x86/include/asm/atomic64_32.h	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/arch/x86/include/asm/atomic64_32.h	2010-10-27 22:58:07.000000000 +0200
@@ -7274,7 +7347,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  			     ".previous\n"
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/include/asm/desc.h linux-2.6.36.3-pax/arch/x86/include/asm/desc.h
 --- linux-2.6.36.3/arch/x86/include/asm/desc.h	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/include/asm/desc.h	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.3-pax/arch/x86/include/asm/desc.h	2011-02-24 17:39:32.000000000 +0100
 @@ -4,6 +4,7 @@
  #include <asm/desc_defs.h>
  #include <asm/ldt.h>
@@ -7311,7 +7384,25 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  }
  
  #ifdef CONFIG_X86_64
-@@ -115,19 +113,24 @@ static inline void paravirt_free_ldt(str
+@@ -65,9 +63,14 @@ static inline void pack_gate(gate_desc *
+ 			     unsigned long base, unsigned dpl, unsigned flags,
+ 			     unsigned short seg)
+ {
+-	gate->a = (seg << 16) | (base & 0xffff);
+-	gate->b = (base & 0xffff0000) |
+-		  (((0x80 | type | (dpl << 5)) & 0xff) << 8);
++	gate->gate.offset_low = base;
++	gate->gate.seg = seg;
++	gate->gate.reserved = 0;
++	gate->gate.type = type;
++	gate->gate.s = 0;
++	gate->gate.dpl = dpl;
++	gate->gate.p = 1;
++	gate->gate.offset_high = base >> 16;
+ }
+ 
+ #endif
+@@ -115,19 +118,24 @@ static inline void paravirt_free_ldt(str
  static inline void native_write_idt_entry(gate_desc *idt, int entry,
  					  const gate_desc *gate)
  {
@@ -7336,7 +7427,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  	switch (type) {
  	case DESC_TSS:
  		size = sizeof(tss_desc);
-@@ -139,7 +142,10 @@ static inline void native_write_gdt_entr
+@@ -139,7 +147,10 @@ static inline void native_write_gdt_entr
  		size = sizeof(struct desc_struct);
  		break;
  	}
@@ -7347,7 +7438,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  }
  
  static inline void pack_descriptor(struct desc_struct *desc, unsigned long base,
-@@ -211,7 +217,9 @@ static inline void native_set_ldt(const
+@@ -211,7 +222,9 @@ static inline void native_set_ldt(const
  
  static inline void native_load_tr_desc(void)
  {
@@ -7357,7 +7448,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  }
  
  static inline void native_load_gdt(const struct desc_ptr *dtr)
-@@ -246,8 +254,10 @@ static inline void native_load_tls(struc
+@@ -246,8 +259,10 @@ static inline void native_load_tls(struc
  	unsigned int i;
  	struct desc_struct *gdt = get_cpu_gdt_table(cpu);
  
@@ -7368,7 +7459,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  }
  
  #define _LDT_empty(info)				\
-@@ -309,7 +319,7 @@ static inline void set_desc_limit(struct
+@@ -309,7 +324,7 @@ static inline void set_desc_limit(struct
  	desc->limit = (limit >> 16) & 0xf;
  }
  
@@ -7377,7 +7468,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  			     unsigned dpl, unsigned ist, unsigned seg)
  {
  	gate_desc s;
-@@ -327,7 +337,7 @@ static inline void _set_gate(int gate, u
+@@ -327,7 +342,7 @@ static inline void _set_gate(int gate, u
   * Pentium F0 0F bugfix can have resulted in the mapped
   * IDT being write-protected.
   */
@@ -7386,7 +7477,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  {
  	BUG_ON((unsigned)n > 0xFF);
  	_set_gate(n, GATE_INTERRUPT, addr, 0, 0, __KERNEL_CS);
-@@ -356,19 +366,19 @@ static inline void alloc_intr_gate(unsig
+@@ -356,19 +371,19 @@ static inline void alloc_intr_gate(unsig
  /*
   * This routine sets up an interrupt gate at directory privilege level 3.
   */
@@ -7409,7 +7500,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
  {
  	BUG_ON((unsigned)n > 0xFF);
  	_set_gate(n, GATE_TRAP, addr, 0, 0, __KERNEL_CS);
-@@ -377,19 +387,31 @@ static inline void set_trap_gate(unsigne
+@@ -377,19 +392,31 @@ static inline void set_trap_gate(unsigne
  static inline void set_task_gate(unsigned int n, unsigned int gdt_entry)
  {
  	BUG_ON((unsigned)n > 0xFF);
@@ -7444,6 +7535,22 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/in
 +#endif
 +
  #endif /* _ASM_X86_DESC_H */
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/include/asm/desc_defs.h linux-2.6.36.3-pax/arch/x86/include/asm/desc_defs.h
+--- linux-2.6.36.3/arch/x86/include/asm/desc_defs.h	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/arch/x86/include/asm/desc_defs.h	2011-02-24 17:38:07.000000000 +0100
+@@ -31,6 +31,12 @@ struct desc_struct {
+ 			unsigned base1: 8, type: 4, s: 1, dpl: 2, p: 1;
+ 			unsigned limit: 4, avl: 1, l: 1, d: 1, g: 1, base2: 8;
+ 		};
++		struct {
++			u16 offset_low;
++			u16 seg;
++			unsigned reserved: 8, type: 4, s: 1, dpl: 2, p: 1;
++			unsigned offset_high: 16;
++		} gate;
+ 	};
+ } __attribute__((packed));
+ 
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/include/asm/device.h linux-2.6.36.3-pax/arch/x86/include/asm/device.h
 --- linux-2.6.36.3/arch/x86/include/asm/device.h	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/arch/x86/include/asm/device.h	2010-10-27 22:58:44.000000000 +0200
@@ -10402,6 +10509,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  obj-y			:= intel_cacheinfo.o scattered.o topology.o
  obj-y			+= proc.o capflags.o powerflags.o common.o
  obj-y			+= vmware.o hypervisor.o sched.o mshyperv.o
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/cpu/amd.c linux-2.6.36.3-pax/arch/x86/kernel/cpu/amd.c
+--- linux-2.6.36.3/arch/x86/kernel/cpu/amd.c	2011-01-12 15:14:10.000000000 +0100
++++ linux-2.6.36.3-pax/arch/x86/kernel/cpu/amd.c	2011-02-24 15:21:16.000000000 +0100
+@@ -571,7 +571,7 @@ static unsigned int __cpuinit amd_size_c
+ 							unsigned int size)
+ {
+ 	/* AMD errata T13 (order #21922) */
+-	if ((c->x86 == 6)) {
++	if (c->x86 == 6) {
+ 		/* Duron Rev A0 */
+ 		if (c->x86_model == 3 && c->x86_mask == 0)
+ 			size = 64;
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/cpu/common.c linux-2.6.36.3-pax/arch/x86/kernel/cpu/common.c
 --- linux-2.6.36.3/arch/x86/kernel/cpu/common.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/arch/x86/kernel/cpu/common.c	2010-12-15 11:05:24.000000000 +0100
@@ -11422,7 +11541,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  	CFI_ADJUST_CFA_OFFSET -24
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/entry_64.S linux-2.6.36.3-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.36.3/arch/x86/kernel/entry_64.S	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/kernel/entry_64.S	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.3-pax/arch/x86/kernel/entry_64.S	2011-02-24 15:43:20.000000000 +0100
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -11431,7 +11550,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -174,6 +175,189 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +175,201 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -11449,9 +11568,20 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#endif
 +	.endm
 +
-+ENTRY(pax_enter_kernel)
++	.macro pax_enter_kernel
++#ifdef CONFIG_PAX_KERNEXEC
++	call pax_enter_kernel
++#endif
++	.endm
++
++	.macro pax_exit_kernel
++#ifdef CONFIG_PAX_KERNEXEC
++	call pax_exit_kernel
++#endif
++	.endm
 +
 +#ifdef CONFIG_PAX_KERNEXEC
++ENTRY(pax_enter_kernel)
 +	push %rdi
 +
 +#ifdef CONFIG_PARAVIRT
@@ -11474,14 +11604,10 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#endif
 +
 +	pop %rdi
-+#endif
-+
 +	retq
 +ENDPROC(pax_enter_kernel)
 +
 +ENTRY(pax_exit_kernel)
-+
-+#ifdef CONFIG_PAX_KERNEXEC
 +	push %rdi
 +
 +#ifdef CONFIG_PARAVIRT
@@ -11502,14 +11628,24 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#endif
 +
 +	pop %rdi
-+#endif
-+
 +	retq
 +ENDPROC(pax_exit_kernel)
++#endif
 +
-+ENTRY(pax_enter_kernel_user)
++	.macro pax_enter_kernel_user
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_enter_kernel_user
++#endif
++	.endm
++
++	.macro pax_exit_kernel_user
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	call pax_exit_kernel_user
++#endif
++	.endm
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
++ENTRY(pax_enter_kernel_user)
 +	push %rdi
 +	push %rbx
 +
@@ -11561,14 +11697,10 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +
 +	pop %rbx
 +	pop %rdi
-+#endif
-+
 +	retq
 +ENDPROC(pax_enter_kernel_user)
 +
 +ENTRY(pax_exit_kernel_user)
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	push %rdi
 +
 +#ifdef CONFIG_PARAVIRT
@@ -11614,14 +11746,13 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#endif
 +
 +	pop %rdi
-+#endif
-+
 +	retq
 +ENDPROC(pax_exit_kernel_user)
++#endif
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -317,7 +501,7 @@ ENTRY(save_args)
+@@ -317,7 +513,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -11630,7 +11761,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  	je 1f
  	SWAPGS
  	/*
-@@ -409,7 +593,7 @@ ENTRY(ret_from_fork)
+@@ -409,7 +605,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -11639,31 +11770,23 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -468,6 +652,11 @@ ENTRY(system_call_after_swapgs)
+@@ -468,6 +664,7 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_enter_kernel_user
-+#endif
-+
++	pax_enter_kernel_user
  	/*
  	 * No need to follow this irqs off/on section - it's straight
  	 * and short:
-@@ -502,6 +691,11 @@ sysret_check:
+@@ -502,6 +699,7 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_exit_kernel_user
-+#endif
-+
++	pax_exit_kernel_user
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -613,7 +807,7 @@ tracesys:
+@@ -613,7 +811,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -11672,24 +11795,24 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -800,6 +994,16 @@ END(interrupt)
+@@ -800,6 +998,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	testb $3, CS(%rdi)
 +	jnz 1f
-+	call pax_enter_kernel
++	pax_enter_kernel
 +	jmp 2f
-+1:	call pax_enter_kernel_user
++1:	pax_enter_kernel_user
 +2:
 +#else
-+	call pax_enter_kernel
++	pax_enter_kernel
 +#endif
  	call \func
  	.endm
  
-@@ -826,7 +1030,7 @@ ret_from_intr:
+@@ -826,7 +1034,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -11698,22 +11821,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -848,12 +1052,18 @@ retint_swapgs:		/* return to user-space
+@@ -848,12 +1056,14 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_exit_kernel_user
-+#endif
-+
++	pax_exit_kernel_user
  	TRACE_IRQS_IRETQ
  	SWAPGS
  	jmp restore_args
  
  retint_restore_args:	/* return to kernel space */
  	DISABLE_INTERRUPTS(CLBR_ANY)
-+	call pax_exit_kernel
++	pax_exit_kernel
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
@@ -11724,12 +11843,12 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	testb $3, CS(%rsp)
 +	jnz 1f
-+	call pax_enter_kernel
++	pax_enter_kernel
 +	jmp 2f
-+1:	call pax_enter_kernel_user
++1:	pax_enter_kernel_user
 +2:
 +#else
-+	call pax_enter_kernel
++	pax_enter_kernel
 +#endif
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
@@ -11741,12 +11860,12 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	testb $3, CS(%rsp)
 +	jnz 1f
-+	call pax_enter_kernel
++	pax_enter_kernel
 +	jmp 2f
-+1:	call pax_enter_kernel_user
++1:	pax_enter_kernel_user
 +2:
 +#else
-+	call pax_enter_kernel
++	pax_enter_kernel
 +#endif
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
@@ -11767,12 +11886,12 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	testb $3, CS(%rsp)
 +	jnz 1f
-+	call pax_enter_kernel
++	pax_enter_kernel
 +	jmp 2f
-+1:	call pax_enter_kernel_user
++1:	pax_enter_kernel_user
 +2:
 +#else
-+	call pax_enter_kernel
++	pax_enter_kernel
 +#endif
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
@@ -11792,12 +11911,12 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	testb $3, CS(%rsp)
 +	jnz 1f
-+	call pax_enter_kernel
++	pax_enter_kernel
 +	jmp 2f
-+1:	call pax_enter_kernel_user
++1:	pax_enter_kernel_user
 +2:
 +#else
-+	call pax_enter_kernel
++	pax_enter_kernel
 +#endif
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
@@ -11809,12 +11928,12 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	testb $3, CS(%rsp)
 +	jnz 1f
-+	call pax_enter_kernel
++	pax_enter_kernel
 +	jmp 2f
-+1:	call pax_enter_kernel_user
++1:	pax_enter_kernel_user
 +2:
 +#else
-+	call pax_enter_kernel
++	pax_enter_kernel
 +#endif
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
@@ -11827,7 +11946,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +	testb $3,CS(%rsp)
  	jnz   paranoid_userspace
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_exit_kernel
++	pax_exit_kernel
 +	TRACE_IRQS_IRETQ 0
 +	SWAPGS_UNSAFE_STACK
 +	RESTORE_ALL 8
@@ -11835,16 +11954,16 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#endif
  paranoid_swapgs:
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	call pax_exit_kernel_user
++	pax_exit_kernel_user
 +#else
-+	call pax_exit_kernel
++	pax_exit_kernel
 +#endif
  	TRACE_IRQS_IRETQ 0
  	SWAPGS_UNSAFE_STACK
  	RESTORE_ALL 8
  	jmp irq_return
  paranoid_restore:
-+	call pax_exit_kernel
++	pax_exit_kernel
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
@@ -11864,27 +11983,40 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	testb $3, CS(%rsp)
 +	jnz 1f
-+	call pax_enter_kernel
++	pax_enter_kernel
 +	jmp 2f
-+1:	call pax_enter_kernel_user
++1:	pax_enter_kernel_user
 +2:
 +#else
-+	call pax_enter_kernel
++	pax_enter_kernel
 +#endif
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1512,11 +1801,12 @@ ENTRY(nmi)
+@@ -1512,11 +1801,25 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
 -	testl $3,CS(%rsp)
 +	testb $3,CS(%rsp)
  	jnz nmi_userspace
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	pax_exit_kernel
++	SWAPGS_UNSAFE_STACK
++	RESTORE_ALL 8
++	jmp irq_return
++#endif
  nmi_swapgs:
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	pax_exit_kernel_user
++#else
++	pax_exit_kernel
++#endif
  	SWAPGS_UNSAFE_STACK
++	RESTORE_ALL 8
++	jmp irq_return
  nmi_restore:
-+	call pax_exit_kernel
++	pax_exit_kernel
  	RESTORE_ALL 8
  	jmp irq_return
  nmi_userspace:
@@ -12972,7 +13104,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  	jmp_code[0] = RELATIVEJUMP_OPCODE;
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/ldt.c linux-2.6.36.3-pax/arch/x86/kernel/ldt.c
 --- linux-2.6.36.3/arch/x86/kernel/ldt.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/kernel/ldt.c	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.3-pax/arch/x86/kernel/ldt.c	2011-02-24 17:37:51.000000000 +0100
 @@ -67,13 +67,13 @@ static int alloc_ldt(mm_context_t *pc, i
  	if (reload) {
  #ifdef CONFIG_SMP
@@ -13654,7 +13786,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  		if (!in_sched_functions(ip))
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/ptrace.c linux-2.6.36.3-pax/arch/x86/kernel/ptrace.c
 --- linux-2.6.36.3/arch/x86/kernel/ptrace.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/kernel/ptrace.c	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.3-pax/arch/x86/kernel/ptrace.c	2011-02-24 15:19:39.000000000 +0100
 @@ -804,7 +804,7 @@ static const struct user_regset_view use
  long arch_ptrace(struct task_struct *child, long request, long addr, long data)
  {
@@ -13690,6 +13822,24 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  }
  
  void user_single_step_siginfo(struct task_struct *tsk,
+@@ -1348,7 +1348,7 @@ void send_sigtrap(struct task_struct *ts
+  * We must return the syscall number to actually look up in the table.
+  * This can be -1L to skip running any syscall at all.
+  */
+-asmregparm long syscall_trace_enter(struct pt_regs *regs)
++long syscall_trace_enter(struct pt_regs *regs)
+ {
+ 	long ret = 0;
+ 
+@@ -1393,7 +1393,7 @@ asmregparm long syscall_trace_enter(stru
+ 	return ret ?: regs->orig_ax;
+ }
+ 
+-asmregparm void syscall_trace_leave(struct pt_regs *regs)
++void syscall_trace_leave(struct pt_regs *regs)
+ {
+ 	bool step;
+ 
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/reboot.c linux-2.6.36.3-pax/arch/x86/kernel/reboot.c
 --- linux-2.6.36.3/arch/x86/kernel/reboot.c	2010-12-14 21:09:00.000000000 +0100
 +++ linux-2.6.36.3-pax/arch/x86/kernel/reboot.c	2010-12-14 21:09:08.000000000 +0100
@@ -13974,7 +14124,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  	if (err) {
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/step.c linux-2.6.36.3-pax/arch/x86/kernel/step.c
 --- linux-2.6.36.3/arch/x86/kernel/step.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/kernel/step.c	2010-12-25 22:14:17.000000000 +0100
++++ linux-2.6.36.3-pax/arch/x86/kernel/step.c	2011-02-24 17:37:51.000000000 +0100
 @@ -27,10 +27,10 @@ unsigned long convert_ip_to_linear(struc
  		struct desc_struct *desc;
  		unsigned long base;
@@ -14432,7 +14582,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/ke
  }
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kernel/tls.c linux-2.6.36.3-pax/arch/x86/kernel/tls.c
 --- linux-2.6.36.3/arch/x86/kernel/tls.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/arch/x86/kernel/tls.c	2010-10-27 22:58:07.000000000 +0200
++++ linux-2.6.36.3-pax/arch/x86/kernel/tls.c	2011-02-24 17:37:51.000000000 +0100
 @@ -85,6 +85,11 @@ int do_set_thread_area(struct task_struc
  	if (idx < GDT_ENTRY_TLS_MIN || idx > GDT_ENTRY_TLS_MAX)
  		return -EINVAL;
@@ -15261,7 +15411,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kv
  /* 14 is the version for Xeon and Pentium 8.4.8*/
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kvm/svm.c linux-2.6.36.3-pax/arch/x86/kvm/svm.c
 --- linux-2.6.36.3/arch/x86/kvm/svm.c	2011-01-12 15:14:09.000000000 +0100
-+++ linux-2.6.36.3-pax/arch/x86/kvm/svm.c	2011-01-12 15:14:27.000000000 +0100
++++ linux-2.6.36.3-pax/arch/x86/kvm/svm.c	2011-02-24 17:37:51.000000000 +0100
 @@ -2921,7 +2921,11 @@ static void reload_tss(struct kvm_vcpu *
  	int cpu = raw_smp_processor_id();
  
@@ -15285,7 +15435,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kv
  	.hardware_setup = svm_hardware_setup,
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/arch/x86/kvm/vmx.c linux-2.6.36.3-pax/arch/x86/kvm/vmx.c
 --- linux-2.6.36.3/arch/x86/kvm/vmx.c	2011-01-12 15:14:09.000000000 +0100
-+++ linux-2.6.36.3-pax/arch/x86/kvm/vmx.c	2011-01-12 15:14:27.000000000 +0100
++++ linux-2.6.36.3-pax/arch/x86/kvm/vmx.c	2011-02-24 17:37:51.000000000 +0100
 @@ -711,7 +711,11 @@ static void reload_tss(void)
  
  	native_store_gdt(&gdt);
@@ -23792,6 +23942,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/cha
  	mutex_unlock(&sonypi_device.lock);
  
  	return 0;
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/char/tpm/tpm.c linux-2.6.36.3-pax/drivers/char/tpm/tpm.c
+--- linux-2.6.36.3/drivers/char/tpm/tpm.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/drivers/char/tpm/tpm.c	2011-02-24 15:21:58.000000000 +0100
+@@ -401,7 +401,7 @@ static ssize_t tpm_transmit(struct tpm_c
+ 		    chip->vendor.req_complete_val)
+ 			goto out_recv;
+ 
+-		if ((status == chip->vendor.req_canceled)) {
++		if (status == chip->vendor.req_canceled) {
+ 			dev_err(chip->dev, "Operation Canceled\n");
+ 			rc = -ECANCELED;
+ 			goto out;
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/char/tpm/tpm_bios.c linux-2.6.36.3-pax/drivers/char/tpm/tpm_bios.c
 --- linux-2.6.36.3/drivers/char/tpm/tpm_bios.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/drivers/char/tpm/tpm_bios.c	2010-10-27 22:58:07.000000000 +0200
@@ -24016,6 +24178,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/cha
  	module_put(ldops->owner);
  	spin_unlock_irqrestore(&tty_ldisc_lock, flags);
  }
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/char/vt.c linux-2.6.36.3-pax/drivers/char/vt.c
+--- linux-2.6.36.3/drivers/char/vt.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/drivers/char/vt.c	2011-02-24 15:22:22.000000000 +0100
+@@ -254,7 +254,7 @@ EXPORT_SYMBOL_GPL(unregister_vt_notifier
+ 
+ static void notify_write(struct vc_data *vc, unsigned int unicode)
+ {
+-	struct vt_notifier_param param = { .vc = vc, unicode = unicode };
++	struct vt_notifier_param param = { .vc = vc, .c = unicode };
+ 	atomic_notifier_call_chain(&vt_notifier_list, VT_WRITE, &param);
+ }
+ 
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/cpuidle/sysfs.c linux-2.6.36.3-pax/drivers/cpuidle/sysfs.c
 --- linux-2.6.36.3/drivers/cpuidle/sysfs.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/drivers/cpuidle/sysfs.c	2010-10-27 22:58:07.000000000 +0200
@@ -24980,6 +25154,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/iee
  	.transmit_packet = dummy_transmit_packet,
  	.devctl =	   dummy_devctl,
  	.isoctl =	   dummy_isoctl
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/ieee1394/init_ohci1394_dma.c linux-2.6.36.3-pax/drivers/ieee1394/init_ohci1394_dma.c
+--- linux-2.6.36.3/drivers/ieee1394/init_ohci1394_dma.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/drivers/ieee1394/init_ohci1394_dma.c	2011-02-24 15:22:39.000000000 +0100
+@@ -257,7 +257,7 @@ void __init init_ohci1394_dma_on_all_con
+ 			for (func = 0; func < 8; func++) {
+ 				u32 class = read_pci_config(num,slot,func,
+ 							PCI_CLASS_REVISION);
+-				if ((class == 0xffffffff))
++				if (class == 0xffffffff)
+ 					continue; /* No device at this func */
+ 
+ 				if (class>>8 != PCI_CLASS_SERIAL_FIREWIRE_OHCI)
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/ieee1394/ohci1394.c linux-2.6.36.3-pax/drivers/ieee1394/ohci1394.c
 --- linux-2.6.36.3/drivers/ieee1394/ohci1394.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/drivers/ieee1394/ohci1394.c	2010-10-27 22:58:08.000000000 +0200
@@ -25694,6 +25880,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/md/
  #  endif
  #endif
  
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/md/dm-ioctl.c linux-2.6.36.3-pax/drivers/md/dm-ioctl.c
+--- linux-2.6.36.3/drivers/md/dm-ioctl.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/drivers/md/dm-ioctl.c	2011-02-24 15:22:59.000000000 +0100
+@@ -1488,7 +1488,7 @@ static int validate_params(uint cmd, str
+ 	    cmd == DM_LIST_VERSIONS_CMD)
+ 		return 0;
+ 
+-	if ((cmd == DM_DEV_CREATE_CMD)) {
++	if (cmd == DM_DEV_CREATE_CMD) {
+ 		if (!*param->name) {
+ 			DMWARN("name not supplied when creating device");
+ 			return -EINVAL;
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/md/dm-table.c linux-2.6.36.3-pax/drivers/md/dm-table.c
 --- linux-2.6.36.3/drivers/md/dm-table.c	2011-01-12 15:14:10.000000000 +0100
 +++ linux-2.6.36.3-pax/drivers/md/dm-table.c	2011-01-12 15:14:28.000000000 +0100
@@ -27004,6 +27202,22 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/pci
  	.alloc_coherent = intel_alloc_coherent,
  	.free_coherent = intel_free_coherent,
  	.map_sg = intel_map_sg,
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/pci/pcie/aspm.c linux-2.6.36.3-pax/drivers/pci/pcie/aspm.c
+--- linux-2.6.36.3/drivers/pci/pcie/aspm.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/drivers/pci/pcie/aspm.c	2011-02-24 15:23:22.000000000 +0100
+@@ -27,9 +27,9 @@
+ #define MODULE_PARAM_PREFIX "pcie_aspm."
+ 
+ /* Note: those are not register definitions */
+-#define ASPM_STATE_L0S_UP	(1)	/* Upstream direction L0s state */
+-#define ASPM_STATE_L0S_DW	(2)	/* Downstream direction L0s state */
+-#define ASPM_STATE_L1		(4)	/* L1 state */
++#define ASPM_STATE_L0S_UP	(1U)	/* Upstream direction L0s state */
++#define ASPM_STATE_L0S_DW	(2U)	/* Downstream direction L0s state */
++#define ASPM_STATE_L1		(4U)	/* L1 state */
+ #define ASPM_STATE_L0S		(ASPM_STATE_L0S_UP | ASPM_STATE_L0S_DW)
+ #define ASPM_STATE_ALL		(ASPM_STATE_L0S | ASPM_STATE_L1)
+ 
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/pci/pcie/portdrv_pci.c linux-2.6.36.3-pax/drivers/pci/pcie/portdrv_pci.c
 --- linux-2.6.36.3/drivers/pci/pcie/portdrv_pci.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/drivers/pci/pcie/portdrv_pci.c	2010-10-27 22:58:08.000000000 +0200
@@ -27765,6 +27979,26 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/sta
  	unsigned long		mcache_timeout;
  
  	unsigned int		idx;
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/staging/quickstart/quickstart.c linux-2.6.36.3-pax/drivers/staging/quickstart/quickstart.c
+--- linux-2.6.36.3/drivers/staging/quickstart/quickstart.c	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/drivers/staging/quickstart/quickstart.c	2011-02-24 15:24:02.000000000 +0100
+@@ -398,15 +398,13 @@ static int __init quickstart_init_input(
+ static int __init quickstart_init(void)
+ {
+ 	int ret;
+-	acpi_status status = 0;
+ 
+ 	/* ACPI Check */
+ 	if (acpi_disabled)
+ 		return -ENODEV;
+ 
+ 	/* ACPI driver register */
+-	status = acpi_bus_register_driver(&quickstart_acpi_driver);
+-	if (status < 0)
++	if (acpi_bus_register_driver(&quickstart_acpi_driver) < 0)
+ 		return -ENODEV;
+ 
+ 	/* If existing bus with no devices */
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/drivers/staging/rtl8192u/ieee80211/proc.c linux-2.6.36.3-pax/drivers/staging/rtl8192u/ieee80211/proc.c
 --- linux-2.6.36.3/drivers/staging/rtl8192u/ieee80211/proc.c	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/drivers/staging/rtl8192u/ieee80211/proc.c	2010-10-27 22:58:44.000000000 +0200
@@ -33965,6 +34199,18 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/include/lin
  
  extern int kgdb_hex2long(char **ptr, unsigned long *long_val);
  extern char *kgdb_mem2hex(char *mem, char *buf, int count);
+diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/include/linux/klist.h linux-2.6.36.3-pax/include/linux/klist.h
+--- linux-2.6.36.3/include/linux/klist.h	2010-10-20 22:30:22.000000000 +0200
++++ linux-2.6.36.3-pax/include/linux/klist.h	2011-02-24 15:43:21.000000000 +0100
+@@ -22,7 +22,7 @@ struct klist {
+ 	struct list_head	k_list;
+ 	void			(*get)(struct klist_node *);
+ 	void			(*put)(struct klist_node *);
+-} __attribute__ ((aligned (4)));
++} __attribute__ ((aligned (sizeof(void *))));
+ 
+ #define KLIST_INIT(_name, _get, _put)					\
+ 	{ .k_lock	= __SPIN_LOCK_UNLOCKED(_name.k_lock),		\
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/include/linux/kvm_host.h linux-2.6.36.3-pax/include/linux/kvm_host.h
 --- linux-2.6.36.3/include/linux/kvm_host.h	2010-10-20 22:30:22.000000000 +0200
 +++ linux-2.6.36.3-pax/include/linux/kvm_host.h	2010-10-27 22:58:08.000000000 +0200
@@ -35910,7 +36156,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/init/initra
  	return 0;
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/init/main.c linux-2.6.36.3-pax/init/main.c
 --- linux-2.6.36.3/init/main.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/init/main.c	2011-01-15 03:09:43.000000000 +0100
++++ linux-2.6.36.3-pax/init/main.c	2011-02-24 17:37:51.000000000 +0100
 @@ -197,6 +197,47 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -38165,7 +38411,7 @@ diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/mm/memory-f
  	return ret;
 diff -NurpX linux-2.6.36.3-pax/Documentation/dontdiff linux-2.6.36.3/mm/memory.c linux-2.6.36.3-pax/mm/memory.c
 --- linux-2.6.36.3/mm/memory.c	2010-10-20 22:30:22.000000000 +0200
-+++ linux-2.6.36.3-pax/mm/memory.c	2010-10-27 22:58:08.000000000 +0200
++++ linux-2.6.36.3-pax/mm/memory.c	2011-02-24 18:34:35.000000000 +0100
 @@ -259,8 +259,12 @@ static inline void free_pmd_range(struct
  		return;
  
