@@ -2582,6 +2582,17 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/powerpc/in
  #else	/* CONFIG_PCI */
  #define set_pci_dma_ops(d)
  #define get_pci_dma_ops()	NULL
+diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/powerpc/include/asm/pgtable.h linux-2.6.37-pax/arch/powerpc/include/asm/pgtable.h
+--- linux-2.6.37/arch/powerpc/include/asm/pgtable.h	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.37-pax/arch/powerpc/include/asm/pgtable.h	2011-02-24 18:35:42.000000000 +0100
+@@ -2,6 +2,7 @@
+ #define _ASM_POWERPC_PGTABLE_H
+ #ifdef __KERNEL__
+ 
++#include <linux/const.h>
+ #ifndef __ASSEMBLY__
+ #include <asm/processor.h>		/* For TASK_SIZE */
+ #include <asm/mmu.h>
 diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/powerpc/include/asm/pte-hash32.h linux-2.6.37-pax/arch/powerpc/include/asm/pte-hash32.h
 --- linux-2.6.37/arch/powerpc/include/asm/pte-hash32.h	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37-pax/arch/powerpc/include/asm/pte-hash32.h	2011-01-07 02:12:38.000000000 +0100
@@ -6652,7 +6663,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/includ
  		"popl %%edi\n\t"
 diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/include/asm/atomic.h linux-2.6.37-pax/arch/x86/include/asm/atomic.h
 --- linux-2.6.37/arch/x86/include/asm/atomic.h	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.37-pax/arch/x86/include/asm/atomic.h	2011-01-07 02:12:38.000000000 +0100
++++ linux-2.6.37-pax/arch/x86/include/asm/atomic.h	2011-02-15 13:16:05.000000000 +0100
 @@ -22,7 +22,18 @@
   */
  static inline int atomic_read(const atomic_t *v)
@@ -6942,7 +6953,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/includ
  #define atomic_dec_return(v)  (atomic_sub_return(1, v))
  
  static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
-@@ -231,17 +418,30 @@ static inline int atomic_xchg(atomic_t *
+@@ -231,21 +418,77 @@ static inline int atomic_xchg(atomic_t *
   */
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
@@ -6977,6 +6988,53 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/includ
  }
  
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
+ 
++/**
++ * atomic_inc_not_zero_hint - increment if not null
++ * @v: pointer of type atomic_t
++ * @hint: probable value of the atomic before the increment
++ *
++ * This version of atomic_inc_not_zero() gives a hint of probable
++ * value of the atomic. This helps processor to not read the memory
++ * before doing the atomic read/modify/write cycle, lowering
++ * number of bus transactions on some arches.
++ *
++ * Returns: 0 if increment was not done, 1 otherwise.
++ */
++#define atomic_inc_not_zero_hint atomic_inc_not_zero_hint
++static inline int atomic_inc_not_zero_hint(atomic_t *v, int hint)
++{
++	int val, c = hint, new;
++
++	/* sanity test, should be removed by compiler if hint is a constant */
++	if (!hint)
++		return atomic_inc_not_zero(v);
++
++	do {
++		asm volatile("incl %0\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++			     "jno 0f\n"
++			     "decl %0\n"
++			     "int $4\n0:\n"
++			     _ASM_EXTABLE(0b, 0b)
++#endif
++
++			     : "=r" (new)
++			     : "0" (c));
++
++		val = atomic_cmpxchg(v, c, new);
++		if (val == c)
++			return 1;
++		c = val;
++	} while (c);
++
++	return 0;
++}
++
+ /*
+  * atomic_dec_if_positive - decrement by 1 if old value positive
+  * @v: pointer of type atomic_t
 diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/include/asm/atomic64_32.h linux-2.6.37-pax/arch/x86/include/asm/atomic64_32.h
 --- linux-2.6.37/arch/x86/include/asm/atomic64_32.h	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37-pax/arch/x86/include/asm/atomic64_32.h	2011-01-07 02:12:38.000000000 +0100
@@ -17089,7 +17147,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/ext
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/fault.c linux-2.6.37-pax/arch/x86/mm/fault.c
 --- linux-2.6.37/arch/x86/mm/fault.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.37-pax/arch/x86/mm/fault.c	2011-02-13 02:08:30.000000000 +0100
++++ linux-2.6.37-pax/arch/x86/mm/fault.c	2011-02-16 21:46:12.000000000 +0100
 @@ -12,10 +12,18 @@
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
  #include <linux/perf_event.h>		/* perf_sw_event		*/
@@ -17458,7 +17516,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/fau
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -954,19 +1185,47 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -954,19 +1185,33 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -17473,20 +17531,6 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/fau
 +	unsigned long address = read_cr2();
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if (address < PAX_USER_SHADOW_BASE && error_code == (PF_INSTR | PF_USER)) {
-+		pmd_t *pmd = pax_get_pmd(current->mm, address + PAX_USER_SHADOW_BASE);
-+		if (pmd) {
-+			spinlock_t *ptl;
-+			pte_t *pte = pte_offset_map_lock(current->mm, pmd, address + PAX_USER_SHADOW_BASE, &ptl);
-+			if (pte_present(*pte)) {
-+				printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
-+				printk(KERN_ERR "PAX: bad exit occured\n");
-+				printk(KERN_ERR "PAX: faulting IP: %pS\n", (void *)regs->ip);
-+				show_trace_log_lvl(NULL, NULL, (void *)regs->sp, regs->bp, KERN_ERR);
-+			}
-+			pte_unmap_unlock(pte, ptl);
-+		}
-+	}
 +	if (!user_mode(regs) && address < 2 * PAX_USER_SHADOW_BASE) {
 +		if (!search_exception_tables(regs->ip)) {
 +			bad_area_nosemaphore(regs, error_code, address);
@@ -17510,7 +17554,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/fau
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1026,7 +1285,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1026,7 +1271,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -17519,7 +17563,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/fau
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1081,6 +1340,11 @@ retry:
+@@ -1081,6 +1326,11 @@ retry:
  		might_sleep();
  	}
  
@@ -17531,7 +17575,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/fau
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1092,18 +1356,24 @@ retry:
+@@ -1092,18 +1342,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -17567,7 +17611,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/arch/x86/mm/fau
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1158,3 +1428,199 @@ good_area:
+@@ -1158,3 +1414,199 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -33732,6 +33776,18 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/include/linux/k
  
  extern int kgdb_hex2long(char **ptr, unsigned long *long_val);
  extern char *kgdb_mem2hex(char *mem, char *buf, int count);
+diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/include/linux/klist.h linux-2.6.37-pax/include/linux/klist.h
+--- linux-2.6.37/include/linux/klist.h	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.37-pax/include/linux/klist.h	2011-02-15 19:17:27.000000000 +0100
+@@ -22,7 +22,7 @@ struct klist {
+ 	struct list_head	k_list;
+ 	void			(*get)(struct klist_node *);
+ 	void			(*put)(struct klist_node *);
+-} __attribute__ ((aligned (4)));
++} __attribute__ ((aligned (sizeof(void *))));
+ 
+ #define KLIST_INIT(_name, _get, _put)					\
+ 	{ .k_lock	= __SPIN_LOCK_UNLOCKED(_name.k_lock),		\
 diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/include/linux/kvm_host.h linux-2.6.37-pax/include/linux/kvm_host.h
 --- linux-2.6.37/include/linux/kvm_host.h	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37-pax/include/linux/kvm_host.h	2011-01-07 02:12:41.000000000 +0100
@@ -37908,7 +37964,7 @@ diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/mm/memory-failu
  	return ret;
 diff -NurpX linux-2.6.37-pax/Documentation/dontdiff linux-2.6.37/mm/memory.c linux-2.6.37-pax/mm/memory.c
 --- linux-2.6.37/mm/memory.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.37-pax/mm/memory.c	2011-01-07 02:12:41.000000000 +0100
++++ linux-2.6.37-pax/mm/memory.c	2011-02-24 18:35:43.000000000 +0100
 @@ -259,8 +259,12 @@ static inline void free_pmd_range(struct
  		return;
  
