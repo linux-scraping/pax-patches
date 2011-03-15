@@ -7470,7 +7470,7 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/in
  			     ".previous\n"
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/include/asm/desc.h linux-2.6.37.4-pax/arch/x86/include/asm/desc.h
 --- linux-2.6.37.4/arch/x86/include/asm/desc.h	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.37.4-pax/arch/x86/include/asm/desc.h	2011-02-08 21:48:30.000000000 +0100
++++ linux-2.6.37.4-pax/arch/x86/include/asm/desc.h	2011-03-15 21:43:05.000000000 +0100
 @@ -4,6 +4,7 @@
  #include <asm/desc_defs.h>
  #include <asm/ldt.h>
@@ -7514,14 +7514,14 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/in
 -	gate->a = (seg << 16) | (base & 0xffff);
 -	gate->b = (base & 0xffff0000) |
 -		  (((0x80 | type | (dpl << 5)) & 0xff) << 8);
-+	gate->offset_low = base;
-+	gate->seg = seg;
-+	gate->reserved = 0;
-+	gate->type = type;
-+	gate->s = 0;
-+	gate->dpl = dpl;
-+	gate->p = 1;
-+	gate->offset_high = base >> 16;
++	gate->gate.offset_low = base;
++	gate->gate.seg = seg;
++	gate->gate.reserved = 0;
++	gate->gate.type = type;
++	gate->gate.s = 0;
++	gate->gate.dpl = dpl;
++	gate->gate.p = 1;
++	gate->gate.offset_high = base >> 16;
  }
  
  #endif
@@ -7660,7 +7660,7 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/in
  #endif /* _ASM_X86_DESC_H */
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/include/asm/desc_defs.h linux-2.6.37.4-pax/arch/x86/include/asm/desc_defs.h
 --- linux-2.6.37.4/arch/x86/include/asm/desc_defs.h	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.37.4-pax/arch/x86/include/asm/desc_defs.h	2011-02-08 21:44:57.000000000 +0100
++++ linux-2.6.37.4-pax/arch/x86/include/asm/desc_defs.h	2011-03-15 21:45:14.000000000 +0100
 @@ -31,6 +31,12 @@ struct desc_struct {
  			unsigned base1: 8, type: 4, s: 1, dpl: 2, p: 1;
  			unsigned limit: 4, avl: 1, l: 1, d: 1, g: 1, base2: 8;
@@ -7670,7 +7670,7 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/in
 +			u16 seg;
 +			unsigned reserved: 8, type: 4, s: 1, dpl: 2, p: 1;
 +			unsigned offset_high: 16;
-+		};
++		} gate;
  	};
  } __attribute__((packed));
  
@@ -13673,7 +13673,7 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/ke
  		if (!in_sched_functions(ip))
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/kernel/ptrace.c linux-2.6.37.4-pax/arch/x86/kernel/ptrace.c
 --- linux-2.6.37.4/arch/x86/kernel/ptrace.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.37.4-pax/arch/x86/kernel/ptrace.c	2011-01-07 02:12:39.000000000 +0100
++++ linux-2.6.37.4-pax/arch/x86/kernel/ptrace.c	2011-03-15 21:44:05.000000000 +0100
 @@ -805,7 +805,7 @@ long arch_ptrace(struct task_struct *chi
  		 unsigned long addr, unsigned long data)
  {
@@ -13709,6 +13709,24 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/ke
  }
  
  void user_single_step_siginfo(struct task_struct *tsk,
+@@ -1347,7 +1347,7 @@ void send_sigtrap(struct task_struct *ts
+  * We must return the syscall number to actually look up in the table.
+  * This can be -1L to skip running any syscall at all.
+  */
+-asmregparm long syscall_trace_enter(struct pt_regs *regs)
++long syscall_trace_enter(struct pt_regs *regs)
+ {
+ 	long ret = 0;
+ 
+@@ -1392,7 +1392,7 @@ asmregparm long syscall_trace_enter(stru
+ 	return ret ?: regs->orig_ax;
+ }
+ 
+-asmregparm void syscall_trace_leave(struct pt_regs *regs)
++void syscall_trace_leave(struct pt_regs *regs)
+ {
+ 	bool step;
+ 
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/arch/x86/kernel/reboot.c linux-2.6.37.4-pax/arch/x86/kernel/reboot.c
 --- linux-2.6.37.4/arch/x86/kernel/reboot.c	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37.4-pax/arch/x86/kernel/reboot.c	2011-01-07 02:12:39.000000000 +0100
@@ -23766,6 +23784,18 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/cha
  	mutex_unlock(&sonypi_device.lock);
  
  	return 0;
+diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/char/tpm/tpm.c linux-2.6.37.4-pax/drivers/char/tpm/tpm.c
+--- linux-2.6.37.4/drivers/char/tpm/tpm.c	2011-02-25 09:32:52.000000000 +0100
++++ linux-2.6.37.4-pax/drivers/char/tpm/tpm.c	2011-03-15 21:46:07.000000000 +0100
+@@ -413,7 +413,7 @@ static ssize_t tpm_transmit(struct tpm_c
+ 		    chip->vendor.req_complete_val)
+ 			goto out_recv;
+ 
+-		if ((status == chip->vendor.req_canceled)) {
++		if (status == chip->vendor.req_canceled) {
+ 			dev_err(chip->dev, "Operation Canceled\n");
+ 			rc = -ECANCELED;
+ 			goto out;
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/char/tpm/tpm_bios.c linux-2.6.37.4-pax/drivers/char/tpm/tpm_bios.c
 --- linux-2.6.37.4/drivers/char/tpm/tpm_bios.c	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37.4-pax/drivers/char/tpm/tpm_bios.c	2011-01-07 02:12:39.000000000 +0100
@@ -25241,6 +25271,18 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/md/
  #  endif
  #endif
  
+diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/md/dm-ioctl.c linux-2.6.37.4-pax/drivers/md/dm-ioctl.c
+--- linux-2.6.37.4/drivers/md/dm-ioctl.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.37.4-pax/drivers/md/dm-ioctl.c	2011-03-15 21:48:12.000000000 +0100
+@@ -1488,7 +1488,7 @@ static int validate_params(uint cmd, str
+ 	    cmd == DM_LIST_VERSIONS_CMD)
+ 		return 0;
+ 
+-	if ((cmd == DM_DEV_CREATE_CMD)) {
++	if (cmd == DM_DEV_CREATE_CMD) {
+ 		if (!*param->name) {
+ 			DMWARN("name not supplied when creating device");
+ 			return -EINVAL;
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/md/dm-table.c linux-2.6.37.4-pax/drivers/md/dm-table.c
 --- linux-2.6.37.4/drivers/md/dm-table.c	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37.4-pax/drivers/md/dm-table.c	2011-01-07 02:12:40.000000000 +0100
@@ -26600,6 +26642,22 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/pci
  	.alloc_coherent = intel_alloc_coherent,
  	.free_coherent = intel_free_coherent,
  	.map_sg = intel_map_sg,
+diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/pci/pcie/aspm.c linux-2.6.37.4-pax/drivers/pci/pcie/aspm.c
+--- linux-2.6.37.4/drivers/pci/pcie/aspm.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.37.4-pax/drivers/pci/pcie/aspm.c	2011-03-15 21:48:34.000000000 +0100
+@@ -27,9 +27,9 @@
+ #define MODULE_PARAM_PREFIX "pcie_aspm."
+ 
+ /* Note: those are not register definitions */
+-#define ASPM_STATE_L0S_UP	(1)	/* Upstream direction L0s state */
+-#define ASPM_STATE_L0S_DW	(2)	/* Downstream direction L0s state */
+-#define ASPM_STATE_L1		(4)	/* L1 state */
++#define ASPM_STATE_L0S_UP	(1U)	/* Upstream direction L0s state */
++#define ASPM_STATE_L0S_DW	(2U)	/* Downstream direction L0s state */
++#define ASPM_STATE_L1		(4U)	/* L1 state */
+ #define ASPM_STATE_L0S		(ASPM_STATE_L0S_UP | ASPM_STATE_L0S_DW)
+ #define ASPM_STATE_ALL		(ASPM_STATE_L0S | ASPM_STATE_L1)
+ 
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/pci/pcie/portdrv_pci.c linux-2.6.37.4-pax/drivers/pci/pcie/portdrv_pci.c
 --- linux-2.6.37.4/drivers/pci/pcie/portdrv_pci.c	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37.4-pax/drivers/pci/pcie/portdrv_pci.c	2011-01-07 02:12:40.000000000 +0100
@@ -27672,6 +27730,18 @@ diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/tty
  };
  
  MODULE_DEVICE_TABLE(input, kbd_ids);
+diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/tty/vt/vt.c linux-2.6.37.4-pax/drivers/tty/vt/vt.c
+--- linux-2.6.37.4/drivers/tty/vt/vt.c	2011-02-25 09:32:52.000000000 +0100
++++ linux-2.6.37.4-pax/drivers/tty/vt/vt.c	2011-03-15 21:46:50.000000000 +0100
+@@ -254,7 +254,7 @@ EXPORT_SYMBOL_GPL(unregister_vt_notifier
+ 
+ static void notify_write(struct vc_data *vc, unsigned int unicode)
+ {
+-	struct vt_notifier_param param = { .vc = vc, unicode = unicode };
++	struct vt_notifier_param param = { .vc = vc, .c = unicode };
+ 	atomic_notifier_call_chain(&vt_notifier_list, VT_WRITE, &param);
+ }
+ 
 diff -NurpX linux-2.6.37.4-pax/Documentation/dontdiff linux-2.6.37.4/drivers/uio/uio.c linux-2.6.37.4-pax/drivers/uio/uio.c
 --- linux-2.6.37.4/drivers/uio/uio.c	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.37.4-pax/drivers/uio/uio.c	2011-01-22 16:34:17.000000000 +0100
