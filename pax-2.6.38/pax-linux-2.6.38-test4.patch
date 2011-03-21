@@ -3096,7 +3096,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/powerpc/mm
  	}
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/powerpc/mm/slice.c linux-2.6.38-pax/arch/powerpc/mm/slice.c
 --- linux-2.6.38/arch/powerpc/mm/slice.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.38-pax/arch/powerpc/mm/slice.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/powerpc/mm/slice.c	2011-03-21 01:53:22.000000000 +0100
 @@ -98,7 +98,7 @@ static int slice_area_is_free(struct mm_
  	if ((mm->task_size - len) < addr)
  		return 0;
@@ -3115,7 +3115,25 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/powerpc/mm
  			/*
  			 * Remember the place where we stopped the search:
  			 */
-@@ -336,7 +336,7 @@ static unsigned long slice_find_area_top
+@@ -313,10 +313,14 @@ static unsigned long slice_find_area_top
+ 		}
+ 	}
+ 
+-	addr = mm->mmap_base;
+-	while (addr > len) {
++	if (mm->mmap_base < len)
++		addr = -ENOMEM;
++	else
++		addr = mm->mmap_base - len;
++
++	while (!IS_ERR_VALUE(addr)) {
+ 		/* Go down by chunk size */
+-		addr = _ALIGN_DOWN(addr - len, 1ul << pshift);
++		addr = _ALIGN_DOWN(addr, 1ul << pshift);
+ 
+ 		/* Check for hit with different page size */
+ 		mask = slice_range_to_mask(addr, len);
+@@ -336,7 +340,7 @@ static unsigned long slice_find_area_top
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -3124,7 +3142,16 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/powerpc/mm
  			/* remember the address as a hint for next time */
  			if (use_cache)
  				mm->free_area_cache = addr;
-@@ -426,6 +426,11 @@ unsigned long slice_get_unmapped_area(un
+@@ -348,7 +352,7 @@ static unsigned long slice_find_area_top
+ 		        mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 		/* try just below the current vma->vm_start */
+-		addr = vma->vm_start;
++		addr = skip_heap_stack_gap(vma, len);
+ 	}
+ 
+ 	/*
+@@ -426,6 +430,11 @@ unsigned long slice_get_unmapped_area(un
  	if (fixed && addr > (mm->task_size - len))
  		return -EINVAL;
  
@@ -3626,7 +3653,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sh/mm/cons
  static int __init dma_init(void)
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sh/mm/mmap.c linux-2.6.38-pax/arch/sh/mm/mmap.c
 --- linux-2.6.38/arch/sh/mm/mmap.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.38-pax/arch/sh/mm/mmap.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/sh/mm/mmap.c	2011-03-21 01:53:02.000000000 +0100
 @@ -74,8 +74,7 @@ unsigned long arch_get_unmapped_area(str
  			addr = PAGE_ALIGN(addr);
  
@@ -3665,7 +3692,21 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sh/mm/mmap
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  		}
-@@ -199,7 +197,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -188,18 +186,18 @@ arch_get_unmapped_area_topdown(struct fi
+ 	if (unlikely(mm->mmap_base < len))
+ 		goto bottomup;
+ 
+-	addr = mm->mmap_base-len;
+-	if (do_colour_align)
+-		addr = COLOUR_ALIGN_DOWN(addr, pgoff);
++	addr = mm->mmap_base - len;
+ 
+ 	do {
++		if (do_colour_align)
++			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
+ 		/*
+ 		 * Lookup failure means no vma is above this address,
+ 		 * else if new region fits below vma->vm_start,
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -3674,6 +3715,19 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sh/mm/mmap
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  		}
+@@ -209,10 +207,8 @@ arch_get_unmapped_area_topdown(struct fi
+ 		        mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 		/* try just below the current vma->vm_start */
+-		addr = vma->vm_start-len;
+-		if (do_colour_align)
+-			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
+-	} while (likely(len < vma->vm_start));
++		addr = skip_heap_stack_gap(vma, len);
++	} while (!IS_ERR_VALUE(addr));
+ 
+ bottomup:
+ 	/*
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/include/asm/atomic_64.h linux-2.6.38-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-2.6.38/arch/sparc/include/asm/atomic_64.h	2011-01-05 01:50:19.000000000 +0100
 +++ linux-2.6.38-pax/arch/sparc/include/asm/atomic_64.h	2011-03-15 21:13:58.000000000 +0100
@@ -4246,7 +4300,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/kern
  		if (flags & MAP_SHARED)
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/kernel/sys_sparc_64.c linux-2.6.38-pax/arch/sparc/kernel/sys_sparc_64.c
 --- linux-2.6.38/arch/sparc/kernel/sys_sparc_64.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.38-pax/arch/sparc/kernel/sys_sparc_64.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/sparc/kernel/sys_sparc_64.c	2011-03-21 01:52:25.000000000 +0100
 @@ -124,7 +124,7 @@ unsigned long arch_get_unmapped_area(str
  		/* We do not accept a shared mapping if it would violate
  		 * cache aliasing constraints.
@@ -4332,7 +4386,21 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/kern
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  		}
-@@ -278,7 +280,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -267,18 +269,18 @@ arch_get_unmapped_area_topdown(struct fi
+ 	if (unlikely(mm->mmap_base < len))
+ 		goto bottomup;
+ 
+-	addr = mm->mmap_base-len;
+-	if (do_color_align)
+-		addr = COLOUR_ALIGN_DOWN(addr, pgoff);
++	addr = mm->mmap_base - len;
+ 
+ 	do {
++		if (do_color_align)
++			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
+ 		/*
+ 		 * Lookup failure means no vma is above this address,
+ 		 * else if new region fits below vma->vm_start,
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -4341,7 +4409,20 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/kern
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  		}
-@@ -385,6 +387,12 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -288,10 +290,8 @@ arch_get_unmapped_area_topdown(struct fi
+  		        mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 		/* try just below the current vma->vm_start */
+-		addr = vma->vm_start-len;
+-		if (do_color_align)
+-			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
+-	} while (likely(len < vma->vm_start));
++		addr = skip_heap_stack_gap(vma, len);
++	} while (!IS_ERR_VALUE(addr));
+ 
+ bottomup:
+ 	/*
+@@ -385,6 +385,12 @@ void arch_pick_mmap_layout(struct mm_str
  	    gap == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -4354,7 +4435,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/kern
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
-@@ -397,6 +405,12 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -397,6 +403,12 @@ void arch_pick_mmap_layout(struct mm_str
  			gap = (task_size / 6 * 5);
  
  		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
@@ -5481,7 +5562,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/mm/f
  	 * was no match.  So in such a case we (carefully) read the
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/mm/hugetlbpage.c linux-2.6.38-pax/arch/sparc/mm/hugetlbpage.c
 --- linux-2.6.38/arch/sparc/mm/hugetlbpage.c	2011-03-15 19:33:06.000000000 +0100
-+++ linux-2.6.38-pax/arch/sparc/mm/hugetlbpage.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/sparc/mm/hugetlbpage.c	2011-03-21 02:31:53.000000000 +0100
 @@ -68,7 +68,7 @@ full_search:
  			}
  			return -ENOMEM;
@@ -5500,7 +5581,18 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/mm/h
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  		}
-@@ -125,7 +125,7 @@ hugetlb_get_unmapped_area_topdown(struct
+@@ -116,16 +116,17 @@ hugetlb_get_unmapped_area_topdown(struct
+ 	if (unlikely(mm->mmap_base < len))
+ 		goto bottomup;
+ 
+-	addr = (mm->mmap_base-len) & HPAGE_MASK;
++	addr = mm->mmap_base - len;
+ 
+ 	do {
++		addr &= HPAGE_MASK;
+ 		/*
+ 		 * Lookup failure means no vma is above this address,
+ 		 * else if new region fits below vma->vm_start,
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -5509,7 +5601,18 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/sparc/mm/h
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  		}
-@@ -182,8 +182,7 @@ hugetlb_get_unmapped_area(struct file *f
+@@ -135,8 +136,8 @@ hugetlb_get_unmapped_area_topdown(struct
+  		        mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 		/* try just below the current vma->vm_start */
+-		addr = (vma->vm_start-len) & HPAGE_MASK;
+-	} while (likely(len < vma->vm_start));
++		addr = skip_heap_stack_gap(vma, len);
++	} while (!IS_ERR_VALUE(addr));
+ 
+ bottomup:
+ 	/*
+@@ -182,8 +183,7 @@ hugetlb_get_unmapped_area(struct file *f
  	if (addr) {
  		addr = ALIGN(addr, HPAGE_SIZE);
  		vma = find_vma(mm, addr);
@@ -10053,7 +10156,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  	jmp	bogus_magic
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel/alternative.c linux-2.6.38-pax/arch/x86/kernel/alternative.c
 --- linux-2.6.38/arch/x86/kernel/alternative.c	2011-03-15 19:33:07.000000000 +0100
-+++ linux-2.6.38-pax/arch/x86/kernel/alternative.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/x86/kernel/alternative.c	2011-03-18 01:20:49.000000000 +0100
 @@ -248,7 +248,7 @@ static void alternatives_smp_lock(const
  		if (!*poff || ptr < text || ptr >= text_end)
  			continue;
@@ -10155,7 +10258,21 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  	return addr;
  }
  
-@@ -677,9 +667,9 @@ void __kprobes text_poke_smp_batch(struc
+@@ -620,7 +610,12 @@ static int __kprobes stop_machine_text_p
+ 		flush_icache_range((unsigned long)p->addr,
+ 				   (unsigned long)p->addr + p->len);
+ 	}
+-
++	/*
++	 * Intel Archiecture Software Developer's Manual section 7.1.3 specifies
++	 * that a core serializing instruction such as "cpuid" should be
++	 * executed on _each_ core before the new instruction is made visible.
++	 */
++	sync_core();
+ 	return 0;
+ }
+ 
+@@ -677,9 +672,9 @@ void __kprobes text_poke_smp_batch(struc
  #if defined(CONFIG_DYNAMIC_FTRACE) || defined(HAVE_JUMP_LABEL)
  
  #ifdef CONFIG_X86_64
@@ -13752,7 +13869,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  			/* 64-bit mode: REX prefix */
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel/sys_i386_32.c linux-2.6.38-pax/arch/x86/kernel/sys_i386_32.c
 --- linux-2.6.38/arch/x86/kernel/sys_i386_32.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.38-pax/arch/x86/kernel/sys_i386_32.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/x86/kernel/sys_i386_32.c	2011-03-21 00:51:51.000000000 +0100
 @@ -24,17 +24,224 @@
  
  #include <asm/syscalls.h>
@@ -13954,8 +14071,8 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
 +			mm->cached_hole_size = vma->vm_start - addr;
 +
 +		/* try just below the current vma->vm_start */
-+		addr = vma->vm_start-len;
-+	} while (len < vma->vm_start);
++		addr = skip_heap_stack_gap(vma, len);
++	} while (!IS_ERR_VALUE(addr));
 +
 +bottomup:
 +	/*
@@ -13992,7 +14109,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  }
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel/sys_x86_64.c linux-2.6.38-pax/arch/x86/kernel/sys_x86_64.c
 --- linux-2.6.38/arch/x86/kernel/sys_x86_64.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.38-pax/arch/x86/kernel/sys_x86_64.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/x86/kernel/sys_x86_64.c	2011-03-21 00:51:46.000000000 +0100
 @@ -32,8 +32,8 @@ out:
  	return error;
  }
@@ -14054,7 +14171,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -141,12 +144,15 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -141,13 +144,18 @@ arch_get_unmapped_area_topdown(struct fi
  	if (!test_thread_flag(TIF_IA32) && (flags & MAP_32BIT))
  		goto bottomup;
  
@@ -14065,14 +14182,19 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  	/* requesting a specific address */
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
- 		vma = find_vma(mm, addr);
+-		vma = find_vma(mm, addr);
 -		if (TASK_SIZE - len >= addr &&
 -				(!vma || addr + len <= vma->vm_start))
-+		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
- 			return addr;
+-			return addr;
++		if (TASK_SIZE - len >= addr) {
++			vma = find_vma(mm, addr);
++			if (check_heap_stack_gap(vma, addr, len))
++				return addr;
++		}
  	}
  
-@@ -162,7 +168,7 @@ arch_get_unmapped_area_topdown(struct fi
+ 	/* check if free_area_cache is useful for us */
+@@ -162,7 +170,7 @@ arch_get_unmapped_area_topdown(struct fi
  	/* make sure it can fit in the remaining address space */
  	if (addr > len) {
  		vma = find_vma(mm, addr-len);
@@ -14081,7 +14203,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  			/* remember the address as a hint for next time */
  			return mm->free_area_cache = addr-len;
  	}
-@@ -179,7 +185,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -179,7 +187,7 @@ arch_get_unmapped_area_topdown(struct fi
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -14090,7 +14212,18 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  			/* remember the address as a hint for next time */
  			return mm->free_area_cache = addr;
  
-@@ -198,13 +204,21 @@ bottomup:
+@@ -188,8 +196,8 @@ arch_get_unmapped_area_topdown(struct fi
+ 			mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 		/* try just below the current vma->vm_start */
+-		addr = vma->vm_start-len;
+-	} while (len < vma->vm_start);
++		addr = skip_heap_stack_gap(vma, len);
++	} while (!IS_ERR_VALUE(addr));
+ 
+ bottomup:
+ 	/*
+@@ -198,13 +206,21 @@ bottomup:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -14774,7 +14907,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kernel
  		/*
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/kvm/emulate.c linux-2.6.38-pax/arch/x86/kvm/emulate.c
 --- linux-2.6.38/arch/x86/kvm/emulate.c	2011-03-15 19:33:08.000000000 +0100
-+++ linux-2.6.38-pax/arch/x86/kvm/emulate.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/x86/kvm/emulate.c	2011-03-20 11:58:06.000000000 +0100
 @@ -88,7 +88,7 @@
  #define Src2ImmByte (2<<29)
  #define Src2One     (3<<29)
@@ -16848,7 +16981,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/ext
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/fault.c linux-2.6.38-pax/arch/x86/mm/fault.c
 --- linux-2.6.38/arch/x86/mm/fault.c	2011-03-15 19:33:08.000000000 +0100
-+++ linux-2.6.38-pax/arch/x86/mm/fault.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/x86/mm/fault.c	2011-03-18 17:15:54.000000000 +0100
 @@ -12,10 +12,18 @@
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
  #include <linux/perf_event.h>		/* perf_sw_event		*/
@@ -17241,7 +17374,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/fau
 +		if (address < PAX_USER_SHADOW_BASE) {
 +			printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
 +			printk(KERN_ERR "PAX: faulting IP: %pS\n", (void *)regs->ip);
-+			show_trace_log_lvl(NULL, NULL, (void *)regs->sp, regs->bp, KERN_ERR);
++			show_trace_log_lvl(NULL, NULL, (void *)regs->sp, KERN_ERR);
 +		} else
 +			address -= PAX_USER_SHADOW_BASE;
 +	}
@@ -17541,7 +17674,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hig
  }
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hugetlbpage.c linux-2.6.38-pax/arch/x86/mm/hugetlbpage.c
 --- linux-2.6.38/arch/x86/mm/hugetlbpage.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.38-pax/arch/x86/mm/hugetlbpage.c	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/arch/x86/mm/hugetlbpage.c	2011-03-21 01:50:10.000000000 +0100
 @@ -266,13 +266,20 @@ static unsigned long hugetlb_get_unmappe
  	struct hstate *h = hstate_file(file);
  	struct mm_struct *mm = current->mm;
@@ -17615,7 +17748,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hug
  
  	/* don't allow allocations above current base */
  	if (mm->free_area_cache > base)
-@@ -321,7 +328,7 @@ static unsigned long hugetlb_get_unmappe
+@@ -321,64 +328,63 @@ static unsigned long hugetlb_get_unmappe
  	        largest_hole = 0;
  		mm->free_area_cache  = base;
  	}
@@ -17624,10 +17757,12 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hug
  	/* make sure it can fit in the remaining address space */
  	if (mm->free_area_cache < len)
  		goto fail;
-@@ -329,33 +336,27 @@ try_again:
+ 
  	/* either no address requested or cant fit in requested address hole */
- 	addr = (mm->free_area_cache - len) & huge_page_mask(h);
+-	addr = (mm->free_area_cache - len) & huge_page_mask(h);
++	addr = (mm->free_area_cache - len);
  	do {
++		addr &= huge_page_mask(h);
 +		vma = find_vma(mm, addr);
  		/*
  		 * Lookup failure means no vma is above this address,
@@ -17667,8 +17802,10 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hug
 +			largest_hole = vma->vm_start - addr;
  
  		/* try just below the current vma->vm_start */
- 		addr = (vma->vm_start - len) & huge_page_mask(h);
-@@ -363,22 +364,26 @@ try_again:
+-		addr = (vma->vm_start - len) & huge_page_mask(h);
+-	} while (len <= vma->vm_start);
++		addr = skip_heap_stack_gap(vma, len);
++	} while (!IS_ERR_VALUE(addr));
  
  fail:
  	/*
@@ -17706,7 +17843,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hug
  	mm->cached_hole_size = ~0UL;
  	addr = hugetlb_get_unmapped_area_bottomup(file, addr0,
  			len, pgoff, flags);
-@@ -386,6 +391,7 @@ fail:
+@@ -386,6 +392,7 @@ fail:
  	/*
  	 * Restore the topdown base:
  	 */
@@ -17714,7 +17851,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hug
  	mm->free_area_cache = base;
  	mm->cached_hole_size = ~0UL;
  
-@@ -399,10 +405,19 @@ hugetlb_get_unmapped_area(struct file *f
+@@ -399,10 +406,19 @@ hugetlb_get_unmapped_area(struct file *f
  	struct hstate *h = hstate_file(file);
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
@@ -17735,7 +17872,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/arch/x86/mm/hug
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -414,8 +429,7 @@ hugetlb_get_unmapped_area(struct file *f
+@@ -414,8 +430,7 @@ hugetlb_get_unmapped_area(struct file *f
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
@@ -33723,7 +33860,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/r
  
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/sched.h linux-2.6.38-pax/include/linux/sched.h
 --- linux-2.6.38/include/linux/sched.h	2011-03-15 19:35:25.000000000 +0100
-+++ linux-2.6.38-pax/include/linux/sched.h	2011-03-15 21:13:58.000000000 +0100
++++ linux-2.6.38-pax/include/linux/sched.h	2011-03-21 01:54:30.000000000 +0100
 @@ -99,6 +99,7 @@ struct robust_list_head;
  struct bio_list;
  struct fs_struct;
@@ -33732,7 +33869,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/s
  
  /*
   * List of flags we want to share for kernel threads,
-@@ -380,10 +381,12 @@ struct user_namespace;
+@@ -380,10 +381,13 @@ struct user_namespace;
  #define DEFAULT_MAX_MAP_COUNT	(USHRT_MAX - MAPCOUNT_ELF_CORE_MARGIN)
  
  extern int sysctl_max_map_count;
@@ -33741,11 +33878,12 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/s
  #include <linux/aio.h>
  
  #ifdef CONFIG_MMU
-+extern bool check_heap_stack_gap(struct vm_area_struct *vma, unsigned long addr, unsigned long len);
++extern bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long addr, unsigned long len);
++extern unsigned long skip_heap_stack_gap(const struct vm_area_struct *vma, unsigned long len);
  extern void arch_pick_mmap_layout(struct mm_struct *mm);
  extern unsigned long
  arch_get_unmapped_area(struct file *, unsigned long, unsigned long,
-@@ -1192,7 +1195,7 @@ enum perf_event_task_context {
+@@ -1192,7 +1196,7 @@ enum perf_event_task_context {
  
  struct task_struct {
  	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
@@ -33754,7 +33892,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/s
  	atomic_t usage;
  	unsigned int flags;	/* per process flags, defined below */
  	unsigned int ptrace;
-@@ -1307,8 +1310,8 @@ struct task_struct {
+@@ -1307,8 +1311,8 @@ struct task_struct {
  	struct list_head thread_group;
  
  	struct completion *vfork_done;		/* for vfork() */
@@ -33765,7 +33903,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/s
  
  	cputime_t utime, stime, utimescaled, stimescaled;
  	cputime_t gtime;
-@@ -1530,6 +1533,52 @@ struct task_struct {
+@@ -1530,6 +1534,52 @@ struct task_struct {
  #endif
  };
  
@@ -33818,7 +33956,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/s
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2169,7 +2218,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2169,7 +2219,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -33827,7 +33965,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/s
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2294,8 +2343,8 @@ static inline void unlock_task_sighand(s
+@@ -2294,8 +2344,8 @@ static inline void unlock_task_sighand(s
  
  #ifndef __HAVE_THREAD_FUNCTIONS
  
@@ -33838,7 +33976,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/include/linux/s
  
  static inline void setup_thread_stack(struct task_struct *p, struct task_struct *org)
  {
-@@ -2310,13 +2359,17 @@ static inline unsigned long *end_of_stac
+@@ -2310,13 +2360,17 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -37946,7 +38084,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mlock.c linu
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux-2.6.38-pax/mm/mmap.c
 --- linux-2.6.38/mm/mmap.c	2011-03-15 19:35:31.000000000 +0100
-+++ linux-2.6.38-pax/mm/mmap.c	2011-03-15 21:13:59.000000000 +0100
++++ linux-2.6.38-pax/mm/mmap.c	2011-03-21 01:54:37.000000000 +0100
 @@ -46,6 +46,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -38300,11 +38438,11 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	kmem_cache_free(vm_area_cachep, vma);
  unacct_error:
  	if (charged)
-@@ -1385,6 +1528,33 @@ unacct_error:
+@@ -1385,6 +1528,44 @@ unacct_error:
  	return error;
  }
  
-+bool check_heap_stack_gap(struct vm_area_struct *vma, unsigned long addr, unsigned long len)
++bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long addr, unsigned long len)
 +{
 +	if (!vma) {
 +#ifdef CONFIG_STACK_GROWSUP
@@ -38331,10 +38469,21 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
 +	return true;
 +}
 +
++unsigned long skip_heap_stack_gap(const struct vm_area_struct *vma, unsigned long len)
++{
++	if (vma->vm_start < len)
++		return -ENOMEM;
++	if (!(vma->vm_flags & VM_GROWSDOWN))
++		return vma->vm_start - len;
++	if (sysctl_heap_stack_gap <= vma->vm_start - len)
++		return vma->vm_start - len - sysctl_heap_stack_gap;
++	return -ENOMEM;
++}
++
  /* Get an address range which is currently unmapped.
   * For shmat() with addr=0.
   *
-@@ -1411,18 +1581,23 @@ arch_get_unmapped_area(struct file *filp
+@@ -1411,18 +1592,23 @@ arch_get_unmapped_area(struct file *filp
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -38365,7 +38514,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	}
  
  full_search:
-@@ -1433,34 +1608,40 @@ full_search:
+@@ -1433,34 +1619,40 @@ full_search:
  			 * Start a new search - just in case we missed
  			 * some holes.
  			 */
@@ -38417,7 +38566,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		mm->free_area_cache = addr;
  		mm->cached_hole_size = ~0UL;
  	}
-@@ -1478,7 +1659,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1478,7 +1670,7 @@ arch_get_unmapped_area_topdown(struct fi
  {
  	struct vm_area_struct *vma;
  	struct mm_struct *mm = current->mm;
@@ -38426,7 +38575,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  
  	/* requested length too big for entire address space */
  	if (len > TASK_SIZE)
-@@ -1487,13 +1668,18 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1487,13 +1679,18 @@ arch_get_unmapped_area_topdown(struct fi
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -38449,7 +38598,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	}
  
  	/* check if free_area_cache is useful for us */
-@@ -1508,7 +1694,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1508,7 +1705,7 @@ arch_get_unmapped_area_topdown(struct fi
  	/* make sure it can fit in the remaining address space */
  	if (addr > len) {
  		vma = find_vma(mm, addr-len);
@@ -38458,7 +38607,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr-len);
  	}
-@@ -1525,7 +1711,7 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1525,7 +1722,7 @@ arch_get_unmapped_area_topdown(struct fi
  		 * return with success:
  		 */
  		vma = find_vma(mm, addr);
@@ -38467,7 +38616,18 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  			/* remember the address as a hint for next time */
  			return (mm->free_area_cache = addr);
  
-@@ -1544,13 +1730,21 @@ bottomup:
+@@ -1534,8 +1731,8 @@ arch_get_unmapped_area_topdown(struct fi
+  		        mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 		/* try just below the current vma->vm_start */
+-		addr = vma->vm_start-len;
+-	} while (len < vma->vm_start);
++		addr = skip_heap_stack_gap(vma, len);
++	} while (!IS_ERR_VALUE(addr));
+ 
+ bottomup:
+ 	/*
+@@ -1544,13 +1741,21 @@ bottomup:
  	 * can happen with large stack limits and large mmap()
  	 * allocations.
  	 */
@@ -38491,7 +38651,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	mm->cached_hole_size = ~0UL;
  
  	return addr;
-@@ -1559,6 +1753,12 @@ bottomup:
+@@ -1559,6 +1764,12 @@ bottomup:
  
  void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  {
@@ -38504,7 +38664,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	/*
  	 * Is this a new hole at the highest possible address?
  	 */
-@@ -1566,8 +1766,10 @@ void arch_unmap_area_topdown(struct mm_s
+@@ -1566,8 +1777,10 @@ void arch_unmap_area_topdown(struct mm_s
  		mm->free_area_cache = addr;
  
  	/* dont allow allocations above current base */
@@ -38516,7 +38676,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  }
  
  unsigned long
-@@ -1675,6 +1877,28 @@ out:
+@@ -1675,6 +1888,28 @@ out:
  	return prev ? prev->vm_next : vma;
  }
  
@@ -38545,7 +38705,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -1734,34 +1958,42 @@ static int acct_stack_growth(struct vm_a
+@@ -1734,34 +1969,42 @@ static int acct_stack_growth(struct vm_a
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
  	int error;
@@ -38597,7 +38757,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1773,6 +2005,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1773,6 +2016,8 @@ int expand_upwards(struct vm_area_struct
  			perf_event_mmap(vma);
  		}
  	}
@@ -38606,7 +38766,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	vma_unlock_anon_vma(vma);
  	khugepaged_enter_vma_merge(vma);
  	return error;
-@@ -1786,6 +2020,8 @@ static int expand_downwards(struct vm_ar
+@@ -1786,6 +2031,8 @@ static int expand_downwards(struct vm_ar
  				   unsigned long address)
  {
  	int error;
@@ -38615,7 +38775,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1799,6 +2035,15 @@ static int expand_downwards(struct vm_ar
+@@ -1799,6 +2046,15 @@ static int expand_downwards(struct vm_ar
  	if (error)
  		return error;
  
@@ -38631,7 +38791,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	vma_lock_anon_vma(vma);
  
  	/*
-@@ -1808,9 +2053,17 @@ static int expand_downwards(struct vm_ar
+@@ -1808,9 +2064,17 @@ static int expand_downwards(struct vm_ar
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -38650,7 +38810,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1818,10 +2071,21 @@ static int expand_downwards(struct vm_ar
+@@ -1818,10 +2082,21 @@ static int expand_downwards(struct vm_ar
  		if (!error) {
  			vma->vm_start = address;
  			vma->vm_pgoff -= grow;
@@ -38672,7 +38832,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	khugepaged_enter_vma_merge(vma);
  	return error;
  }
-@@ -1896,6 +2160,13 @@ static void remove_vma_list(struct mm_st
+@@ -1896,6 +2171,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -38686,7 +38846,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1941,6 +2212,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1941,6 +2223,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -38703,7 +38863,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1969,14 +2250,33 @@ static int __split_vma(struct mm_struct
+@@ -1969,14 +2261,33 @@ static int __split_vma(struct mm_struct
  	struct vm_area_struct *new;
  	int err = -ENOMEM;
  
@@ -38737,7 +38897,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1989,6 +2289,22 @@ static int __split_vma(struct mm_struct
+@@ -1989,6 +2300,22 @@ static int __split_vma(struct mm_struct
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -38760,7 +38920,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	pol = mpol_dup(vma_policy(vma));
  	if (IS_ERR(pol)) {
  		err = PTR_ERR(pol);
-@@ -2014,6 +2330,42 @@ static int __split_vma(struct mm_struct
+@@ -2014,6 +2341,42 @@ static int __split_vma(struct mm_struct
  	else
  		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -38803,7 +38963,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	/* Success. */
  	if (!err)
  		return 0;
-@@ -2026,10 +2378,18 @@ static int __split_vma(struct mm_struct
+@@ -2026,10 +2389,18 @@ static int __split_vma(struct mm_struct
  			removed_exe_file_vma(mm);
  		fput(new->vm_file);
  	}
@@ -38823,7 +38983,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	kmem_cache_free(vm_area_cachep, new);
   out_err:
  	return err;
-@@ -2042,6 +2402,15 @@ static int __split_vma(struct mm_struct
+@@ -2042,6 +2413,15 @@ static int __split_vma(struct mm_struct
  int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
  	      unsigned long addr, int new_below)
  {
@@ -38839,7 +38999,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -2053,11 +2422,30 @@ int split_vma(struct mm_struct *mm, stru
+@@ -2053,11 +2433,30 @@ int split_vma(struct mm_struct *mm, stru
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -38870,7 +39030,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -2131,6 +2519,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -2131,6 +2530,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -38879,7 +39039,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	return 0;
  }
  
-@@ -2143,22 +2533,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -2143,22 +2544,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  
  	profile_munmap(addr);
  
@@ -38908,7 +39068,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2172,6 +2558,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2172,6 +2569,7 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -38916,7 +39076,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2183,16 +2570,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -2183,16 +2581,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -38948,7 +39108,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		locked += mm->locked_vm;
  		lock_limit = rlimit(RLIMIT_MEMLOCK);
  		lock_limit >>= PAGE_SHIFT;
-@@ -2209,22 +2610,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2209,22 +2621,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -38975,7 +39135,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2238,7 +2639,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2238,7 +2650,7 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -38984,7 +39144,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  		return -ENOMEM;
  	}
  
-@@ -2252,11 +2653,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2252,11 +2664,12 @@ unsigned long do_brk(unsigned long addr,
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
  	perf_event_mmap(vma);
@@ -38999,7 +39159,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	return addr;
  }
  
-@@ -2303,8 +2705,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2303,8 +2716,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -39011,7 +39171,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2318,6 +2722,10 @@ int insert_vm_struct(struct mm_struct *
+@@ -2318,6 +2733,10 @@ int insert_vm_struct(struct mm_struct *
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -39022,7 +39182,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2340,7 +2748,22 @@ int insert_vm_struct(struct mm_struct *
+@@ -2340,7 +2759,22 @@ int insert_vm_struct(struct mm_struct *
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -39045,7 +39205,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	return 0;
  }
  
-@@ -2358,6 +2781,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2358,6 +2792,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -39054,7 +39214,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2407,6 +2832,39 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2407,6 +2843,39 @@ struct vm_area_struct *copy_vma(struct v
  	kmem_cache_free(vm_area_cachep, new_vma);
  	return NULL;
  }
@@ -39094,7 +39254,7 @@ diff -NurpX linux-2.6.38-pax/Documentation/dontdiff linux-2.6.38/mm/mmap.c linux
  
  /*
   * Return true if the calling process may expand its vm space by the passed
-@@ -2489,6 +2947,17 @@ int install_special_mapping(struct mm_st
+@@ -2489,6 +2958,17 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
