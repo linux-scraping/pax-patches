@@ -1447,21 +1447,13 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/mips
       #define pte_val(x)	((x).pte)
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/mips/include/asm/system.h linux-2.6.32.36-pax/arch/mips/include/asm/system.h
 --- linux-2.6.32.36/arch/mips/include/asm/system.h	2009-12-03 15:01:27.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/mips/include/asm/system.h	2010-12-16 23:50:54.000000000 +0100
-@@ -23,6 +23,7 @@
- #include <asm/dsp.h>
- #include <asm/watch.h>
- #include <asm/war.h>
-+#include <asm/asm.h>
- 
- 
- /*
-@@ -230,6 +231,6 @@ extern void per_cpu_trap_init(void);
++++ linux-2.6.32.36-pax/arch/mips/include/asm/system.h	2011-04-16 01:19:57.000000000 +0200
+@@ -230,6 +230,6 @@ extern void per_cpu_trap_init(void);
   */
  #define __ARCH_WANT_UNLOCKED_CTXSW
  
 -extern unsigned long arch_align_stack(unsigned long sp);
-+#define arch_align_stack(x) ((x) & ALMASK)
++#define arch_align_stack(x) ((x) & ~0xfUL)
  
  #endif /* _ASM_SYSTEM_H */
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/mips/kernel/binfmt_elfn32.c linux-2.6.32.36-pax/arch/mips/kernel/binfmt_elfn32.c
@@ -6267,7 +6259,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	if (err)
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/ia32/ia32entry.S linux-2.6.32.36-pax/arch/x86/ia32/ia32entry.S
 --- linux-2.6.32.36/arch/x86/ia32/ia32entry.S	2010-10-01 22:27:53.000000000 +0200
-+++ linux-2.6.32.36-pax/arch/x86/ia32/ia32entry.S	2011-02-24 19:01:56.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/ia32/ia32entry.S	2011-04-16 01:19:57.000000000 +0200
 @@ -13,6 +13,7 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
@@ -6276,7 +6268,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  #include <linux/linkage.h>
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
-@@ -93,6 +94,18 @@ ENTRY(native_irq_enable_sysexit)
+@@ -93,6 +94,23 @@ ENTRY(native_irq_enable_sysexit)
  ENDPROC(native_irq_enable_sysexit)
  #endif
  
@@ -6290,20 +6282,36 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	call pax_exit_kernel_user
 +#endif
++#ifdef CONFIG_PAX_RANDKSTACK
++	push %rax
++	call pax_randomize_kstack
++	pop %rax
++#endif
 +	.endm
 +
  /*
   * 32bit SYSENTER instruction entry.
   *
-@@ -120,6 +133,7 @@ ENTRY(ia32_sysenter_target)
+@@ -119,7 +137,7 @@ ENTRY(ia32_sysenter_target)
+ 	CFI_REGISTER	rsp,rbp
  	SWAPGS_UNSAFE_STACK
  	movq	PER_CPU_VAR(kernel_stack), %rsp
- 	addq	$(KERNEL_STACK_OFFSET),%rsp
+-	addq	$(KERNEL_STACK_OFFSET),%rsp
 +	pax_enter_kernel_user
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs, here we enable it straight after entry:
-@@ -150,6 +164,12 @@ ENTRY(ia32_sysenter_target)
+@@ -135,7 +153,8 @@ ENTRY(ia32_sysenter_target)
+ 	pushfq
+ 	CFI_ADJUST_CFA_OFFSET 8
+ 	/*CFI_REL_OFFSET rflags,0*/
+-	movl	8*3-THREAD_SIZE+TI_sysenter_return(%rsp), %r10d
++	GET_THREAD_INFO(%r10)
++	movl	TI_sysenter_return(%r10), %r10d
+ 	CFI_REGISTER rip,r10
+ 	pushq	$__USER32_CS
+ 	CFI_ADJUST_CFA_OFFSET 8
+@@ -150,6 +169,12 @@ ENTRY(ia32_sysenter_target)
  	SAVE_ARGS 0,0,1
   	/* no need to do an access_ok check here because rbp has been
   	   32bit zero extended */ 
@@ -6316,7 +6324,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  1:	movl	(%rbp),%ebp
   	.section __ex_table,"a"
   	.quad 1b,ia32_badarg
-@@ -172,6 +192,7 @@ sysenter_dispatch:
+@@ -172,6 +197,7 @@ sysenter_dispatch:
  	testl	$_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz	sysexit_audit
  sysexit_from_sys_call:
@@ -6324,7 +6332,15 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	andl    $~TS_COMPAT,TI_status(%r10)
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
-@@ -290,6 +311,11 @@ ENTRY(ia32_cstar_target)
+@@ -283,19 +309,24 @@ ENDPROC(ia32_sysenter_target)
+ ENTRY(ia32_cstar_target)
+ 	CFI_STARTPROC32	simple
+ 	CFI_SIGNAL_FRAME
+-	CFI_DEF_CFA	rsp,KERNEL_STACK_OFFSET
++	CFI_DEF_CFA	rsp,0
+ 	CFI_REGISTER	rip,rcx
+ 	/*CFI_REGISTER	rflags,r11*/
+ 	SWAPGS_UNSAFE_STACK
  	movl	%esp,%r8d
  	CFI_REGISTER	rsp,r8
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -6336,7 +6352,14 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
-@@ -311,6 +337,12 @@ ENTRY(ia32_cstar_target)
+ 	 */
+ 	ENABLE_INTERRUPTS(CLBR_NONE)
+-	SAVE_ARGS 8,1,1
++	SAVE_ARGS 8*6,1,1
+ 	movl 	%eax,%eax	/* zero extension */
+ 	movq	%rax,ORIG_RAX-ARGOFFSET(%rsp)
+ 	movq	%rcx,RIP-ARGOFFSET(%rsp)
+@@ -311,6 +342,12 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -6349,7 +6372,16 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  1:	movl	(%r8),%r9d
  	.section __ex_table,"a"
  	.quad 1b,ia32_badarg
-@@ -333,6 +365,7 @@ cstar_dispatch:
+@@ -323,7 +360,7 @@ ENTRY(ia32_cstar_target)
+ 	cmpq $IA32_NR_syscalls-1,%rax
+ 	ja  ia32_badsys
+ cstar_do_call:
+-	IA32_ARG_FIXUP 1
++	IA32_ARG_FIXUP 0
+ cstar_dispatch:
+ 	call *ia32_sys_call_table(,%rax,8)
+ 	movq %rax,RAX-ARGOFFSET(%rsp)
+@@ -333,6 +370,7 @@ cstar_dispatch:
  	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz sysretl_audit
  sysretl_from_sys_call:
@@ -6357,7 +6389,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	andl $~TS_COMPAT,TI_status(%r10)
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
-@@ -415,6 +448,7 @@ ENTRY(ia32_syscall)
+@@ -415,6 +453,7 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
@@ -7850,7 +7882,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	);
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/include/asm/i387.h linux-2.6.32.36-pax/arch/x86/include/asm/i387.h
 --- linux-2.6.32.36/arch/x86/include/asm/i387.h	2009-12-03 15:01:39.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/include/asm/i387.h	2010-12-16 23:50:54.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/include/asm/i387.h	2011-04-16 01:19:57.000000000 +0200
 @@ -60,6 +60,11 @@ static inline int fxrstor_checking(struc
  {
  	int err;
@@ -7891,6 +7923,15 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  /*
   * These must be called with preempt disabled
+@@ -291,7 +296,7 @@ static inline void kernel_fpu_begin(void
+ 	struct thread_info *me = current_thread_info();
+ 	preempt_disable();
+ 	if (me->status & TS_USEDFPU)
+-		__save_init_fpu(me->task);
++		__save_init_fpu(current);
+ 	else
+ 		clts();
+ }
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/include/asm/io_32.h linux-2.6.32.36-pax/arch/x86/include/asm/io_32.h
 --- linux-2.6.32.36/arch/x86/include/asm/io_32.h	2009-06-10 08:46:15.000000000 +0200
 +++ linux-2.6.32.36-pax/arch/x86/include/asm/io_32.h	2011-01-28 00:38:44.000000000 +0100
@@ -9319,7 +9360,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  #define __USER_CS     (GDT_ENTRY_DEFAULT_USER_CS* 8 + 3)
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/include/asm/smp.h linux-2.6.32.36-pax/arch/x86/include/asm/smp.h
 --- linux-2.6.32.36/arch/x86/include/asm/smp.h	2010-12-16 23:50:07.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/include/asm/smp.h	2010-12-16 23:50:54.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/include/asm/smp.h	2011-04-16 01:19:57.000000000 +0200
 @@ -24,7 +24,7 @@ extern unsigned int num_processors;
  DECLARE_PER_CPU(cpumask_var_t, cpu_sibling_map);
  DECLARE_PER_CPU(cpumask_var_t, cpu_core_map);
@@ -9329,6 +9370,23 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  static inline struct cpumask *cpu_sibling_mask(int cpu)
  {
+@@ -175,14 +175,8 @@ extern unsigned disabled_cpus __cpuinitd
+ extern int safe_smp_processor_id(void);
+ 
+ #elif defined(CONFIG_X86_64_SMP)
+-#define raw_smp_processor_id() (percpu_read(cpu_number))
+-
+-#define stack_smp_processor_id()					\
+-({								\
+-	struct thread_info *ti;						\
+-	__asm__("andq %%rsp,%0; ":"=r" (ti) : "0" (CURRENT_MASK));	\
+-	ti->cpu;							\
+-})
++#define raw_smp_processor_id()		(percpu_read(cpu_number))
++#define stack_smp_processor_id()	raw_smp_processor_id()
+ #define safe_smp_processor_id()		smp_processor_id()
+ 
+ #endif
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/include/asm/spinlock.h linux-2.6.32.36-pax/arch/x86/include/asm/spinlock.h
 --- linux-2.6.32.36/arch/x86/include/asm/spinlock.h	2009-09-10 19:41:11.000000000 +0200
 +++ linux-2.6.32.36-pax/arch/x86/include/asm/spinlock.h	2010-12-30 21:40:16.000000000 +0100
@@ -9408,7 +9466,25 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  }
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/include/asm/system.h linux-2.6.32.36-pax/arch/x86/include/asm/system.h
 --- linux-2.6.32.36/arch/x86/include/asm/system.h	2010-08-04 23:11:13.000000000 +0200
-+++ linux-2.6.32.36-pax/arch/x86/include/asm/system.h	2010-12-16 23:50:54.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/include/asm/system.h	2011-04-16 01:52:31.000000000 +0200
+@@ -132,7 +132,7 @@ do {									\
+ 	     "thread_return:\n\t"					  \
+ 	     "movq "__percpu_arg([current_task])",%%rsi\n\t"		  \
+ 	     __switch_canary						  \
+-	     "movq %P[thread_info](%%rsi),%%r8\n\t"			  \
++	     "movq "__percpu_arg([thread_info])",%%r8\n\t"		  \
+ 	     "movq %%rax,%%rdi\n\t" 					  \
+ 	     "testl  %[_tif_fork],%P[ti_flags](%%r8)\n\t"	  \
+ 	     "jnz   ret_from_fork\n\t"					  \
+@@ -143,7 +143,7 @@ do {									\
+ 	       [threadrsp] "i" (offsetof(struct task_struct, thread.sp)), \
+ 	       [ti_flags] "i" (offsetof(struct thread_info, flags)),	  \
+ 	       [_tif_fork] "i" (_TIF_FORK),			  	  \
+-	       [thread_info] "i" (offsetof(struct task_struct, stack)),   \
++	       [thread_info] "m" (per_cpu_var(current_tinfo)),		  \
+ 	       [current_task] "m" (per_cpu_var(current_task))		  \
+ 	       __switch_canary_iparam					  \
+ 	     : "memory", "cc" __EXTRA_CLOBBER)
 @@ -200,7 +200,7 @@ static inline unsigned long get_limit(un
  {
  	unsigned long __limit;
@@ -9427,6 +9503,153 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  extern void free_init_pages(char *what, unsigned long begin, unsigned long end);
  
  void default_idle(void);
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/include/asm/thread_info.h linux-2.6.32.36-pax/arch/x86/include/asm/thread_info.h
+--- linux-2.6.32.36/arch/x86/include/asm/thread_info.h	2010-02-17 23:59:00.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/include/asm/thread_info.h	2011-04-16 01:19:58.000000000 +0200
+@@ -10,6 +10,7 @@
+ #include <linux/compiler.h>
+ #include <asm/page.h>
+ #include <asm/types.h>
++#include <asm/percpu.h>
+ 
+ /*
+  * low level task data that entry.S needs immediate access to
+@@ -24,7 +25,6 @@ struct exec_domain;
+ #include <asm/atomic.h>
+ 
+ struct thread_info {
+-	struct task_struct	*task;		/* main task structure */
+ 	struct exec_domain	*exec_domain;	/* execution domain */
+ 	__u32			flags;		/* low level flags */
+ 	__u32			status;		/* thread synchronous flags */
+@@ -34,18 +34,11 @@ struct thread_info {
+ 	mm_segment_t		addr_limit;
+ 	struct restart_block    restart_block;
+ 	void __user		*sysenter_return;
+-#ifdef CONFIG_X86_32
+-	unsigned long           previous_esp;   /* ESP of the previous stack in
+-						   case of nested (IRQ) stacks
+-						*/
+-	__u8			supervisor_stack[0];
+-#endif
+ 	int			uaccess_err;
+ };
+ 
+-#define INIT_THREAD_INFO(tsk)			\
++#define INIT_THREAD_INFO			\
+ {						\
+-	.task		= &tsk,			\
+ 	.exec_domain	= &default_exec_domain,	\
+ 	.flags		= 0,			\
+ 	.cpu		= 0,			\
+@@ -56,7 +49,7 @@ struct thread_info {
+ 	},					\
+ }
+ 
+-#define init_thread_info	(init_thread_union.thread_info)
++#define init_thread_info	(init_task.tinfo)
+ #define init_stack		(init_thread_union.stack)
+ 
+ #else /* !__ASSEMBLY__ */
+@@ -163,6 +156,23 @@ struct thread_info {
+ #define alloc_thread_info(tsk)						\
+ 	((struct thread_info *)__get_free_pages(THREAD_FLAGS, THREAD_ORDER))
+ 
++#ifdef __ASSEMBLY__
++/* how to get the thread information struct from ASM */
++#define GET_THREAD_INFO(reg)	 \
++	mov PER_CPU_VAR(current_tinfo), reg
++
++/* use this one if reg already contains %esp */
++#define GET_THREAD_INFO_WITH_ESP(reg) GET_THREAD_INFO(reg)
++#else
++/* how to get the thread information struct from C */
++DECLARE_PER_CPU(struct thread_info *, current_tinfo);
++
++static __always_inline struct thread_info *current_thread_info(void)
++{
++	return percpu_read_stable(current_tinfo);
++}
++#endif
++
+ #ifdef CONFIG_X86_32
+ 
+ #define STACK_WARN	(THREAD_SIZE/8)
+@@ -173,35 +183,13 @@ struct thread_info {
+  */
+ #ifndef __ASSEMBLY__
+ 
+-
+ /* how to get the current stack pointer from C */
+ register unsigned long current_stack_pointer asm("esp") __used;
+ 
+-/* how to get the thread information struct from C */
+-static inline struct thread_info *current_thread_info(void)
+-{
+-	return (struct thread_info *)
+-		(current_stack_pointer & ~(THREAD_SIZE - 1));
+-}
+-
+-#else /* !__ASSEMBLY__ */
+-
+-/* how to get the thread information struct from ASM */
+-#define GET_THREAD_INFO(reg)	 \
+-	movl $-THREAD_SIZE, reg; \
+-	andl %esp, reg
+-
+-/* use this one if reg already contains %esp */
+-#define GET_THREAD_INFO_WITH_ESP(reg) \
+-	andl $-THREAD_SIZE, reg
+-
+ #endif
+ 
+ #else /* X86_32 */
+ 
+-#include <asm/percpu.h>
+-#define KERNEL_STACK_OFFSET (5*8)
+-
+ /*
+  * macros/functions for gaining access to the thread information structure
+  * preempt_count needs to be 1 initially, until the scheduler is functional.
+@@ -209,21 +197,6 @@ static inline struct thread_info *curren
+ #ifndef __ASSEMBLY__
+ DECLARE_PER_CPU(unsigned long, kernel_stack);
+ 
+-static inline struct thread_info *current_thread_info(void)
+-{
+-	struct thread_info *ti;
+-	ti = (void *)(percpu_read_stable(kernel_stack) +
+-		      KERNEL_STACK_OFFSET - THREAD_SIZE);
+-	return ti;
+-}
+-
+-#else /* !__ASSEMBLY__ */
+-
+-/* how to get the thread information struct from ASM */
+-#define GET_THREAD_INFO(reg) \
+-	movq PER_CPU_VAR(kernel_stack),reg ; \
+-	subq $(THREAD_SIZE-KERNEL_STACK_OFFSET),reg
+-
+ #endif
+ 
+ #endif /* !X86_32 */
+@@ -260,5 +233,16 @@ extern void arch_task_cache_init(void);
+ extern void free_thread_info(struct thread_info *ti);
+ extern int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src);
+ #define arch_task_cache_init arch_task_cache_init
++
++#define __HAVE_THREAD_FUNCTIONS
++#define task_thread_info(task)	(&(task)->tinfo)
++#define task_stack_page(task)	((task)->stack)
++#define setup_thread_stack(p, org) do {} while (0)
++#define end_of_stack(p) ((unsigned long *)task_stack_page(p) + 1)
++
++#define __HAVE_ARCH_TASK_STRUCT_ALLOCATOR
++extern struct task_struct *alloc_task_struct(void);
++extern void free_task_struct(struct task_struct *);
++
+ #endif
+ #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/include/asm/uaccess.h linux-2.6.32.36-pax/arch/x86/include/asm/uaccess.h
 --- linux-2.6.32.36/arch/x86/include/asm/uaccess.h	2009-09-10 19:41:12.000000000 +0200
 +++ linux-2.6.32.36-pax/arch/x86/include/asm/uaccess.h	2011-03-12 22:10:46.000000000 +0100
@@ -10543,8 +10766,16 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/asm-offsets_32.c linux-2.6.32.36-pax/arch/x86/kernel/asm-offsets_32.c
 --- linux-2.6.32.36/arch/x86/kernel/asm-offsets_32.c	2009-09-10 19:41:12.000000000 +0200
-+++ linux-2.6.32.36-pax/arch/x86/kernel/asm-offsets_32.c	2010-12-16 23:50:54.000000000 +0100
-@@ -115,6 +115,11 @@ void foo(void)
++++ linux-2.6.32.36-pax/arch/x86/kernel/asm-offsets_32.c	2011-04-16 01:19:58.000000000 +0200
+@@ -51,7 +51,6 @@ void foo(void)
+ 	OFFSET(CPUINFO_x86_vendor_id, cpuinfo_x86, x86_vendor_id);
+ 	BLANK();
+ 
+-	OFFSET(TI_task, thread_info, task);
+ 	OFFSET(TI_exec_domain, thread_info, exec_domain);
+ 	OFFSET(TI_flags, thread_info, flags);
+ 	OFFSET(TI_status, thread_info, status);
+@@ -115,6 +114,11 @@ void foo(void)
  	OFFSET(PV_CPU_iret, pv_cpu_ops, iret);
  	OFFSET(PV_CPU_irq_enable_sysexit, pv_cpu_ops, irq_enable_sysexit);
  	OFFSET(PV_CPU_read_cr0, pv_cpu_ops, read_cr0);
@@ -10614,7 +10845,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  			size = 64;
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/cpu/common.c linux-2.6.32.36-pax/arch/x86/kernel/cpu/common.c
 --- linux-2.6.32.36/arch/x86/kernel/cpu/common.c	2010-11-04 13:27:50.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/cpu/common.c	2010-12-17 00:07:56.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/kernel/cpu/common.c	2011-04-16 01:19:58.000000000 +0200
 @@ -83,60 +83,6 @@ static const struct cpu_dev __cpuinitcon
  
  static const struct cpu_dev *this_cpu __cpuinitdata = &default_cpu;
@@ -10696,7 +10927,26 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	/* If the model name is still unset, do table lookup. */
  	if (!c->x86_model_id[0]) {
  		const char *p;
-@@ -1060,7 +1010,7 @@ struct pt_regs * __cpuinit idle_regs(str
+@@ -980,6 +930,9 @@ static __init int setup_disablecpuid(cha
+ }
+ __setup("clearcpuid=", setup_disablecpuid);
+ 
++DEFINE_PER_CPU(struct thread_info *, current_tinfo) = &init_task.tinfo;
++EXPORT_PER_CPU_SYMBOL(current_tinfo);
++
+ #ifdef CONFIG_X86_64
+ struct desc_ptr idt_descr = { NR_VECTORS * 16 - 1, (unsigned long) idt_table };
+ 
+@@ -995,7 +948,7 @@ DEFINE_PER_CPU(struct task_struct *, cur
+ EXPORT_PER_CPU_SYMBOL(current_task);
+ 
+ DEFINE_PER_CPU(unsigned long, kernel_stack) =
+-	(unsigned long)&init_thread_union - KERNEL_STACK_OFFSET + THREAD_SIZE;
++	(unsigned long)&init_thread_union - 8 + THREAD_SIZE;
+ EXPORT_PER_CPU_SYMBOL(kernel_stack);
+ 
+ DEFINE_PER_CPU(char *, irq_stack_ptr) =
+@@ -1060,7 +1013,7 @@ struct pt_regs * __cpuinit idle_regs(str
  {
  	memset(regs, 0, sizeof(struct pt_regs));
  	regs->fs = __KERNEL_PERCPU;
@@ -10705,7 +10955,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  	return regs;
  }
-@@ -1101,7 +1051,7 @@ void __cpuinit cpu_init(void)
+@@ -1101,7 +1054,7 @@ void __cpuinit cpu_init(void)
  	int i;
  
  	cpu = stack_smp_processor_id();
@@ -10714,7 +10964,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	orig_ist = &per_cpu(orig_ist, cpu);
  
  #ifdef CONFIG_NUMA
-@@ -1127,7 +1077,7 @@ void __cpuinit cpu_init(void)
+@@ -1127,7 +1080,7 @@ void __cpuinit cpu_init(void)
  	switch_to_new_gdt(cpu);
  	loadsegment(fs, 0);
  
@@ -10723,7 +10973,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  	memset(me->thread.tls_array, 0, GDT_ENTRY_TLS_ENTRIES * 8);
  	syscall_init();
-@@ -1136,7 +1086,6 @@ void __cpuinit cpu_init(void)
+@@ -1136,7 +1089,6 @@ void __cpuinit cpu_init(void)
  	wrmsrl(MSR_KERNEL_GS_BASE, 0);
  	barrier();
  
@@ -10731,7 +10981,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	if (cpu != 0)
  		enable_x2apic();
  
-@@ -1199,7 +1148,7 @@ void __cpuinit cpu_init(void)
+@@ -1199,7 +1151,7 @@ void __cpuinit cpu_init(void)
  {
  	int cpu = smp_processor_id();
  	struct task_struct *curr = current;
@@ -11090,8 +11340,66 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  		.__cr3		= __pa_nodebug(swapper_pg_dir),
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/dumpstack.c linux-2.6.32.36-pax/arch/x86/kernel/dumpstack.c
 --- linux-2.6.32.36/arch/x86/kernel/dumpstack.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/dumpstack.c	2010-12-16 23:50:54.000000000 +0100
-@@ -180,7 +180,7 @@ void dump_stack(void)
++++ linux-2.6.32.36-pax/arch/x86/kernel/dumpstack.c	2011-04-16 01:19:58.000000000 +0200
+@@ -36,9 +36,8 @@ void printk_address(unsigned long addres
+ static void
+ print_ftrace_graph_addr(unsigned long addr, void *data,
+ 			const struct stacktrace_ops *ops,
+-			struct thread_info *tinfo, int *graph)
++			struct task_struct *task, int *graph)
+ {
+-	struct task_struct *task = tinfo->task;
+ 	unsigned long ret_addr;
+ 	int index = task->curr_ret_stack;
+ 
+@@ -59,7 +58,7 @@ print_ftrace_graph_addr(unsigned long ad
+ static inline void
+ print_ftrace_graph_addr(unsigned long addr, void *data,
+ 			const struct stacktrace_ops *ops,
+-			struct thread_info *tinfo, int *graph)
++			struct task_struct *task, int *graph)
+ { }
+ #endif
+ 
+@@ -70,10 +69,8 @@ print_ftrace_graph_addr(unsigned long ad
+  * severe exception (double fault, nmi, stack fault, debug, mce) hardware stack
+  */
+ 
+-static inline int valid_stack_ptr(struct thread_info *tinfo,
+-			void *p, unsigned int size, void *end)
++static inline int valid_stack_ptr(void *t, void *p, unsigned int size, void *end)
+ {
+-	void *t = tinfo;
+ 	if (end) {
+ 		if (p < end && p >= (end-THREAD_SIZE))
+ 			return 1;
+@@ -84,14 +81,14 @@ static inline int valid_stack_ptr(struct
+ }
+ 
+ unsigned long
+-print_context_stack(struct thread_info *tinfo,
++print_context_stack(struct task_struct *task, void *stack_start,
+ 		unsigned long *stack, unsigned long bp,
+ 		const struct stacktrace_ops *ops, void *data,
+ 		unsigned long *end, int *graph)
+ {
+ 	struct stack_frame *frame = (struct stack_frame *)bp;
+ 
+-	while (valid_stack_ptr(tinfo, stack, sizeof(*stack), end)) {
++	while (valid_stack_ptr(stack_start, stack, sizeof(*stack), end)) {
+ 		unsigned long addr;
+ 
+ 		addr = *stack;
+@@ -103,7 +100,7 @@ print_context_stack(struct thread_info *
+ 			} else {
+ 				ops->address(data, addr, 0);
+ 			}
+-			print_ftrace_graph_addr(addr, data, ops, tinfo, graph);
++			print_ftrace_graph_addr(addr, data, ops, task, graph);
+ 		}
+ 		stack++;
+ 	}
+@@ -180,7 +177,7 @@ void dump_stack(void)
  #endif
  
  	printk("Pid: %d, comm: %.20s %s %s %.*s\n",
@@ -11100,7 +11408,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  		init_utsname()->release,
  		(int)strcspn(init_utsname()->version, " "),
  		init_utsname()->version);
-@@ -241,7 +241,7 @@ void __kprobes oops_end(unsigned long fl
+@@ -241,7 +238,7 @@ void __kprobes oops_end(unsigned long fl
  		panic("Fatal exception in interrupt");
  	if (panic_on_oops)
  		panic("Fatal exception");
@@ -11109,7 +11417,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  }
  
  int __kprobes __die(const char *str, struct pt_regs *regs, long err)
-@@ -295,7 +295,7 @@ void die(const char *str, struct pt_regs
+@@ -295,7 +292,7 @@ void die(const char *str, struct pt_regs
  	unsigned long flags = oops_begin();
  	int sig = SIGSEGV;
  
@@ -11118,10 +11426,43 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  		report_bug(regs->ip, regs);
  
  	if (__die(str, regs, err))
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/dumpstack.h linux-2.6.32.36-pax/arch/x86/kernel/dumpstack.h
+--- linux-2.6.32.36/arch/x86/kernel/dumpstack.h	2009-09-10 19:41:13.000000000 +0200
++++ linux-2.6.32.36-pax/arch/x86/kernel/dumpstack.h	2011-04-16 02:17:39.000000000 +0200
+@@ -15,7 +15,7 @@
+ #endif
+ 
+ extern unsigned long
+-print_context_stack(struct thread_info *tinfo,
++print_context_stack(struct task_struct *task, void *stack_start,
+ 		unsigned long *stack, unsigned long bp,
+ 		const struct stacktrace_ops *ops, void *data,
+ 		unsigned long *end, int *graph);
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/dumpstack_32.c linux-2.6.32.36-pax/arch/x86/kernel/dumpstack_32.c
 --- linux-2.6.32.36/arch/x86/kernel/dumpstack_32.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/dumpstack_32.c	2010-12-16 23:50:54.000000000 +0100
-@@ -112,11 +112,12 @@ void show_registers(struct pt_regs *regs
++++ linux-2.6.32.36-pax/arch/x86/kernel/dumpstack_32.c	2011-04-16 02:03:56.000000000 +0200
+@@ -53,16 +53,12 @@ void dump_trace(struct task_struct *task
+ #endif
+ 
+ 	for (;;) {
+-		struct thread_info *context;
++		void *stack_start = (void *)((unsigned long)stack & ~(THREAD_SIZE-1));
++		bp = print_context_stack(task, stack_start, stack, bp, ops, data, NULL, &graph);
+ 
+-		context = (struct thread_info *)
+-			((unsigned long)stack & (~(THREAD_SIZE - 1)));
+-		bp = print_context_stack(context, stack, bp, ops,
+-					 data, NULL, &graph);
+-
+-		stack = (unsigned long *)context->previous_esp;
+-		if (!stack)
++		if (stack_start == task_stack_page(task))
+ 			break;
++		stack = *(unsigned long **)stack_start;
+ 		if (ops->stack(data, "IRQ") < 0)
+ 			break;
+ 		touch_nmi_watchdog();
+@@ -112,11 +108,12 @@ void show_registers(struct pt_regs *regs
  	 * When in-kernel, we also print out the stack and code at the
  	 * time of the fault..
  	 */
@@ -11135,7 +11476,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  		printk(KERN_EMERG "Stack:\n");
  		show_stack_log_lvl(NULL, regs, &regs->sp,
-@@ -124,10 +125,10 @@ void show_registers(struct pt_regs *regs
+@@ -124,10 +121,10 @@ void show_registers(struct pt_regs *regs
  
  		printk(KERN_EMERG "Code: ");
  
@@ -11148,7 +11489,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  			code_len = code_len - code_prologue + 1;
  		}
  		for (i = 0; i < code_len; i++, ip++) {
-@@ -136,7 +137,7 @@ void show_registers(struct pt_regs *regs
+@@ -136,7 +133,7 @@ void show_registers(struct pt_regs *regs
  				printk(" Bad EIP value.");
  				break;
  			}
@@ -11157,7 +11498,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  				printk("<%02x> ", c);
  			else
  				printk("%02x ", c);
-@@ -149,6 +150,7 @@ int is_valid_bugaddr(unsigned long ip)
+@@ -149,6 +146,7 @@ int is_valid_bugaddr(unsigned long ip)
  {
  	unsigned short ud2;
  
@@ -11165,6 +11506,59 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	if (ip < PAGE_OFFSET)
  		return 0;
  	if (probe_kernel_address((unsigned short *)ip, ud2))
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/dumpstack_64.c linux-2.6.32.36-pax/arch/x86/kernel/dumpstack_64.c
+--- linux-2.6.32.36/arch/x86/kernel/dumpstack_64.c	2009-12-03 15:01:41.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/kernel/dumpstack_64.c	2011-04-16 01:55:01.000000000 +0200
+@@ -116,8 +116,8 @@ void dump_trace(struct task_struct *task
+ 	unsigned long *irq_stack_end =
+ 		(unsigned long *)per_cpu(irq_stack_ptr, cpu);
+ 	unsigned used = 0;
+-	struct thread_info *tinfo;
+ 	int graph = 0;
++	void *stack_start;
+ 
+ 	if (!task)
+ 		task = current;
+@@ -146,10 +146,10 @@ void dump_trace(struct task_struct *task
+ 	 * current stack address. If the stacks consist of nested
+ 	 * exceptions
+ 	 */
+-	tinfo = task_thread_info(task);
+ 	for (;;) {
+ 		char *id;
+ 		unsigned long *estack_end;
++
+ 		estack_end = in_exception_stack(cpu, (unsigned long)stack,
+ 						&used, &id);
+ 
+@@ -157,7 +157,7 @@ void dump_trace(struct task_struct *task
+ 			if (ops->stack(data, id) < 0)
+ 				break;
+ 
+-			bp = print_context_stack(tinfo, stack, bp, ops,
++			bp = print_context_stack(task, estack_end - EXCEPTION_STKSZ, stack, bp, ops,
+ 						 data, estack_end, &graph);
+ 			ops->stack(data, "<EOE>");
+ 			/*
+@@ -176,7 +176,7 @@ void dump_trace(struct task_struct *task
+ 			if (stack >= irq_stack && stack < irq_stack_end) {
+ 				if (ops->stack(data, "IRQ") < 0)
+ 					break;
+-				bp = print_context_stack(tinfo, stack, bp,
++				bp = print_context_stack(task, irq_stack, stack, bp,
+ 					ops, data, irq_stack_end, &graph);
+ 				/*
+ 				 * We link to the next stack (which would be
+@@ -195,7 +195,8 @@ void dump_trace(struct task_struct *task
+ 	/*
+ 	 * This handles the process stack:
+ 	 */
+-	bp = print_context_stack(tinfo, stack, bp, ops, data, NULL, &graph);
++	stack_start = (void *)((unsigned long)stack & ~(THREAD_SIZE-1));
++	bp = print_context_stack(task, stack_start, stack, bp, ops, data, NULL, &graph);
+ 	put_cpu();
+ }
+ EXPORT_SYMBOL(dump_trace);
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/e820.c linux-2.6.32.36-pax/arch/x86/kernel/e820.c
 --- linux-2.6.32.36/arch/x86/kernel/e820.c	2011-03-24 10:56:45.000000000 +0100
 +++ linux-2.6.32.36-pax/arch/x86/kernel/e820.c	2011-03-24 10:56:53.000000000 +0100
@@ -11724,7 +12118,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	CFI_ADJUST_CFA_OFFSET -24
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/entry_64.S linux-2.6.32.36-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.36/arch/x86/kernel/entry_64.S	2011-03-24 10:56:45.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/entry_64.S	2011-03-24 10:56:53.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/kernel/entry_64.S	2011-04-16 01:19:58.000000000 +0200
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -11733,7 +12127,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -174,6 +175,201 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +175,206 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -11824,6 +12218,11 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
 +	.macro pax_exit_kernel_user
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	call pax_exit_kernel_user
++#endif
++#ifdef CONFIG_PAX_RANDKSTACK
++	push %rax
++	call pax_randomize_kstack
++	pop %rax
 +#endif
 +	.endm
 +
@@ -11935,7 +12334,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -317,7 +513,7 @@ ENTRY(save_args)
+@@ -317,7 +518,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -11944,7 +12343,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	je 1f
  	SWAPGS
  	/*
-@@ -409,7 +605,7 @@ ENTRY(ret_from_fork)
+@@ -409,7 +610,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -11953,7 +12352,16 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -468,6 +664,7 @@ ENTRY(system_call_after_swapgs)
+@@ -455,7 +656,7 @@ END(ret_from_fork)
+ ENTRY(system_call)
+ 	CFI_STARTPROC	simple
+ 	CFI_SIGNAL_FRAME
+-	CFI_DEF_CFA	rsp,KERNEL_STACK_OFFSET
++	CFI_DEF_CFA	rsp,0
+ 	CFI_REGISTER	rip,rcx
+ 	/*CFI_REGISTER	rflags,r11*/
+ 	SWAPGS_UNSAFE_STACK
+@@ -468,12 +669,13 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -11961,7 +12369,14 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	/*
  	 * No need to follow this irqs off/on section - it's straight
  	 * and short:
-@@ -502,6 +699,7 @@ sysret_check:
+ 	 */
+ 	ENABLE_INTERRUPTS(CLBR_NONE)
+-	SAVE_ARGS 8,1
++	SAVE_ARGS 8*6,1
+ 	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
+ 	movq  %rcx,RIP-ARGOFFSET(%rsp)
+ 	CFI_REL_OFFSET rip,RIP-ARGOFFSET
+@@ -502,6 +704,7 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -11969,7 +12384,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -613,7 +811,7 @@ tracesys:
+@@ -613,7 +816,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -11978,7 +12393,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -800,6 +998,16 @@ END(interrupt)
+@@ -800,6 +1003,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
@@ -11995,7 +12410,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	call \func
  	.endm
  
-@@ -822,7 +1030,7 @@ ret_from_intr:
+@@ -822,7 +1035,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -12004,7 +12419,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -844,12 +1052,14 @@ retint_swapgs:		/* return to user-space
+@@ -844,12 +1057,14 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -12019,7 +12434,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1032,6 +1242,16 @@ ENTRY(\sym)
+@@ -1032,6 +1247,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12036,7 +12451,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1049,6 +1269,16 @@ ENTRY(\sym)
+@@ -1049,6 +1274,16 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12053,7 +12468,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1066,9 +1296,24 @@ ENTRY(\sym)
+@@ -1066,9 +1301,24 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12079,7 +12494,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
-@@ -1085,6 +1330,16 @@ ENTRY(\sym)
+@@ -1085,6 +1335,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12096,7 +12511,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1104,6 +1359,16 @@ ENTRY(\sym)
+@@ -1104,6 +1364,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -12113,7 +12528,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1405,14 +1670,27 @@ ENTRY(paranoid_exit)
+@@ -1405,14 +1675,27 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -12142,7 +12557,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
-@@ -1470,7 +1748,7 @@ ENTRY(error_entry)
+@@ -1470,7 +1753,7 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -12151,7 +12566,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	je error_kernelspace
  error_swapgs:
  	SWAPGS
-@@ -1529,6 +1807,16 @@ ENTRY(nmi)
+@@ -1529,6 +1812,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -12168,7 +12583,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1539,11 +1827,25 @@ ENTRY(nmi)
+@@ -1539,11 +1832,25 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -13054,8 +13469,18 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
 +#endif
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/init_task.c linux-2.6.32.36-pax/arch/x86/kernel/init_task.c
 --- linux-2.6.32.36/arch/x86/kernel/init_task.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/init_task.c	2010-12-16 23:50:54.000000000 +0100
-@@ -38,5 +38,5 @@ EXPORT_SYMBOL(init_task);
++++ linux-2.6.32.36-pax/arch/x86/kernel/init_task.c	2011-04-16 01:19:58.000000000 +0200
+@@ -20,8 +20,7 @@ static struct sighand_struct init_sighan
+  * way process stacks are handled. This is done by having a special
+  * "init_task" linker map entry..
+  */
+-union thread_union init_thread_union __init_task_data =
+-	{ INIT_THREAD_INFO(init_task) };
++union thread_union init_thread_union __init_task_data;
+ 
+ /*
+  * Initial task structure.
+@@ -38,5 +37,5 @@ EXPORT_SYMBOL(init_task);
   * section. Since TSS's are completely CPU-local, we want them
   * on exact cacheline boundaries, to eliminate cacheline ping-pong.
   */
@@ -13077,54 +13502,144 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/irq_32.c linux-2.6.32.36-pax/arch/x86/kernel/irq_32.c
 --- linux-2.6.32.36/arch/x86/kernel/irq_32.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/irq_32.c	2010-12-23 00:46:56.000000000 +0100
-@@ -94,7 +94,7 @@ execute_on_irq_stack(int overflow, struc
++++ linux-2.6.32.36-pax/arch/x86/kernel/irq_32.c	2011-04-16 02:23:21.000000000 +0200
+@@ -35,7 +35,7 @@ static int check_stack_overflow(void)
+ 	__asm__ __volatile__("andl %%esp,%0" :
+ 			     "=r" (sp) : "0" (THREAD_SIZE - 1));
+ 
+-	return sp < (sizeof(struct thread_info) + STACK_WARN);
++	return sp < STACK_WARN;
+ }
+ 
+ static void print_stack_overflow(void)
+@@ -54,9 +54,9 @@ static inline void print_stack_overflow(
+  * per-CPU IRQ handling contexts (thread information and stack)
+  */
+ union irq_ctx {
+-	struct thread_info      tinfo;
+-	u32                     stack[THREAD_SIZE/sizeof(u32)];
+-} __attribute__((aligned(PAGE_SIZE)));
++	unsigned long		previous_esp;
++	u32			stack[THREAD_SIZE/sizeof(u32)];
++} __attribute__((aligned(THREAD_SIZE)));
+ 
+ static DEFINE_PER_CPU(union irq_ctx *, hardirq_ctx);
+ static DEFINE_PER_CPU(union irq_ctx *, softirq_ctx);
+@@ -78,10 +78,9 @@ static void call_on_stack(void *func, vo
+ static inline int
+ execute_on_irq_stack(int overflow, struct irq_desc *desc, int irq)
+ {
+-	union irq_ctx *curctx, *irqctx;
++	union irq_ctx *irqctx;
+ 	u32 *isp, arg1, arg2;
+ 
+-	curctx = (union irq_ctx *) current_thread_info();
+ 	irqctx = __get_cpu_var(hardirq_ctx);
+ 
+ 	/*
+@@ -90,21 +89,17 @@ execute_on_irq_stack(int overflow, struc
+ 	 * handler) we can't do that and just have to keep using the
+ 	 * current stack (which is the irq stack already after all)
+ 	 */
+-	if (unlikely(curctx == irqctx))
++	if (unlikely((void *)current_stack_pointer - (void *)irqctx < THREAD_SIZE))
  		return 0;
  
  	/* build the stack frame on the IRQ stack */
 -	isp = (u32 *) ((char *)irqctx + sizeof(*irqctx));
+-	irqctx->tinfo.task = curctx->tinfo.task;
+-	irqctx->tinfo.previous_esp = current_stack_pointer;
 +	isp = (u32 *) ((char *)irqctx + sizeof(*irqctx) - 8);
- 	irqctx->tinfo.task = curctx->tinfo.task;
- 	irqctx->tinfo.previous_esp = current_stack_pointer;
++	irqctx->previous_esp = current_stack_pointer;
++	add_preempt_count(HARDIRQ_OFFSET);
  
-@@ -106,6 +106,10 @@ execute_on_irq_stack(int overflow, struc
- 		(irqctx->tinfo.preempt_count & ~SOFTIRQ_MASK) |
- 		(curctx->tinfo.preempt_count & SOFTIRQ_MASK);
- 
+-	/*
+-	 * Copy the softirq bits in preempt_count so that the
+-	 * softirq checks work in the hardirq context.
+-	 */
+-	irqctx->tinfo.preempt_count =
+-		(irqctx->tinfo.preempt_count & ~SOFTIRQ_MASK) |
+-		(curctx->tinfo.preempt_count & SOFTIRQ_MASK);
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	__set_fs(irqctx->tinfo.addr_limit);
++	__set_fs(MAKE_MM_SEG(0));
 +#endif
-+
+ 
  	if (unlikely(overflow))
  		call_on_stack(print_stack_overflow, isp);
- 
-@@ -116,6 +120,11 @@ execute_on_irq_stack(int overflow, struc
+@@ -116,6 +111,12 @@ execute_on_irq_stack(int overflow, struc
  		     :  "0" (irq),   "1" (desc),  "2" (isp),
  			"D" (desc->handle_irq)
  		     : "memory", "cc", "ecx");
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	__set_fs(curctx->tinfo.addr_limit);
++	__set_fs(current_thread_info()->addr_limit);
 +#endif
 +
++	sub_preempt_count(HARDIRQ_OFFSET);
  	return 1;
  }
  
-@@ -175,9 +184,18 @@ asmlinkage void do_softirq(void)
- 		irqctx->tinfo.previous_esp = current_stack_pointer;
+@@ -124,28 +125,11 @@ execute_on_irq_stack(int overflow, struc
+  */
+ void __cpuinit irq_ctx_init(int cpu)
+ {
+-	union irq_ctx *irqctx;
+-
+ 	if (per_cpu(hardirq_ctx, cpu))
+ 		return;
+ 
+-	irqctx = &per_cpu(hardirq_stack, cpu);
+-	irqctx->tinfo.task		= NULL;
+-	irqctx->tinfo.exec_domain	= NULL;
+-	irqctx->tinfo.cpu		= cpu;
+-	irqctx->tinfo.preempt_count	= HARDIRQ_OFFSET;
+-	irqctx->tinfo.addr_limit	= MAKE_MM_SEG(0);
+-
+-	per_cpu(hardirq_ctx, cpu) = irqctx;
+-
+-	irqctx = &per_cpu(softirq_stack, cpu);
+-	irqctx->tinfo.task		= NULL;
+-	irqctx->tinfo.exec_domain	= NULL;
+-	irqctx->tinfo.cpu		= cpu;
+-	irqctx->tinfo.preempt_count	= 0;
+-	irqctx->tinfo.addr_limit	= MAKE_MM_SEG(0);
+-
+-	per_cpu(softirq_ctx, cpu) = irqctx;
++	per_cpu(hardirq_ctx, cpu) = &per_cpu(hardirq_stack, cpu);
++	per_cpu(softirq_ctx, cpu) = &per_cpu(softirq_stack, cpu);
+ 
+ 	printk(KERN_DEBUG "CPU %u irqstacks, hard=%p soft=%p\n",
+ 	       cpu, per_cpu(hardirq_ctx, cpu),  per_cpu(softirq_ctx, cpu));
+@@ -159,7 +143,6 @@ void irq_ctx_exit(int cpu)
+ asmlinkage void do_softirq(void)
+ {
+ 	unsigned long flags;
+-	struct thread_info *curctx;
+ 	union irq_ctx *irqctx;
+ 	u32 *isp;
+ 
+@@ -169,15 +152,22 @@ asmlinkage void do_softirq(void)
+ 	local_irq_save(flags);
+ 
+ 	if (local_softirq_pending()) {
+-		curctx = current_thread_info();
+ 		irqctx = __get_cpu_var(softirq_ctx);
+-		irqctx->tinfo.task = curctx->task;
+-		irqctx->tinfo.previous_esp = current_stack_pointer;
++		irqctx->previous_esp = current_stack_pointer;
  
  		/* build the stack frame on the softirq stack */
 -		isp = (u32 *) ((char *)irqctx + sizeof(*irqctx));
 +		isp = (u32 *) ((char *)irqctx + sizeof(*irqctx) - 8);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		__set_fs(irqctx->tinfo.addr_limit);
++		__set_fs(MAKE_MM_SEG(0));
 +#endif
  
  		call_on_stack(__do_softirq, isp);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		__set_fs(curctx->addr_limit);
++		__set_fs(current_thread_info()->addr_limit);
 +#endif
 +
  		/*
@@ -13745,8 +14260,46 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	.free_coherent = swiotlb_free_coherent,
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/process.c linux-2.6.32.36-pax/arch/x86/kernel/process.c
 --- linux-2.6.32.36/arch/x86/kernel/process.c	2010-05-28 22:44:09.000000000 +0200
-+++ linux-2.6.32.36-pax/arch/x86/kernel/process.c	2010-12-17 00:09:56.000000000 +0100
-@@ -73,7 +73,7 @@ void exit_thread(void)
++++ linux-2.6.32.36-pax/arch/x86/kernel/process.c	2011-04-16 01:19:58.000000000 +0200
+@@ -51,16 +51,33 @@ void free_thread_xstate(struct task_stru
+ 
+ void free_thread_info(struct thread_info *ti)
+ {
+-	free_thread_xstate(ti->task);
+ 	free_pages((unsigned long)ti, get_order(THREAD_SIZE));
+ }
+ 
++static struct kmem_cache *task_struct_cachep;
++
+ void arch_task_cache_init(void)
+ {
+-        task_xstate_cachep =
+-        	kmem_cache_create("task_xstate", xstate_size,
++	/* create a slab on which task_structs can be allocated */
++	task_struct_cachep =
++		kmem_cache_create("task_struct", sizeof(struct task_struct),
++			ARCH_MIN_TASKALIGN, SLAB_PANIC | SLAB_NOTRACK, NULL);
++
++	task_xstate_cachep =
++		kmem_cache_create("task_xstate", xstate_size,
+ 				  __alignof__(union thread_xstate),
+-				  SLAB_PANIC | SLAB_NOTRACK, NULL);
++				  SLAB_PANIC | SLAB_NOTRACK | SLAB_USERCOPY, NULL);
++}
++
++struct task_struct *alloc_task_struct(void)
++{
++	return kmem_cache_alloc(task_struct_cachep, GFP_KERNEL);
++}
++
++void free_task_struct(struct task_struct *task)
++{
++	free_thread_xstate(task);
++	kmem_cache_free(task_struct_cachep, task);
+ }
+ 
+ /*
+@@ -73,7 +90,7 @@ void exit_thread(void)
  	unsigned long *bp = t->io_bitmap_ptr;
  
  	if (bp) {
@@ -13755,7 +14308,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
  		t->io_bitmap_ptr = NULL;
  		clear_thread_flag(TIF_IO_BITMAP);
-@@ -93,6 +93,9 @@ void flush_thread(void)
+@@ -93,6 +110,9 @@ void flush_thread(void)
  
  	clear_tsk_thread_flag(tsk, TIF_DEBUG);
  
@@ -13765,27 +14318,51 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	tsk->thread.debugreg0 = 0;
  	tsk->thread.debugreg1 = 0;
  	tsk->thread.debugreg2 = 0;
-@@ -602,17 +605,3 @@ static int __init idle_setup(char *str)
- 	return 0;
+@@ -603,16 +623,31 @@ static int __init idle_setup(char *str)
  }
  early_param("idle", idle_setup);
--
+ 
 -unsigned long arch_align_stack(unsigned long sp)
--{
++#ifdef CONFIG_PAX_RANDKSTACK
++asmlinkage void pax_randomize_kstack(void)
+ {
 -	if (!(current->personality & ADDR_NO_RANDOMIZE) && randomize_va_space)
 -		sp -= get_random_int() % 8192;
 -	return sp & ~0xf;
 -}
--
++	struct thread_struct *thread = &current->thread;
++	unsigned long time;
+ 
 -unsigned long arch_randomize_brk(struct mm_struct *mm)
 -{
 -	unsigned long range_end = mm->brk + 0x02000000;
 -	return randomize_range(mm->brk, range_end, 0) ? : mm->brk;
 -}
--
++	if (!randomize_va_space)
++		return;
++
++	rdtscl(time);
++
++	/* P4 seems to return a 0 LSB, ignore it */
++#ifdef CONFIG_MPENTIUM4
++	time &= 0x1EUL;
++	time <<= 2;
++#else
++	time &= 0xFUL;
++	time <<= 3;
++#endif
++
++	thread->sp0 ^= time;
++	load_sp0(init_tss + smp_processor_id(), thread);
+ 
++#ifdef CONFIG_X86_64
++	percpu_write(kernel_stack, thread->sp0);
++#endif
++}
++#endif
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/process_32.c linux-2.6.32.36-pax/arch/x86/kernel/process_32.c
 --- linux-2.6.32.36/arch/x86/kernel/process_32.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/process_32.c	2010-12-23 00:46:56.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/kernel/process_32.c	2011-04-16 01:19:58.000000000 +0200
 @@ -67,6 +67,7 @@ asmlinkage void ret_from_fork(void) __as
  unsigned long thread_saved_pc(struct task_struct *tsk)
  {
@@ -13855,37 +14432,33 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	/*
  	 * Load the per-thread Thread-Local Storage descriptor.
  	 */
-@@ -497,3 +501,27 @@ unsigned long get_wchan(struct task_stru
- 	return 0;
+@@ -416,6 +420,9 @@ __switch_to(struct task_struct *prev_p,
+ 	 */
+ 	arch_end_context_switch(next_p);
+ 
++	percpu_write(current_task, next_p);
++	percpu_write(current_tinfo, &next_p->tinfo);
++
+ 	if (preload_fpu)
+ 		__math_state_restore();
+ 
+@@ -425,8 +432,6 @@ __switch_to(struct task_struct *prev_p,
+ 	if (prev->gs | next->gs)
+ 		lazy_load_gs(next->gs);
+ 
+-	percpu_write(current_task, next_p);
+-
+ 	return prev_p;
  }
  
-+#ifdef CONFIG_PAX_RANDKSTACK
-+asmlinkage void pax_randomize_kstack(void)
-+{
-+	struct thread_struct *thread = &current->thread;
-+	unsigned long time;
-+
-+	if (!randomize_va_space)
-+		return;
-+
-+	rdtscl(time);
-+
-+	/* P4 seems to return a 0 LSB, ignore it */
-+#ifdef CONFIG_MPENTIUM4
-+	time &= 0x1EUL;
-+	time <<= 2;
-+#else
-+	time &= 0xFUL;
-+	time <<= 3;
-+#endif
-+
-+	thread->sp0 ^= time;
-+	load_sp0(init_tss + smp_processor_id(), thread);
-+}
-+#endif
+@@ -496,4 +501,3 @@ unsigned long get_wchan(struct task_stru
+ 	} while (count++ < 16);
+ 	return 0;
+ }
+-
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/process_64.c linux-2.6.32.36-pax/arch/x86/kernel/process_64.c
 --- linux-2.6.32.36/arch/x86/kernel/process_64.c	2010-05-15 01:29:31.000000000 +0200
-+++ linux-2.6.32.36-pax/arch/x86/kernel/process_64.c	2010-12-16 23:50:54.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/kernel/process_64.c	2011-04-16 01:19:58.000000000 +0200
 @@ -91,7 +91,7 @@ static void __exit_idle(void)
  void exit_idle(void)
  {
@@ -13904,7 +14477,17 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  		init_utsname()->release,
  		(int)strcspn(init_utsname()->version, " "),
  		init_utsname()->version, board);
-@@ -380,7 +380,7 @@ __switch_to(struct task_struct *prev_p,
+@@ -280,8 +280,7 @@ int copy_thread(unsigned long clone_flag
+ 	struct pt_regs *childregs;
+ 	struct task_struct *me = current;
+ 
+-	childregs = ((struct pt_regs *)
+-			(THREAD_SIZE + task_stack_page(p))) - 1;
++	childregs = task_stack_page(p) + THREAD_SIZE - sizeof(struct pt_regs) - 8;
+ 	*childregs = *regs;
+ 
+ 	childregs->ax = 0;
+@@ -380,7 +379,7 @@ __switch_to(struct task_struct *prev_p,
  	struct thread_struct *prev = &prev_p->thread;
  	struct thread_struct *next = &next_p->thread;
  	int cpu = smp_processor_id();
@@ -13913,7 +14496,20 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	unsigned fsindex, gsindex;
  	bool preload_fpu;
  
-@@ -560,12 +560,11 @@ unsigned long get_wchan(struct task_stru
+@@ -476,10 +475,9 @@ __switch_to(struct task_struct *prev_p,
+ 	prev->usersp = percpu_read(old_rsp);
+ 	percpu_write(old_rsp, next->usersp);
+ 	percpu_write(current_task, next_p);
++	percpu_write(current_tinfo, &next_p->tinfo);
+ 
+-	percpu_write(kernel_stack,
+-		  (unsigned long)task_stack_page(next_p) +
+-		  THREAD_SIZE - KERNEL_STACK_OFFSET);
++	percpu_write(kernel_stack, next->sp0);
+ 
+ 	/*
+ 	 * Now maybe reload the debug registers and handle I/O bitmaps
+@@ -560,12 +558,11 @@ unsigned long get_wchan(struct task_stru
  	if (!p || p == current || p->state == TASK_RUNNING)
  		return 0;
  	stack = (unsigned long)task_stack_page(p);
@@ -14264,7 +14860,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	if (current_thread_info()->status & TS_RESTORE_SIGMASK)
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/smpboot.c linux-2.6.32.36-pax/arch/x86/kernel/smpboot.c
 --- linux-2.6.32.36/arch/x86/kernel/smpboot.c	2011-01-12 15:11:33.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/smpboot.c	2011-01-12 15:11:41.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/kernel/smpboot.c	2011-04-16 02:05:10.000000000 +0200
 @@ -94,14 +94,14 @@ static DEFINE_PER_CPU(struct task_struct
   */
  static DEFINE_MUTEX(x86_cpu_hotplug_driver_mutex);
@@ -14284,9 +14880,22 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  }
  
  ssize_t arch_cpu_probe(const char *buf, size_t count) { return -1; }
-@@ -754,7 +754,11 @@ do_rest:
- 		(unsigned long)task_stack_page(c_idle.idle) -
- 		KERNEL_STACK_OFFSET + THREAD_SIZE;
+@@ -743,6 +743,7 @@ static int __cpuinit do_boot_cpu(int api
+ 	set_idle_for_cpu(cpu, c_idle.idle);
+ do_rest:
+ 	per_cpu(current_task, cpu) = c_idle.idle;
++	per_cpu(current_tinfo, cpu) = &c_idle.idle->tinfo;
+ #ifdef CONFIG_X86_32
+ 	/* Stack for startup_32 can be just as for start_secondary onwards */
+ 	irq_ctx_init(cpu);
+@@ -750,11 +751,13 @@ do_rest:
+ #else
+ 	clear_tsk_thread_flag(c_idle.idle, TIF_FORK);
+ 	initial_gs = per_cpu_offset(cpu);
+-	per_cpu(kernel_stack, cpu) =
+-		(unsigned long)task_stack_page(c_idle.idle) -
+-		KERNEL_STACK_OFFSET + THREAD_SIZE;
++	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(c_idle.idle) - 8 + THREAD_SIZE;
  #endif
 +
 +	pax_open_kernel();
@@ -14296,7 +14905,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	initial_code = (unsigned long)start_secondary;
  	stack_start.sp = (void *) c_idle.idle->thread.sp;
  
-@@ -891,6 +895,12 @@ int __cpuinit native_cpu_up(unsigned int
+@@ -891,6 +894,12 @@ int __cpuinit native_cpu_up(unsigned int
  
  	per_cpu(cpu_state, cpu) = CPU_UP_PREPARE;
  
@@ -14880,7 +15489,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  	.quad	0x00cf9b000000ffff	# __KERNEL32_CS
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/traps.c linux-2.6.32.36-pax/arch/x86/kernel/traps.c
 --- linux-2.6.32.36/arch/x86/kernel/traps.c	2009-12-03 15:01:41.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/kernel/traps.c	2010-12-16 23:50:54.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/kernel/traps.c	2011-04-16 01:19:58.000000000 +0200
 @@ -69,12 +69,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -15030,6 +15639,25 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  		handle_vm86_fault((struct kernel_vm86_regs *)regs, error_code);
  		return;
  	}
+@@ -798,7 +827,7 @@ asmlinkage void __attribute__((weak)) sm
+ void __math_state_restore(void)
+ {
+ 	struct thread_info *thread = current_thread_info();
+-	struct task_struct *tsk = thread->task;
++	struct task_struct *tsk = current;
+ 
+ 	/*
+ 	 * Paranoid restore. send a SIGSEGV if we fail to restore the state.
+@@ -825,8 +854,7 @@ void __math_state_restore(void)
+  */
+ asmlinkage void math_state_restore(void)
+ {
+-	struct thread_info *thread = current_thread_info();
+-	struct task_struct *tsk = thread->task;
++	struct task_struct *tsk = current;
+ 
+ 	if (!tsk_used_math(tsk)) {
+ 		local_irq_enable();
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/kernel/tsc.c linux-2.6.32.36-pax/arch/x86/kernel/tsc.c
 --- linux-2.6.32.36/arch/x86/kernel/tsc.c	2011-02-24 20:07:53.000000000 +0100
 +++ linux-2.6.32.36-pax/arch/x86/kernel/tsc.c	2011-02-24 20:08:16.000000000 +0100
@@ -20212,13 +20840,13 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  #endif
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/vdso/Makefile linux-2.6.32.36-pax/arch/x86/vdso/Makefile
 --- linux-2.6.32.36/arch/x86/vdso/Makefile	2011-01-12 15:11:33.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/vdso/Makefile	2011-01-12 15:11:42.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/vdso/Makefile	2011-04-16 01:48:56.000000000 +0200
 @@ -122,7 +122,7 @@ quiet_cmd_vdso = VDSO    $@
  		       $(VDSO_LDFLAGS) $(VDSO_LDFLAGS_$(filter %.lds,$(^F))) \
  		       -Wl,-T,$(filter %.lds,$^) $(filter %.o,$^)
  
 -VDSO_LDFLAGS = -fPIC -shared $(call cc-ldoption, -Wl$(comma)--hash-style=sysv)
-+VDSO_LDFLAGS = -fPIC -shared --no-undefined $(call cc-ldoption, -Wl$(comma)--hash-style=sysv)
++VDSO_LDFLAGS = -fPIC -shared -Wl,--no-undefined $(call cc-ldoption, -Wl$(comma)--hash-style=sysv)
  GCOV_PROFILE := n
  
  #
@@ -20581,7 +21209,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/xen/smp.c linux-2.6.32.36-pax/arch/x86/xen/smp.c
 --- linux-2.6.32.36/arch/x86/xen/smp.c	2010-12-16 23:50:07.000000000 +0100
-+++ linux-2.6.32.36-pax/arch/x86/xen/smp.c	2010-12-17 00:07:56.000000000 +0100
++++ linux-2.6.32.36-pax/arch/x86/xen/smp.c	2011-04-16 01:19:58.000000000 +0200
 @@ -167,11 +167,6 @@ static void __init xen_smp_prepare_boot_
  {
  	BUG_ON(smp_processor_id() != 0);
@@ -20610,6 +21238,22 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/
  #else
  	ctxt->gs_base_kernel = per_cpu_offset(cpu);
  #endif
+@@ -287,13 +282,12 @@ static int __cpuinit xen_cpu_up(unsigned
+ 	int rc;
+ 
+ 	per_cpu(current_task, cpu) = idle;
++	per_cpu(current_tinfo, cpu) = &idle->tinfo;
+ #ifdef CONFIG_X86_32
+ 	irq_ctx_init(cpu);
+ #else
+ 	clear_tsk_thread_flag(idle, TIF_FORK);
+-	per_cpu(kernel_stack, cpu) =
+-		(unsigned long)task_stack_page(idle) -
+-		KERNEL_STACK_OFFSET + THREAD_SIZE;
++	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(idle) - 8 + THREAD_SIZE;
+ #endif
+ 	xen_setup_runstate_info(cpu);
+ 	xen_setup_timer(cpu);
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/arch/x86/xen/xen-head.S linux-2.6.32.36-pax/arch/x86/xen/xen-head.S
 --- linux-2.6.32.36/arch/x86/xen/xen-head.S	2009-06-10 08:46:22.000000000 +0200
 +++ linux-2.6.32.36-pax/arch/x86/xen/xen-head.S	2010-12-16 23:50:54.000000000 +0100
@@ -20712,6 +21356,36 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/block/blk
  	.show	= queue_attr_show,
  	.store	= queue_attr_store,
  };
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/block/bsg.c linux-2.6.32.36-pax/block/bsg.c
+--- linux-2.6.32.36/block/bsg.c	2010-11-04 13:27:51.000000000 +0100
++++ linux-2.6.32.36-pax/block/bsg.c	2011-04-16 01:19:58.000000000 +0200
+@@ -175,16 +175,24 @@ static int blk_fill_sgv4_hdr_rq(struct r
+ 				struct sg_io_v4 *hdr, struct bsg_device *bd,
+ 				fmode_t has_write_perm)
+ {
++	unsigned char tmpcmd[sizeof(rq->__cmd)];
++	unsigned char *cmdptr;
++
+ 	if (hdr->request_len > BLK_MAX_CDB) {
+ 		rq->cmd = kzalloc(hdr->request_len, GFP_KERNEL);
+ 		if (!rq->cmd)
+ 			return -ENOMEM;
+-	}
++		cmdptr = rq->cmd;
++	} else
++		cmdptr = tmpcmd;
+ 
+-	if (copy_from_user(rq->cmd, (void *)(unsigned long)hdr->request,
++	if (copy_from_user(cmdptr, (void *)(unsigned long)hdr->request,
+ 			   hdr->request_len))
+ 		return -EFAULT;
+ 
++	if (cmdptr != rq->cmd)
++		memcpy(rq->cmd, cmdptr, hdr->request_len);
++
+ 	if (hdr->subprotocol == BSG_SUB_PROTOCOL_SCSI_CMD) {
+ 		if (blk_verify_command(rq->cmd, has_write_perm))
+ 			return -EPERM;
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/block/elevator.c linux-2.6.32.36-pax/block/elevator.c
 --- linux-2.6.32.36/block/elevator.c	2009-12-03 15:01:42.000000000 +0100
 +++ linux-2.6.32.36-pax/block/elevator.c	2010-12-16 23:50:54.000000000 +0100
@@ -20724,6 +21398,60 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/block/ele
  	.show	= elv_attr_show,
  	.store	= elv_attr_store,
  };
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/block/scsi_ioctl.c linux-2.6.32.36-pax/block/scsi_ioctl.c
+--- linux-2.6.32.36/block/scsi_ioctl.c	2010-12-17 00:21:55.000000000 +0100
++++ linux-2.6.32.36-pax/block/scsi_ioctl.c	2011-04-16 01:19:58.000000000 +0200
+@@ -220,8 +220,20 @@ EXPORT_SYMBOL(blk_verify_command);
+ static int blk_fill_sghdr_rq(struct request_queue *q, struct request *rq,
+ 			     struct sg_io_hdr *hdr, fmode_t mode)
+ {
+-	if (copy_from_user(rq->cmd, hdr->cmdp, hdr->cmd_len))
++	unsigned char tmpcmd[sizeof(rq->__cmd)];
++	unsigned char *cmdptr;
++
++	if (rq->cmd != rq->__cmd)
++		cmdptr = rq->cmd;
++	else
++		cmdptr = tmpcmd;
++
++	if (copy_from_user(cmdptr, hdr->cmdp, hdr->cmd_len))
+ 		return -EFAULT;
++
++	if (cmdptr != rq->cmd)
++		memcpy(rq->cmd, cmdptr, hdr->cmd_len);
++
+ 	if (blk_verify_command(rq->cmd, mode & FMODE_WRITE))
+ 		return -EPERM;
+ 
+@@ -430,6 +442,8 @@ int sg_scsi_ioctl(struct request_queue *
+ 	int err;
+ 	unsigned int in_len, out_len, bytes, opcode, cmdlen;
+ 	char *buffer = NULL, sense[SCSI_SENSE_BUFFERSIZE];
++	unsigned char tmpcmd[sizeof(rq->__cmd)];
++	unsigned char *cmdptr;
+ 
+ 	if (!sic)
+ 		return -EINVAL;
+@@ -463,9 +477,18 @@ int sg_scsi_ioctl(struct request_queue *
+ 	 */
+ 	err = -EFAULT;
+ 	rq->cmd_len = cmdlen;
+-	if (copy_from_user(rq->cmd, sic->data, cmdlen))
++
++	if (rq->cmd != rq->__cmd)
++		cmdptr = rq->cmd;
++	else
++		cmdptr = tmpcmd;
++
++	if (copy_from_user(cmdptr, sic->data, cmdlen))
+ 		goto error;
+ 
++	if (rq->cmd != cmdptr)
++		memcpy(rq->cmd, cmdptr, cmdlen);
++
+ 	if (in_len && copy_from_user(buffer, sic->data + cmdlen, in_len))
+ 		goto error;
+ 
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/crypto/lrw.c linux-2.6.32.36-pax/crypto/lrw.c
 --- linux-2.6.32.36/crypto/lrw.c	2009-03-24 08:35:04.000000000 +0100
 +++ linux-2.6.32.36-pax/crypto/lrw.c	2010-12-16 23:50:54.000000000 +0100
@@ -25316,6 +26044,18 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/drivers/g
  					} else
  						error = abs(current_freq - freq);
  					vco_diff = abs(vco - best_vco);
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/drivers/gpu/drm/radeon/radeon_ioc32.c linux-2.6.32.36-pax/drivers/gpu/drm/radeon/radeon_ioc32.c
+--- linux-2.6.32.36/drivers/gpu/drm/radeon/radeon_ioc32.c	2009-12-03 15:01:48.000000000 +0100
++++ linux-2.6.32.36-pax/drivers/gpu/drm/radeon/radeon_ioc32.c	2011-04-16 01:19:58.000000000 +0200
+@@ -368,7 +368,7 @@ static int compat_radeon_cp_setparam(str
+ 	request = compat_alloc_user_space(sizeof(*request));
+ 	if (!access_ok(VERIFY_WRITE, request, sizeof(*request))
+ 	    || __put_user(req32.param, &request->param)
+-	    || __put_user((void __user *)(unsigned long)req32.value,
++	    || __put_user((unsigned long)req32.value,
+ 			  &request->value))
+ 		return -EFAULT;
+ 
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/drivers/gpu/drm/radeon/radeon_state.c linux-2.6.32.36-pax/drivers/gpu/drm/radeon/radeon_state.c
 --- linux-2.6.32.36/drivers/gpu/drm/radeon/radeon_state.c	2010-07-06 23:04:02.000000000 +0200
 +++ linux-2.6.32.36-pax/drivers/gpu/drm/radeon/radeon_state.c	2010-12-16 23:50:55.000000000 +0100
@@ -25382,6 +26122,22 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/drivers/g
  }
  
  
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/drivers/gpu/drm/radeon/rs690.c linux-2.6.32.36-pax/drivers/gpu/drm/radeon/rs690.c
+--- linux-2.6.32.36/drivers/gpu/drm/radeon/rs690.c	2009-12-20 06:24:00.000000000 +0100
++++ linux-2.6.32.36-pax/drivers/gpu/drm/radeon/rs690.c	2011-04-16 01:34:35.000000000 +0200
+@@ -302,9 +302,11 @@ void rs690_crtc_bandwidth_compute(struct
+ 		if (rdev->pm.max_bandwidth.full > rdev->pm.sideport_bandwidth.full &&
+ 			rdev->pm.sideport_bandwidth.full)
+ 			rdev->pm.max_bandwidth = rdev->pm.sideport_bandwidth;
+-		read_delay_latency.full = rfixed_const(370 * 800 * 1000);
++		read_delay_latency.full = rfixed_const(800 * 1000);
+ 		read_delay_latency.full = rfixed_div(read_delay_latency,
+ 			rdev->pm.igp_sideport_mclk);
++		a.full = rfixed_const(370);
++		read_delay_latency.full = rfixed_mul(read_delay_latency, a);
+ 	} else {
+ 		if (rdev->pm.max_bandwidth.full > rdev->pm.k8_bandwidth.full &&
+ 			rdev->pm.k8_bandwidth.full)
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/drivers/gpu/drm/ttm/ttm_bo.c linux-2.6.32.36-pax/drivers/gpu/drm/ttm/ttm_bo.c
 --- linux-2.6.32.36/drivers/gpu/drm/ttm/ttm_bo.c	2009-12-03 15:01:49.000000000 +0100
 +++ linux-2.6.32.36-pax/drivers/gpu/drm/ttm/ttm_bo.c	2010-12-16 23:50:55.000000000 +0100
@@ -30348,7 +31104,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt_elf.c linux-2.6.32.36-pax/fs/binfmt_elf.c
 --- linux-2.6.32.36/fs/binfmt_elf.c	2010-02-17 23:59:03.000000000 +0100
-+++ linux-2.6.32.36-pax/fs/binfmt_elf.c	2010-12-16 23:50:55.000000000 +0100
++++ linux-2.6.32.36-pax/fs/binfmt_elf.c	2011-04-16 01:19:58.000000000 +0200
 @@ -50,6 +50,10 @@ static int elf_core_dump(long signr, str
  #define elf_core_dump	NULL
  #endif
@@ -30390,7 +31146,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	return 0;
  }
  
-@@ -148,7 +159,7 @@ create_elf_tables(struct linux_binprm *b
+@@ -148,12 +159,13 @@ create_elf_tables(struct linux_binprm *b
  	elf_addr_t __user *u_rand_bytes;
  	const char *k_platform = ELF_PLATFORM;
  	const char *k_base_platform = ELF_BASE_PLATFORM;
@@ -30399,7 +31155,13 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	int items;
  	elf_addr_t *elf_info;
  	int ei_index = 0;
-@@ -195,8 +206,12 @@ create_elf_tables(struct linux_binprm *b
+ 	const struct cred *cred = current_cred();
+ 	struct vm_area_struct *vma;
++	unsigned long saved_auxv[AT_VECTOR_SIZE];
+ 
+ 	/*
+ 	 * In some cases (e.g. Hyper-Threading), we want to avoid L1
+@@ -195,8 +207,12 @@ create_elf_tables(struct linux_binprm *b
  	 * Generate 16 random bytes for userspace PRNG seeding.
  	 */
  	get_random_bytes(k_rand_bytes, sizeof(k_rand_bytes));
@@ -30414,7 +31176,20 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	if (__copy_to_user(u_rand_bytes, k_rand_bytes, sizeof(k_rand_bytes)))
  		return -EFAULT;
  
-@@ -385,10 +400,10 @@ static unsigned long load_elf_interp(str
+@@ -308,9 +324,11 @@ create_elf_tables(struct linux_binprm *b
+ 		return -EFAULT;
+ 	current->mm->env_end = p;
+ 
++	memcpy(saved_auxv, elf_info, ei_index * sizeof(elf_addr_t));
++
+ 	/* Put the elf_info on the stack in the right place.  */
+ 	sp = (elf_addr_t __user *)envp + 1;
+-	if (copy_to_user(sp, elf_info, ei_index * sizeof(elf_addr_t)))
++	if (copy_to_user(sp, saved_auxv, ei_index * sizeof(elf_addr_t)))
+ 		return -EFAULT;
+ 	return 0;
+ }
+@@ -385,10 +403,10 @@ static unsigned long load_elf_interp(str
  {
  	struct elf_phdr *elf_phdata;
  	struct elf_phdr *eppnt;
@@ -30427,7 +31202,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	unsigned long total_size;
  	int retval, i, size;
  
-@@ -434,6 +449,11 @@ static unsigned long load_elf_interp(str
+@@ -434,6 +452,11 @@ static unsigned long load_elf_interp(str
  		goto out_close;
  	}
  
@@ -30439,7 +31214,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	eppnt = elf_phdata;
  	for (i = 0; i < interp_elf_ex->e_phnum; i++, eppnt++) {
  		if (eppnt->p_type == PT_LOAD) {
-@@ -477,8 +497,8 @@ static unsigned long load_elf_interp(str
+@@ -477,8 +500,8 @@ static unsigned long load_elf_interp(str
  			k = load_addr + eppnt->p_vaddr;
  			if (BAD_ADDR(k) ||
  			    eppnt->p_filesz > eppnt->p_memsz ||
@@ -30450,7 +31225,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -532,6 +552,177 @@ out:
+@@ -532,6 +555,177 @@ out:
  	return error;
  }
  
@@ -30628,7 +31403,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -548,6 +739,11 @@ static unsigned long randomize_stack_top
+@@ -548,6 +742,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -30640,7 +31415,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -566,7 +762,7 @@ static int load_elf_binary(struct linux_
+@@ -566,7 +765,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -30649,7 +31424,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -576,11 +772,11 @@ static int load_elf_binary(struct linux_
+@@ -576,11 +775,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -30662,7 +31437,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -718,11 +914,80 @@ static int load_elf_binary(struct linux_
+@@ -718,11 +917,80 @@ static int load_elf_binary(struct linux_
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -30744,7 +31519,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -804,6 +1069,20 @@ static int load_elf_binary(struct linux_
+@@ -804,6 +1072,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -30765,7 +31540,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -836,9 +1115,9 @@ static int load_elf_binary(struct linux_
+@@ -836,9 +1118,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -30778,7 +31553,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -866,6 +1145,11 @@ static int load_elf_binary(struct linux_
+@@ -866,6 +1148,11 @@ static int load_elf_binary(struct linux_
  	start_data += load_bias;
  	end_data += load_bias;
  
@@ -30790,7 +31565,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	/* Calling set_brk effectively mmaps the pages that we need
  	 * for the bss and break sections.  We must do this before
  	 * mapping in the interpreter, to make sure it doesn't wind
-@@ -877,9 +1161,11 @@ static int load_elf_binary(struct linux_
+@@ -877,9 +1164,11 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -30805,7 +31580,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	}
  
  	if (elf_interpreter) {
-@@ -1112,8 +1398,10 @@ static int dump_seek(struct file *file,
+@@ -1112,8 +1401,10 @@ static int dump_seek(struct file *file,
  			unsigned long n = off;
  			if (n > PAGE_SIZE)
  				n = PAGE_SIZE;
@@ -30817,7 +31592,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  			off -= n;
  		}
  		free_page((unsigned long)buf);
-@@ -1125,7 +1413,7 @@ static int dump_seek(struct file *file,
+@@ -1125,7 +1416,7 @@ static int dump_seek(struct file *file,
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -30826,7 +31601,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1159,7 +1447,7 @@ static unsigned long vma_dump_size(struc
+@@ -1159,7 +1450,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -30835,7 +31610,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  		goto whole;
  
  	/*
-@@ -1385,9 +1673,9 @@ static void fill_auxv_note(struct memelf
+@@ -1385,9 +1676,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -30847,7 +31622,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1973,7 +2261,7 @@ static int elf_core_dump(long signr, str
+@@ -1973,7 +2264,7 @@ static int elf_core_dump(long signr, str
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -30856,7 +31631,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2006,7 +2294,7 @@ static int elf_core_dump(long signr, str
+@@ -2006,7 +2297,7 @@ static int elf_core_dump(long signr, str
  		unsigned long addr;
  		unsigned long end;
  
@@ -30865,7 +31640,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/binfmt
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2042,6 +2330,96 @@ out:
+@@ -2042,6 +2333,96 @@ out:
  
  #endif		/* USE_ELF_CORE_DUMP */
  
@@ -31384,6 +32159,18 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/compat
  
  /* ioctl should not be warned about even if it's not implemented.
     Valid reasons to use this:
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/dcache.c linux-2.6.32.36-pax/fs/dcache.c
+--- linux-2.6.32.36/fs/dcache.c	2011-03-28 01:36:19.000000000 +0200
++++ linux-2.6.32.36-pax/fs/dcache.c	2011-04-16 01:20:00.000000000 +0200
+@@ -2319,7 +2319,7 @@ void __init vfs_caches_init(unsigned lon
+ 	mempages -= reserve;
+ 
+ 	names_cachep = kmem_cache_create("names_cache", PATH_MAX, 0,
+-			SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
++			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_USERCOPY, NULL);
+ 
+ 	dcache_init();
+ 	inode_init();
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/debugfs/inode.c linux-2.6.32.36-pax/fs/debugfs/inode.c
 --- linux-2.6.32.36/fs/debugfs/inode.c	2009-12-20 06:24:01.000000000 +0100
 +++ linux-2.6.32.36-pax/fs/debugfs/inode.c	2010-12-16 23:50:55.000000000 +0100
@@ -31431,7 +32218,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/ecrypt
  		goto out_free;
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/exec.c linux-2.6.32.36-pax/fs/exec.c
 --- linux-2.6.32.36/fs/exec.c	2011-01-12 15:11:33.000000000 +0100
-+++ linux-2.6.32.36-pax/fs/exec.c	2011-01-12 15:12:15.000000000 +0100
++++ linux-2.6.32.36-pax/fs/exec.c	2011-04-16 01:19:58.000000000 +0200
 @@ -56,12 +56,24 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -31610,7 +32397,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/exec.c
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1570,6 +1599,201 @@ out:
+@@ -1570,6 +1599,195 @@ out:
  	return ispipe;
  }
  
@@ -31794,16 +32581,10 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/exec.c
 +#endif
 +}
 +
-+void pax_report_leak_to_user(const void *ptr, unsigned long len)
++void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type)
 +{
-+	printk(KERN_ERR "PAX: kernel memory leak attempt detected from %p (%lu bytes)\n", ptr, len);
-+	dump_stack();
-+	do_group_exit(SIGKILL);
-+}
-+
-+void pax_report_overflow_from_user(const void *ptr, unsigned long len)
-+{
-+	printk(KERN_ERR "PAX: kernel memory overflow attempt detected to %p (%lu bytes)\n", ptr, len);
++	printk(KERN_ERR "PAX: kernel memory %s attempt detected %s %p (%s) (%lu bytes)\n",
++		to ? "leak" : "overwrite", to ? "from" : "to", ptr, type ? : "unknown", len);
 +	dump_stack();
 +	do_group_exit(SIGKILL);
 +}
@@ -31812,7 +32593,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/exec.c
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1772,17 +1996,17 @@ static void wait_for_dump_helpers(struct
+@@ -1772,17 +1990,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -32650,6 +33431,32 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/jffs2/
  };
  
  /*
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/libfs.c linux-2.6.32.36-pax/fs/libfs.c
+--- linux-2.6.32.36/fs/libfs.c	2010-07-06 23:04:03.000000000 +0200
++++ linux-2.6.32.36-pax/fs/libfs.c	2011-04-16 01:27:20.000000000 +0200
+@@ -132,6 +132,8 @@ int dcache_readdir(struct file * filp, v
+ 	struct dentry *dentry = filp->f_path.dentry;
+ 	struct dentry *cursor = filp->private_data;
+ 	struct list_head *p, *q = &cursor->d_u.d_child;
++	char d_name[DNAME_INLINE_LEN];
++	const char *name;
+ 	ino_t ino;
+ 	int i = filp->f_pos;
+ 
+@@ -162,7 +164,12 @@ int dcache_readdir(struct file * filp, v
+ 					continue;
+ 
+ 				spin_unlock(&dcache_lock);
+-				if (filldir(dirent, next->d_name.name, 
++				if (next->d_name.len < DNAME_INLINE_LEN) {
++					memcpy(d_name, next->d_name.name, next->d_name.len);
++					name = d_name;
++				} else
++					name = next->d_name.name;
++				if (filldir(dirent, name, 
+ 					    next->d_name.len, filp->f_pos, 
+ 					    next->d_inode->i_ino, 
+ 					    dt_type(next->d_inode)) < 0)
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/lockd/svc.c linux-2.6.32.36-pax/fs/lockd/svc.c
 --- linux-2.6.32.36/fs/lockd/svc.c	2009-06-10 08:47:08.000000000 +0200
 +++ linux-2.6.32.36-pax/fs/lockd/svc.c	2010-12-16 23:50:55.000000000 +0100
@@ -32688,7 +33495,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/locks.
  	lock_kernel();
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/namei.c linux-2.6.32.36-pax/fs/namei.c
 --- linux-2.6.32.36/fs/namei.c	2010-03-20 18:05:39.000000000 +0100
-+++ linux-2.6.32.36-pax/fs/namei.c	2010-12-16 23:50:55.000000000 +0100
++++ linux-2.6.32.36-pax/fs/namei.c	2011-04-16 01:19:58.000000000 +0200
 @@ -638,7 +638,7 @@ static __always_inline int __do_follow_l
  	cookie = dentry->d_inode->i_op->follow_link(dentry, nd);
  	error = PTR_ERR(cookie);
@@ -32698,6 +33505,31 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/namei.
  		error = 0;
  		if (s)
  			error = __vfs_follow_link(nd, s);
+@@ -2798,6 +2798,8 @@ SYSCALL_DEFINE2(rename, const char __use
+ 
+ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen, const char *link)
+ {
++	char tmpbuf[64];
++	const char *newlink;
+ 	int len;
+ 
+ 	len = PTR_ERR(link);
+@@ -2807,7 +2809,14 @@ int vfs_readlink(struct dentry *dentry,
+ 	len = strlen(link);
+ 	if (len > (unsigned) buflen)
+ 		len = buflen;
+-	if (copy_to_user(buffer, link, len))
++
++	if (len < sizeof(tmpbuf)) {
++		memcpy(tmpbuf, link, len);
++		newlink = tmpbuf;
++	} else
++		newlink = link;
++
++	if (copy_to_user(buffer, newlink, len))
+ 		len = -EFAULT;
+ out:
+ 	return len;
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/nfs/inode.c linux-2.6.32.36-pax/fs/nfs/inode.c
 --- linux-2.6.32.36/fs/nfs/inode.c	2010-04-04 21:06:34.000000000 +0200
 +++ linux-2.6.32.36-pax/fs/nfs/inode.c	2010-12-16 23:50:55.000000000 +0100
@@ -33048,6 +33880,18 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/nls/nl
  };
  
  #define UNICODE_MAX	0x0010ffff
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/notify/dnotify/dnotify.c linux-2.6.32.36-pax/fs/notify/dnotify/dnotify.c
+--- linux-2.6.32.36/fs/notify/dnotify/dnotify.c	2009-12-03 15:02:38.000000000 +0100
++++ linux-2.6.32.36-pax/fs/notify/dnotify/dnotify.c	2011-04-16 01:25:53.000000000 +0200
+@@ -173,7 +173,7 @@ static void dnotify_free_mark(struct fsn
+ 	kmem_cache_free(dnotify_mark_entry_cache, dnentry);
+ }
+ 
+-static struct fsnotify_ops dnotify_fsnotify_ops = {
++static const struct fsnotify_ops dnotify_fsnotify_ops = {
+ 	.handle_event = dnotify_handle_event,
+ 	.should_send_event = dnotify_should_send_event,
+ 	.free_group_priv = NULL,
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/fs/ntfs/dir.c linux-2.6.32.36-pax/fs/ntfs/dir.c
 --- linux-2.6.32.36/fs/ntfs/dir.c	2009-06-10 08:47:09.000000000 +0200
 +++ linux-2.6.32.36-pax/fs/ntfs/dir.c	2010-12-16 23:50:55.000000000 +0100
@@ -35011,6 +35855,18 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
 +#define ACCESS_ONCE_RW(x) (*(volatile typeof(x) *)&(x))
  
  #endif /* __LINUX_COMPILER_H */
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/linux/dcache.h linux-2.6.32.36-pax/include/linux/dcache.h
+--- linux-2.6.32.36/include/linux/dcache.h	2009-09-10 19:42:43.000000000 +0200
++++ linux-2.6.32.36-pax/include/linux/dcache.h	2011-04-16 02:31:31.000000000 +0200
+@@ -119,6 +119,8 @@ struct dentry {
+ 	unsigned char d_iname[DNAME_INLINE_LEN_MIN];	/* small names */
+ };
+ 
++#define DNAME_INLINE_LEN (sizeof(struct dentry)-offsetof(struct dentry,d_iname))
++
+ /*
+  * dentry->d_lock spinlock nesting subclasses:
+  *
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/linux/decompress/mm.h linux-2.6.32.36-pax/include/linux/decompress/mm.h
 --- linux-2.6.32.36/include/linux/decompress/mm.h	2010-04-04 21:06:34.000000000 +0200
 +++ linux-2.6.32.36-pax/include/linux/decompress/mm.h	2010-12-16 23:50:55.000000000 +0100
@@ -35389,6 +36245,30 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  static inline void zero_user_segments(struct page *page,
  	unsigned start1, unsigned end1,
  	unsigned start2, unsigned end2)
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/linux/init_task.h linux-2.6.32.36-pax/include/linux/init_task.h
+--- linux-2.6.32.36/include/linux/init_task.h	2009-12-03 15:02:42.000000000 +0100
++++ linux-2.6.32.36-pax/include/linux/init_task.h	2011-04-16 01:29:58.000000000 +0200
+@@ -83,6 +83,12 @@ extern struct group_info init_groups;
+ #define INIT_IDS
+ #endif
+ 
++#ifdef CONFIG_X86
++#define INIT_TASK_THREAD_INFO INIT_THREAD_INFO
++#else
++#define INIT_TASK_THREAD_INFO
++#endif
++
+ #ifdef CONFIG_SECURITY_FILE_CAPABILITIES
+ /*
+  * Because of the reduced scope of CAP_SETPCAP when filesystem
+@@ -156,6 +162,7 @@ extern struct cred init_cred;
+ 		 __MUTEX_INITIALIZER(tsk.cred_guard_mutex),		\
+ 	.comm		= "swapper",					\
+ 	.thread		= INIT_THREAD,					\
++	.tinfo		= INIT_TASK_THREAD_INFO,			\
+ 	.fs		= &init_fs,					\
+ 	.files		= &init_files,					\
+ 	.signal		= &init_signals,				\
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/linux/interrupt.h linux-2.6.32.36-pax/include/linux/interrupt.h
 --- linux-2.6.32.36/include/linux/interrupt.h	2010-09-13 11:53:16.000000000 +0200
 +++ linux-2.6.32.36-pax/include/linux/interrupt.h	2010-12-16 23:50:55.000000000 +0100
@@ -36111,7 +36991,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  					   on-disk FS format */
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/linux/sched.h linux-2.6.32.36-pax/include/linux/sched.h
 --- linux-2.6.32.36/include/linux/sched.h	2011-02-24 20:07:53.000000000 +0100
-+++ linux-2.6.32.36-pax/include/linux/sched.h	2011-03-21 02:47:37.000000000 +0100
++++ linux-2.6.32.36-pax/include/linux/sched.h	2011-04-16 01:28:02.000000000 +0200
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -36133,15 +37013,6 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  extern unsigned long
  arch_get_unmapped_area(struct file *, unsigned long, unsigned long,
  		       unsigned long, unsigned long);
-@@ -1216,7 +1220,7 @@ struct rcu_node;
- 
- struct task_struct {
- 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
--	void *stack;
-+	struct thread_info *stack;
- 	atomic_t usage;
- 	unsigned int flags;	/* per process flags, defined below */
- 	unsigned int ptrace;
 @@ -1328,8 +1332,8 @@ struct task_struct {
  	struct list_head thread_group;
  
@@ -36153,7 +37024,18 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  
  	cputime_t utime, stime, utimescaled, stimescaled;
  	cputime_t gtime;
-@@ -1542,6 +1546,52 @@ struct task_struct {
+@@ -1369,6 +1373,10 @@ struct task_struct {
+ #endif
+ /* CPU-specific state of this task */
+ 	struct thread_struct thread;
++/* thread_info moved to task_struct */
++#ifdef CONFIG_X86
++	struct thread_info tinfo;
++#endif
+ /* filesystem information */
+ 	struct fs_struct *fs;
+ /* open file information */
+@@ -1542,6 +1550,51 @@ struct task_struct {
  #endif /* CONFIG_TRACING */
  };
  
@@ -36200,13 +37082,12 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
 +void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +void pax_report_insns(void *pc, void *sp);
 +void pax_report_refcount_overflow(struct pt_regs *regs);
-+void pax_report_leak_to_user(const void *ptr, unsigned long len);
-+void pax_report_overflow_from_user(const void *ptr, unsigned long len);
++void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2155,7 +2205,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2155,7 +2208,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -36215,18 +37096,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2268,8 +2318,8 @@ static inline void unlock_task_sighand(s
- 
- #ifndef __HAVE_THREAD_FUNCTIONS
- 
--#define task_thread_info(task)	((struct thread_info *)(task)->stack)
--#define task_stack_page(task)	((task)->stack)
-+#define task_thread_info(task)	((task)->stack)
-+#define task_stack_page(task)	((void *)(task)->stack)
- 
- static inline void setup_thread_stack(struct task_struct *p, struct task_struct *org)
- {
-@@ -2284,13 +2334,17 @@ static inline unsigned long *end_of_stac
+@@ -2284,13 +2337,17 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -36291,8 +37161,8 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  /**
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/linux/slab.h linux-2.6.32.36-pax/include/linux/slab.h
 --- linux-2.6.32.36/include/linux/slab.h	2009-09-10 19:42:46.000000000 +0200
-+++ linux-2.6.32.36-pax/include/linux/slab.h	2010-12-16 23:50:55.000000000 +0100
-@@ -11,6 +11,7 @@
++++ linux-2.6.32.36-pax/include/linux/slab.h	2011-04-16 01:19:58.000000000 +0200
+@@ -11,12 +11,20 @@
  
  #include <linux/gfp.h>
  #include <linux/types.h>
@@ -36300,7 +37170,20 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  
  /*
   * Flags to pass to kmem_cache_create().
-@@ -82,10 +83,13 @@
+  * The ones marked DEBUG are only valid if CONFIG_SLAB_DEBUG is set.
+  */
+ #define SLAB_DEBUG_FREE		0x00000100UL	/* DEBUG: Perform (expensive) checks on free */
++
++#ifdef CONFIG_PAX_USERCOPY
++#define SLAB_USERCOPY		0x00000200UL	/* PaX: Allow copying objs to/from userland */
++#else
++#define SLAB_USERCOPY		0x00000000UL
++#endif
++
+ #define SLAB_RED_ZONE		0x00000400UL	/* DEBUG: Red zone objs in a cache */
+ #define SLAB_POISON		0x00000800UL	/* DEBUG: Poison objects */
+ #define SLAB_HWCACHE_ALIGN	0x00002000UL	/* Align objs on cache lines */
+@@ -82,10 +90,13 @@
   * ZERO_SIZE_PTR can be passed to kfree though in the same way that NULL can.
   * Both make kfree a no-op.
   */
@@ -36317,7 +37200,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  
  /*
   * struct kmem_cache related prototypes
-@@ -138,6 +142,7 @@ void * __must_check krealloc(const void
+@@ -138,6 +149,7 @@ void * __must_check krealloc(const void
  void kfree(const void *);
  void kzfree(const void *);
  size_t ksize(const void *);
@@ -36325,7 +37208,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/include/l
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
-@@ -328,4 +333,37 @@ static inline void *kzalloc_node(size_t
+@@ -328,4 +340,37 @@ static inline void *kzalloc_node(size_t
  
  void __init kmem_cache_init_late(void);
  
@@ -39224,6 +40107,36 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/kernel/tr
  		return;
  
  	local_irq_save(flags);
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/kernel/trace/trace_workqueue.c linux-2.6.32.36-pax/kernel/trace/trace_workqueue.c
+--- linux-2.6.32.36/kernel/trace/trace_workqueue.c	2009-12-03 15:02:47.000000000 +0100
++++ linux-2.6.32.36-pax/kernel/trace/trace_workqueue.c	2011-04-16 01:20:00.000000000 +0200
+@@ -21,7 +21,7 @@ struct cpu_workqueue_stats {
+ 	int		            cpu;
+ 	pid_t			    pid;
+ /* Can be inserted from interrupt or user context, need to be atomic */
+-	atomic_t	            inserted;
++	atomic_unchecked_t          inserted;
+ /*
+  *  Don't need to be atomic, works are serialized in a single workqueue thread
+  *  on a single CPU.
+@@ -58,7 +58,7 @@ probe_workqueue_insertion(struct task_st
+ 	spin_lock_irqsave(&workqueue_cpu_stat(cpu)->lock, flags);
+ 	list_for_each_entry(node, &workqueue_cpu_stat(cpu)->list, list) {
+ 		if (node->pid == wq_thread->pid) {
+-			atomic_inc(&node->inserted);
++			atomic_inc_unchecked(&node->inserted);
+ 			goto found;
+ 		}
+ 	}
+@@ -205,7 +205,7 @@ static int workqueue_stat_show(struct se
+ 		tsk = get_pid_task(pid, PIDTYPE_PID);
+ 		if (tsk) {
+ 			seq_printf(s, "%3d %6d     %6u       %s\n", cws->cpu,
+-				   atomic_read(&cws->inserted), cws->executed,
++				   atomic_read_unchecked(&cws->inserted), cws->executed,
+ 				   tsk->comm);
+ 			put_task_struct(tsk);
+ 		}
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/kernel/utsname_sysctl.c linux-2.6.32.36-pax/kernel/utsname_sysctl.c
 --- linux-2.6.32.36/kernel/utsname_sysctl.c	2009-12-03 15:02:47.000000000 +0100
 +++ linux-2.6.32.36-pax/kernel/utsname_sysctl.c	2010-12-16 23:50:56.000000000 +0100
@@ -42017,7 +42930,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/shmem.
  		 * The more uptodate page coming down from a stacked
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slab.c linux-2.6.32.36-pax/mm/slab.c
 --- linux-2.6.32.36/mm/slab.c	2010-09-13 11:53:05.000000000 +0200
-+++ linux-2.6.32.36-pax/mm/slab.c	2010-12-16 23:50:56.000000000 +0100
++++ linux-2.6.32.36-pax/mm/slab.c	2011-04-16 01:19:58.000000000 +0200
 @@ -308,7 +308,7 @@ struct kmem_list3 {
   * Need this for bootstrapping a per node allocator.
   */
@@ -42054,6 +42967,15 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slab.c
  
  /* internal cache of cache description objs */
  static struct kmem_cache cache_cache = {
+@@ -1479,7 +1479,7 @@ void __init kmem_cache_init(void)
+ 			sizes->cs_cachep = kmem_cache_create(names->name,
+ 					sizes->cs_size,
+ 					ARCH_KMALLOC_MINALIGN,
+-					ARCH_KMALLOC_FLAGS|SLAB_PANIC,
++					ARCH_KMALLOC_FLAGS|SLAB_PANIC|SLAB_USERCOPY,
+ 					NULL);
+ 		}
+ #ifdef CONFIG_ZONE_DMA
 @@ -4480,6 +4480,51 @@ static int __init slab_proc_init(void)
  module_init(slab_proc_init);
  #endif
@@ -42062,9 +42984,9 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slab.c
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
-+	struct kmem_cache *cachep;
-+	struct slab *slabp;
 +	struct page *page;
++	struct kmem_cache *cachep = NULL;
++	struct slab *slabp;
 +	unsigned int objnr;
 +	unsigned long offset;
 +
@@ -42086,6 +43008,9 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slab.c
 +	}
 +
 +	cachep = page_get_cache(page);
++	if (!(cachep->flags & SLAB_USERCOPY))
++		goto report;
++
 +	slabp = page_get_slab(page);
 +	objnr = obj_to_index(cachep, slabp, ptr);
 +	BUG_ON(objnr >= cachep->num);
@@ -42094,10 +43019,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slab.c
 +		return;
 +
 +report:
-+	if (to)
-+		pax_report_leak_to_user(ptr, n);
-+	else
-+		pax_report_overflow_from_user(ptr, n);
++	pax_report_usercopy(ptr, n, to, cachep ? cachep->name : NULL);
 +#endif
 +
 +}
@@ -42108,7 +43030,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slab.c
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c linux-2.6.32.36-pax/mm/slob.c
 --- linux-2.6.32.36/mm/slob.c	2009-12-03 15:02:49.000000000 +0100
-+++ linux-2.6.32.36-pax/mm/slob.c	2010-12-16 23:50:56.000000000 +0100
++++ linux-2.6.32.36-pax/mm/slob.c	2011-04-16 01:19:58.000000000 +0200
 @@ -29,7 +29,7 @@
   * If kmalloc is asked for objects of PAGE_SIZE or larger, it calls
   * alloc_pages() directly, allocating compound pages so the page order
@@ -42254,7 +43176,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c
  EXPORT_SYMBOL(__kmalloc_node);
  
  void kfree(const void *block)
-@@ -528,13 +540,84 @@ void kfree(const void *block)
+@@ -528,13 +540,81 @@ void kfree(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -42330,10 +43252,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c
 +	}
 +
 +report:
-+	if (to)
-+		pax_report_leak_to_user(ptr, n);
-+	else
-+		pax_report_overflow_from_user(ptr, n);
++	pax_report_usercopy(ptr, n, to, NULL);
 +#endif
 +
 +}
@@ -42342,7 +43261,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -547,10 +630,10 @@ size_t ksize(const void *block)
+@@ -547,10 +627,10 @@ size_t ksize(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -42356,7 +43275,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -605,17 +688,25 @@ void *kmem_cache_alloc_node(struct kmem_
+@@ -605,17 +685,25 @@ void *kmem_cache_alloc_node(struct kmem_
  {
  	void *b;
  
@@ -42382,7 +43301,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -627,10 +718,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -627,10 +715,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -42401,7 +43320,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -643,15 +740,24 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -643,15 +737,24 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
@@ -42431,7 +43350,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slob.c
  	trace_kmem_cache_free(_RET_IP_, b);
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c linux-2.6.32.36-pax/mm/slub.c
 --- linux-2.6.32.36/mm/slub.c	2009-12-03 15:02:49.000000000 +0100
-+++ linux-2.6.32.36-pax/mm/slub.c	2010-12-16 23:50:56.000000000 +0100
++++ linux-2.6.32.36-pax/mm/slub.c	2011-04-16 01:48:21.000000000 +0200
 @@ -1893,6 +1893,8 @@ void kmem_cache_free(struct kmem_cache *
  
  	page = virt_to_head_page(x);
@@ -42469,7 +43388,22 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
  		list_del(&s->list);
  		up_write(&slub_lock);
  		if (kmem_cache_close(s)) {
-@@ -2915,6 +2916,46 @@ void *__kmalloc_node(size_t size, gfp_t
+@@ -2691,12 +2692,10 @@ static int __init setup_slub_nomerge(cha
+ __setup("slub_nomerge", setup_slub_nomerge);
+ 
+ static struct kmem_cache *create_kmalloc_cache(struct kmem_cache *s,
+-		const char *name, int size, gfp_t gfp_flags)
++		const char *name, int size, gfp_t gfp_flags, unsigned int flags)
+ {
+-	unsigned int flags = 0;
+-
+ 	if (gfp_flags & SLUB_DMA)
+-		flags = SLAB_CACHE_DMA;
++		flags |= SLAB_CACHE_DMA;
+ 
+ 	/*
+ 	 * This function is called with IRQs disabled during early-boot on
+@@ -2915,6 +2914,46 @@ void *__kmalloc_node(size_t size, gfp_t
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -42478,7 +43412,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +	struct page *page;
-+	struct kmem_cache *s;
++	struct kmem_cache *s = NULL;
 +	unsigned long offset;
 +
 +	if (!n)
@@ -42499,15 +43433,15 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
 +	}
 +
 +	s = page->slab;
++	if (!(s->flags & SLAB_USERCOPY))
++		goto report;
++
 +	offset = (ptr - page_address(page)) % s->size;
 +	if (offset <= s->objsize && n <= s->objsize - offset)
 +		return;
 +
 +report:
-+	if (to)
-+		pax_report_leak_to_user(ptr, n);
-+	else
-+		pax_report_overflow_from_user(ptr, n);
++	pax_report_usercopy(ptr, n, to, s ? s->name : NULL);
 +#endif
 +
 +}
@@ -42516,16 +43450,40 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3186,7 +3227,7 @@ void __init kmem_cache_init(void)
+@@ -3185,8 +3224,8 @@ void __init kmem_cache_init(void)
+ 	 * kmem_cache_open for slab_state == DOWN.
  	 */
  	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
- 		sizeof(struct kmem_cache_node), GFP_NOWAIT);
+-		sizeof(struct kmem_cache_node), GFP_NOWAIT);
 -	kmalloc_caches[0].refcount = -1;
++		sizeof(struct kmem_cache_node), GFP_NOWAIT, 0);
 +	atomic_set(&kmalloc_caches[0].refcount, -1);
  	caches++;
  
  	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
-@@ -3293,7 +3334,7 @@ static int slab_unmergeable(struct kmem_
+@@ -3198,18 +3237,18 @@ void __init kmem_cache_init(void)
+ 	/* Caches that are not of the two-to-the-power-of size */
+ 	if (KMALLOC_MIN_SIZE <= 32) {
+ 		create_kmalloc_cache(&kmalloc_caches[1],
+-				"kmalloc-96", 96, GFP_NOWAIT);
++				"kmalloc-96", 96, GFP_NOWAIT, SLAB_USERCOPY);
+ 		caches++;
+ 	}
+ 	if (KMALLOC_MIN_SIZE <= 64) {
+ 		create_kmalloc_cache(&kmalloc_caches[2],
+-				"kmalloc-192", 192, GFP_NOWAIT);
++				"kmalloc-192", 192, GFP_NOWAIT, SLAB_USERCOPY);
+ 		caches++;
+ 	}
+ 
+ 	for (i = KMALLOC_SHIFT_LOW; i < SLUB_PAGE_SHIFT; i++) {
+ 		create_kmalloc_cache(&kmalloc_caches[i],
+-			"kmalloc", 1 << i, GFP_NOWAIT);
++			"kmalloc", 1 << i, GFP_NOWAIT, SLAB_USERCOPY);
+ 		caches++;
+ 	}
+ 
+@@ -3293,7 +3332,7 @@ static int slab_unmergeable(struct kmem_
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -42534,7 +43492,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
  		return 1;
  
  	return 0;
-@@ -3353,7 +3394,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3353,7 +3392,7 @@ struct kmem_cache *kmem_cache_create(con
  	if (s) {
  		int cpu;
  
@@ -42543,7 +43501,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3372,7 +3413,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3372,7 +3411,7 @@ struct kmem_cache *kmem_cache_create(con
  
  		if (sysfs_slab_alias(s, name)) {
  			down_write(&slub_lock);
@@ -42552,7 +43510,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
  			up_write(&slub_lock);
  			goto err;
  		}
-@@ -4101,7 +4142,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4101,7 +4140,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -42561,7 +43519,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -4503,7 +4544,7 @@ static void kmem_cache_release(struct ko
+@@ -4503,7 +4542,7 @@ static void kmem_cache_release(struct ko
  	kfree(s);
  }
  
@@ -42570,7 +43528,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/mm/slub.c
  	.show = slab_attr_show,
  	.store = slab_attr_store,
  };
-@@ -4522,7 +4563,7 @@ static int uevent_filter(struct kset *ks
+@@ -4522,7 +4561,7 @@ static int uevent_filter(struct kset *ks
  	return 0;
  }
  
@@ -43125,6 +44083,24 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/ipv4/
  	if (*octets == NULL) {
  		if (net_ratelimit())
  			printk("OOM in bsalg (%d)\n", __LINE__);
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/ipv4/raw.c linux-2.6.32.36-pax/net/ipv4/raw.c
+--- linux-2.6.32.36/net/ipv4/raw.c	2009-12-03 15:02:51.000000000 +0100
++++ linux-2.6.32.36-pax/net/ipv4/raw.c	2011-04-16 01:20:00.000000000 +0200
+@@ -724,10 +724,13 @@ static int raw_init(struct sock *sk)
+ 
+ static int raw_seticmpfilter(struct sock *sk, char __user *optval, int optlen)
+ {
++	struct icmp_filter filter;
++
+ 	if (optlen > sizeof(struct icmp_filter))
+ 		optlen = sizeof(struct icmp_filter);
+-	if (copy_from_user(&raw_sk(sk)->filter, optval, optlen))
++	if (copy_from_user(&filter, optval, optlen))
+ 		return -EFAULT;
++	raw_sk(sk)->filter = filter;
+ 	return 0;
+ }
+ 
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/ipv4/tcp_probe.c linux-2.6.32.36-pax/net/ipv4/tcp_probe.c
 --- linux-2.6.32.36/net/ipv4/tcp_probe.c	2009-06-10 08:47:22.000000000 +0200
 +++ linux-2.6.32.36-pax/net/ipv4/tcp_probe.c	2010-12-16 23:50:56.000000000 +0100
@@ -43151,7 +44127,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/ipv6/
  int ipv6_parse_hopopts(struct sk_buff *skb)
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/ipv6/raw.c linux-2.6.32.36-pax/net/ipv6/raw.c
 --- linux-2.6.32.36/net/ipv6/raw.c	2009-12-03 15:02:52.000000000 +0100
-+++ linux-2.6.32.36-pax/net/ipv6/raw.c	2010-12-16 23:50:56.000000000 +0100
++++ linux-2.6.32.36-pax/net/ipv6/raw.c	2011-04-16 01:19:58.000000000 +0200
 @@ -600,7 +600,7 @@ out:
  	return err;
  }
@@ -43161,6 +44137,23 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/ipv6/
  			struct flowi *fl, struct rt6_info *rt,
  			unsigned int flags)
  {
+@@ -916,12 +916,15 @@ do_confirm:
+ static int rawv6_seticmpfilter(struct sock *sk, int level, int optname,
+ 			       char __user *optval, int optlen)
+ {
++	struct icmp6_filter filter;
++
+ 	switch (optname) {
+ 	case ICMPV6_FILTER:
+ 		if (optlen > sizeof(struct icmp6_filter))
+ 			optlen = sizeof(struct icmp6_filter);
+-		if (copy_from_user(&raw6_sk(sk)->filter, optval, optlen))
++		if (copy_from_user(&filter, optval, optlen))
+ 			return -EFAULT;
++		raw6_sk(sk)->filter = filter;
+ 		return 0;
+ 	default:
+ 		return -ENOPROTOOPT;
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/irda/ircomm/ircomm_tty.c linux-2.6.32.36-pax/net/irda/ircomm/ircomm_tty.c
 --- linux-2.6.32.36/net/irda/ircomm/ircomm_tty.c	2009-06-10 08:47:22.000000000 +0200
 +++ linux-2.6.32.36-pax/net/irda/ircomm/ircomm_tty.c	2011-01-22 17:20:57.000000000 +0100
@@ -43286,6 +44279,29 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/irda/
  	seq_printf(m, "Max data size: %d\n", self->max_data_size);
  	seq_printf(m, "Max header size: %d\n", self->max_header_size);
  
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/mac80211/cfg.c linux-2.6.32.36-pax/net/mac80211/cfg.c
+--- linux-2.6.32.36/net/mac80211/cfg.c	2010-01-29 04:17:43.000000000 +0100
++++ linux-2.6.32.36-pax/net/mac80211/cfg.c	2011-04-16 01:52:55.000000000 +0200
+@@ -1369,7 +1369,7 @@ static int ieee80211_set_bitrate_mask(st
+ 	return err;
+ }
+ 
+-struct cfg80211_ops mac80211_config_ops = {
++const struct cfg80211_ops mac80211_config_ops = {
+ 	.add_virtual_intf = ieee80211_add_iface,
+ 	.del_virtual_intf = ieee80211_del_iface,
+ 	.change_virtual_intf = ieee80211_change_iface,
+diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/mac80211/cfg.h linux-2.6.32.36-pax/net/mac80211/cfg.h
+--- linux-2.6.32.36/net/mac80211/cfg.h	2008-04-17 04:49:44.000000000 +0200
++++ linux-2.6.32.36-pax/net/mac80211/cfg.h	2011-04-16 01:20:00.000000000 +0200
+@@ -4,6 +4,6 @@
+ #ifndef __CFG_H
+ #define __CFG_H
+ 
+-extern struct cfg80211_ops mac80211_config_ops;
++extern const struct cfg80211_ops mac80211_config_ops;
+ 
+ #endif /* __CFG_H */
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/net/mac80211/ieee80211_i.h linux-2.6.32.36-pax/net/mac80211/ieee80211_i.h
 --- linux-2.6.32.36/net/mac80211/ieee80211_i.h	2010-04-04 21:06:32.000000000 +0200
 +++ linux-2.6.32.36-pax/net/mac80211/ieee80211_i.h	2011-01-22 17:22:00.000000000 +0100
@@ -43810,7 +44826,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/scripts/p
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/security/Kconfig linux-2.6.32.36-pax/security/Kconfig
 --- linux-2.6.32.36/security/Kconfig	2009-12-03 15:02:54.000000000 +0100
-+++ linux-2.6.32.36-pax/security/Kconfig	2011-01-03 22:53:15.000000000 +0100
++++ linux-2.6.32.36-pax/security/Kconfig	2011-04-16 01:19:58.000000000 +0200
 @@ -4,6 +4,510 @@
  
  menu "Security options"
@@ -44182,7 +45198,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/security/
 +
 +config PAX_RANDKSTACK
 +	bool "Randomize kernel stack base"
-+	depends on PAX_ASLR && X86_TSC && X86_32
++	depends on PAX_ASLR && X86_TSC && X86
 +	help
 +	  By saying Y here the kernel will randomize every task's kernel
 +	  stack on every system call.  This will not only force an attacker
@@ -44292,7 +45308,7 @@ diff -NurpX linux-2.6.32.36-pax/Documentation/dontdiff linux-2.6.32.36/security/
 +	  this feature.
 +
 +config PAX_USERCOPY
-+	bool "Bounds check heap object copies between kernel and userland"
++	bool "Harden heap object copies between kernel and userland"
 +	depends on X86 || PPC || SPARC
 +	depends on SLAB || SLUB || SLOB
 +	help
