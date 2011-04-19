@@ -11757,7 +11757,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  efi_rt_function_ptr:
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/kernel/entry_32.S linux-2.6.32.38-pax/arch/x86/kernel/entry_32.S
 --- linux-2.6.32.38/arch/x86/kernel/entry_32.S	2009-09-10 19:41:13.000000000 +0200
-+++ linux-2.6.32.38-pax/arch/x86/kernel/entry_32.S	2011-01-04 03:37:43.000000000 +0100
++++ linux-2.6.32.38-pax/arch/x86/kernel/entry_32.S	2011-04-19 23:15:45.000000000 +0200
 @@ -185,13 +185,81 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -11882,7 +11882,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
-@@ -414,10 +499,9 @@ sysenter_past_esp:
+@@ -414,25 +499,36 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
  	 * Push current_thread_info()->sysenter_return to the stack.
@@ -11890,12 +11890,19 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
 -	 * pushed above; +8 corresponds to copy_thread's esp0 setting.
  	 */
 -	pushl (TI_sysenter_return-THREAD_SIZE+8+4*4)(%esp)
-+	GET_THREAD_INFO(%ebp)
-+	pushl TI_sysenter_return(%ebp)
++	pushl $0
  	CFI_ADJUST_CFA_OFFSET 4
  	CFI_REL_OFFSET eip, 0
  
-@@ -430,9 +514,19 @@ sysenter_past_esp:
+ 	pushl %eax
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	SAVE_ALL
++	GET_THREAD_INFO(%ebp)
++	movl TI_sysenter_return(%ebp),%ebp
++	movl %ebp,PT_EIP(%esp)
+ 	ENABLE_INTERRUPTS(CLBR_NONE)
+ 
+ /*
   * Load the potential sixth argument from user stack.
   * Careful about security.
   */
@@ -11915,7 +11922,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  	movl %ebp,PT_EBP(%esp)
  .section __ex_table,"a"
  	.align 4
-@@ -455,12 +549,23 @@ sysenter_do_call:
+@@ -455,12 +551,23 @@ sysenter_do_call:
  	testl $_TIF_ALLWORK_MASK, %ecx
  	jne sysexit_audit
  sysenter_exit:
@@ -11939,7 +11946,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  	PTGS_TO_GS
  	ENABLE_INTERRUPTS_SYSEXIT
  
-@@ -504,11 +609,17 @@ sysexit_audit:
+@@ -504,11 +611,17 @@ sysexit_audit:
  
  	CFI_ENDPROC
  .pushsection .fixup,"ax"
@@ -11959,7 +11966,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  .popsection
  	PTGS_TO_GS_EX
  ENDPROC(ia32_sysenter_target)
-@@ -538,6 +649,10 @@ syscall_exit:
+@@ -538,6 +651,10 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
@@ -11970,7 +11977,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -602,7 +717,13 @@ ldt_ss:
+@@ -602,7 +719,13 @@ ldt_ss:
  	mov PT_OLDESP(%esp), %eax	/* load userspace esp */
  	mov %dx, %ax			/* eax: new kernel esp */
  	sub %eax, %edx			/* offset (low word is 0) */
@@ -11985,7 +11992,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  	shr $16, %edx
  	mov %dl, GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx) /* bits 16..23 */
  	mov %dh, GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx) /* bits 24..31 */
-@@ -642,25 +763,19 @@ work_resched:
+@@ -642,25 +765,19 @@ work_resched:
  
  work_notifysig:				# deal with pending signals and
  					# notify-resume requests
@@ -12014,7 +12021,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  #endif
  	xorl %edx, %edx
  	call do_notify_resume
-@@ -695,6 +810,10 @@ END(syscall_exit_work)
+@@ -695,6 +812,10 @@ END(syscall_exit_work)
  
  	RING0_INT_FRAME			# can't unwind into user space anyway
  syscall_fault:
@@ -12025,7 +12032,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  	GET_THREAD_INFO(%ebp)
  	movl $-EFAULT,PT_EAX(%esp)
  	jmp resume_userspace
-@@ -726,6 +845,33 @@ PTREGSCALL(rt_sigreturn)
+@@ -726,6 +847,33 @@ PTREGSCALL(rt_sigreturn)
  PTREGSCALL(vm86)
  PTREGSCALL(vm86old)
  
@@ -12059,7 +12066,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -735,7 +881,13 @@ PTREGSCALL(vm86old)
+@@ -735,7 +883,13 @@ PTREGSCALL(vm86old)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -12074,7 +12081,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx), %al /* bits 16..23 */
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx), %ah /* bits 24..31 */
  	shl $16, %eax
-@@ -1198,7 +1350,6 @@ return_to_handler:
+@@ -1198,7 +1352,6 @@ return_to_handler:
  	ret
  #endif
  
@@ -12082,7 +12089,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1255,9 +1406,12 @@ error_code:
+@@ -1255,9 +1408,12 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -12096,7 +12103,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  	TRACE_IRQS_OFF
  	movl %esp,%eax			# pt_regs pointer
  	call *%edi
-@@ -1351,6 +1505,9 @@ nmi_stack_correct:
+@@ -1351,6 +1507,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -12106,7 +12113,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/arch/x86/
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1391,6 +1548,9 @@ nmi_espfix_stack:
+@@ -1391,6 +1550,9 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -34838,6 +34845,26 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/fs/xfs/xf
  #endif /* DEBUG */
  
  #if defined(XFS_RW_TRACE)
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/fs/xfs/xfs_dir2_sf.c linux-2.6.32.38-pax/fs/xfs/xfs_dir2_sf.c
+--- linux-2.6.32.38/fs/xfs/xfs_dir2_sf.c	2009-06-10 08:47:11.000000000 +0200
++++ linux-2.6.32.38-pax/fs/xfs/xfs_dir2_sf.c	2011-04-19 23:20:42.000000000 +0200
+@@ -779,7 +779,15 @@ xfs_dir2_sf_getdents(
+ 		}
+ 
+ 		ino = xfs_dir2_sf_get_inumber(sfp, xfs_dir2_sf_inumberp(sfep));
+-		if (filldir(dirent, sfep->name, sfep->namelen,
++		if (dp->i_df.if_u1.if_data == dp->i_df.if_u2.if_inline_data) {
++			char name[sfep->namelen];
++			memcpy(name, sfep->name, sfep->namelen);
++			if (filldir(dirent, name, sfep->namelen,
++			    off & 0x7fffffff, ino, DT_UNKNOWN)) {
++				*offset = off & 0x7fffffff;
++				return 0;
++			}
++		} else if (filldir(dirent, sfep->name, sfep->namelen,
+ 			    off & 0x7fffffff, ino, DT_UNKNOWN)) {
+ 			*offset = off & 0x7fffffff;
+ 			return 0;
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/acpi/acoutput.h linux-2.6.32.38-pax/include/acpi/acoutput.h
 --- linux-2.6.32.38/include/acpi/acoutput.h	2009-03-24 08:35:46.000000000 +0100
 +++ linux-2.6.32.38-pax/include/acpi/acoutput.h	2010-12-16 23:50:55.000000000 +0100
@@ -36241,13 +36268,13 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/l
  	unsigned start2, unsigned end2)
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/linux/init_task.h linux-2.6.32.38-pax/include/linux/init_task.h
 --- linux-2.6.32.38/include/linux/init_task.h	2009-12-03 15:02:42.000000000 +0100
-+++ linux-2.6.32.38-pax/include/linux/init_task.h	2011-04-16 01:29:58.000000000 +0200
++++ linux-2.6.32.38-pax/include/linux/init_task.h	2011-04-19 23:16:56.000000000 +0200
 @@ -83,6 +83,12 @@ extern struct group_info init_groups;
  #define INIT_IDS
  #endif
  
 +#ifdef CONFIG_X86
-+#define INIT_TASK_THREAD_INFO INIT_THREAD_INFO
++#define INIT_TASK_THREAD_INFO .tinfo = INIT_THREAD_INFO,
 +#else
 +#define INIT_TASK_THREAD_INFO
 +#endif
@@ -36259,7 +36286,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/l
  		 __MUTEX_INITIALIZER(tsk.cred_guard_mutex),		\
  	.comm		= "swapper",					\
  	.thread		= INIT_THREAD,					\
-+	.tinfo		= INIT_TASK_THREAD_INFO,			\
++	INIT_TASK_THREAD_INFO						\
  	.fs		= &init_fs,					\
  	.files		= &init_files,					\
  	.signal		= &init_signals,				\
@@ -36816,6 +36843,18 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/l
  	= { ARRAY_SIZE(array), nump, param_set_##type, param_get_##type,\
  	    sizeof(array[0]), array };					\
  	__module_param_call(MODULE_PARAM_PREFIX, name,			\
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/linux/mutex.h linux-2.6.32.38-pax/include/linux/mutex.h
+--- linux-2.6.32.38/include/linux/mutex.h	2009-09-10 19:42:45.000000000 +0200
++++ linux-2.6.32.38-pax/include/linux/mutex.h	2011-04-19 23:14:29.000000000 +0200
+@@ -51,7 +51,7 @@ struct mutex {
+ 	spinlock_t		wait_lock;
+ 	struct list_head	wait_list;
+ #if defined(CONFIG_DEBUG_MUTEXES) || defined(CONFIG_SMP)
+-	struct thread_info	*owner;
++	struct task_struct	*owner;
+ #endif
+ #ifdef CONFIG_DEBUG_MUTEXES
+ 	const char 		*name;
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/linux/namei.h linux-2.6.32.38-pax/include/linux/namei.h
 --- linux-2.6.32.38/include/linux/namei.h	2009-12-03 15:02:42.000000000 +0100
 +++ linux-2.6.32.38-pax/include/linux/namei.h	2010-12-16 23:50:55.000000000 +0100
@@ -36985,7 +37024,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/l
  					   on-disk FS format */
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/linux/sched.h linux-2.6.32.38-pax/include/linux/sched.h
 --- linux-2.6.32.38/include/linux/sched.h	2011-02-24 20:07:53.000000000 +0100
-+++ linux-2.6.32.38-pax/include/linux/sched.h	2011-04-16 01:28:02.000000000 +0200
++++ linux-2.6.32.38-pax/include/linux/sched.h	2011-04-19 23:17:20.000000000 +0200
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -36994,6 +37033,15 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/l
  
  /*
   * List of flags we want to share for kernel threads,
+@@ -350,7 +351,7 @@ extern signed long schedule_timeout_kill
+ extern signed long schedule_timeout_uninterruptible(signed long timeout);
+ asmlinkage void __schedule(void);
+ asmlinkage void schedule(void);
+-extern int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner);
++extern int mutex_spin_on_owner(struct mutex *lock, struct task_struct *owner);
+ 
+ struct nsproxy;
+ struct user_namespace;
 @@ -371,9 +372,12 @@ struct user_namespace;
  #define DEFAULT_MAX_MAP_COUNT	(USHORT_MAX - MAPCOUNT_ELF_CORE_MARGIN)
  
@@ -37081,7 +37129,17 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/l
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2155,7 +2208,7 @@ extern void __cleanup_sighand(struct sig
+@@ -1978,7 +2031,9 @@ void yield(void);
+ extern struct exec_domain	default_exec_domain;
+ 
+ union thread_union {
++#ifndef CONFIG_X86
+ 	struct thread_info thread_info;
++#endif
+ 	unsigned long stack[THREAD_SIZE/sizeof(long)];
+ };
+ 
+@@ -2155,7 +2210,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -37090,7 +37148,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/include/l
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,13 +2337,17 @@ static inline unsigned long *end_of_stac
+@@ -2284,13 +2339,17 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -39460,6 +39518,121 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/mo
  			mod = NULL;
  	}
  	return mod;
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/mutex-debug.c linux-2.6.32.38-pax/kernel/mutex-debug.c
+--- linux-2.6.32.38/kernel/mutex-debug.c	2009-12-03 15:02:45.000000000 +0100
++++ linux-2.6.32.38-pax/kernel/mutex-debug.c	2011-04-19 23:14:29.000000000 +0200
+@@ -49,21 +49,21 @@ void debug_mutex_free_waiter(struct mute
+ }
+ 
+ void debug_mutex_add_waiter(struct mutex *lock, struct mutex_waiter *waiter,
+-			    struct thread_info *ti)
++			    struct task_struct *task)
+ {
+ 	SMP_DEBUG_LOCKS_WARN_ON(!spin_is_locked(&lock->wait_lock));
+ 
+ 	/* Mark the current thread as blocked on the lock: */
+-	ti->task->blocked_on = waiter;
++	task->blocked_on = waiter;
+ }
+ 
+ void mutex_remove_waiter(struct mutex *lock, struct mutex_waiter *waiter,
+-			 struct thread_info *ti)
++			 struct task_struct *task)
+ {
+ 	DEBUG_LOCKS_WARN_ON(list_empty(&waiter->list));
+-	DEBUG_LOCKS_WARN_ON(waiter->task != ti->task);
+-	DEBUG_LOCKS_WARN_ON(ti->task->blocked_on != waiter);
+-	ti->task->blocked_on = NULL;
++	DEBUG_LOCKS_WARN_ON(waiter->task != task);
++	DEBUG_LOCKS_WARN_ON(task->blocked_on != waiter);
++	task->blocked_on = NULL;
+ 
+ 	list_del_init(&waiter->list);
+ 	waiter->task = NULL;
+@@ -75,7 +75,7 @@ void debug_mutex_unlock(struct mutex *lo
+ 		return;
+ 
+ 	DEBUG_LOCKS_WARN_ON(lock->magic != lock);
+-	DEBUG_LOCKS_WARN_ON(lock->owner != current_thread_info());
++	DEBUG_LOCKS_WARN_ON(lock->owner != current);
+ 	DEBUG_LOCKS_WARN_ON(!lock->wait_list.prev && !lock->wait_list.next);
+ 	mutex_clear_owner(lock);
+ }
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/mutex-debug.h linux-2.6.32.38-pax/kernel/mutex-debug.h
+--- linux-2.6.32.38/kernel/mutex-debug.h	2009-06-10 08:47:19.000000000 +0200
++++ linux-2.6.32.38-pax/kernel/mutex-debug.h	2011-04-19 23:14:29.000000000 +0200
+@@ -20,16 +20,16 @@ extern void debug_mutex_wake_waiter(stru
+ extern void debug_mutex_free_waiter(struct mutex_waiter *waiter);
+ extern void debug_mutex_add_waiter(struct mutex *lock,
+ 				   struct mutex_waiter *waiter,
+-				   struct thread_info *ti);
++				   struct task_struct *task);
+ extern void mutex_remove_waiter(struct mutex *lock, struct mutex_waiter *waiter,
+-				struct thread_info *ti);
++				struct task_struct *task);
+ extern void debug_mutex_unlock(struct mutex *lock);
+ extern void debug_mutex_init(struct mutex *lock, const char *name,
+ 			     struct lock_class_key *key);
+ 
+ static inline void mutex_set_owner(struct mutex *lock)
+ {
+-	lock->owner = current_thread_info();
++	lock->owner = current;
+ }
+ 
+ static inline void mutex_clear_owner(struct mutex *lock)
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/mutex.c linux-2.6.32.38-pax/kernel/mutex.c
+--- linux-2.6.32.38/kernel/mutex.c	2010-07-06 23:04:03.000000000 +0200
++++ linux-2.6.32.38-pax/kernel/mutex.c	2011-04-19 23:14:29.000000000 +0200
+@@ -169,7 +169,7 @@ __mutex_lock_common(struct mutex *lock,
+ 	 */
+ 
+ 	for (;;) {
+-		struct thread_info *owner;
++		struct task_struct *owner;
+ 
+ 		/*
+ 		 * If we own the BKL, then don't spin. The owner of
+@@ -214,7 +214,7 @@ __mutex_lock_common(struct mutex *lock,
+ 	spin_lock_mutex(&lock->wait_lock, flags);
+ 
+ 	debug_mutex_lock_common(lock, &waiter);
+-	debug_mutex_add_waiter(lock, &waiter, task_thread_info(task));
++	debug_mutex_add_waiter(lock, &waiter, task);
+ 
+ 	/* add waiting tasks to the end of the waitqueue (FIFO): */
+ 	list_add_tail(&waiter.list, &lock->wait_list);
+@@ -243,8 +243,7 @@ __mutex_lock_common(struct mutex *lock,
+ 		 * TASK_UNINTERRUPTIBLE case.)
+ 		 */
+ 		if (unlikely(signal_pending_state(state, task))) {
+-			mutex_remove_waiter(lock, &waiter,
+-					    task_thread_info(task));
++			mutex_remove_waiter(lock, &waiter, task);
+ 			mutex_release(&lock->dep_map, 1, ip);
+ 			spin_unlock_mutex(&lock->wait_lock, flags);
+ 
+@@ -265,7 +264,7 @@ __mutex_lock_common(struct mutex *lock,
+ done:
+ 	lock_acquired(&lock->dep_map, ip);
+ 	/* got the lock - rejoice! */
+-	mutex_remove_waiter(lock, &waiter, current_thread_info());
++	mutex_remove_waiter(lock, &waiter, current);
+ 	mutex_set_owner(lock);
+ 
+ 	/* set it to 0 if there are no waiters left: */
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/mutex.h linux-2.6.32.38-pax/kernel/mutex.h
+--- linux-2.6.32.38/kernel/mutex.h	2009-06-10 08:47:19.000000000 +0200
++++ linux-2.6.32.38-pax/kernel/mutex.h	2011-04-19 23:14:29.000000000 +0200
+@@ -19,7 +19,7 @@
+ #ifdef CONFIG_SMP
+ static inline void mutex_set_owner(struct mutex *lock)
+ {
+-	lock->owner = current_thread_info();
++	lock->owner = current;
+ }
+ 
+ static inline void mutex_clear_owner(struct mutex *lock)
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/panic.c linux-2.6.32.38-pax/kernel/panic.c
 --- linux-2.6.32.38/kernel/panic.c	2009-12-03 15:02:45.000000000 +0100
 +++ linux-2.6.32.38-pax/kernel/panic.c	2010-12-16 23:50:56.000000000 +0100
@@ -39700,7 +39873,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/rt
  
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/sched.c linux-2.6.32.38-pax/kernel/sched.c
 --- linux-2.6.32.38/kernel/sched.c	2011-03-24 10:56:44.000000000 +0100
-+++ linux-2.6.32.38-pax/kernel/sched.c	2011-03-24 10:56:53.000000000 +0100
++++ linux-2.6.32.38-pax/kernel/sched.c	2011-04-19 23:16:21.000000000 +0200
 @@ -5043,7 +5043,7 @@ out:
   * In CONFIG_NO_HZ case, the idle load balance owner will do the
   * rebalancing for all the cpus for whom scheduler ticks are stopped.
@@ -39710,6 +39883,37 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/kernel/sc
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
+@@ -5770,7 +5770,7 @@ EXPORT_SYMBOL(schedule);
+  * Look out! "owner" is an entirely speculative pointer
+  * access and not reliable.
+  */
+-int mutex_spin_on_owner(struct mutex *lock, struct thread_info *owner)
++int mutex_spin_on_owner(struct mutex *lock, struct task_struct *owner)
+ {
+ 	unsigned int cpu;
+ 	struct rq *rq;
+@@ -5784,10 +5784,10 @@ int mutex_spin_on_owner(struct mutex *lo
+ 	 * DEBUG_PAGEALLOC could have unmapped it if
+ 	 * the mutex owner just released it and exited.
+ 	 */
+-	if (probe_kernel_address(&owner->cpu, cpu))
++	if (probe_kernel_address(&task_thread_info(owner)->cpu, cpu))
+ 		return 0;
+ #else
+-	cpu = owner->cpu;
++	cpu = task_thread_info(owner)->cpu;
+ #endif
+ 
+ 	/*
+@@ -5816,7 +5816,7 @@ int mutex_spin_on_owner(struct mutex *lo
+ 		/*
+ 		 * Is that owner really running on that cpu?
+ 		 */
+-		if (task_thread_info(rq->curr) != owner || need_resched())
++		if (rq->curr != owner || need_resched())
+ 			return 0;
+ 
+ 		cpu_relax();
 @@ -7700,7 +7700,7 @@ static struct ctl_table sd_ctl_dir[] = {
  		.procname	= "sched_domain",
  		.mode		= 0555,
@@ -42912,7 +43116,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/mm/rmap.c
  			allocated = NULL;
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/mm/shmem.c linux-2.6.32.38-pax/mm/shmem.c
 --- linux-2.6.32.38/mm/shmem.c	2011-03-28 01:36:20.000000000 +0200
-+++ linux-2.6.32.38-pax/mm/shmem.c	2011-03-28 01:50:26.000000000 +0200
++++ linux-2.6.32.38-pax/mm/shmem.c	2011-04-19 23:14:29.000000000 +0200
 @@ -1061,6 +1061,8 @@ static int shmem_writepage(struct page *
  		goto unlock;
  	}
@@ -42922,9 +43126,36 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/mm/shmem.
  	if (entry->val) {
  		/*
  		 * The more uptodate page coming down from a stacked
+@@ -1962,7 +1964,7 @@ static int shmem_symlink(struct inode *d
+ 
+ 	info = SHMEM_I(inode);
+ 	inode->i_size = len-1;
+-	if (len <= (char *)inode - (char *)info) {
++	if (len <= min((char *)inode - (char *)info, 64)) {
+ 		/* do it inline */
+ 		memcpy(info, symname, len);
+ 		inode->i_op = &shmem_symlink_inline_operations;
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/mm/slab.c linux-2.6.32.38-pax/mm/slab.c
 --- linux-2.6.32.38/mm/slab.c	2010-09-13 11:53:05.000000000 +0200
-+++ linux-2.6.32.38-pax/mm/slab.c	2011-04-16 01:19:58.000000000 +0200
++++ linux-2.6.32.38-pax/mm/slab.c	2011-04-19 23:14:29.000000000 +0200
+@@ -174,7 +174,7 @@
+ 
+ /* Legal flag mask for kmem_cache_create(). */
+ #if DEBUG
+-# define CREATE_MASK	(SLAB_RED_ZONE | \
++# define CREATE_MASK	(SLAB_USERCOPY | SLAB_RED_ZONE | \
+ 			 SLAB_POISON | SLAB_HWCACHE_ALIGN | \
+ 			 SLAB_CACHE_DMA | \
+ 			 SLAB_STORE_USER | \
+@@ -182,7 +182,7 @@
+ 			 SLAB_DESTROY_BY_RCU | SLAB_MEM_SPREAD | \
+ 			 SLAB_DEBUG_OBJECTS | SLAB_NOLEAKTRACE | SLAB_NOTRACK)
+ #else
+-# define CREATE_MASK	(SLAB_HWCACHE_ALIGN | \
++# define CREATE_MASK	(SLAB_USERCOPY | SLAB_HWCACHE_ALIGN | \
+ 			 SLAB_CACHE_DMA | \
+ 			 SLAB_RECLAIM_ACCOUNT | SLAB_PANIC | \
+ 			 SLAB_DESTROY_BY_RCU | SLAB_MEM_SPREAD | \
 @@ -308,7 +308,7 @@ struct kmem_list3 {
   * Need this for bootstrapping a per node allocator.
   */
@@ -42961,6 +43192,24 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/mm/slab.c
  
  /* internal cache of cache description objs */
  static struct kmem_cache cache_cache = {
+@@ -1453,7 +1453,7 @@ void __init kmem_cache_init(void)
+ 	sizes[INDEX_AC].cs_cachep = kmem_cache_create(names[INDEX_AC].name,
+ 					sizes[INDEX_AC].cs_size,
+ 					ARCH_KMALLOC_MINALIGN,
+-					ARCH_KMALLOC_FLAGS|SLAB_PANIC,
++					ARCH_KMALLOC_FLAGS|SLAB_PANIC|SLAB_USERCOPY,
+ 					NULL);
+ 
+ 	if (INDEX_AC != INDEX_L3) {
+@@ -1461,7 +1461,7 @@ void __init kmem_cache_init(void)
+ 			kmem_cache_create(names[INDEX_L3].name,
+ 				sizes[INDEX_L3].cs_size,
+ 				ARCH_KMALLOC_MINALIGN,
+-				ARCH_KMALLOC_FLAGS|SLAB_PANIC,
++				ARCH_KMALLOC_FLAGS|SLAB_PANIC|SLAB_USERCOPY,
+ 				NULL);
+ 	}
+ 
 @@ -1479,7 +1479,7 @@ void __init kmem_cache_init(void)
  			sizes->cs_cachep = kmem_cache_create(names->name,
  					sizes->cs_size,
@@ -43992,6 +44241,26 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/net/core/
  
  #define flow_flush_tasklet(cpu) (&per_cpu(flow_flush_tasklets, cpu))
  
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/net/core/sock.c linux-2.6.32.38-pax/net/core/sock.c
+--- linux-2.6.32.38/net/core/sock.c	2010-02-17 23:59:04.000000000 +0100
++++ linux-2.6.32.38-pax/net/core/sock.c	2011-04-19 18:17:15.000000000 +0200
+@@ -864,11 +864,15 @@ int sock_getsockopt(struct socket *sock,
+ 		break;
+ 
+ 	case SO_PEERCRED:
++	{
++		struct ucred peercred;
+ 		if (len > sizeof(sk->sk_peercred))
+ 			len = sizeof(sk->sk_peercred);
+-		if (copy_to_user(optval, &sk->sk_peercred, len))
++		peercred = sk->sk_peercred;
++		if (copy_to_user(optval, &peercred, len))
+ 			return -EFAULT;
+ 		goto lenout;
++	}
+ 
+ 	case SO_PEERNAME:
+ 	{
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/net/dccp/ccids/ccid3.c linux-2.6.32.38-pax/net/dccp/ccids/ccid3.c
 --- linux-2.6.32.38/net/dccp/ccids/ccid3.c	2009-12-03 15:02:50.000000000 +0100
 +++ linux-2.6.32.38-pax/net/dccp/ccids/ccid3.c	2010-12-16 23:50:56.000000000 +0100
@@ -44820,8 +45089,8 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/scripts/p
      for (i = 0; i < logo_clutsize; i++) {
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/security/Kconfig linux-2.6.32.38-pax/security/Kconfig
 --- linux-2.6.32.38/security/Kconfig	2009-12-03 15:02:54.000000000 +0100
-+++ linux-2.6.32.38-pax/security/Kconfig	2011-04-16 01:19:58.000000000 +0200
-@@ -4,6 +4,510 @@
++++ linux-2.6.32.38-pax/security/Kconfig	2011-04-19 23:14:29.000000000 +0200
+@@ -4,6 +4,511 @@
  
  menu "Security options"
  
@@ -45313,7 +45582,8 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/security/
 +	  Specifically, this checking prevents information leaking from the
 +	  kernel heap during kernel to userland copies (if the kernel heap
 +	  object is otherwise fully initialized) and prevents kernel heap
-+	  overflows during userland to kernel copies.
++	  overflows during userland to kernel copies.  Only objects belonging
++	  to explictly marked slub types are allowed to be copied at all.
 +
 +	  Note that the current implementation provides the strictest checks
 +	  for the SLUB allocator.
@@ -45332,7 +45602,7 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/security/
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +650,7 @@ config INTEL_TXT
+@@ -146,7 +651,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -45409,6 +45679,28 @@ diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/security/
  	key = ima_hash_key(entry->digest);
  	hlist_add_head_rcu(&qe->hnext, &ima_htable.queue[key]);
  	return 0;
+diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/security/keys/keyring.c linux-2.6.32.38-pax/security/keys/keyring.c
+--- linux-2.6.32.38/security/keys/keyring.c	2010-07-06 23:04:03.000000000 +0200
++++ linux-2.6.32.38-pax/security/keys/keyring.c	2011-04-19 23:14:29.000000000 +0200
+@@ -214,15 +214,15 @@ static long keyring_read(const struct ke
+ 			ret = -EFAULT;
+ 
+ 			for (loop = 0; loop < klist->nkeys; loop++) {
++				key_serial_t serial;
+ 				key = klist->keys[loop];
++				serial = key->serial;
+ 
+ 				tmp = sizeof(key_serial_t);
+ 				if (tmp > buflen)
+ 					tmp = buflen;
+ 
+-				if (copy_to_user(buffer,
+-						 &key->serial,
+-						 tmp) != 0)
++				if (copy_to_user(buffer, &serial, tmp))
+ 					goto error;
+ 
+ 				buflen -= tmp;
 diff -NurpX linux-2.6.32.38-pax/Documentation/dontdiff linux-2.6.32.38/security/root_plug.c linux-2.6.32.38-pax/security/root_plug.c
 --- linux-2.6.32.38/security/root_plug.c	2009-09-10 19:42:59.000000000 +0200
 +++ linux-2.6.32.38-pax/security/root_plug.c	2010-12-16 23:50:56.000000000 +0100
