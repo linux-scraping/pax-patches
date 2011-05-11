@@ -7037,7 +7037,7 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/in
   * @v: pointer of type atomic_t
 diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/include/asm/atomic64_32.h linux-2.6.38.6-pax/arch/x86/include/asm/atomic64_32.h
 --- linux-2.6.38.6/arch/x86/include/asm/atomic64_32.h	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.38.6-pax/arch/x86/include/asm/atomic64_32.h	2011-04-28 16:02:38.000000000 +0200
++++ linux-2.6.38.6-pax/arch/x86/include/asm/atomic64_32.h	2011-05-11 19:07:57.000000000 +0200
 @@ -12,6 +12,14 @@ typedef struct {
  	u64 __aligned(8) counter;
  } atomic64_t;
@@ -7053,7 +7053,29 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/in
  #define ATOMIC64_INIT(val)	{ (val) }
  
  #ifdef CONFIG_X86_CMPXCHG64
-@@ -77,6 +85,24 @@ static inline void atomic64_set(atomic64
+@@ -38,6 +46,21 @@ static inline long long atomic64_cmpxchg
+ }
+ 
+ /**
++ * atomic64_cmpxchg_unchecked - cmpxchg atomic64 variable
++ * @p: pointer to type atomic64_unchecked_t
++ * @o: expected value
++ * @n: new value
++ *
++ * Atomically sets @v to @n if it was equal to @o and returns
++ * the old value.
++ */
++
++static inline long long atomic64_cmpxchg_unchecked(atomic64_unchecked_t *v, long long o, long long n)
++{
++	return cmpxchg64(&v->counter, o, n);
++}
++
++/**
+  * atomic64_xchg - xchg atomic64 variable
+  * @v: pointer to type atomic64_t
+  * @n: value to assign
+@@ -77,6 +100,24 @@ static inline void atomic64_set(atomic64
  }
  
  /**
@@ -7078,7 +7100,7 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/in
   * atomic64_read - read atomic64 variable
   * @v: pointer to type atomic64_t
   *
-@@ -93,6 +119,22 @@ static inline long long atomic64_read(at
+@@ -93,6 +134,22 @@ static inline long long atomic64_read(at
   }
  
  /**
@@ -7101,7 +7123,30 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/in
   * atomic64_add_return - add and return
   * @i: integer value to add
   * @v: pointer to type atomic64_t
-@@ -131,6 +173,17 @@ static inline long long atomic64_inc_ret
+@@ -108,6 +165,22 @@ static inline long long atomic64_add_ret
+ 	return i;
+ }
+ 
++/**
++ * atomic64_add_return_unchecked - add and return
++ * @i: integer value to add
++ * @v: pointer to type atomic64_unchecked_t
++ *
++ * Atomically adds @i to @v and returns @i + *@v
++ */
++static inline long long atomic64_add_return_unchecked(long long i, atomic64_unchecked_t *v)
++{
++	asm volatile(ATOMIC64_ALTERNATIVE(add_return_unchecked)
++		     : "+A" (i), "+c" (v)
++		     : : "memory"
++		     );
++	return i;
++}
++
+ /*
+  * Other variants with different arithmetic operators:
+  */
+@@ -131,6 +204,17 @@ static inline long long atomic64_inc_ret
  	return a;
  }
  
@@ -7119,7 +7164,7 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/in
  static inline long long atomic64_dec_return(atomic64_t *v)
  {
  	long long a;
-@@ -155,6 +208,22 @@ static inline long long atomic64_add(lon
+@@ -155,6 +239,22 @@ static inline long long atomic64_add(lon
  		     : "+A" (i), "+c" (v)
  		     : : "memory"
  		     );
@@ -14730,6 +14775,37 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/ke
  {
  	bool step;
  
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/kernel/pvclock.c linux-2.6.38.6-pax/arch/x86/kernel/pvclock.c
+--- linux-2.6.38.6/arch/x86/kernel/pvclock.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/arch/x86/kernel/pvclock.c	2011-05-11 18:52:51.000000000 +0200
+@@ -81,11 +81,11 @@ unsigned long pvclock_tsc_khz(struct pvc
+ 	return pv_tsc_khz;
+ }
+ 
+-static atomic64_t last_value = ATOMIC64_INIT(0);
++static atomic64_unchecked_t last_value = ATOMIC64_INIT(0);
+ 
+ void pvclock_resume(void)
+ {
+-	atomic64_set(&last_value, 0);
++	atomic64_set_unchecked(&last_value, 0);
+ }
+ 
+ cycle_t pvclock_clocksource_read(struct pvclock_vcpu_time_info *src)
+@@ -121,11 +121,11 @@ cycle_t pvclock_clocksource_read(struct
+ 	 * updating at the same time, and one of them could be slightly behind,
+ 	 * making the assumption that last_value always go forward fail to hold.
+ 	 */
+-	last = atomic64_read(&last_value);
++	last = atomic64_read_unchecked(&last_value);
+ 	do {
+ 		if (ret < last)
+ 			return last;
+-		last = atomic64_cmpxchg(&last_value, last, ret);
++		last = atomic64_cmpxchg_unchecked(&last_value, last, ret);
+ 	} while (unlikely(last != ret));
+ 
+ 	return ret;
 diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/arch/x86/kernel/reboot.c linux-2.6.38.6-pax/arch/x86/kernel/reboot.c
 --- linux-2.6.38.6/arch/x86/kernel/reboot.c	2011-03-15 19:33:08.000000000 +0100
 +++ linux-2.6.38.6-pax/arch/x86/kernel/reboot.c	2011-04-23 01:16:32.000000000 +0200
@@ -27199,6 +27275,58 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/drivers/inf
  	}
  	PDBG("%s stag_state 0x%0x type 0x%0x pdid 0x%0x, stag_idx 0x%x\n",
  	     __func__, stag_state, type, pdid, stag_idx);
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/drivers/infiniband/hw/ipath/ipath_rc.c linux-2.6.38.6-pax/drivers/infiniband/hw/ipath/ipath_rc.c
+--- linux-2.6.38.6/drivers/infiniband/hw/ipath/ipath_rc.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/drivers/infiniband/hw/ipath/ipath_rc.c	2011-05-11 18:59:57.000000000 +0200
+@@ -1868,7 +1868,7 @@ void ipath_rc_rcv(struct ipath_ibdev *de
+ 		struct ib_atomic_eth *ateth;
+ 		struct ipath_ack_entry *e;
+ 		u64 vaddr;
+-		atomic64_t *maddr;
++		atomic64_unchecked_t *maddr;
+ 		u64 sdata;
+ 		u32 rkey;
+ 		u8 next;
+@@ -1903,11 +1903,11 @@ void ipath_rc_rcv(struct ipath_ibdev *de
+ 					    IB_ACCESS_REMOTE_ATOMIC)))
+ 			goto nack_acc_unlck;
+ 		/* Perform atomic OP and save result. */
+-		maddr = (atomic64_t *) qp->r_sge.sge.vaddr;
++		maddr = (atomic64_unchecked_t *) qp->r_sge.sge.vaddr;
+ 		sdata = be64_to_cpu(ateth->swap_data);
+ 		e = &qp->s_ack_queue[qp->r_head_ack_queue];
+ 		e->atomic_data = (opcode == OP(FETCH_ADD)) ?
+-			(u64) atomic64_add_return(sdata, maddr) - sdata :
++			(u64) atomic64_add_return_unchecked(sdata, maddr) - sdata :
+ 			(u64) cmpxchg((u64 *) qp->r_sge.sge.vaddr,
+ 				      be64_to_cpu(ateth->compare_data),
+ 				      sdata);
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/drivers/infiniband/hw/ipath/ipath_ruc.c linux-2.6.38.6-pax/drivers/infiniband/hw/ipath/ipath_ruc.c
+--- linux-2.6.38.6/drivers/infiniband/hw/ipath/ipath_ruc.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/drivers/infiniband/hw/ipath/ipath_ruc.c	2011-05-11 19:01:57.000000000 +0200
+@@ -266,7 +266,7 @@ static void ipath_ruc_loopback(struct ip
+ 	unsigned long flags;
+ 	struct ib_wc wc;
+ 	u64 sdata;
+-	atomic64_t *maddr;
++	atomic64_unchecked_t *maddr;
+ 	enum ib_wc_status send_status;
+ 
+ 	/*
+@@ -382,11 +382,11 @@ again:
+ 					    IB_ACCESS_REMOTE_ATOMIC)))
+ 			goto acc_err;
+ 		/* Perform atomic OP and save result. */
+-		maddr = (atomic64_t *) qp->r_sge.sge.vaddr;
++		maddr = (atomic64_unchecked_t *) qp->r_sge.sge.vaddr;
+ 		sdata = wqe->wr.wr.atomic.compare_add;
+ 		*(u64 *) sqp->s_sge.sge.vaddr =
+ 			(wqe->wr.opcode == IB_WR_ATOMIC_FETCH_AND_ADD) ?
+-			(u64) atomic64_add_return(sdata, maddr) - sdata :
++			(u64) atomic64_add_return_unchecked(sdata, maddr) - sdata :
+ 			(u64) cmpxchg((u64 *) qp->r_sge.sge.vaddr,
+ 				      sdata, wqe->wr.wr.atomic.swap);
+ 		goto send_comp;
 diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/drivers/infiniband/hw/nes/nes.c linux-2.6.38.6-pax/drivers/infiniband/hw/nes/nes.c
 --- linux-2.6.38.6/drivers/infiniband/hw/nes/nes.c	2011-03-15 19:33:29.000000000 +0100
 +++ linux-2.6.38.6-pax/drivers/infiniband/hw/nes/nes.c	2011-04-28 21:13:48.000000000 +0200
@@ -29426,6 +29554,18 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/drivers/net
  			break;
  		err = 0;
  		break;
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/drivers/net/tg3.c linux-2.6.38.6-pax/drivers/net/tg3.c
+--- linux-2.6.38.6/drivers/net/tg3.c	2011-03-15 19:34:06.000000000 +0100
++++ linux-2.6.38.6-pax/drivers/net/tg3.c	2011-05-11 19:38:34.000000000 +0200
+@@ -13003,7 +13003,7 @@ done:
+ 
+ static struct pci_dev * __devinit tg3_find_peer(struct tg3 *);
+ 
+-static void inline vlan_features_add(struct net_device *dev, unsigned long flags)
++static inline void vlan_features_add(struct net_device *dev, unsigned long flags)
+ {
+ 	dev->vlan_features |= flags;
+ }
 diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/drivers/net/tg3.h linux-2.6.38.6-pax/drivers/net/tg3.h
 --- linux-2.6.38.6/drivers/net/tg3.h	2011-03-15 19:34:06.000000000 +0100
 +++ linux-2.6.38.6-pax/drivers/net/tg3.h	2011-03-15 21:13:58.000000000 +0100
@@ -48217,6 +48357,18 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/ipv6/in
  			__sk_dst_reset(sk);
  			dst = NULL;
  		}
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/ipv6/inet6_hashtables.c linux-2.6.38.6-pax/net/ipv6/inet6_hashtables.c
+--- linux-2.6.38.6/net/ipv6/inet6_hashtables.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/net/ipv6/inet6_hashtables.c	2011-05-11 19:38:19.000000000 +0200
+@@ -124,7 +124,7 @@ out:
+ }
+ EXPORT_SYMBOL(__inet6_lookup_established);
+ 
+-static int inline compute_score(struct sock *sk, struct net *net,
++static inline int compute_score(struct sock *sk, struct net *net,
+ 				const unsigned short hnum,
+ 				const struct in6_addr *daddr,
+ 				const int dif)
 diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/ipv6/raw.c linux-2.6.38.6-pax/net/ipv6/raw.c
 --- linux-2.6.38.6/net/ipv6/raw.c	2011-03-15 19:35:35.000000000 +0100
 +++ linux-2.6.38.6-pax/net/ipv6/raw.c	2011-04-26 19:15:22.000000000 +0200
@@ -49018,6 +49170,96 @@ diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rds/con
  
  	if (likely(*recent == gen))
  		return 0;
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rds/ib.h linux-2.6.38.6-pax/net/rds/ib.h
+--- linux-2.6.38.6/net/rds/ib.h	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/net/rds/ib.h	2011-05-11 18:56:47.000000000 +0200
+@@ -127,7 +127,7 @@ struct rds_ib_connection {
+ 	/* sending acks */
+ 	unsigned long		i_ack_flags;
+ #ifdef KERNEL_HAS_ATOMIC64
+-	atomic64_t		i_ack_next;	/* next ACK to send */
++	atomic64_unchecked_t	i_ack_next;	/* next ACK to send */
+ #else
+ 	spinlock_t		i_ack_lock;	/* protect i_ack_next */
+ 	u64			i_ack_next;	/* next ACK to send */
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rds/ib_cm.c linux-2.6.38.6-pax/net/rds/ib_cm.c
+--- linux-2.6.38.6/net/rds/ib_cm.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/net/rds/ib_cm.c	2011-05-11 18:57:13.000000000 +0200
+@@ -720,7 +720,7 @@ void rds_ib_conn_shutdown(struct rds_con
+ 	/* Clear the ACK state */
+ 	clear_bit(IB_ACK_IN_FLIGHT, &ic->i_ack_flags);
+ #ifdef KERNEL_HAS_ATOMIC64
+-	atomic64_set(&ic->i_ack_next, 0);
++	atomic64_set_unchecked(&ic->i_ack_next, 0);
+ #else
+ 	ic->i_ack_next = 0;
+ #endif
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rds/ib_recv.c linux-2.6.38.6-pax/net/rds/ib_recv.c
+--- linux-2.6.38.6/net/rds/ib_recv.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/net/rds/ib_recv.c	2011-05-11 18:57:31.000000000 +0200
+@@ -592,7 +592,7 @@ static u64 rds_ib_get_ack(struct rds_ib_
+ static void rds_ib_set_ack(struct rds_ib_connection *ic, u64 seq,
+ 				int ack_required)
+ {
+-	atomic64_set(&ic->i_ack_next, seq);
++	atomic64_set_unchecked(&ic->i_ack_next, seq);
+ 	if (ack_required) {
+ 		smp_mb__before_clear_bit();
+ 		set_bit(IB_ACK_REQUESTED, &ic->i_ack_flags);
+@@ -604,7 +604,7 @@ static u64 rds_ib_get_ack(struct rds_ib_
+ 	clear_bit(IB_ACK_REQUESTED, &ic->i_ack_flags);
+ 	smp_mb__after_clear_bit();
+ 
+-	return atomic64_read(&ic->i_ack_next);
++	return atomic64_read_unchecked(&ic->i_ack_next);
+ }
+ #endif
+ 
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rds/iw.h linux-2.6.38.6-pax/net/rds/iw.h
+--- linux-2.6.38.6/net/rds/iw.h	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/net/rds/iw.h	2011-05-11 18:57:04.000000000 +0200
+@@ -133,7 +133,7 @@ struct rds_iw_connection {
+ 	/* sending acks */
+ 	unsigned long		i_ack_flags;
+ #ifdef KERNEL_HAS_ATOMIC64
+-	atomic64_t		i_ack_next;	/* next ACK to send */
++	atomic64_unchecked_t	i_ack_next;	/* next ACK to send */
+ #else
+ 	spinlock_t		i_ack_lock;	/* protect i_ack_next */
+ 	u64			i_ack_next;	/* next ACK to send */
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rds/iw_cm.c linux-2.6.38.6-pax/net/rds/iw_cm.c
+--- linux-2.6.38.6/net/rds/iw_cm.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/net/rds/iw_cm.c	2011-05-11 18:57:41.000000000 +0200
+@@ -664,7 +664,7 @@ void rds_iw_conn_shutdown(struct rds_con
+ 	/* Clear the ACK state */
+ 	clear_bit(IB_ACK_IN_FLIGHT, &ic->i_ack_flags);
+ #ifdef KERNEL_HAS_ATOMIC64
+-	atomic64_set(&ic->i_ack_next, 0);
++	atomic64_set_unchecked(&ic->i_ack_next, 0);
+ #else
+ 	ic->i_ack_next = 0;
+ #endif
+diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rds/iw_recv.c linux-2.6.38.6-pax/net/rds/iw_recv.c
+--- linux-2.6.38.6/net/rds/iw_recv.c	2011-01-05 01:50:19.000000000 +0100
++++ linux-2.6.38.6-pax/net/rds/iw_recv.c	2011-05-11 18:57:54.000000000 +0200
+@@ -427,7 +427,7 @@ static u64 rds_iw_get_ack(struct rds_iw_
+ static void rds_iw_set_ack(struct rds_iw_connection *ic, u64 seq,
+ 				int ack_required)
+ {
+-	atomic64_set(&ic->i_ack_next, seq);
++	atomic64_set_unchecked(&ic->i_ack_next, seq);
+ 	if (ack_required) {
+ 		smp_mb__before_clear_bit();
+ 		set_bit(IB_ACK_REQUESTED, &ic->i_ack_flags);
+@@ -439,7 +439,7 @@ static u64 rds_iw_get_ack(struct rds_iw_
+ 	clear_bit(IB_ACK_REQUESTED, &ic->i_ack_flags);
+ 	smp_mb__after_clear_bit();
+ 
+-	return atomic64_read(&ic->i_ack_next);
++	return atomic64_read_unchecked(&ic->i_ack_next);
+ }
+ #endif
+ 
 diff -NurpX linux-2.6.38.6-pax/Documentation/dontdiff linux-2.6.38.6/net/rxrpc/af_rxrpc.c linux-2.6.38.6-pax/net/rxrpc/af_rxrpc.c
 --- linux-2.6.38.6/net/rxrpc/af_rxrpc.c	2011-03-15 19:35:38.000000000 +0100
 +++ linux-2.6.38.6-pax/net/rxrpc/af_rxrpc.c	2011-04-28 00:47:27.000000000 +0200
