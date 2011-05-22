@@ -8037,7 +8037,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/ia32/i
  	if (err)
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/ia32/ia32entry.S linux-2.6.39-pax/arch/x86/ia32/ia32entry.S
 --- linux-2.6.39/arch/x86/ia32/ia32entry.S	2011-05-19 10:21:14.000000000 +0200
-+++ linux-2.6.39-pax/arch/x86/ia32/ia32entry.S	2011-05-19 13:45:27.000000000 +0200
++++ linux-2.6.39-pax/arch/x86/ia32/ia32entry.S	2011-05-22 22:11:26.000000000 +0200
 @@ -13,6 +13,7 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
@@ -8113,7 +8113,27 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/ia32/i
  	andl    $~TS_COMPAT,TI_status(%r10)
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
-@@ -277,19 +306,24 @@ ENDPROC(ia32_sysenter_target)
+@@ -194,6 +223,9 @@ sysexit_from_sys_call:
+ 	movl %eax,%esi			/* 2nd arg: syscall number */
+ 	movl $AUDIT_ARCH_I386,%edi	/* 1st arg: audit arch */
+ 	call audit_syscall_entry
++
++	pax_erase_kstack
++
+ 	movl RAX-ARGOFFSET(%rsp),%eax	/* reload syscall number */
+ 	cmpq $(IA32_NR_syscalls-1),%rax
+ 	ja ia32_badsys
+@@ -246,6 +278,9 @@ sysenter_tracesys:
+ 	movq	$-ENOSYS,RAX(%rsp)/* ptrace can change this for a bad syscall */
+ 	movq	%rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call	syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	cmpq	$(IA32_NR_syscalls-1),%rax
+@@ -277,19 +312,24 @@ ENDPROC(ia32_sysenter_target)
  ENTRY(ia32_cstar_target)
  	CFI_STARTPROC32	simple
  	CFI_SIGNAL_FRAME
@@ -8140,7 +8160,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/ia32/i
  	movl 	%eax,%eax	/* zero extension */
  	movq	%rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq	%rcx,RIP-ARGOFFSET(%rsp)
-@@ -305,6 +339,12 @@ ENTRY(ia32_cstar_target)
+@@ -305,6 +345,12 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -8153,7 +8173,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/ia32/i
  1:	movl	(%r8),%r9d
  	.section __ex_table,"a"
  	.quad 1b,ia32_badarg
-@@ -327,6 +367,7 @@ cstar_dispatch:
+@@ -327,6 +373,7 @@ cstar_dispatch:
  	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz sysretl_audit
  sysretl_from_sys_call:
@@ -8161,7 +8181,17 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/ia32/i
  	andl $~TS_COMPAT,TI_status(%r10)
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
-@@ -409,6 +450,7 @@ ENTRY(ia32_syscall)
+@@ -364,6 +411,9 @@ cstar_tracesys:
+ 	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
+ 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS32 ARGOFFSET, 1  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	xchgl %ebp,%r9d
+@@ -409,6 +459,7 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
@@ -8169,6 +8199,16 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/ia32/i
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
+@@ -441,6 +492,9 @@ ia32_tracesys:
+ 	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
+ 	movq %rsp,%rdi        /* &pt_regs -> arg1 */
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
+ 	RESTORE_REST
+ 	cmpq $(IA32_NR_syscalls-1),%rax
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/include/asm/alternative.h linux-2.6.39-pax/arch/x86/include/asm/alternative.h
 --- linux-2.6.39/arch/x86/include/asm/alternative.h	2011-03-15 19:33:07.000000000 +0100
 +++ linux-2.6.39-pax/arch/x86/include/asm/alternative.h	2011-05-19 13:45:27.000000000 +0200
@@ -13397,7 +13437,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	early_console->write(early_console, buf, n);
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel/entry_32.S linux-2.6.39-pax/arch/x86/kernel/entry_32.S
 --- linux-2.6.39/arch/x86/kernel/entry_32.S	2011-05-19 10:21:14.000000000 +0200
-+++ linux-2.6.39-pax/arch/x86/kernel/entry_32.S	2011-05-19 14:23:27.000000000 +0200
++++ linux-2.6.39-pax/arch/x86/kernel/entry_32.S	2011-05-22 21:59:34.000000000 +0200
 @@ -185,13 +185,146 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -13587,6 +13627,15 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
+@@ -344,7 +494,7 @@ ENTRY(resume_userspace)
+ 	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
+ 					# int/exception return?
+ 	jne work_pending
+-	jmp restore_all
++	jmp restore_all_pax
+ END(ret_from_exception)
+ 
+ #ifdef CONFIG_PREEMPT
 @@ -394,23 +544,34 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
@@ -13649,7 +13698,17 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	PTGS_TO_GS
  	ENABLE_INTERRUPTS_SYSEXIT
  
-@@ -481,11 +653,17 @@ sysexit_audit:
+@@ -455,6 +627,9 @@ sysenter_audit:
+ 	movl %eax,%edx			/* 2nd arg: syscall number */
+ 	movl $AUDIT_ARCH_I386,%eax	/* 1st arg: audit arch */
+ 	call audit_syscall_entry
++
++	pax_erase_kstack
++
+ 	pushl_cfi %ebx
+ 	movl PT_EAX(%esp),%eax		/* reload syscall number */
+ 	jmp sysenter_do_call
+@@ -481,11 +656,17 @@ sysexit_audit:
  
  	CFI_ENDPROC
  .pushsection .fixup,"ax"
@@ -13669,10 +13728,12 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  .popsection
  	PTGS_TO_GS_EX
  ENDPROC(ia32_sysenter_target)
-@@ -518,6 +696,12 @@ syscall_exit:
+@@ -518,6 +699,14 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
++restore_all_pax:
++
 +#ifdef CONFIG_PAX_RANDKSTACK
 +	call pax_randomize_kstack
 +#endif
@@ -13682,7 +13743,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -577,14 +761,21 @@ ldt_ss:
+@@ -577,14 +766,21 @@ ldt_ss:
   * compensating for the offset by changing to the ESPFIX segment with
   * a base address that matches for the difference.
   */
@@ -13707,7 +13768,14 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	pushl_cfi $__ESPFIX_SS
  	pushl_cfi %eax			/* new kernel esp */
  	/* Disable interrupts, but do not irqtrace this section: we
-@@ -619,23 +810,17 @@ work_resched:
+@@ -613,29 +809,23 @@ work_resched:
+ 	movl TI_flags(%ebp), %ecx
+ 	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
+ 					# than syscall tracing?
+-	jz restore_all
++	jz restore_all_pax
+ 	testb $_TIF_NEED_RESCHED, %cl
+ 	jnz work_resched
  
  work_notifysig:				# deal with pending signals and
  					# notify-resume requests
@@ -13734,7 +13802,17 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  #endif
  	xorl %edx, %edx
  	call do_notify_resume
-@@ -670,6 +855,10 @@ END(syscall_exit_work)
+@@ -648,6 +838,9 @@ syscall_trace_entry:
+ 	movl $-ENOSYS,PT_EAX(%esp)
+ 	movl %esp, %eax
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	/* What it returned is what we'll actually use.  */
+ 	cmpl $(nr_syscalls), %eax
+ 	jnae syscall_call
+@@ -670,6 +863,10 @@ END(syscall_exit_work)
  
  	RING0_INT_FRAME			# can't unwind into user space anyway
  syscall_fault:
@@ -13745,7 +13823,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	GET_THREAD_INFO(%ebp)
  	movl $-EFAULT,PT_EAX(%esp)
  	jmp resume_userspace
-@@ -752,6 +941,36 @@ ptregs_clone:
+@@ -752,6 +949,36 @@ ptregs_clone:
  	CFI_ENDPROC
  ENDPROC(ptregs_clone)
  
@@ -13782,7 +13860,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -761,8 +980,15 @@ ENDPROC(ptregs_clone)
+@@ -761,8 +988,15 @@ ENDPROC(ptregs_clone)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -13800,7 +13878,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl_cfi $__KERNEL_DS
-@@ -1213,7 +1439,6 @@ return_to_handler:
+@@ -1213,7 +1447,6 @@ return_to_handler:
  	jmp *%ecx
  #endif
  
@@ -13808,7 +13886,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1259,9 +1484,12 @@ error_code:
+@@ -1259,9 +1492,12 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -13822,7 +13900,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	TRACE_IRQS_OFF
  	movl %esp,%eax			# pt_regs pointer
  	call *%edi
-@@ -1346,6 +1574,9 @@ nmi_stack_correct:
+@@ -1346,6 +1582,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -13832,7 +13910,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1382,6 +1613,9 @@ nmi_espfix_stack:
+@@ -1382,6 +1621,9 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -13844,7 +13922,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	CFI_ADJUST_CFA_OFFSET -24
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel/entry_64.S linux-2.6.39-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.39/arch/x86/kernel/entry_64.S	2011-05-19 10:21:14.000000000 +0200
-+++ linux-2.6.39-pax/arch/x86/kernel/entry_64.S	2011-05-19 13:45:28.000000000 +0200
++++ linux-2.6.39-pax/arch/x86/kernel/entry_64.S	2011-05-22 22:11:39.000000000 +0200
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -14157,7 +14235,27 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -611,7 +861,7 @@ tracesys:
+@@ -560,6 +810,9 @@ auditsys:
+ 	movq %rax,%rsi			/* 2nd arg: syscall number */
+ 	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
+ 	call audit_syscall_entry
++
++	pax_erase_kstack
++
+ 	LOAD_ARGS 0		/* reload call-clobbered registers */
+ 	jmp system_call_fastpath
+ 
+@@ -590,6 +843,9 @@ tracesys:
+ 	FIXUP_TOP_OF_STACK %rdi
+ 	movq %rsp,%rdi
+ 	call syscall_trace_enter
++
++	pax_erase_kstack
++
+ 	/*
+ 	 * Reload arg registers from stack in case ptrace changed them.
+ 	 * We don't reload %rax because syscall_trace_enter() returned
+@@ -611,7 +867,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -14166,7 +14264,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -793,6 +1043,16 @@ END(interrupt)
+@@ -793,6 +1049,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-RBP
  	call save_args
  	PARTIAL_FRAME 0
@@ -14183,7 +14281,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	call \func
  	.endm
  
-@@ -825,7 +1085,7 @@ ret_from_intr:
+@@ -825,7 +1091,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -14192,7 +14290,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -847,12 +1107,14 @@ retint_swapgs:		/* return to user-space
+@@ -847,12 +1113,14 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -14207,7 +14305,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1027,6 +1289,16 @@ ENTRY(\sym)
+@@ -1027,6 +1295,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -14224,7 +14322,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1044,6 +1316,16 @@ ENTRY(\sym)
+@@ -1044,6 +1322,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -14241,7 +14339,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1052,7 +1334,7 @@ ENTRY(\sym)
+@@ -1052,7 +1340,7 @@ ENTRY(\sym)
  END(\sym)
  .endm
  
@@ -14250,7 +14348,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1062,8 +1344,24 @@ ENTRY(\sym)
+@@ -1062,8 +1350,24 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -14275,7 +14373,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	subq $EXCEPTION_STKSZ, INIT_TSS_IST(\ist)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, INIT_TSS_IST(\ist)
-@@ -1080,6 +1378,16 @@ ENTRY(\sym)
+@@ -1080,6 +1384,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -14292,7 +14390,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1099,6 +1407,16 @@ ENTRY(\sym)
+@@ -1099,6 +1413,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -14309,7 +14407,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1361,14 +1679,27 @@ ENTRY(paranoid_exit)
+@@ -1361,14 +1685,27 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -14338,7 +14436,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
-@@ -1426,7 +1757,7 @@ ENTRY(error_entry)
+@@ -1426,7 +1763,7 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -14347,7 +14445,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	je error_kernelspace
  error_swapgs:
  	SWAPGS
-@@ -1490,6 +1821,16 @@ ENTRY(nmi)
+@@ -1490,6 +1827,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -14364,7 +14462,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1500,11 +1841,25 @@ ENTRY(nmi)
+@@ -1500,11 +1847,25 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -16540,7 +16638,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	return ret;
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel/reboot.c linux-2.6.39-pax/arch/x86/kernel/reboot.c
 --- linux-2.6.39/arch/x86/kernel/reboot.c	2011-05-19 10:21:15.000000000 +0200
-+++ linux-2.6.39-pax/arch/x86/kernel/reboot.c	2011-05-21 19:31:48.000000000 +0200
++++ linux-2.6.39-pax/arch/x86/kernel/reboot.c	2011-05-23 01:23:42.000000000 +0200
 @@ -35,7 +35,7 @@ void (*pm_power_off)(void);
  EXPORT_SYMBOL(pm_power_off);
  
@@ -16587,13 +16685,14 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  
  	/* GDT[0]: GDT self-pointer */
  	lowmem_gdt[0] =
-@@ -357,7 +361,30 @@ void machine_real_restart(unsigned int t
+@@ -357,7 +361,33 @@ void machine_real_restart(unsigned int t
  		GDT_ENTRY(0x009b, restart_pa, 0xffff);
  
  	/* Jump to the identity-mapped low memory code */
 +
 +#if defined(CONFIG_X86_32) && (defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF))
 +	gdt = get_cpu_gdt_table(smp_processor_id());
++	pax_open_kernel();
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	gdt[GDT_ENTRY_KERNEL_DS].type = 3;
 +	gdt[GDT_ENTRY_KERNEL_DS].limit = 0xf;
@@ -16602,10 +16701,12 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
 +#ifdef CONFIG_PAX_KERNEXEC
 +	gdt[GDT_ENTRY_KERNEL_CS].base0 = 0;
 +	gdt[GDT_ENTRY_KERNEL_CS].base1 = 0;
++	gdt[GDT_ENTRY_KERNEL_CS].base2 = 0;
 +	gdt[GDT_ENTRY_KERNEL_CS].limit0 = 0xffff;
 +	gdt[GDT_ENTRY_KERNEL_CS].limit = 0xf;
 +	gdt[GDT_ENTRY_KERNEL_CS].g = 1;
 +#endif
++	pax_close_kernel();
 +#endif
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
@@ -16618,7 +16719,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  }
  #ifdef CONFIG_APM_MODULE
  EXPORT_SYMBOL(machine_real_restart);
-@@ -478,7 +505,7 @@ void __attribute__((weak)) mach_reboot_f
+@@ -478,7 +508,7 @@ void __attribute__((weak)) mach_reboot_f
  {
  }
  
@@ -16627,7 +16728,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  {
  	int i;
  
-@@ -593,13 +620,13 @@ void native_machine_shutdown(void)
+@@ -593,13 +623,13 @@ void native_machine_shutdown(void)
  #endif
  }
  
@@ -16643,7 +16744,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  {
  	printk("machine restart\n");
  
-@@ -608,7 +635,7 @@ static void native_machine_restart(char
+@@ -608,7 +638,7 @@ static void native_machine_restart(char
  	__machine_emergency_restart(0);
  }
  
@@ -16652,7 +16753,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  {
  	/* stop other cpus and apics */
  	machine_shutdown();
-@@ -619,7 +646,7 @@ static void native_machine_halt(void)
+@@ -619,7 +649,7 @@ static void native_machine_halt(void)
  	stop_this_cpu(NULL);
  }
  
@@ -16661,7 +16762,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  {
  	if (pm_power_off) {
  		if (!reboot_force)
-@@ -628,6 +655,7 @@ static void native_machine_power_off(voi
+@@ -628,6 +658,7 @@ static void native_machine_power_off(voi
  	}
  	/* a fallback in case there is no PM info available */
  	tboot_shutdown(TB_SHUTDOWN_HALT);
@@ -16769,7 +16870,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  		 * area.  Reload any changed state for the boot CPU.
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel/signal.c linux-2.6.39-pax/arch/x86/kernel/signal.c
 --- linux-2.6.39/arch/x86/kernel/signal.c	2011-01-05 01:50:19.000000000 +0100
-+++ linux-2.6.39-pax/arch/x86/kernel/signal.c	2011-05-19 13:45:28.000000000 +0200
++++ linux-2.6.39-pax/arch/x86/kernel/signal.c	2011-05-22 11:33:55.000000000 +0200
 @@ -198,7 +198,7 @@ static unsigned long align_sigframe(unsi
  	 * Align the stack pointer according to the i386 ABI,
  	 * i.e. so that on function entry ((sp + 4) & 15) == 0.
@@ -16835,7 +16936,16 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/arch/x86/kernel
  	} put_user_catch(err);
  
  	if (err)
-@@ -780,7 +783,7 @@ static void do_signal(struct pt_regs *re
+@@ -773,6 +776,8 @@ static void do_signal(struct pt_regs *re
+ 	int signr;
+ 	sigset_t *oldset;
+ 
++	pax_track_stack();
++
+ 	/*
+ 	 * We want the common case to go fast, which is why we may in certain
+ 	 * cases get here from kernel mode. Just return without doing anything
+@@ -780,7 +785,7 @@ static void do_signal(struct pt_regs *re
  	 * X86_32: vm86 regs switched out by assembly code before reaching
  	 * here, so testing against kernel CS suffices.
  	 */
@@ -54536,8 +54646,17 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/profile.
  
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/ptrace.c linux-2.6.39-pax/kernel/ptrace.c
 --- linux-2.6.39/kernel/ptrace.c	2011-05-19 10:23:26.000000000 +0200
-+++ linux-2.6.39-pax/kernel/ptrace.c	2011-05-19 13:45:48.000000000 +0200
-@@ -373,7 +373,7 @@ int ptrace_readdata(struct task_struct *
++++ linux-2.6.39-pax/kernel/ptrace.c	2011-05-22 12:13:57.000000000 +0200
+@@ -362,6 +362,8 @@ int ptrace_readdata(struct task_struct *
+ {
+ 	int copied = 0;
+ 
++	pax_track_stack();
++
+ 	while (len > 0) {
+ 		char buf[128];
+ 		int this_len, retval;
+@@ -373,7 +375,7 @@ int ptrace_readdata(struct task_struct *
  				break;
  			return -EIO;
  		}
@@ -54546,7 +54665,16 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/ptrace.c
  			return -EFAULT;
  		copied += retval;
  		src += retval;
-@@ -569,7 +569,7 @@ int ptrace_request(struct task_struct *c
+@@ -387,6 +389,8 @@ int ptrace_writedata(struct task_struct
+ {
+ 	int copied = 0;
+ 
++	pax_track_stack();
++
+ 	while (len > 0) {
+ 		char buf[128];
+ 		int this_len, retval;
+@@ -569,9 +573,11 @@ int ptrace_request(struct task_struct *c
  {
  	int ret = -EIO;
  	siginfo_t siginfo;
@@ -54554,8 +54682,12 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/ptrace.c
 +	void __user *datavp = (__force void __user *) data;
  	unsigned long __user *datalp = datavp;
  
++	pax_track_stack();
++
  	switch (request) {
-@@ -749,7 +749,7 @@ int generic_ptrace_peekdata(struct task_
+ 	case PTRACE_PEEKTEXT:
+ 	case PTRACE_PEEKDATA:
+@@ -749,7 +755,7 @@ int generic_ptrace_peekdata(struct task_
  	copied = access_process_vm(tsk, addr, &tmp, sizeof(tmp), 0);
  	if (copied != sizeof(tmp))
  		return -EIO;
@@ -54564,6 +54696,15 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/ptrace.c
  }
  
  int generic_ptrace_pokedata(struct task_struct *tsk, unsigned long addr,
+@@ -772,6 +778,8 @@ int compat_ptrace_request(struct task_st
+ 	siginfo_t siginfo;
+ 	int ret;
+ 
++	pax_track_stack();
++
+ 	switch (request) {
+ 	case PTRACE_PEEKTEXT:
+ 	case PTRACE_PEEKDATA:
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/rcutorture.c linux-2.6.39-pax/kernel/rcutorture.c
 --- linux-2.6.39/kernel/rcutorture.c	2011-05-19 10:23:26.000000000 +0200
 +++ linux-2.6.39-pax/kernel/rcutorture.c	2011-05-19 13:45:48.000000000 +0200
@@ -54915,8 +55056,17 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/rtmutex-
  	default:
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/sched.c linux-2.6.39-pax/kernel/sched.c
 --- linux-2.6.39/kernel/sched.c	2011-05-19 10:23:26.000000000 +0200
-+++ linux-2.6.39-pax/kernel/sched.c	2011-05-19 13:45:48.000000000 +0200
-@@ -4165,7 +4165,7 @@ EXPORT_SYMBOL(schedule);
++++ linux-2.6.39-pax/kernel/sched.c	2011-05-22 11:55:26.000000000 +0200
+@@ -4078,6 +4078,8 @@ asmlinkage void __sched schedule(void)
+ 	struct rq *rq;
+ 	int cpu;
+ 
++	pax_track_stack();
++
+ need_resched:
+ 	preempt_disable();
+ 	cpu = smp_processor_id();
+@@ -4165,7 +4167,7 @@ EXPORT_SYMBOL(schedule);
   * Look out! "owner" is an entirely speculative pointer
   * access and not reliable.
   */
@@ -54925,7 +55075,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/sched.c 
  {
  	unsigned int cpu;
  	struct rq *rq;
-@@ -4179,10 +4179,10 @@ int mutex_spin_on_owner(struct mutex *lo
+@@ -4179,10 +4181,10 @@ int mutex_spin_on_owner(struct mutex *lo
  	 * DEBUG_PAGEALLOC could have unmapped it if
  	 * the mutex owner just released it and exited.
  	 */
@@ -54938,7 +55088,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/sched.c 
  #endif
  
  	/*
-@@ -4219,7 +4219,7 @@ int mutex_spin_on_owner(struct mutex *lo
+@@ -4219,7 +4221,7 @@ int mutex_spin_on_owner(struct mutex *lo
  		/*
  		 * Is that owner really running on that cpu?
  		 */
@@ -54947,7 +55097,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/sched.c 
  			return 0;
  
  		arch_mutex_cpu_relax();
-@@ -7164,7 +7164,7 @@ static void init_sched_groups_power(int
+@@ -7164,7 +7166,7 @@ static void init_sched_groups_power(int
  	long power;
  	int weight;
  
@@ -54991,7 +55141,7 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/sched_fa
  	struct rq *this_rq = cpu_rq(this_cpu);
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/signal.c linux-2.6.39-pax/kernel/signal.c
 --- linux-2.6.39/kernel/signal.c	2011-05-19 10:23:26.000000000 +0200
-+++ linux-2.6.39-pax/kernel/signal.c	2011-05-19 13:45:48.000000000 +0200
++++ linux-2.6.39-pax/kernel/signal.c	2011-05-22 12:14:05.000000000 +0200
 @@ -45,12 +45,12 @@ static struct kmem_cache *sigqueue_cache
  
  int print_fatal_signals __read_mostly;
@@ -55025,6 +55175,15 @@ diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/signal.c
  	if (is_global_init(tsk))
  		return 1;
  	if (handler != SIG_IGN && handler != SIG_DFL)
+@@ -1718,6 +1718,8 @@ void ptrace_notify(int exit_code)
+ {
+ 	siginfo_t info;
+ 
++	pax_track_stack();
++
+ 	BUG_ON((exit_code & (0x7f | ~0xffff)) != SIGTRAP);
+ 
+ 	memset(&info, 0, sizeof info);
 diff -NurpX linux-2.6.39-pax/Documentation/dontdiff linux-2.6.39/kernel/smp.c linux-2.6.39-pax/kernel/smp.c
 --- linux-2.6.39/kernel/smp.c	2011-05-19 10:23:26.000000000 +0200
 +++ linux-2.6.39-pax/kernel/smp.c	2011-05-19 13:45:48.000000000 +0200
