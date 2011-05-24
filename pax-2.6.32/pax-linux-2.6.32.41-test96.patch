@@ -6347,7 +6347,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	if (err)
 diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/ia32/ia32entry.S linux-2.6.32.41-pax/arch/x86/ia32/ia32entry.S
 --- linux-2.6.32.41/arch/x86/ia32/ia32entry.S	2010-10-01 22:27:53.000000000 +0200
-+++ linux-2.6.32.41-pax/arch/x86/ia32/ia32entry.S	2011-05-23 20:05:35.000000000 +0200
++++ linux-2.6.32.41-pax/arch/x86/ia32/ia32entry.S	2011-05-24 02:33:46.000000000 +0200
 @@ -13,6 +13,7 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
@@ -6356,7 +6356,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  #include <linux/linkage.h>
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
-@@ -93,6 +94,26 @@ ENTRY(native_irq_enable_sysexit)
+@@ -93,6 +94,30 @@ ENTRY(native_irq_enable_sysexit)
  ENDPROC(native_irq_enable_sysexit)
  #endif
  
@@ -6375,15 +6375,19 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
 +	call pax_randomize_kstack
 +	popq %rax
 +#endif
++	pax_erase_kstack
++	.endm
++
++.macro pax_erase_kstack
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +	call pax_erase_kstack
 +#endif
-+	.endm
++.endm
 +
  /*
   * 32bit SYSENTER instruction entry.
   *
-@@ -119,7 +140,7 @@ ENTRY(ia32_sysenter_target)
+@@ -119,7 +144,7 @@ ENTRY(ia32_sysenter_target)
  	CFI_REGISTER	rsp,rbp
  	SWAPGS_UNSAFE_STACK
  	movq	PER_CPU_VAR(kernel_stack), %rsp
@@ -6392,7 +6396,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs, here we enable it straight after entry:
-@@ -135,7 +156,8 @@ ENTRY(ia32_sysenter_target)
+@@ -135,7 +160,8 @@ ENTRY(ia32_sysenter_target)
  	pushfq
  	CFI_ADJUST_CFA_OFFSET 8
  	/*CFI_REL_OFFSET rflags,0*/
@@ -6402,7 +6406,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	CFI_REGISTER rip,r10
  	pushq	$__USER32_CS
  	CFI_ADJUST_CFA_OFFSET 8
-@@ -150,6 +172,12 @@ ENTRY(ia32_sysenter_target)
+@@ -150,6 +176,12 @@ ENTRY(ia32_sysenter_target)
  	SAVE_ARGS 0,0,1
   	/* no need to do an access_ok check here because rbp has been
   	   32bit zero extended */ 
@@ -6415,7 +6419,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  1:	movl	(%rbp),%ebp
   	.section __ex_table,"a"
   	.quad 1b,ia32_badarg
-@@ -172,6 +200,7 @@ sysenter_dispatch:
+@@ -172,6 +204,7 @@ sysenter_dispatch:
  	testl	$_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz	sysexit_audit
  sysexit_from_sys_call:
@@ -6423,27 +6427,27 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	andl    $~TS_COMPAT,TI_status(%r10)
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
-@@ -200,6 +229,9 @@ sysexit_from_sys_call:
+@@ -200,6 +233,9 @@ sysexit_from_sys_call:
  	movl %eax,%esi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
 +
-+	call pax_erase_kstack
++	pax_erase_kstack
 +
  	movl RAX-ARGOFFSET(%rsp),%eax	/* reload syscall number */
  	cmpq $(IA32_NR_syscalls-1),%rax
  	ja ia32_badsys
-@@ -252,6 +284,9 @@ sysenter_tracesys:
+@@ -252,6 +288,9 @@ sysenter_tracesys:
  	movq	$-ENOSYS,RAX(%rsp)/* ptrace can change this for a bad syscall */
  	movq	%rsp,%rdi        /* &pt_regs -> arg1 */
  	call	syscall_trace_enter
 +
-+	call pax_erase_kstack
++	pax_erase_kstack
 +
  	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
  	cmpq	$(IA32_NR_syscalls-1),%rax
-@@ -283,19 +318,24 @@ ENDPROC(ia32_sysenter_target)
+@@ -283,19 +322,24 @@ ENDPROC(ia32_sysenter_target)
  ENTRY(ia32_cstar_target)
  	CFI_STARTPROC32	simple
  	CFI_SIGNAL_FRAME
@@ -6470,7 +6474,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	movl 	%eax,%eax	/* zero extension */
  	movq	%rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq	%rcx,RIP-ARGOFFSET(%rsp)
-@@ -311,6 +351,12 @@ ENTRY(ia32_cstar_target)
+@@ -311,6 +355,12 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -6483,7 +6487,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  1:	movl	(%r8),%r9d
  	.section __ex_table,"a"
  	.quad 1b,ia32_badarg
-@@ -333,6 +379,7 @@ cstar_dispatch:
+@@ -333,6 +383,7 @@ cstar_dispatch:
  	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz sysretl_audit
  sysretl_from_sys_call:
@@ -6491,17 +6495,17 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	andl $~TS_COMPAT,TI_status(%r10)
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
-@@ -370,6 +417,9 @@ cstar_tracesys:
+@@ -370,6 +421,9 @@ cstar_tracesys:
  	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
  	movq %rsp,%rdi        /* &pt_regs -> arg1 */
  	call syscall_trace_enter
 +
-+	call pax_erase_kstack
++	pax_erase_kstack
 +
  	LOAD_ARGS32 ARGOFFSET, 1  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
  	xchgl %ebp,%r9d
-@@ -415,6 +465,7 @@ ENTRY(ia32_syscall)
+@@ -415,6 +469,7 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
@@ -6509,12 +6513,12 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
-@@ -448,6 +499,9 @@ ia32_tracesys:
+@@ -448,6 +503,9 @@ ia32_tracesys:
  	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
  	movq %rsp,%rdi        /* &pt_regs -> arg1 */
  	call syscall_trace_enter
 +
-+	call pax_erase_kstack
++	pax_erase_kstack
 +
  	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
@@ -12821,7 +12825,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	CFI_ADJUST_CFA_OFFSET -24
 diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/kernel/entry_64.S linux-2.6.32.41-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.41/arch/x86/kernel/entry_64.S	2011-03-24 10:56:45.000000000 +0100
-+++ linux-2.6.32.41-pax/arch/x86/kernel/entry_64.S	2011-05-23 02:35:42.000000000 +0200
++++ linux-2.6.32.41-pax/arch/x86/kernel/entry_64.S	2011-05-24 02:33:46.000000000 +0200
 @@ -53,6 +53,7 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -12830,7 +12834,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -174,6 +175,253 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +175,257 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -12927,9 +12931,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
 +	call pax_randomize_kstack
 +	pop %rax
 +#endif
-+#ifdef CONFIG_PAX_MEMORY_STACKLEAK
-+	call pax_erase_kstack
-+#endif
++	pax_erase_kstack
 +	.endm
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -13038,6 +13040,12 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
 +ENDPROC(pax_exit_kernel_user)
 +#endif
 +
++.macro pax_erase_kstack
++#ifdef CONFIG_PAX_MEMORY_STACKLEAK
++	call pax_erase_kstack
++#endif
++.endm
++
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +/*
 + * r10: thread_info
@@ -13084,7 +13092,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -317,7 +565,7 @@ ENTRY(save_args)
+@@ -317,7 +569,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -13093,7 +13101,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	je 1f
  	SWAPGS
  	/*
-@@ -409,7 +657,7 @@ ENTRY(ret_from_fork)
+@@ -409,7 +661,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -13102,7 +13110,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -455,7 +703,7 @@ END(ret_from_fork)
+@@ -455,7 +707,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -13111,7 +13119,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -468,12 +716,13 @@ ENTRY(system_call_after_swapgs)
+@@ -468,12 +720,13 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -13126,7 +13134,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -502,6 +751,7 @@ sysret_check:
+@@ -502,6 +755,7 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -13134,7 +13142,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -562,6 +812,9 @@ auditsys:
+@@ -562,6 +816,9 @@ auditsys:
  	movq %rax,%rsi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -13144,7 +13152,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	LOAD_ARGS 0		/* reload call-clobbered registers */
  	jmp system_call_fastpath
  
-@@ -592,6 +845,9 @@ tracesys:
+@@ -592,6 +849,9 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -13154,7 +13162,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	/*
  	 * Reload arg registers from stack in case ptrace changed them.
  	 * We don't reload %rax because syscall_trace_enter() returned
-@@ -613,7 +869,7 @@ tracesys:
+@@ -613,7 +873,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -13163,7 +13171,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -800,6 +1056,16 @@ END(interrupt)
+@@ -800,6 +1060,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
@@ -13180,7 +13188,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	call \func
  	.endm
  
-@@ -822,7 +1088,7 @@ ret_from_intr:
+@@ -822,7 +1092,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -13189,7 +13197,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -844,12 +1110,14 @@ retint_swapgs:		/* return to user-space
+@@ -844,12 +1114,14 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -13204,7 +13212,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1032,6 +1300,16 @@ ENTRY(\sym)
+@@ -1032,6 +1304,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -13221,7 +13229,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1049,6 +1327,16 @@ ENTRY(\sym)
+@@ -1049,6 +1331,16 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -13238,7 +13246,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1066,9 +1354,24 @@ ENTRY(\sym)
+@@ -1066,9 +1358,24 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -13264,7 +13272,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
-@@ -1085,6 +1388,16 @@ ENTRY(\sym)
+@@ -1085,6 +1392,16 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -13281,7 +13289,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1104,6 +1417,16 @@ ENTRY(\sym)
+@@ -1104,6 +1421,16 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -13298,7 +13306,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1405,14 +1728,27 @@ ENTRY(paranoid_exit)
+@@ -1405,14 +1732,27 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -13327,7 +13335,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	TRACE_IRQS_IRETQ 0
  	RESTORE_ALL 8
  	jmp irq_return
-@@ -1470,7 +1806,7 @@ ENTRY(error_entry)
+@@ -1470,7 +1810,7 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -13336,7 +13344,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	je error_kernelspace
  error_swapgs:
  	SWAPGS
-@@ -1529,6 +1865,16 @@ ENTRY(nmi)
+@@ -1529,6 +1869,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -13353,7 +13361,7 @@ diff -NurpX linux-2.6.32.41-pax/Documentation/dontdiff linux-2.6.32.41/arch/x86/
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1539,11 +1885,25 @@ ENTRY(nmi)
+@@ -1539,11 +1889,25 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
