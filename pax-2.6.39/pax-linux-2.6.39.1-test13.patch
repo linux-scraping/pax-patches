@@ -42442,7 +42442,7 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/ecryptfs
  		if (copy_to_user(&buf[i], msg_ctx->msg, msg_ctx->msg_size))
 diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/exec.c linux-2.6.39.1-pax/fs/exec.c
 --- linux-2.6.39.1/fs/exec.c	2011-05-19 10:23:08.000000000 +0200
-+++ linux-2.6.39.1-pax/fs/exec.c	2011-06-02 01:59:01.000000000 +0200
++++ linux-2.6.39.1-pax/fs/exec.c	2011-06-04 12:37:03.000000000 +0200
 @@ -55,12 +55,24 @@
  #include <linux/fs_struct.h>
  #include <linux/pipe_fs_i.h>
@@ -42644,7 +42644,7 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/exec.c l
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1648,6 +1677,205 @@ out:
+@@ -1648,6 +1677,206 @@ out:
  	return ispipe;
  }
  
@@ -42838,8 +42838,9 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/exec.c l
 +#endif
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
-+void pax_track_stack(unsigned long sp)
++void pax_track_stack(void)
 +{
++	unsigned long sp = (unsigned long)&sp;
 +	if (sp < current_thread_info()->lowest_stack &&
 +	    sp > (unsigned long)task_stack_page(current))
 +		current_thread_info()->lowest_stack = sp;
@@ -42850,7 +42851,7 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/exec.c l
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -1858,17 +2086,17 @@ static void wait_for_dump_helpers(struct
+@@ -1858,17 +2087,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -42873,7 +42874,7 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/exec.c l
  	pipe_unlock(pipe);
  
  }
-@@ -1929,7 +2157,7 @@ void do_coredump(long signr, int exit_co
+@@ -1929,7 +2158,7 @@ void do_coredump(long signr, int exit_co
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -42882,7 +42883,7 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/exec.c l
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2011,7 +2239,7 @@ void do_coredump(long signr, int exit_co
+@@ -2011,7 +2240,7 @@ void do_coredump(long signr, int exit_co
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -42891,7 +42892,7 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/fs/exec.c l
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2081,7 +2309,7 @@ close_fail:
+@@ -2081,7 +2310,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -65151,8 +65152,8 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/M
 +pax_plugin-objs := pax_plugin.o
 diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/pax_plugin.c linux-2.6.39.1-pax/tools/gcc/pax_plugin.c
 --- linux-2.6.39.1/tools/gcc/pax_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.39.1-pax/tools/gcc/pax_plugin.c	2011-06-04 01:56:34.000000000 +0200
-@@ -0,0 +1,321 @@
++++ linux-2.6.39.1-pax/tools/gcc/pax_plugin.c	2011-06-04 13:10:12.000000000 +0200
+@@ -0,0 +1,242 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -65203,7 +65204,6 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +
 +static bool gate_pax_track_stack(void);
 +static unsigned int execute_pax_tree_instrument(void);
-+static unsigned int execute_pax_expand(void);
 +static unsigned int execute_pax_final(void);
 +
 +static struct gimple_opt_pass pax_tree_instrument_pass = {
@@ -65221,24 +65221,6 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0, //TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts,
 +		.todo_flags_finish	= TODO_verify_stmts // | TODO_dump_func
-+	}
-+};
-+
-+static struct rtl_opt_pass pax_expand_rtl_opt_pass = {
-+	.pass = {
-+		.type			= RTL_PASS,
-+		.name			= "pax_expand",
-+		.gate			= gate_pax_track_stack,
-+		.execute		= execute_pax_expand,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= 0,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0, //TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts,
-+		.todo_flags_finish	= 0 //TODO_dump_func | TODO_ggc_collect
 +	}
 +};
 +
@@ -65268,13 +65250,13 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +static void pax_add_instrumentation(gimple_stmt_iterator *gsi, bool before)
 +{
 +	gimple call;
-+	tree sp, decl, type;
++	tree decl, type;
 +
-+	sp = build_int_cst_wide(ptr_type_node, 0, 0);
-+	type = build_function_type_list(void_type_node, unsigned_type_node, NULL_TREE);
++	// insert call to void pax_track_stack(void)
++	type = build_function_type_list(void_type_node, NULL_TREE);
 +	decl = build_fn_decl(track_function, type);
 +	DECL_ASSEMBLER_NAME(decl); // for LTO
-+	call = gimple_build_call(decl, 1, sp);
++	call = gimple_build_call(decl, 0);
 +	if (before)
 +		gsi_insert_before(gsi, call, GSI_CONTINUE_LINKING);
 +	else
@@ -65285,7 +65267,6 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +{
 +	basic_block bb;
 +	gimple_stmt_iterator gsi;
-+	bool isalloca = false;
 +
 +	// 1. loop through BBs and GIMPLE statements
 +	FOR_EACH_BB(bb) {
@@ -65308,18 +65289,13 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +			if (DECL_FUNCTION_CODE(decl) != BUILT_IN_ALLOCA)
 +				continue;
 +
-+			// 3. insert track call after each __builtin_alloca call
++			// 2. insert track call after each __builtin_alloca call
 +			pax_add_instrumentation(&gsi, false);
-+			isalloca = true;
 +//			print_node(stderr, "pax", decl, 4);
 +		}
 +	}
 +
-+	// 2. if no __builtin_alloca call is found
-+	if (isalloca)
-+		return 0;
-+
-+	// 2.1 insert track call at the beginning
++	// 3. insert track call at the beginning
 +	bb = ENTRY_BLOCK_PTR_FOR_FUNCTION(cfun)->next_bb;
 +	gsi = gsi_start_bb(bb);
 +	pax_add_instrumentation(&gsi, true);
@@ -65327,9 +65303,12 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +	return 0;
 +}
 +
-+static unsigned int execute_pax_expand(void)
++static unsigned int execute_pax_final(void)
 +{
-+	rtx sp, insn;
++	rtx insn;
++
++	if (cfun->calls_alloca)
++		return 0;
 +
 +	// 1. find pax_track_stack calls
 +	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
@@ -65349,66 +65328,16 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +			continue;
 +		if (strcmp(XSTR(body, 0), track_function))
 +			continue;
-+		// 2. fix parameter to be the stack pointer
-+		// rtl match: (insn 6 5 7 3 (set (mem (reg 56 virtual-outgoing-args) [0 S4 A32]) (0)) -1 (nil))
-+		//            (insn 6 5 7 3 (set (reg 0 ax) (0)) -1 (nil))
-+		//            (insn 6 5 7 3 (set (reg 5 di) (0)) -1 (nil))
-+		sp = PREV_INSN(insn);
-+		if (!INSN_P(sp))
++//		warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
++		// 2. delete call if function frame is not big enough
++		if (get_frame_size() >= track_frame_size)
 +			continue;
-+		sp = PATTERN(sp);
-+		if (GET_CODE(sp) != SET)
-+			continue;
-+		SET_SRC(sp) = stack_pointer_rtx;
++		delete_insn_and_edges(insn);
 +	}
 +
 +//	print_simple_rtl(stderr, get_insns());
 +//	print_rtl(stderr, get_insns());
 +//	warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
-+
-+	return 0;
-+}
-+
-+static unsigned int execute_pax_final(void)
-+{
-+	rtx sp = NULL, insn;
-+
-+	// 1. find pax_track_stack calls
-+	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
-+		// rtl match: (call_insn 8 7 9 3 (call (mem (symbol_ref ("pax_track_stack") [flags 0x41] <function_decl 0xb7470e80 pax_track_stack>) [0 S1 A8]) (4)) -1 (nil) (nil))
-+		rtx body;
-+
-+		if (!INSN_P(insn))
-+			continue;
-+		body = PATTERN(insn);
-+		if (GET_CODE(body) == SET) {
-+			if (GET_CODE(body) == SET && SET_SRC(body) == stack_pointer_rtx)
-+				sp = insn;
-+			continue;
-+		}
-+
-+		if (!CALL_P(insn))
-+			continue;
-+		if (GET_CODE(body) != CALL)
-+			continue;
-+		body = XEXP(body, 0);
-+		if (GET_CODE(body) != MEM)
-+			continue;
-+		body = XEXP(body, 0);
-+		if (GET_CODE(body) != SYMBOL_REF)
-+			continue;
-+		if (strcmp(XSTR(body, 0), track_function))
-+			continue;
-+//	warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
-+		// 2. delete call if function frame is not big enough
-+		if (cfun->calls_alloca)
-+			continue;
-+		if (get_frame_size() >= track_frame_size)
-+			continue;
-+		if (sp)
-+			delete_insn_and_edges(sp);
-+		delete_insn_and_edges(insn);
-+	}
 +
 +	return 0;
 +}
@@ -65423,12 +65352,6 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +		.pass				= &pax_tree_instrument_pass.pass,
 +//		.reference_pass_name		= "tree_profile",
 +		.reference_pass_name		= "optimized",
-+		.ref_pass_instance_number	= 0,
-+		.pos_op 			= PASS_POS_INSERT_AFTER
-+	};
-+	struct register_pass_info pax_expand_pass_info = {
-+		.pass				= &pax_expand_rtl_opt_pass.pass,
-+		.reference_pass_name		= "expand",
 +		.ref_pass_instance_number	= 0,
 +		.pos_op 			= PASS_POS_INSERT_AFTER
 +	};
@@ -65469,7 +65392,6 @@ diff -NurpX linux-2.6.39.1-pax/Documentation/dontdiff linux-2.6.39.1/tools/gcc/p
 +	}
 +
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &pax_tree_instrument_pass_info);
-+	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &pax_expand_pass_info);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &pax_final_pass_info);
 +
 +	return 0;
