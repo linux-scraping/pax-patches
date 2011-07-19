@@ -13610,8 +13610,18 @@ diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/ke
  	.spin_is_contended = __ticket_spin_is_contended,
 diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/kernel/paravirt.c linux-2.6.39.3-pax/arch/x86/kernel/paravirt.c
 --- linux-2.6.39.3/arch/x86/kernel/paravirt.c	2011-05-19 06:06:34.000000000 +0200
-+++ linux-2.6.39.3-pax/arch/x86/kernel/paravirt.c	2011-07-14 13:52:11.251018431 +0200
-@@ -145,14 +145,14 @@ unsigned paravirt_patch_default(u8 type,
++++ linux-2.6.39.3-pax/arch/x86/kernel/paravirt.c	2011-07-19 23:39:03.182992321 +0200
+@@ -53,6 +53,9 @@ u64 _paravirt_ident_64(u64 x)
+ {
+ 	return x;
+ }
++#if defined(CONFIG_X86_32) && defined(CONFIG_X86_PAE)
++PV_CALLEE_SAVE_REGS_THUNK(_paravirt_ident_64);
++#endif
+ 
+ void __init default_banner(void)
+ {
+@@ -145,15 +148,19 @@ unsigned paravirt_patch_default(u8 type,
  	if (opfunc == NULL)
  		/* If there's no function, patch it with a ud2a (BUG) */
  		ret = paravirt_patch_insns(insnbuf, len, ud2a, ud2a+sizeof(ud2a));
@@ -13626,10 +13636,15 @@ diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/ke
  		ret = paravirt_patch_ident_32(insnbuf, len);
 -	else if (opfunc == _paravirt_ident_64)
 +	else if (opfunc == (void *)_paravirt_ident_64)
++		ret = paravirt_patch_ident_64(insnbuf, len);
++#if defined(CONFIG_X86_32) && defined(CONFIG_X86_PAE)
++	else if (opfunc == (void *)__raw_callee_save__paravirt_ident_64)
  		ret = paravirt_patch_ident_64(insnbuf, len);
++#endif
  
  	else if (type == PARAVIRT_PATCH(pv_cpu_ops.iret) ||
-@@ -178,7 +178,7 @@ unsigned paravirt_patch_insns(void *insn
+ 		 type == PARAVIRT_PATCH(pv_cpu_ops.irq_enable_sysexit) ||
+@@ -178,7 +185,7 @@ unsigned paravirt_patch_insns(void *insn
  	if (insn_len > len || start == NULL)
  		insn_len = len;
  	else
@@ -13638,7 +13653,7 @@ diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/ke
  
  	return insn_len;
  }
-@@ -294,22 +294,22 @@ void arch_flush_lazy_mmu_mode(void)
+@@ -294,22 +301,22 @@ void arch_flush_lazy_mmu_mode(void)
  	preempt_enable();
  }
  
@@ -13665,7 +13680,7 @@ diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/ke
  	.save_fl = __PV_IS_CALLEE_SAVE(native_save_fl),
  	.restore_fl = __PV_IS_CALLEE_SAVE(native_restore_fl),
  	.irq_disable = __PV_IS_CALLEE_SAVE(native_irq_disable),
-@@ -321,7 +321,7 @@ struct pv_irq_ops pv_irq_ops = {
+@@ -321,7 +328,7 @@ struct pv_irq_ops pv_irq_ops = {
  #endif
  };
  
@@ -13674,7 +13689,7 @@ diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/ke
  	.cpuid = native_cpuid,
  	.get_debugreg = native_get_debugreg,
  	.set_debugreg = native_set_debugreg,
-@@ -382,7 +382,7 @@ struct pv_cpu_ops pv_cpu_ops = {
+@@ -382,21 +389,26 @@ struct pv_cpu_ops pv_cpu_ops = {
  	.end_context_switch = paravirt_nop,
  };
  
@@ -13683,7 +13698,19 @@ diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/ke
  #ifdef CONFIG_X86_LOCAL_APIC
  	.startup_ipi_hook = paravirt_nop,
  #endif
-@@ -396,7 +396,7 @@ struct pv_apic_ops pv_apic_ops = {
+ };
+ 
+-#if defined(CONFIG_X86_32) && !defined(CONFIG_X86_PAE)
++#ifdef CONFIG_X86_32
++#ifdef CONFIG_X86_PAE
++/* 64-bit pagetable entries */
++#define PTE_IDENT	PV_CALLEE_SAVE(_paravirt_ident_64)
++#else
+ /* 32-bit pagetable entries */
+ #define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_32)
++#endif
+ #else
+ /* 64-bit pagetable entries */
  #define PTE_IDENT	__PV_IS_CALLEE_SAVE(_paravirt_ident_64)
  #endif
  
@@ -13692,7 +13719,7 @@ diff -NurpX linux-2.6.39.3-pax/Documentation/dontdiff linux-2.6.39.3/arch/x86/ke
  
  	.read_cr2 = native_read_cr2,
  	.write_cr2 = native_write_cr2,
-@@ -465,6 +465,12 @@ struct pv_mmu_ops pv_mmu_ops = {
+@@ -465,6 +477,12 @@ struct pv_mmu_ops pv_mmu_ops = {
  	},
  
  	.set_fixmap = native_set_fixmap,
