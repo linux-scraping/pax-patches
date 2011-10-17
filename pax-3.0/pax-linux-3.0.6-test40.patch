@@ -4748,6 +4748,32 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/um/kernel/pr
  unsigned long get_wchan(struct task_struct *p)
  {
  	unsigned long stack_page, sp, ip;
+diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/um/Makefile linux-3.0.6-pax/arch/um/Makefile
+--- linux-3.0.6/arch/um/Makefile	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.0.6-pax/arch/um/Makefile	2011-10-15 17:58:24.569411216 +0200
+@@ -49,6 +49,10 @@ USER_CFLAGS = $(patsubst $(KERNEL_DEFINE
+ 	$(patsubst -I%,,$(KBUILD_CFLAGS)))) $(ARCH_INCLUDE) $(MODE_INCLUDE) \
+ 	$(filter -I%,$(CFLAGS)) -D_FILE_OFFSET_BITS=64
+ 
++ifdef CONSTIFY_PLUGIN
++USER_CFLAGS	+= $(CONSTIFY_PLUGIN) -fplugin-arg-constify_plugin-no-constify
++endif
++
+ include $(srctree)/$(ARCH_DIR)/Makefile-$(SUBARCH)
+ 
+ #This will adjust *FLAGS accordingly to the platform.
+diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/um/sys-i386/shared/sysdep/system.h linux-3.0.6-pax/arch/um/sys-i386/shared/sysdep/system.h
+--- linux-3.0.6/arch/um/sys-i386/shared/sysdep/system.h	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.0.6-pax/arch/um/sys-i386/shared/sysdep/system.h	2011-10-14 19:48:35.229077641 +0200
+@@ -17,7 +17,7 @@
+ # define AT_VECTOR_SIZE_ARCH 1
+ #endif
+ 
+-extern unsigned long arch_align_stack(unsigned long sp);
++#define arch_align_stack(x) ((x) & ~0xfUL)
+ 
+ void default_idle(void);
+ 
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/um/sys-i386/syscalls.c linux-3.0.6-pax/arch/um/sys-i386/syscalls.c
 --- linux-3.0.6/arch/um/sys-i386/syscalls.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.0.6-pax/arch/um/sys-i386/syscalls.c	2011-10-09 13:14:44.567928105 +0200
@@ -4773,6 +4799,18 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/um/sys-i386/
  /*
   * The prototype on i386 is:
   *
+diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/um/sys-x86_64/shared/sysdep/system.h linux-3.0.6-pax/arch/um/sys-x86_64/shared/sysdep/system.h
+--- linux-3.0.6/arch/um/sys-x86_64/shared/sysdep/system.h	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.0.6-pax/arch/um/sys-x86_64/shared/sysdep/system.h	2011-10-14 19:49:00.485078923 +0200
+@@ -17,7 +17,7 @@
+ # define AT_VECTOR_SIZE_ARCH 1
+ #endif
+ 
+-extern unsigned long arch_align_stack(unsigned long sp);
++#define arch_align_stack(x) ((x) & ~0xfUL)
+ 
+ void default_idle(void);
+ 
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/boot/bitops.h linux-3.0.6-pax/arch/x86/boot/bitops.h
 --- linux-3.0.6/arch/x86/boot/bitops.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.0.6-pax/arch/x86/boot/bitops.h	2011-10-09 13:14:44.567928105 +0200
@@ -11019,7 +11057,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  #include <asm/fcntl.h>
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/entry_32.S linux-3.0.6-pax/arch/x86/kernel/entry_32.S
 --- linux-3.0.6/arch/x86/kernel/entry_32.S	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.6-pax/arch/x86/kernel/entry_32.S	2011-10-09 13:14:44.647928101 +0200
++++ linux-3.0.6-pax/arch/x86/kernel/entry_32.S	2011-10-17 00:08:45.951310721 +0200
 @@ -185,13 +185,146 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -11193,6 +11231,15 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  .macro RESTORE_INT_REGS
  	popl_cfi %ebx
  	CFI_RESTORE ebx
+@@ -307,7 +449,7 @@ ENTRY(ret_from_fork)
+ 	popfl_cfi
+ 	jmp syscall_exit
+ 	CFI_ENDPROC
+-END(ret_from_fork)
++ENDPROC(ret_from_fork)
+ 
+ /*
+  * Interrupt exit functions should be protected against kprobes
 @@ -332,7 +474,15 @@ check_userspace:
  	movb PT_CS(%esp), %al
  	andl $(X86_EFLAGS_VM | SEGMENT_RPL_MASK), %eax
@@ -11209,15 +11256,26 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
-@@ -344,7 +494,7 @@ ENTRY(resume_userspace)
+@@ -344,8 +494,8 @@ ENTRY(resume_userspace)
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
  					# int/exception return?
  	jne work_pending
 -	jmp restore_all
+-END(ret_from_exception)
 +	jmp restore_all_pax
- END(ret_from_exception)
++ENDPROC(ret_from_exception)
  
  #ifdef CONFIG_PREEMPT
+ ENTRY(resume_kernel)
+@@ -360,7 +510,7 @@ need_resched:
+ 	jz restore_all
+ 	call preempt_schedule_irq
+ 	jmp need_resched
+-END(resume_kernel)
++ENDPROC(resume_kernel)
+ #endif
+ 	CFI_ENDPROC
+ /*
 @@ -394,23 +544,34 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
@@ -11365,7 +11423,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	pushl_cfi $__ESPFIX_SS
  	pushl_cfi %eax			/* new kernel esp */
  	/* Disable interrupts, but do not irqtrace this section: we
-@@ -613,29 +824,23 @@ work_resched:
+@@ -613,34 +824,28 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -11399,7 +11457,13 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  #endif
  	xorl %edx, %edx
  	call do_notify_resume
-@@ -648,6 +853,9 @@ syscall_trace_entry:
+ 	jmp resume_userspace_sig
+-END(work_pending)
++ENDPROC(work_pending)
+ 
+ 	# perform syscall exit tracing
+ 	ALIGN
+@@ -648,11 +853,14 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -11409,7 +11473,19 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	/* What it returned is what we'll actually use.  */
  	cmpl $(nr_syscalls), %eax
  	jnae syscall_call
-@@ -670,6 +878,10 @@ END(syscall_exit_work)
+ 	jmp syscall_exit
+-END(syscall_trace_entry)
++ENDPROC(syscall_trace_entry)
+ 
+ 	# perform syscall exit tracing
+ 	ALIGN
+@@ -665,20 +873,24 @@ syscall_exit_work:
+ 	movl %esp, %eax
+ 	call syscall_trace_leave
+ 	jmp resume_userspace
+-END(syscall_exit_work)
++ENDPROC(syscall_exit_work)
+ 	CFI_ENDPROC
  
  	RING0_INT_FRAME			# can't unwind into user space anyway
  syscall_fault:
@@ -11420,6 +11496,17 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	GET_THREAD_INFO(%ebp)
  	movl $-EFAULT,PT_EAX(%esp)
  	jmp resume_userspace
+-END(syscall_fault)
++ENDPROC(syscall_fault)
+ 
+ syscall_badsys:
+ 	movl $-ENOSYS,PT_EAX(%esp)
+ 	jmp resume_userspace
+-END(syscall_badsys)
++ENDPROC(syscall_badsys)
+ 	CFI_ENDPROC
+ /*
+  * End of kprobes section
 @@ -752,6 +964,36 @@ ptregs_clone:
  	CFI_ENDPROC
  ENDPROC(ptregs_clone)
@@ -11475,6 +11562,188 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl_cfi $__KERNEL_DS
+@@ -815,7 +1064,7 @@ vector=vector+1
+   .endr
+ 2:	jmp common_interrupt
+ .endr
+-END(irq_entries_start)
++ENDPROC(irq_entries_start)
+ 
+ .previous
+ END(interrupt)
+@@ -863,7 +1112,7 @@ ENTRY(coprocessor_error)
+ 	pushl_cfi $do_coprocessor_error
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(coprocessor_error)
++ENDPROC(coprocessor_error)
+ 
+ ENTRY(simd_coprocessor_error)
+ 	RING0_INT_FRAME
+@@ -889,7 +1138,7 @@ ENTRY(simd_coprocessor_error)
+ #endif
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(simd_coprocessor_error)
++ENDPROC(simd_coprocessor_error)
+ 
+ ENTRY(device_not_available)
+ 	RING0_INT_FRAME
+@@ -897,7 +1146,7 @@ ENTRY(device_not_available)
+ 	pushl_cfi $do_device_not_available
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(device_not_available)
++ENDPROC(device_not_available)
+ 
+ #ifdef CONFIG_PARAVIRT
+ ENTRY(native_iret)
+@@ -906,12 +1155,12 @@ ENTRY(native_iret)
+ 	.align 4
+ 	.long native_iret, iret_exc
+ .previous
+-END(native_iret)
++ENDPROC(native_iret)
+ 
+ ENTRY(native_irq_enable_sysexit)
+ 	sti
+ 	sysexit
+-END(native_irq_enable_sysexit)
++ENDPROC(native_irq_enable_sysexit)
+ #endif
+ 
+ ENTRY(overflow)
+@@ -920,7 +1169,7 @@ ENTRY(overflow)
+ 	pushl_cfi $do_overflow
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(overflow)
++ENDPROC(overflow)
+ 
+ ENTRY(bounds)
+ 	RING0_INT_FRAME
+@@ -928,7 +1177,7 @@ ENTRY(bounds)
+ 	pushl_cfi $do_bounds
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(bounds)
++ENDPROC(bounds)
+ 
+ ENTRY(invalid_op)
+ 	RING0_INT_FRAME
+@@ -936,7 +1185,7 @@ ENTRY(invalid_op)
+ 	pushl_cfi $do_invalid_op
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(invalid_op)
++ENDPROC(invalid_op)
+ 
+ ENTRY(coprocessor_segment_overrun)
+ 	RING0_INT_FRAME
+@@ -944,35 +1193,35 @@ ENTRY(coprocessor_segment_overrun)
+ 	pushl_cfi $do_coprocessor_segment_overrun
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(coprocessor_segment_overrun)
++ENDPROC(coprocessor_segment_overrun)
+ 
+ ENTRY(invalid_TSS)
+ 	RING0_EC_FRAME
+ 	pushl_cfi $do_invalid_TSS
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(invalid_TSS)
++ENDPROC(invalid_TSS)
+ 
+ ENTRY(segment_not_present)
+ 	RING0_EC_FRAME
+ 	pushl_cfi $do_segment_not_present
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(segment_not_present)
++ENDPROC(segment_not_present)
+ 
+ ENTRY(stack_segment)
+ 	RING0_EC_FRAME
+ 	pushl_cfi $do_stack_segment
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(stack_segment)
++ENDPROC(stack_segment)
+ 
+ ENTRY(alignment_check)
+ 	RING0_EC_FRAME
+ 	pushl_cfi $do_alignment_check
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(alignment_check)
++ENDPROC(alignment_check)
+ 
+ ENTRY(divide_error)
+ 	RING0_INT_FRAME
+@@ -980,7 +1229,7 @@ ENTRY(divide_error)
+ 	pushl_cfi $do_divide_error
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(divide_error)
++ENDPROC(divide_error)
+ 
+ #ifdef CONFIG_X86_MCE
+ ENTRY(machine_check)
+@@ -989,7 +1238,7 @@ ENTRY(machine_check)
+ 	pushl_cfi machine_check_vector
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(machine_check)
++ENDPROC(machine_check)
+ #endif
+ 
+ ENTRY(spurious_interrupt_bug)
+@@ -998,7 +1247,7 @@ ENTRY(spurious_interrupt_bug)
+ 	pushl_cfi $do_spurious_interrupt_bug
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(spurious_interrupt_bug)
++ENDPROC(spurious_interrupt_bug)
+ /*
+  * End of kprobes section
+  */
+@@ -1113,7 +1362,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector
+ 
+ ENTRY(mcount)
+ 	ret
+-END(mcount)
++ENDPROC(mcount)
+ 
+ ENTRY(ftrace_caller)
+ 	cmpl $0, function_trace_stop
+@@ -1142,7 +1391,7 @@ ftrace_graph_call:
+ .globl ftrace_stub
+ ftrace_stub:
+ 	ret
+-END(ftrace_caller)
++ENDPROC(ftrace_caller)
+ 
+ #else /* ! CONFIG_DYNAMIC_FTRACE */
+ 
+@@ -1178,7 +1427,7 @@ trace:
+ 	popl %ecx
+ 	popl %eax
+ 	jmp ftrace_stub
+-END(mcount)
++ENDPROC(mcount)
+ #endif /* CONFIG_DYNAMIC_FTRACE */
+ #endif /* CONFIG_FUNCTION_TRACER */
+ 
+@@ -1199,7 +1448,7 @@ ENTRY(ftrace_graph_caller)
+ 	popl %ecx
+ 	popl %eax
+ 	ret
+-END(ftrace_graph_caller)
++ENDPROC(ftrace_graph_caller)
+ 
+ .globl return_to_handler
+ return_to_handler:
 @@ -1213,7 +1462,6 @@ return_to_handler:
  	jmp *%ecx
  #endif
@@ -11483,7 +11752,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1259,9 +1507,12 @@ error_code:
+@@ -1259,15 +1507,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -11497,6 +11766,22 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	TRACE_IRQS_OFF
  	movl %esp,%eax			# pt_regs pointer
  	call *%edi
+ 	jmp ret_from_exception
+ 	CFI_ENDPROC
+-END(page_fault)
++ENDPROC(page_fault)
+ 
+ /*
+  * Debug traps and NMI can happen at the one SYSENTER instruction
+@@ -1309,7 +1560,7 @@ debug_stack_correct:
+ 	call do_debug
+ 	jmp ret_from_exception
+ 	CFI_ENDPROC
+-END(debug)
++ENDPROC(debug)
+ 
+ /*
+  * NMI is doubly nasty. It can happen _while_ we're handling
 @@ -1346,6 +1597,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
@@ -11507,7 +11792,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1382,6 +1636,9 @@ nmi_espfix_stack:
+@@ -1382,12 +1636,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -11517,9 +11802,42 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	RESTORE_REGS
  	lss 12+4(%esp), %esp		# back to espfix stack
  	CFI_ADJUST_CFA_OFFSET -24
+ 	jmp irq_return
+ 	CFI_ENDPROC
+-END(nmi)
++ENDPROC(nmi)
+ 
+ ENTRY(int3)
+ 	RING0_INT_FRAME
+@@ -1399,14 +1656,14 @@ ENTRY(int3)
+ 	call do_int3
+ 	jmp ret_from_exception
+ 	CFI_ENDPROC
+-END(int3)
++ENDPROC(int3)
+ 
+ ENTRY(general_protection)
+ 	RING0_EC_FRAME
+ 	pushl_cfi $do_general_protection
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(general_protection)
++ENDPROC(general_protection)
+ 
+ #ifdef CONFIG_KVM_GUEST
+ ENTRY(async_page_fault)
+@@ -1414,7 +1671,7 @@ ENTRY(async_page_fault)
+ 	pushl_cfi $do_async_page_fault
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(async_page_fault)
++ENDPROC(async_page_fault)
+ #endif
+ 
+ /*
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/entry_64.S linux-3.0.6-pax/arch/x86/kernel/entry_64.S
 --- linux-3.0.6/arch/x86/kernel/entry_64.S	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.6-pax/arch/x86/kernel/entry_64.S	2011-10-10 23:00:59.329436962 +0200
++++ linux-3.0.6-pax/arch/x86/kernel/entry_64.S	2011-10-17 00:07:32.787306746 +0200
 @@ -53,6 +53,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -11529,22 +11847,28 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -66,6 +68,7 @@
+@@ -66,8 +68,9 @@
  #ifdef CONFIG_FUNCTION_TRACER
  #ifdef CONFIG_DYNAMIC_FTRACE
  ENTRY(mcount)
 +	pax_force_retaddr
  	retq
- END(mcount)
+-END(mcount)
++ENDPROC(mcount)
  
-@@ -90,6 +93,7 @@ GLOBAL(ftrace_graph_call)
+ ENTRY(ftrace_caller)
+ 	cmpl $0, function_trace_stop
+@@ -90,8 +93,9 @@ GLOBAL(ftrace_graph_call)
  #endif
  
  GLOBAL(ftrace_stub)
 +	pax_force_retaddr
  	retq
- END(ftrace_caller)
+-END(ftrace_caller)
++ENDPROC(ftrace_caller)
  
+ #else /* ! CONFIG_DYNAMIC_FTRACE */
+ ENTRY(mcount)
 @@ -110,6 +114,7 @@ ENTRY(mcount)
  #endif
  
@@ -11553,7 +11877,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	retq
  
  trace:
-@@ -119,6 +124,7 @@ trace:
+@@ -119,12 +124,13 @@ trace:
  	movq 8(%rbp), %rsi
  	subq $MCOUNT_INSN_SIZE, %rdi
  
@@ -11561,14 +11885,24 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	call   *ftrace_trace_function
  
  	MCOUNT_RESTORE_FRAME
-@@ -144,6 +150,7 @@ ENTRY(ftrace_graph_caller)
+ 
+ 	jmp ftrace_stub
+-END(mcount)
++ENDPROC(mcount)
+ #endif /* CONFIG_DYNAMIC_FTRACE */
+ #endif /* CONFIG_FUNCTION_TRACER */
+ 
+@@ -144,8 +150,9 @@ ENTRY(ftrace_graph_caller)
  
  	MCOUNT_RESTORE_FRAME
  
 +	pax_force_retaddr
  	retq
- END(ftrace_graph_caller)
+-END(ftrace_graph_caller)
++ENDPROC(ftrace_graph_caller)
  
+ GLOBAL(return_to_handler)
+ 	subq  $24, %rsp
 @@ -161,6 +168,7 @@ GLOBAL(return_to_handler)
  	movq 8(%rsp), %rdx
  	movq (%rsp), %rax
@@ -11856,23 +12190,31 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	je 1f
  	SWAPGS
  	/*
-@@ -338,6 +609,7 @@ ENTRY(save_args)
+@@ -338,9 +609,10 @@ ENTRY(save_args)
  	 * We entered an interrupt context - irqs are off:
  	 */
  2:	TRACE_IRQS_OFF
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(save_args)
-@@ -354,6 +626,7 @@ ENTRY(save_rest)
+-END(save_args)
++ENDPROC(save_args)
+ 	.popsection
+ 
+ ENTRY(save_rest)
+@@ -354,9 +626,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(save_rest)
-@@ -385,7 +658,8 @@ ENTRY(save_paranoid)
+-END(save_rest)
++ENDPROC(save_rest)
+ 
+ /* save complete stack frame */
+ 	.pushsection .kprobes.text, "ax"
+@@ -385,9 +658,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -11880,8 +12222,11 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
 +1:	pax_force_retaddr
 +	ret
  	CFI_ENDPROC
- END(save_paranoid)
+-END(save_paranoid)
++ENDPROC(save_paranoid)
  	.popsection
+ 
+ /*
 @@ -409,7 +683,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
@@ -11891,6 +12236,15 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
+@@ -419,7 +693,7 @@ ENTRY(ret_from_fork)
+ 	jmp ret_from_sys_call			# go to the SYSRET fastpath
+ 
+ 	CFI_ENDPROC
+-END(ret_from_fork)
++ENDPROC(ret_from_fork)
+ 
+ /*
+  * System call entry. Up to 6 arguments in registers are supported.
 @@ -455,7 +729,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
@@ -11953,14 +12307,63 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -702,6 +985,7 @@ ENTRY(ptregscall_common)
+@@ -668,7 +951,7 @@ int_restore_rest:
+ 	TRACE_IRQS_OFF
+ 	jmp int_with_check
+ 	CFI_ENDPROC
+-END(system_call)
++ENDPROC(system_call)
+ 
+ /*
+  * Certain special system calls that need to save a complete full stack frame.
+@@ -684,7 +967,7 @@ ENTRY(\label)
+ 	call \func
+ 	jmp ptregscall_common
+ 	CFI_ENDPROC
+-END(\label)
++ENDPROC(\label)
+ 	.endm
+ 
+ 	PTREGSCALL stub_clone, sys_clone, %r8
+@@ -702,9 +985,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
 +	pax_force_retaddr
  	ret $REST_SKIP		/* pop extended registers */
  	CFI_ENDPROC
- END(ptregscall_common)
+-END(ptregscall_common)
++ENDPROC(ptregscall_common)
+ 
+ ENTRY(stub_execve)
+ 	CFI_STARTPROC
+@@ -719,7 +1003,7 @@ ENTRY(stub_execve)
+ 	RESTORE_REST
+ 	jmp int_ret_from_sys_call
+ 	CFI_ENDPROC
+-END(stub_execve)
++ENDPROC(stub_execve)
+ 
+ /*
+  * sigreturn is special because it needs to restore all registers on return.
+@@ -737,7 +1021,7 @@ ENTRY(stub_rt_sigreturn)
+ 	RESTORE_REST
+ 	jmp int_ret_from_sys_call
+ 	CFI_ENDPROC
+-END(stub_rt_sigreturn)
++ENDPROC(stub_rt_sigreturn)
+ 
+ /*
+  * Build the entry stubs and pointer table with some assembler magic.
+@@ -772,7 +1056,7 @@ vector=vector+1
+ 2:	jmp common_interrupt
+ .endr
+ 	CFI_ENDPROC
+-END(irq_entries_start)
++ENDPROC(irq_entries_start)
+ 
+ .previous
+ END(interrupt)
 @@ -793,6 +1077,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-RBP
  	call save_args
@@ -12004,7 +12407,25 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1027,6 +1325,16 @@ ENTRY(\sym)
+@@ -941,7 +1239,7 @@ ENTRY(retint_kernel)
+ #endif
+ 
+ 	CFI_ENDPROC
+-END(common_interrupt)
++ENDPROC(common_interrupt)
+ /*
+  * End of kprobes section
+  */
+@@ -957,7 +1255,7 @@ ENTRY(\sym)
+ 	interrupt \do_sym
+ 	jmp ret_from_intr
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ #ifdef CONFIG_SMP
+@@ -1027,12 +1325,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12021,7 +12442,14 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1044,6 +1352,16 @@ ENTRY(\sym)
+ 	jmp error_exit		/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ .macro paranoidzeroentry sym do_sym
+@@ -1044,15 +1352,25 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12038,8 +12466,10 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1052,7 +1370,7 @@ ENTRY(\sym)
- END(\sym)
+ 	jmp paranoid_exit	/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
  .endm
  
 -#define INIT_TSS_IST(x) PER_CPU_VAR(init_tss) + (TSS_ist + ((x) - 1) * 8)
@@ -12047,7 +12477,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1062,8 +1380,24 @@ ENTRY(\sym)
+@@ -1062,14 +1380,30 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12072,7 +12502,14 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	subq $EXCEPTION_STKSZ, INIT_TSS_IST(\ist)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, INIT_TSS_IST(\ist)
-@@ -1080,6 +1414,16 @@ ENTRY(\sym)
+ 	jmp paranoid_exit	/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ .macro errorentry sym do_sym
+@@ -1080,13 +1414,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12089,7 +12526,15 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1099,6 +1443,16 @@ ENTRY(\sym)
+ 	call \do_sym
+ 	jmp error_exit			/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ 	/* error code is on the stack already */
+@@ -1099,13 +1443,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -12106,15 +12551,27 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1134,6 +1488,7 @@ gs_change:
+ 	call \do_sym
+ 	jmp paranoid_exit		/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ zeroentry divide_error do_divide_error
+@@ -1134,9 +1488,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(native_load_gs_index)
-@@ -1158,6 +1513,7 @@ ENTRY(kernel_thread_helper)
+-END(native_load_gs_index)
++ENDPROC(native_load_gs_index)
+ 
+ 	.section __ex_table,"a"
+ 	.align 8
+@@ -1158,13 +1513,14 @@ ENTRY(kernel_thread_helper)
  	 * Here we are in the child and the registers are set as they were
  	 * at kernel_thread() invocation in the parent.
  	 */
@@ -12122,6 +12579,14 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	call *%rsi
  	# exit
  	mov %eax, %edi
+ 	call do_exit
+ 	ud2			# padding for call trace
+ 	CFI_ENDPROC
+-END(kernel_thread_helper)
++ENDPROC(kernel_thread_helper)
+ 
+ /*
+  * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
 @@ -1193,9 +1549,10 @@ ENTRY(kernel_execve)
  	je int_ret_from_sys_call
  	RESTORE_ARGS
@@ -12146,6 +12611,24 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
+@@ -1253,7 +1611,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+ 	decl PER_CPU_VAR(irq_count)
+ 	jmp  error_exit
+ 	CFI_ENDPROC
+-END(xen_do_hypervisor_callback)
++ENDPROC(xen_do_hypervisor_callback)
+ 
+ /*
+  * Hypervisor uses this for application faults while it executes.
+@@ -1312,7 +1670,7 @@ ENTRY(xen_failsafe_callback)
+ 	SAVE_ALL
+ 	jmp error_exit
+ 	CFI_ENDPROC
+-END(xen_failsafe_callback)
++ENDPROC(xen_failsafe_callback)
+ 
+ apicinterrupt XEN_HVM_EVTCHN_CALLBACK \
+ 	xen_hvm_callback_vector xen_evtchn_do_upcall
 @@ -1361,16 +1719,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
@@ -12179,6 +12662,15 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
+@@ -1399,7 +1772,7 @@ paranoid_schedule:
+ 	TRACE_IRQS_OFF
+ 	jmp paranoid_userspace
+ 	CFI_ENDPROC
+-END(paranoid_exit)
++ENDPROC(paranoid_exit)
+ 
+ /*
+  * Exception entry point. This expects an error code/orig_rax on the stack.
 @@ -1426,12 +1799,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
@@ -12194,6 +12686,24 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	ret
  
  /*
+@@ -1458,7 +1832,7 @@ bstep_iret:
+ 	movq %rcx,RIP+8(%rsp)
+ 	jmp error_swapgs
+ 	CFI_ENDPROC
+-END(error_entry)
++ENDPROC(error_entry)
+ 
+ 
+ /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
+@@ -1478,7 +1852,7 @@ ENTRY(error_exit)
+ 	jnz retint_careful
+ 	jmp retint_swapgs
+ 	CFI_ENDPROC
+-END(error_exit)
++ENDPROC(error_exit)
+ 
+ 
+ 	/* runs on exception stack */
 @@ -1490,6 +1864,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
@@ -12241,6 +12751,23 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/e
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
+@@ -1534,14 +1934,14 @@ nmi_schedule:
+ 	jmp paranoid_exit
+ 	CFI_ENDPROC
+ #endif
+-END(nmi)
++ENDPROC(nmi)
+ 
+ ENTRY(ignore_sysret)
+ 	CFI_STARTPROC
+ 	mov $-ENOSYS,%eax
+ 	sysret
+ 	CFI_ENDPROC
+-END(ignore_sysret)
++ENDPROC(ignore_sysret)
+ 
+ /*
+  * End of kprobes section
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/arch/x86/kernel/ftrace.c linux-3.0.6-pax/arch/x86/kernel/ftrace.c
 --- linux-3.0.6/arch/x86/kernel/ftrace.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.0.6-pax/arch/x86/kernel/ftrace.c	2011-10-09 13:14:44.651928101 +0200
@@ -22197,7 +22724,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/crypto/gf128mul.c
  
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/dontdiff linux-3.0.6-pax/Documentation/dontdiff
 --- linux-3.0.6/Documentation/dontdiff	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.6-pax/Documentation/dontdiff	2011-10-09 13:14:44.923928086 +0200
++++ linux-3.0.6-pax/Documentation/dontdiff	2011-10-17 16:09:28.694100457 +0200
 @@ -5,6 +5,7 @@
  *.cis
  *.cpio
@@ -22226,7 +22753,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  SCCS
  System.map*
  TAGS
-@@ -98,6 +102,8 @@ bzImage*
+@@ -98,14 +102,18 @@ bzImage*
  capability_names.h
  capflags.c
  classlist.h*
@@ -22235,7 +22762,17 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  comp*.log
  compile.h*
  conf
-@@ -126,12 +132,14 @@ fore200e_pca_fw.c*
+ config
+ config-*
+ config_data.h*
++config.c
+ config.mak
+ config.mak.autogen
++config.tmp
+ conmakehash
+ consolemap_deftbl.c*
+ cpustr.h
+@@ -126,12 +134,14 @@ fore200e_pca_fw.c*
  gconf
  gconf.glade.h
  gen-devlist
@@ -22250,15 +22787,16 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  hpet_example
  hugepage-mmap
  hugepage-shm
-@@ -146,7 +154,6 @@ int32.c
+@@ -146,7 +156,7 @@ int32.c
  int4.c
  int8.c
  kallsyms
 -kconfig
++kern_constants.h
  keywords.c
  ksym.c*
  ksym.h*
-@@ -154,7 +161,6 @@ kxgettext
+@@ -154,7 +164,6 @@ kxgettext
  lkc_defs.h
  lex.c
  lex.*.c
@@ -22266,7 +22804,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  logo_*.c
  logo_*_clut224.c
  logo_*_mono.c
-@@ -166,7 +172,6 @@ machtypes.h
+@@ -166,7 +175,6 @@ machtypes.h
  map
  map_hugetlb
  maui_boot.h
@@ -22274,7 +22812,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  mconf
  miboot*
  mk_elfconfig
-@@ -174,6 +179,7 @@ mkboot
+@@ -174,6 +182,7 @@ mkboot
  mkbugboot
  mkcpustr
  mkdep
@@ -22282,7 +22820,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  mkprep
  mkregtable
  mktables
-@@ -209,6 +215,7 @@ r300_reg_safe.h
+@@ -209,6 +218,7 @@ r300_reg_safe.h
  r420_reg_safe.h
  r600_reg_safe.h
  recordmcount
@@ -22290,7 +22828,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  relocs
  rlim_names.h
  rn50_reg_safe.h
-@@ -219,6 +226,7 @@ setup
+@@ -219,6 +229,7 @@ setup
  setup.bin
  setup.elf
  sImage
@@ -22298,7 +22836,15 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  sm_tbl*
  split-include
  syscalltab.h
-@@ -246,7 +254,9 @@ vmlinux
+@@ -229,6 +240,7 @@ tftpboot.img
+ timeconst.h
+ times.h*
+ trix_boot.h
++user_constants.h
+ utsrelease.h*
+ vdso-syms.lds
+ vdso.lds
+@@ -246,7 +258,9 @@ vmlinux
  vmlinux-*
  vmlinux.aout
  vmlinux.bin.all
@@ -22308,7 +22854,7 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/Documentation/don
  vmlinuz
  voffset.h
  vsyscall.lds
-@@ -254,6 +264,7 @@ vsyscall_32.lds
+@@ -254,6 +268,7 @@ vsyscall_32.lds
  wanxlfw.inc
  uImage
  unifdef
@@ -39867,17 +40413,6 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/include/linux/lib
  
  struct ata_port_info {
  	unsigned long		flags;
-diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/include/linux/linkage.h linux-3.0.6-pax/include/linux/linkage.h
---- linux-3.0.6/include/linux/linkage.h	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.6-pax/include/linux/linkage.h	2011-10-10 23:01:48.637434322 +0200
-@@ -82,6 +82,7 @@
-  */
- #ifndef ENDPROC
- #define ENDPROC(name) \
-+  .size name, .-name; \
-   .type name, @function; \
-   END(name)
- #endif
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/include/linux/mca.h linux-3.0.6-pax/include/linux/mca.h
 --- linux-3.0.6/include/linux/mca.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.0.6-pax/include/linux/mca.h	2011-10-09 13:14:45.751928042 +0200
@@ -55272,6 +55807,18 @@ diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/tools/gcc/stackle
 +
 +	return 0;
 +}
+Binary files linux-3.0.6/tools/perf/perf and linux-3.0.6-pax/tools/perf/perf differ
+diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/tools/perf/util/include/asm/alternative-asm.h linux-3.0.6-pax/tools/perf/util/include/asm/alternative-asm.h
+--- linux-3.0.6/tools/perf/util/include/asm/alternative-asm.h	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.0.6-pax/tools/perf/util/include/asm/alternative-asm.h	2011-10-17 17:55:35.982446289 +0200
+@@ -5,4 +5,7 @@
+ 
+ #define altinstruction_entry #
+ 
++	.macro pax_force_retaddr rip=0
++	.endm
++
+ #endif
 diff -NurpX linux-3.0.6-pax/Documentation/dontdiff linux-3.0.6/usr/gen_init_cpio.c linux-3.0.6-pax/usr/gen_init_cpio.c
 --- linux-3.0.6/usr/gen_init_cpio.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.0.6-pax/usr/gen_init_cpio.c	2011-10-09 13:14:46.251928015 +0200
