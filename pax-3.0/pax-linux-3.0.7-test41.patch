@@ -19199,7 +19199,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/extab
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault.c linux-3.0.7-pax/arch/x86/mm/fault.c
 --- linux-3.0.7/arch/x86/mm/fault.c	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.7-pax/arch/x86/mm/fault.c	2011-10-09 13:14:44.863928089 +0200
++++ linux-3.0.7-pax/arch/x86/mm/fault.c	2011-10-25 13:53:23.416396268 +0200
 @@ -13,10 +13,18 @@
  #include <linux/perf_event.h>		/* perf_sw_event		*/
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
@@ -19252,10 +19252,14 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  			break;
  
  		instr++;
-@@ -180,6 +194,30 @@ force_sig_info_fault(int si_signo, int s
+@@ -180,6 +194,34 @@ force_sig_info_fault(int si_signo, int s
  	force_sig_info(si_signo, &info, tsk);
  }
  
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++static bool pax_is_fetch_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address);
++#endif
++
 +#ifdef CONFIG_PAX_EMUTRAMP
 +static int pax_handle_fetch_fault(struct pt_regs *regs);
 +#endif
@@ -19283,7 +19287,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  DEFINE_SPINLOCK(pgd_lock);
  LIST_HEAD(pgd_list);
  
-@@ -230,10 +268,22 @@ void vmalloc_sync_all(void)
+@@ -230,10 +272,22 @@ void vmalloc_sync_all(void)
  	for (address = VMALLOC_START & PMD_MASK;
  	     address >= TASK_SIZE && address < FIXADDR_TOP;
  	     address += PMD_SIZE) {
@@ -19306,7 +19310,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  			spinlock_t *pgt_lock;
  			pmd_t *ret;
  
-@@ -241,8 +291,13 @@ void vmalloc_sync_all(void)
+@@ -241,8 +295,13 @@ void vmalloc_sync_all(void)
  			pgt_lock = &pgd_page_get_mm(page)->page_table_lock;
  
  			spin_lock(pgt_lock);
@@ -19321,7 +19325,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  
  			if (!ret)
  				break;
-@@ -276,6 +331,11 @@ static noinline __kprobes int vmalloc_fa
+@@ -276,6 +335,11 @@ static noinline __kprobes int vmalloc_fa
  	 * an interrupt in the middle of a task switch..
  	 */
  	pgd_paddr = read_cr3();
@@ -19333,7 +19337,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  	pmd_k = vmalloc_sync_one(__va(pgd_paddr), address);
  	if (!pmd_k)
  		return -1;
-@@ -371,7 +431,14 @@ static noinline __kprobes int vmalloc_fa
+@@ -371,7 +435,14 @@ static noinline __kprobes int vmalloc_fa
  	 * happen within a race in page table update. In the later
  	 * case just flush:
  	 */
@@ -19348,7 +19352,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  	pgd_ref = pgd_offset_k(address);
  	if (pgd_none(*pgd_ref))
  		return -1;
-@@ -533,7 +600,7 @@ static int is_errata93(struct pt_regs *r
+@@ -533,7 +604,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -19357,7 +19361,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  		return 1;
  #endif
  	return 0;
-@@ -560,7 +627,7 @@ static int is_f00f_bug(struct pt_regs *r
+@@ -560,7 +631,7 @@ static int is_f00f_bug(struct pt_regs *r
  }
  
  static const char nx_warning[] = KERN_CRIT
@@ -19366,7 +19370,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  
  static void
  show_fault_oops(struct pt_regs *regs, unsigned long error_code,
-@@ -569,15 +636,21 @@ show_fault_oops(struct pt_regs *regs, un
+@@ -569,15 +640,21 @@ show_fault_oops(struct pt_regs *regs, un
  	if (!oops_may_print())
  		return;
  
@@ -19390,15 +19394,13 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -703,6 +776,67 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -703,6 +780,19 @@ __bad_area_nosemaphore(struct pt_regs *r
  {
  	struct task_struct *tsk = current;
  
-+#if defined(CONFIG_X86_64) || defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
-+	struct mm_struct *mm = tsk->mm;
-+#endif
-+
 +#ifdef CONFIG_X86_64
++	struct mm_struct *mm = tsk->mm;
++
 +	if (mm && (error_code & PF_INSTR) && mm->context.vdso) {
 +		if (regs->ip == VSYSCALL_ADDR(__NR_vgettimeofday) ||
 +		    regs->ip == VSYSCALL_ADDR(__NR_vtime) ||
@@ -19409,56 +19411,32 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
 +	}
 +#endif
 +
-+#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
-+	if (mm && (error_code & PF_USER)) {
-+		unsigned long ip = regs->ip;
-+
-+		if (v8086_mode(regs))
-+			ip = ((regs->cs & 0xffff) << 4) + (ip & 0xffff);
-+
-+		/*
-+		 * It's possible to have interrupts off here:
-+		 */
-+		local_irq_enable();
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+		if ((mm->pax_flags & MF_PAX_PAGEEXEC) &&
-+		    (((__supported_pte_mask & _PAGE_NX) && (error_code & PF_INSTR)) || (!(error_code & (PF_PROT | PF_WRITE)) && ip == address))) {
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+			switch (pax_handle_fetch_fault(regs)) {
-+			case 2:
-+				return;
-+			}
-+#endif
-+
-+			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
-+			do_group_exit(SIGKILL);
-+		}
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+		if ((mm->pax_flags & MF_PAX_SEGMEXEC) && !(error_code & (PF_PROT | PF_WRITE)) && (ip + SEGMEXEC_TASK_SIZE == address)) {
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+			switch (pax_handle_fetch_fault(regs)) {
-+			case 2:
-+				return;
-+			}
-+#endif
-+
-+			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
-+			do_group_exit(SIGKILL);
-+		}
-+#endif
-+
-+	}
-+#endif
-+
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -871,6 +1005,99 @@ static int spurious_fault_check(unsigned
+@@ -720,6 +810,21 @@ __bad_area_nosemaphore(struct pt_regs *r
+ 		if (is_errata100(regs, address))
+ 			return;
+ 
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++		if (pax_is_fetch_fault(regs, error_code, address)) {
++
++#ifdef CONFIG_PAX_EMUTRAMP
++			switch (pax_handle_fetch_fault(regs)) {
++			case 2:
++				return;
++			}
++#endif
++
++			pax_report_fault(regs, (void *)regs->ip, (void *)regs->sp);
++			do_group_exit(SIGKILL);
++		}
++#endif
++
+ 		if (unlikely(show_unhandled_signals))
+ 			show_signal_msg(regs, error_code, address, tsk);
+ 
+@@ -871,6 +976,99 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -19558,7 +19536,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -943,6 +1170,9 @@ int show_unhandled_signals = 1;
+@@ -943,6 +1141,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -19568,7 +19546,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -976,19 +1206,33 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -976,19 +1177,33 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -19606,7 +19584,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1048,7 +1292,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1048,7 +1263,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -19615,7 +19593,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1103,6 +1347,11 @@ retry:
+@@ -1103,6 +1318,11 @@ retry:
  		might_sleep();
  	}
  
@@ -19627,7 +19605,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1114,18 +1363,24 @@ retry:
+@@ -1114,18 +1334,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -19651,22 +19629,53 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/fault
 +	if (unlikely(address + 65536 + 32 * sizeof(unsigned long) < task_pt_regs(tsk)->sp)) {
 +		bad_area(regs, error_code, address);
 +		return;
- 	}
++	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (unlikely((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)) {
 +		bad_area(regs, error_code, address);
 +		return;
-+	}
+ 	}
 +#endif
 +
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1180,3 +1435,199 @@ good_area:
+@@ -1180,3 +1406,230 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
++
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++static bool pax_is_fetch_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address)
++{
++	struct mm_struct *mm = current->mm;
++	unsigned long ip = regs->ip;
++
++	if (v8086_mode(regs))
++		ip = ((regs->cs & 0xffff) << 4) + (ip & 0xffff);
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	if (mm->pax_flags & MF_PAX_PAGEEXEC) {
++		if ((__supported_pte_mask & _PAGE_NX) && (error_code & PF_INSTR))
++			return true;
++		if (!(error_code & (PF_PROT | PF_WRITE)) && ip == address)
++			return true;
++		return false;
++	}
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (mm->pax_flags & MF_PAX_SEGMEXEC) {
++		if (!(error_code & (PF_PROT | PF_WRITE)) && (ip + SEGMEXEC_TASK_SIZE == address))
++			return true;
++		return false;
++	}
++#endif
++
++	return false;
++}
++#endif
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
 +static int pax_handle_fetch_fault_32(struct pt_regs *regs)
@@ -21310,7 +21319,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/mm/tlb.c
  
 diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/net/bpf_jit_comp.c linux-3.0.7-pax/arch/x86/net/bpf_jit_comp.c
 --- linux-3.0.7/arch/x86/net/bpf_jit_comp.c	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.7-pax/arch/x86/net/bpf_jit_comp.c	2011-10-09 13:14:44.875928089 +0200
++++ linux-3.0.7-pax/arch/x86/net/bpf_jit_comp.c	2011-10-21 00:11:01.262675965 +0200
 @@ -589,7 +589,9 @@ cond_branch:			f_offset = addrs[i + filt
  					module_free(NULL, image);
  					return;
@@ -21330,6 +21339,15 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/net/bpf_
  						   proglen,
  						   sizeof(struct work_struct)));
  			if (!image)
+@@ -637,7 +639,7 @@ out:
+ 
+ static void jit_free_defer(struct work_struct *arg)
+ {
+-	module_free(NULL, arg);
++	module_free_exec(NULL, arg);
+ }
+ 
+ /* run from softirq, we must use a work_struct to call
 diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/arch/x86/net/bpf_jit.S linux-3.0.7-pax/arch/x86/net/bpf_jit.S
 --- linux-3.0.7/arch/x86/net/bpf_jit.S	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.0.7-pax/arch/x86/net/bpf_jit.S	2011-10-09 13:14:44.911928087 +0200
@@ -32540,6 +32558,27 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/drivers/staging/i
  
  struct iio_ring_setup_ops {
  	int				(*preenable)(struct iio_dev *);
+diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/drivers/staging/mei/interface.c linux-3.0.7-pax/drivers/staging/mei/interface.c
+--- linux-3.0.7/drivers/staging/mei/interface.c	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.0.7-pax/drivers/staging/mei/interface.c	2011-10-25 16:22:22.127919006 +0200
+@@ -333,7 +333,7 @@ int mei_send_flow_control(struct mei_dev
+ 	mei_hdr->reserved = 0;
+ 
+ 	mei_flow_control = (struct hbm_flow_control *) &dev->wr_msg_buf[1];
+-	memset(mei_flow_control, 0, sizeof(mei_flow_control));
++	memset(mei_flow_control, 0, sizeof(*mei_flow_control));
+ 	mei_flow_control->host_addr = cl->host_client_id;
+ 	mei_flow_control->me_addr = cl->me_client_id;
+ 	mei_flow_control->cmd.cmd = MEI_FLOW_CONTROL_CMD;
+@@ -397,7 +397,7 @@ int mei_disconnect(struct mei_device *de
+ 
+ 	mei_cli_disconnect =
+ 	    (struct hbm_client_disconnect_request *) &dev->wr_msg_buf[1];
+-	memset(mei_cli_disconnect, 0, sizeof(mei_cli_disconnect));
++	memset(mei_cli_disconnect, 0, sizeof(*mei_cli_disconnect));
+ 	mei_cli_disconnect->host_addr = cl->host_client_id;
+ 	mei_cli_disconnect->me_addr = cl->me_client_id;
+ 	mei_cli_disconnect->cmd.cmd = CLIENT_DISCONNECT_REQ_CMD;
 diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/drivers/staging/octeon/ethernet.c linux-3.0.7-pax/drivers/staging/octeon/ethernet.c
 --- linux-3.0.7/drivers/staging/octeon/ethernet.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.0.7-pax/drivers/staging/octeon/ethernet.c	2011-10-09 13:14:45.291928066 +0200
@@ -46122,7 +46161,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/lib/vsprintf.c li
  
 diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/Makefile linux-3.0.7-pax/Makefile
 --- linux-3.0.7/Makefile	2011-10-20 00:14:14.713601581 +0200
-+++ linux-3.0.7-pax/Makefile	2011-10-20 00:14:21.781599388 +0200
++++ linux-3.0.7-pax/Makefile	2011-10-25 12:13:31.924716170 +0200
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -46131,24 +46170,11 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/Makefile linux-3.
 -HOSTCXXFLAGS = -O2
 +HOSTCFLAGS   = -Wall -W -Wmissing-prototypes -Wstrict-prototypes -Wno-unused-parameter -Wno-missing-field-initializers -O2 -fomit-frame-pointer -fno-delete-null-pointer-checks
 +HOSTCLFAGS  += $(call cc-option, -Wno-empty-body)
-+HOSTCXXFLAGS = -O2 -fno-delete-null-pointer-checks
++HOSTCXXFLAGS = -O2 -Wall -W -fno-delete-null-pointer-checks
  
  # Decide whether to build built-in, modular, or both.
  # Normally, just do built-in.
-@@ -365,10 +366,12 @@ LINUXINCLUDE    := -I$(srctree)/arch/$(h
- KBUILD_CPPFLAGS := -D__KERNEL__
- 
- KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
-+		   -W -Wno-unused-parameter -Wno-missing-field-initializers \
- 		   -fno-strict-aliasing -fno-common \
- 		   -Werror-implicit-function-declaration \
- 		   -Wno-format-security \
- 		   -fno-delete-null-pointer-checks
-+KBUILD_CFLAGS   += $(call cc-option, -Wno-empty-body)
- KBUILD_AFLAGS_KERNEL :=
- KBUILD_CFLAGS_KERNEL :=
- KBUILD_AFLAGS   := -D__ASSEMBLY__
-@@ -407,8 +410,8 @@ export RCS_TAR_IGNORE := --exclude SCCS
+@@ -407,8 +408,8 @@ export RCS_TAR_IGNORE := --exclude SCCS
  # Rules shared between *config targets and build targets
  
  # Basic helpers built in scripts/
@@ -46159,12 +46185,14 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -564,6 +567,36 @@ else
+@@ -564,6 +565,38 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
 +ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(CC)"), y)
++ifdef CONFIG_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
++endif
 +ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +STACKLEAK_PLUGIN := -fplugin=$(objtree)/tools/gcc/stackleak_plugin.so -fplugin-arg-stackleak_plugin-track-lowest-sp=100
 +endif
@@ -53040,7 +53068,16 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/scripts/gcc-plugi
 +echo "#include \"gcc-plugin.h\"\n#include \"rtl.h\"" | $1 -x c -shared - -o /dev/null -I`$2 -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
 diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/scripts/Makefile.build linux-3.0.7-pax/scripts/Makefile.build
 --- linux-3.0.7/scripts/Makefile.build	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.7-pax/scripts/Makefile.build	2011-10-09 13:14:46.223928017 +0200
++++ linux-3.0.7-pax/scripts/Makefile.build	2011-10-21 01:04:41.490504030 +0200
+@@ -62,7 +62,7 @@ endif
+ ifdef KBUILD_ENABLE_EXTRA_GCC_CHECKS
+ warning-  := $(empty)
+ 
+-warning-1 := -Wextra -Wunused -Wno-unused-parameter
++warning-1 := -Wextra -Wunused -Wno-unused-parameter -Wno-missing-field-initializers
+ warning-1 += -Wmissing-declarations
+ warning-1 += -Wmissing-format-attribute
+ warning-1 += -Wmissing-prototypes
 @@ -109,7 +109,7 @@ endif
  endif
  
@@ -53348,8 +53385,8 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/security/integrit
  	return 0;
 diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/security/Kconfig linux-3.0.7-pax/security/Kconfig
 --- linux-3.0.7/security/Kconfig	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.0.7-pax/security/Kconfig	2011-10-09 13:14:46.227928016 +0200
-@@ -4,6 +4,542 @@
++++ linux-3.0.7-pax/security/Kconfig	2011-10-25 12:13:10.784717298 +0200
+@@ -4,6 +4,558 @@
  
  menu "Security options"
  
@@ -53885,6 +53922,22 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/security/Kconfig 
 +	  Since this has a negligible performance impact, you should enable
 +	  this feature.
 +
++config PAX_CONSTIFY_PLUGIN
++	bool "Automatically constify eligible structures"
++	help
++	  By saying Y here the compiler will automatically constify a class
++	  of types that contain only function pointers.  This reduces the
++	  kernel's attack surface and also produces a better memory layout.
++
++	  Note that the implementation requires a gcc with plugin support,
++	  i.e., gcc 4.5 or newer.  You may need to install the supporting
++	  headers explicitly in addition to the normal gcc package.
++
++	  Note that if some code really has to modify constified variables
++	  then the source code will have to be patched to allow it.  Examples
++	  can be found in PaX itself (the no_const attribute) and for some
++	  out-of-tree modules at http://www.grsecurity.net/~paxguy1/ .
++
 +endmenu
 +
 +endmenu
@@ -53892,7 +53945,7 @@ diff -NurpX linux-3.0.7-pax/Documentation/dontdiff linux-3.0.7/security/Kconfig 
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -167,7 +703,7 @@ config INTEL_TXT
+@@ -167,7 +719,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
