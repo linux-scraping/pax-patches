@@ -4915,6 +4915,32 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/um/k
  unsigned long get_wchan(struct task_struct *p)
  {
  	unsigned long stack_page, sp, ip;
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/um/Makefile linux-2.6.32.46-pax/arch/um/Makefile
+--- linux-2.6.32.46/arch/um/Makefile	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/arch/um/Makefile	2011-10-25 17:37:18.324035293 +0200
+@@ -49,6 +49,10 @@ USER_CFLAGS = $(patsubst $(KERNEL_DEFINE
+ 	$(patsubst -I%,,$(KBUILD_CFLAGS)))) $(ARCH_INCLUDE) $(MODE_INCLUDE) \
+ 	$(filter -I%,$(CFLAGS)) -D_FILE_OFFSET_BITS=64
+ 
++ifdef CONSTIFY_PLUGIN
++USER_CFLAGS	+= $(CONSTIFY_PLUGIN) -fplugin-arg-constify_plugin-no-constify
++endif
++
+ include $(srctree)/$(ARCH_DIR)/Makefile-$(SUBARCH)
+ 
+ #This will adjust *FLAGS accordingly to the platform.
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/um/sys-i386/shared/sysdep/system.h linux-2.6.32.46-pax/arch/um/sys-i386/shared/sysdep/system.h
+--- linux-2.6.32.46/arch/um/sys-i386/shared/sysdep/system.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/arch/um/sys-i386/shared/sysdep/system.h	2011-10-25 17:37:18.324035293 +0200
+@@ -17,7 +17,7 @@
+ # define AT_VECTOR_SIZE_ARCH 1
+ #endif
+ 
+-extern unsigned long arch_align_stack(unsigned long sp);
++#define arch_align_stack(x) ((x) & ~0xfUL)
+ 
+ void default_idle(void);
+ 
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/um/sys-i386/syscalls.c linux-2.6.32.46-pax/arch/um/sys-i386/syscalls.c
 --- linux-2.6.32.46/arch/um/sys-i386/syscalls.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/arch/um/sys-i386/syscalls.c	2011-06-25 10:34:08.568000354 +0200
@@ -4940,6 +4966,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/um/s
  /*
   * Perform the select(nd, in, out, ex, tv) and mmap() system
   * calls. Linux/i386 didn't use to be able to handle more than
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/um/sys-x86_64/shared/sysdep/system.h linux-2.6.32.46-pax/arch/um/sys-x86_64/shared/sysdep/system.h
+--- linux-2.6.32.46/arch/um/sys-x86_64/shared/sysdep/system.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/arch/um/sys-x86_64/shared/sysdep/system.h	2011-10-25 17:37:18.324035293 +0200
+@@ -17,7 +17,7 @@
+ # define AT_VECTOR_SIZE_ARCH 1
+ #endif
+ 
+-extern unsigned long arch_align_stack(unsigned long sp);
++#define arch_align_stack(x) ((x) & ~0xfUL)
+ 
+ void default_idle(void);
+ 
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/boot/bitops.h linux-2.6.32.46-pax/arch/x86/boot/bitops.h
 --- linux-2.6.32.46/arch/x86/boot/bitops.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/arch/x86/boot/bitops.h	2011-06-25 10:34:08.572000354 +0200
@@ -5520,16 +5558,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	ret
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/ia32/ia32entry.S linux-2.6.32.46-pax/arch/x86/ia32/ia32entry.S
 --- linux-2.6.32.46/arch/x86/ia32/ia32entry.S	2011-06-25 10:30:34.284000322 +0200
-+++ linux-2.6.32.46-pax/arch/x86/ia32/ia32entry.S	2011-08-25 23:48:18.827937593 +0200
-@@ -13,6 +13,7 @@
++++ linux-2.6.32.46-pax/arch/x86/ia32/ia32entry.S	2011-10-25 17:37:18.256035292 +0200
+@@ -13,7 +13,9 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
  #include <asm/irqflags.h>
 +#include <asm/pgtable.h>
  #include <linux/linkage.h>
++#include <asm/alternative-asm.h>
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
-@@ -93,6 +94,29 @@ ENTRY(native_irq_enable_sysexit)
+ #include <linux/elf-em.h>
+@@ -93,6 +95,29 @@ ENTRY(native_irq_enable_sysexit)
  ENDPROC(native_irq_enable_sysexit)
  #endif
  
@@ -5559,7 +5599,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  /*
   * 32bit SYSENTER instruction entry.
   *
-@@ -119,7 +143,7 @@ ENTRY(ia32_sysenter_target)
+@@ -119,7 +144,7 @@ ENTRY(ia32_sysenter_target)
  	CFI_REGISTER	rsp,rbp
  	SWAPGS_UNSAFE_STACK
  	movq	PER_CPU_VAR(kernel_stack), %rsp
@@ -5568,7 +5608,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs, here we enable it straight after entry:
-@@ -135,7 +159,8 @@ ENTRY(ia32_sysenter_target)
+@@ -135,7 +160,8 @@ ENTRY(ia32_sysenter_target)
  	pushfq
  	CFI_ADJUST_CFA_OFFSET 8
  	/*CFI_REL_OFFSET rflags,0*/
@@ -5578,7 +5618,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	CFI_REGISTER rip,r10
  	pushq	$__USER32_CS
  	CFI_ADJUST_CFA_OFFSET 8
-@@ -150,6 +175,12 @@ ENTRY(ia32_sysenter_target)
+@@ -150,6 +176,12 @@ ENTRY(ia32_sysenter_target)
  	SAVE_ARGS 0,0,1
   	/* no need to do an access_ok check here because rbp has been
   	   32bit zero extended */ 
@@ -5591,7 +5631,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  1:	movl	(%rbp),%ebp
   	.section __ex_table,"a"
   	.quad 1b,ia32_badarg
-@@ -172,6 +203,8 @@ sysenter_dispatch:
+@@ -172,6 +204,8 @@ sysenter_dispatch:
  	testl	$_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz	sysexit_audit
  sysexit_from_sys_call:
@@ -5600,7 +5640,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	andl    $~TS_COMPAT,TI_status(%r10)
  	/* clear IF, that popfq doesn't enable interrupts early */
  	andl  $~0x200,EFLAGS-R11(%rsp) 
-@@ -200,6 +233,9 @@ sysexit_from_sys_call:
+@@ -200,6 +234,9 @@ sysexit_from_sys_call:
  	movl %eax,%esi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -5610,7 +5650,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	movl RAX-ARGOFFSET(%rsp),%eax	/* reload syscall number */
  	cmpq $(IA32_NR_syscalls-1),%rax
  	ja ia32_badsys
-@@ -252,6 +288,9 @@ sysenter_tracesys:
+@@ -252,6 +289,9 @@ sysenter_tracesys:
  	movq	$-ENOSYS,RAX(%rsp)/* ptrace can change this for a bad syscall */
  	movq	%rsp,%rdi        /* &pt_regs -> arg1 */
  	call	syscall_trace_enter
@@ -5620,7 +5660,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
  	cmpq	$(IA32_NR_syscalls-1),%rax
-@@ -283,19 +322,24 @@ ENDPROC(ia32_sysenter_target)
+@@ -283,19 +323,24 @@ ENDPROC(ia32_sysenter_target)
  ENTRY(ia32_cstar_target)
  	CFI_STARTPROC32	simple
  	CFI_SIGNAL_FRAME
@@ -5647,7 +5687,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	movl 	%eax,%eax	/* zero extension */
  	movq	%rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq	%rcx,RIP-ARGOFFSET(%rsp)
-@@ -311,6 +355,12 @@ ENTRY(ia32_cstar_target)
+@@ -311,6 +356,12 @@ ENTRY(ia32_cstar_target)
  	/* no need to do an access_ok check here because r8 has been
  	   32bit zero extended */ 
  	/* hardware stack frame is complete now */	
@@ -5660,7 +5700,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  1:	movl	(%r8),%r9d
  	.section __ex_table,"a"
  	.quad 1b,ia32_badarg
-@@ -333,6 +383,8 @@ cstar_dispatch:
+@@ -333,6 +384,8 @@ cstar_dispatch:
  	testl $_TIF_ALLWORK_MASK,TI_flags(%r10)
  	jnz sysretl_audit
  sysretl_from_sys_call:
@@ -5669,7 +5709,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	andl $~TS_COMPAT,TI_status(%r10)
  	RESTORE_ARGS 1,-ARG_SKIP,1,1,1
  	movl RIP-ARGOFFSET(%rsp),%ecx
-@@ -370,6 +422,9 @@ cstar_tracesys:
+@@ -370,6 +423,9 @@ cstar_tracesys:
  	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
  	movq %rsp,%rdi        /* &pt_regs -> arg1 */
  	call syscall_trace_enter
@@ -5679,7 +5719,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	LOAD_ARGS32 ARGOFFSET, 1  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
  	xchgl %ebp,%r9d
-@@ -415,6 +470,7 @@ ENTRY(ia32_syscall)
+@@ -415,6 +471,7 @@ ENTRY(ia32_syscall)
  	CFI_REL_OFFSET	rip,RIP-RIP
  	PARAVIRT_ADJUST_EXCEPTION_FRAME
  	SWAPGS
@@ -5687,7 +5727,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	/*
  	 * No need to follow this irqs on/off section: the syscall
  	 * disabled irqs and here we enable it straight after entry:
-@@ -448,6 +504,9 @@ ia32_tracesys:
+@@ -448,6 +505,9 @@ ia32_tracesys:
  	movq $-ENOSYS,RAX(%rsp)	/* ptrace can change this for a bad syscall */
  	movq %rsp,%rdi        /* &pt_regs -> arg1 */
  	call syscall_trace_enter
@@ -5697,6 +5737,14 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	LOAD_ARGS32 ARGOFFSET  /* reload args from stack in case ptrace changed it */
  	RESTORE_REST
  	cmpq $(IA32_NR_syscalls-1),%rax
+@@ -462,6 +522,7 @@ ia32_badsys:
+ 
+ quiet_ni_syscall:
+ 	movq $-ENOSYS,%rax
++	pax_force_retaddr
+ 	ret
+ 	CFI_ENDPROC
+ 	
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/ia32/ia32_signal.c linux-2.6.32.46-pax/arch/x86/ia32/ia32_signal.c
 --- linux-2.6.32.46/arch/x86/ia32/ia32_signal.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/arch/x86/ia32/ia32_signal.c	2011-10-06 09:32:44.426213186 +0200
@@ -8308,6 +8356,17 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  
  /* This contains all the paravirt structures: we get a convenient
   * number for each function using the offset which we use to indicate
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/include/asm/percpu.h linux-2.6.32.46-pax/arch/x86/include/asm/percpu.h
+--- linux-2.6.32.46/arch/x86/include/asm/percpu.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/arch/x86/include/asm/percpu.h	2011-10-25 23:36:04.440668199 +0200
+@@ -78,6 +78,7 @@ do {							\
+ 	if (0) {					\
+ 		T__ tmp__;				\
+ 		tmp__ = (val);				\
++		(void)tmp__;				\
+ 	}						\
+ 	switch (sizeof(var)) {				\
+ 	case 1:						\
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/include/asm/pgalloc.h linux-2.6.32.46-pax/arch/x86/include/asm/pgalloc.h
 --- linux-2.6.32.46/arch/x86/include/asm/pgalloc.h	2011-06-25 10:30:34.308000322 +0200
 +++ linux-2.6.32.46-pax/arch/x86/include/asm/pgalloc.h	2011-06-25 10:34:08.620000354 +0200
@@ -11885,7 +11944,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  ENDPROC(efi_call6)
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/kernel/entry_32.S linux-2.6.32.46-pax/arch/x86/kernel/entry_32.S
 --- linux-2.6.32.46/arch/x86/kernel/entry_32.S	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.46-pax/arch/x86/kernel/entry_32.S	2011-08-30 15:22:28.321483150 +0200
++++ linux-2.6.32.46-pax/arch/x86/kernel/entry_32.S	2011-10-25 17:48:31.908055098 +0200
 @@ -185,13 +185,146 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -12059,6 +12118,15 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  .macro RESTORE_INT_REGS
  	popl %ebx
  	CFI_ADJUST_CFA_OFFSET -4
+@@ -331,7 +473,7 @@ ENTRY(ret_from_fork)
+ 	CFI_ADJUST_CFA_OFFSET -4
+ 	jmp syscall_exit
+ 	CFI_ENDPROC
+-END(ret_from_fork)
++ENDPROC(ret_from_fork)
+ 
+ /*
+  * Return to user mode is not as complex as all this looks,
 @@ -352,7 +494,15 @@ check_userspace:
  	movb PT_CS(%esp), %al
  	andl $(X86_EFLAGS_VM | SEGMENT_RPL_MASK), %eax
@@ -12075,15 +12143,26 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
-@@ -364,7 +514,7 @@ ENTRY(resume_userspace)
+@@ -364,8 +514,8 @@ ENTRY(resume_userspace)
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
  					# int/exception return?
  	jne work_pending
 -	jmp restore_all
+-END(ret_from_exception)
 +	jmp restore_all_pax
- END(ret_from_exception)
++ENDPROC(ret_from_exception)
  
  #ifdef CONFIG_PREEMPT
+ ENTRY(resume_kernel)
+@@ -380,7 +530,7 @@ need_resched:
+ 	jz restore_all
+ 	call preempt_schedule_irq
+ 	jmp need_resched
+-END(resume_kernel)
++ENDPROC(resume_kernel)
+ #endif
+ 	CFI_ENDPROC
+ 
 @@ -414,25 +564,36 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
@@ -12226,7 +12305,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	pushl $__ESPFIX_SS
  	CFI_ADJUST_CFA_OFFSET 4
  	push %eax			/* new kernel esp */
-@@ -636,31 +846,25 @@ work_resched:
+@@ -636,36 +846,30 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -12262,7 +12341,13 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  #endif
  	xorl %edx, %edx
  	call do_notify_resume
-@@ -673,6 +877,9 @@ syscall_trace_entry:
+ 	jmp resume_userspace_sig
+-END(work_pending)
++ENDPROC(work_pending)
+ 
+ 	# perform syscall exit tracing
+ 	ALIGN
+@@ -673,11 +877,14 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -12272,7 +12357,19 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	/* What it returned is what we'll actually use.  */
  	cmpl $(nr_syscalls), %eax
  	jnae syscall_call
-@@ -695,6 +902,10 @@ END(syscall_exit_work)
+ 	jmp syscall_exit
+-END(syscall_trace_entry)
++ENDPROC(syscall_trace_entry)
+ 
+ 	# perform syscall exit tracing
+ 	ALIGN
+@@ -690,20 +897,24 @@ syscall_exit_work:
+ 	movl %esp, %eax
+ 	call syscall_trace_leave
+ 	jmp resume_userspace
+-END(syscall_exit_work)
++ENDPROC(syscall_exit_work)
+ 	CFI_ENDPROC
  
  	RING0_INT_FRAME			# can't unwind into user space anyway
  syscall_fault:
@@ -12283,6 +12380,17 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	GET_THREAD_INFO(%ebp)
  	movl $-EFAULT,PT_EAX(%esp)
  	jmp resume_userspace
+-END(syscall_fault)
++ENDPROC(syscall_fault)
+ 
+ syscall_badsys:
+ 	movl $-ENOSYS,PT_EAX(%esp)
+ 	jmp resume_userspace
+-END(syscall_badsys)
++ENDPROC(syscall_badsys)
+ 	CFI_ENDPROC
+ 
+ /*
 @@ -726,6 +937,33 @@ PTREGSCALL(rt_sigreturn)
  PTREGSCALL(vm86)
  PTREGSCALL(vm86old)
@@ -12332,6 +12440,192 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 4(%ebx), %al /* bits 16..23 */
  	mov GDT_ENTRY_ESPFIX_SS * 8 + 7(%ebx), %ah /* bits 24..31 */
  	shl $16, %eax
+@@ -793,7 +1037,7 @@ vector=vector+1
+   .endr
+ 2:	jmp common_interrupt
+ .endr
+-END(irq_entries_start)
++ENDPROC(irq_entries_start)
+ 
+ .previous
+ END(interrupt)
+@@ -840,7 +1084,7 @@ ENTRY(coprocessor_error)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(coprocessor_error)
++ENDPROC(coprocessor_error)
+ 
+ ENTRY(simd_coprocessor_error)
+ 	RING0_INT_FRAME
+@@ -850,7 +1094,7 @@ ENTRY(simd_coprocessor_error)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(simd_coprocessor_error)
++ENDPROC(simd_coprocessor_error)
+ 
+ ENTRY(device_not_available)
+ 	RING0_INT_FRAME
+@@ -860,7 +1104,7 @@ ENTRY(device_not_available)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(device_not_available)
++ENDPROC(device_not_available)
+ 
+ #ifdef CONFIG_PARAVIRT
+ ENTRY(native_iret)
+@@ -869,12 +1113,12 @@ ENTRY(native_iret)
+ 	.align 4
+ 	.long native_iret, iret_exc
+ .previous
+-END(native_iret)
++ENDPROC(native_iret)
+ 
+ ENTRY(native_irq_enable_sysexit)
+ 	sti
+ 	sysexit
+-END(native_irq_enable_sysexit)
++ENDPROC(native_irq_enable_sysexit)
+ #endif
+ 
+ ENTRY(overflow)
+@@ -885,7 +1129,7 @@ ENTRY(overflow)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(overflow)
++ENDPROC(overflow)
+ 
+ ENTRY(bounds)
+ 	RING0_INT_FRAME
+@@ -895,7 +1139,7 @@ ENTRY(bounds)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(bounds)
++ENDPROC(bounds)
+ 
+ ENTRY(invalid_op)
+ 	RING0_INT_FRAME
+@@ -905,7 +1149,7 @@ ENTRY(invalid_op)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(invalid_op)
++ENDPROC(invalid_op)
+ 
+ ENTRY(coprocessor_segment_overrun)
+ 	RING0_INT_FRAME
+@@ -915,7 +1159,7 @@ ENTRY(coprocessor_segment_overrun)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(coprocessor_segment_overrun)
++ENDPROC(coprocessor_segment_overrun)
+ 
+ ENTRY(invalid_TSS)
+ 	RING0_EC_FRAME
+@@ -923,7 +1167,7 @@ ENTRY(invalid_TSS)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(invalid_TSS)
++ENDPROC(invalid_TSS)
+ 
+ ENTRY(segment_not_present)
+ 	RING0_EC_FRAME
+@@ -931,7 +1175,7 @@ ENTRY(segment_not_present)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(segment_not_present)
++ENDPROC(segment_not_present)
+ 
+ ENTRY(stack_segment)
+ 	RING0_EC_FRAME
+@@ -939,7 +1183,7 @@ ENTRY(stack_segment)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(stack_segment)
++ENDPROC(stack_segment)
+ 
+ ENTRY(alignment_check)
+ 	RING0_EC_FRAME
+@@ -947,7 +1191,7 @@ ENTRY(alignment_check)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(alignment_check)
++ENDPROC(alignment_check)
+ 
+ ENTRY(divide_error)
+ 	RING0_INT_FRAME
+@@ -957,7 +1201,7 @@ ENTRY(divide_error)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(divide_error)
++ENDPROC(divide_error)
+ 
+ #ifdef CONFIG_X86_MCE
+ ENTRY(machine_check)
+@@ -968,7 +1212,7 @@ ENTRY(machine_check)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(machine_check)
++ENDPROC(machine_check)
+ #endif
+ 
+ ENTRY(spurious_interrupt_bug)
+@@ -979,7 +1223,7 @@ ENTRY(spurious_interrupt_bug)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(spurious_interrupt_bug)
++ENDPROC(spurious_interrupt_bug)
+ 
+ ENTRY(kernel_thread_helper)
+ 	pushl $0		# fake return address for unwinder
+@@ -1095,7 +1339,7 @@ ENDPROC(xen_failsafe_callback)
+ 
+ ENTRY(mcount)
+ 	ret
+-END(mcount)
++ENDPROC(mcount)
+ 
+ ENTRY(ftrace_caller)
+ 	cmpl $0, function_trace_stop
+@@ -1124,7 +1368,7 @@ ftrace_graph_call:
+ .globl ftrace_stub
+ ftrace_stub:
+ 	ret
+-END(ftrace_caller)
++ENDPROC(ftrace_caller)
+ 
+ #else /* ! CONFIG_DYNAMIC_FTRACE */
+ 
+@@ -1160,7 +1404,7 @@ trace:
+ 	popl %ecx
+ 	popl %eax
+ 	jmp ftrace_stub
+-END(mcount)
++ENDPROC(mcount)
+ #endif /* CONFIG_DYNAMIC_FTRACE */
+ #endif /* CONFIG_FUNCTION_TRACER */
+ 
+@@ -1181,7 +1425,7 @@ ENTRY(ftrace_graph_caller)
+ 	popl %ecx
+ 	popl %eax
+ 	ret
+-END(ftrace_graph_caller)
++ENDPROC(ftrace_graph_caller)
+ 
+ .globl return_to_handler
+ return_to_handler:
 @@ -1198,7 +1442,6 @@ return_to_handler:
  	ret
  #endif
@@ -12340,7 +12634,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1255,9 +1498,12 @@ error_code:
+@@ -1255,15 +1498,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -12354,6 +12648,22 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	TRACE_IRQS_OFF
  	movl %esp,%eax			# pt_regs pointer
  	call *%edi
+ 	jmp ret_from_exception
+ 	CFI_ENDPROC
+-END(page_fault)
++ENDPROC(page_fault)
+ 
+ /*
+  * Debug traps and NMI can happen at the one SYSENTER instruction
+@@ -1309,7 +1555,7 @@ debug_stack_correct:
+ 	call do_debug
+ 	jmp ret_from_exception
+ 	CFI_ENDPROC
+-END(debug)
++ENDPROC(debug)
+ 
+ /*
+  * NMI is doubly nasty. It can happen _while_ we're handling
 @@ -1351,6 +1597,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
@@ -12364,7 +12674,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1391,6 +1640,9 @@ nmi_espfix_stack:
+@@ -1391,12 +1640,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -12374,9 +12684,34 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	RESTORE_REGS
  	lss 12+4(%esp), %esp		# back to espfix stack
  	CFI_ADJUST_CFA_OFFSET -24
+ 	jmp irq_return
+ 	CFI_ENDPROC
+-END(nmi)
++ENDPROC(nmi)
+ 
+ ENTRY(int3)
+ 	RING0_INT_FRAME
+@@ -1409,7 +1661,7 @@ ENTRY(int3)
+ 	call do_int3
+ 	jmp ret_from_exception
+ 	CFI_ENDPROC
+-END(int3)
++ENDPROC(int3)
+ 
+ ENTRY(general_protection)
+ 	RING0_EC_FRAME
+@@ -1417,7 +1669,7 @@ ENTRY(general_protection)
+ 	CFI_ADJUST_CFA_OFFSET 4
+ 	jmp error_code
+ 	CFI_ENDPROC
+-END(general_protection)
++ENDPROC(general_protection)
+ 
+ /*
+  * End of kprobes section
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/kernel/entry_64.S linux-2.6.32.46-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.46/arch/x86/kernel/entry_64.S	2011-06-25 10:30:34.360000322 +0200
-+++ linux-2.6.32.46-pax/arch/x86/kernel/entry_64.S	2011-10-08 13:08:22.414272200 +0200
++++ linux-2.6.32.46-pax/arch/x86/kernel/entry_64.S	2011-10-25 17:48:00.604054176 +0200
 @@ -53,6 +53,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -12386,22 +12721,28 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  
  /* Avoid __ASSEMBLER__'ifying <linux/audit.h> just for this.  */
  #include <linux/elf-em.h>
-@@ -64,6 +66,7 @@
+@@ -64,8 +66,9 @@
  #ifdef CONFIG_FUNCTION_TRACER
  #ifdef CONFIG_DYNAMIC_FTRACE
  ENTRY(mcount)
 +	pax_force_retaddr
  	retq
- END(mcount)
+-END(mcount)
++ENDPROC(mcount)
  
-@@ -88,6 +91,7 @@ GLOBAL(ftrace_graph_call)
+ ENTRY(ftrace_caller)
+ 	cmpl $0, function_trace_stop
+@@ -88,8 +91,9 @@ GLOBAL(ftrace_graph_call)
  #endif
  
  GLOBAL(ftrace_stub)
 +	pax_force_retaddr
  	retq
- END(ftrace_caller)
+-END(ftrace_caller)
++ENDPROC(ftrace_caller)
  
+ #else /* ! CONFIG_DYNAMIC_FTRACE */
+ ENTRY(mcount)
 @@ -108,6 +112,7 @@ ENTRY(mcount)
  #endif
  
@@ -12410,7 +12751,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	retq
  
  trace:
-@@ -117,6 +122,7 @@ trace:
+@@ -117,12 +122,13 @@ trace:
  	movq 8(%rbp), %rsi
  	subq $MCOUNT_INSN_SIZE, %rdi
  
@@ -12418,14 +12759,24 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	call   *ftrace_trace_function
  
  	MCOUNT_RESTORE_FRAME
-@@ -142,6 +148,7 @@ ENTRY(ftrace_graph_caller)
+ 
+ 	jmp ftrace_stub
+-END(mcount)
++ENDPROC(mcount)
+ #endif /* CONFIG_DYNAMIC_FTRACE */
+ #endif /* CONFIG_FUNCTION_TRACER */
+ 
+@@ -142,8 +148,9 @@ ENTRY(ftrace_graph_caller)
  
  	MCOUNT_RESTORE_FRAME
  
 +	pax_force_retaddr
  	retq
- END(ftrace_graph_caller)
+-END(ftrace_graph_caller)
++ENDPROC(ftrace_graph_caller)
  
+ GLOBAL(return_to_handler)
+ 	subq  $24, %rsp
 @@ -159,6 +166,7 @@ GLOBAL(return_to_handler)
  	movq 8(%rsp), %rdx
  	movq (%rsp), %rax
@@ -12713,23 +13064,31 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	je 1f
  	SWAPGS
  	/*
-@@ -337,6 +608,7 @@ ENTRY(save_args)
+@@ -337,9 +608,10 @@ ENTRY(save_args)
  	 * We entered an interrupt context - irqs are off:
  	 */
  2:	TRACE_IRQS_OFF
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(save_args)
-@@ -352,6 +624,7 @@ ENTRY(save_rest)
+-END(save_args)
++ENDPROC(save_args)
+ 
+ ENTRY(save_rest)
+ 	PARTIAL_FRAME 1 REST_SKIP+8
+@@ -352,9 +624,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(save_rest)
-@@ -383,7 +656,8 @@ ENTRY(save_paranoid)
+-END(save_rest)
++ENDPROC(save_rest)
+ 
+ /* save complete stack frame */
+ 	.pushsection .kprobes.text, "ax"
+@@ -383,9 +656,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -12737,8 +13096,11 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
 +1:	pax_force_retaddr
 +	ret
  	CFI_ENDPROC
- END(save_paranoid)
+-END(save_paranoid)
++ENDPROC(save_paranoid)
  	.popsection
+ 
+ /*
 @@ -409,7 +683,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
@@ -12748,6 +13110,15 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
+@@ -419,7 +693,7 @@ ENTRY(ret_from_fork)
+ 	jmp ret_from_sys_call			# go to the SYSRET fastpath
+ 
+ 	CFI_ENDPROC
+-END(ret_from_fork)
++ENDPROC(ret_from_fork)
+ 
+ /*
+  * System call entry. Upto 6 arguments in registers are supported.
 @@ -455,7 +729,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
@@ -12810,14 +13181,63 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -708,6 +991,7 @@ ENTRY(ptregscall_common)
+@@ -674,7 +957,7 @@ int_restore_rest:
+ 	TRACE_IRQS_OFF
+ 	jmp int_with_check
+ 	CFI_ENDPROC
+-END(system_call)
++ENDPROC(system_call)
+ 
+ /*
+  * Certain special system calls that need to save a complete full stack frame.
+@@ -690,7 +973,7 @@ ENTRY(\label)
+ 	call \func
+ 	jmp ptregscall_common
+ 	CFI_ENDPROC
+-END(\label)
++ENDPROC(\label)
+ 	.endm
+ 
+ 	PTREGSCALL stub_clone, sys_clone, %r8
+@@ -708,9 +991,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
 +	pax_force_retaddr
  	ret $REST_SKIP		/* pop extended registers */
  	CFI_ENDPROC
- END(ptregscall_common)
+-END(ptregscall_common)
++ENDPROC(ptregscall_common)
+ 
+ ENTRY(stub_execve)
+ 	CFI_STARTPROC
+@@ -726,7 +1010,7 @@ ENTRY(stub_execve)
+ 	RESTORE_REST
+ 	jmp int_ret_from_sys_call
+ 	CFI_ENDPROC
+-END(stub_execve)
++ENDPROC(stub_execve)
+ 
+ /*
+  * sigreturn is special because it needs to restore all registers on return.
+@@ -744,7 +1028,7 @@ ENTRY(stub_rt_sigreturn)
+ 	RESTORE_REST
+ 	jmp int_ret_from_sys_call
+ 	CFI_ENDPROC
+-END(stub_rt_sigreturn)
++ENDPROC(stub_rt_sigreturn)
+ 
+ /*
+  * Build the entry stubs and pointer table with some assembler magic.
+@@ -780,7 +1064,7 @@ vector=vector+1
+ 2:	jmp common_interrupt
+ .endr
+ 	CFI_ENDPROC
+-END(irq_entries_start)
++ENDPROC(irq_entries_start)
+ 
+ .previous
+ END(interrupt)
 @@ -800,6 +1084,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
@@ -12861,7 +13281,25 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1032,6 +1330,16 @@ ENTRY(\sym)
+@@ -940,7 +1238,7 @@ ENTRY(retint_kernel)
+ #endif
+ 
+ 	CFI_ENDPROC
+-END(common_interrupt)
++ENDPROC(common_interrupt)
+ 
+ /*
+  * APIC interrupts.
+@@ -953,7 +1251,7 @@ ENTRY(\sym)
+ 	interrupt \do_sym
+ 	jmp ret_from_intr
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ #ifdef CONFIG_SMP
+@@ -1032,12 +1330,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12878,7 +13316,14 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1049,6 +1357,16 @@ ENTRY(\sym)
+ 	jmp error_exit		/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ .macro paranoidzeroentry sym do_sym
+@@ -1049,12 +1357,22 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12895,7 +13340,14 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
  	call \do_sym
-@@ -1066,9 +1384,24 @@ ENTRY(\sym)
+ 	jmp paranoid_exit	/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ .macro paranoidzeroentry_ist sym do_sym ist
+@@ -1066,15 +1384,30 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -12921,7 +13373,14 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	subq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
  	call \do_sym
  	addq $EXCEPTION_STKSZ, TSS_ist + (\ist - 1) * 8(%rbp)
-@@ -1085,6 +1418,16 @@ ENTRY(\sym)
+ 	jmp paranoid_exit	/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ .macro errorentry sym do_sym
+@@ -1085,13 +1418,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -12938,7 +13397,15 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1104,6 +1447,16 @@ ENTRY(\sym)
+ 	call \do_sym
+ 	jmp error_exit			/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ 	/* error code is on the stack already */
+@@ -1104,13 +1447,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -12955,23 +13422,39 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	movq %rsp,%rdi			/* pt_regs pointer */
  	movq ORIG_RAX(%rsp),%rsi	/* get error code */
  	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
-@@ -1141,6 +1494,7 @@ gs_change:
+ 	call \do_sym
+ 	jmp paranoid_exit		/* %ebx: no swapgs flag */
+ 	CFI_ENDPROC
+-END(\sym)
++ENDPROC(\sym)
+ .endm
+ 
+ zeroentry divide_error do_divide_error
+@@ -1141,9 +1494,10 @@ gs_change:
  	SWAPGS
  	popf
  	CFI_ADJUST_CFA_OFFSET -8
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(native_load_gs_index)
-@@ -1195,6 +1549,7 @@ ENTRY(kernel_thread)
+-END(native_load_gs_index)
++ENDPROC(native_load_gs_index)
+ 
+ 	.section __ex_table,"a"
+ 	.align 8
+@@ -1195,9 +1549,10 @@ ENTRY(kernel_thread)
  	 */
  	RESTORE_ALL
  	UNFAKE_STACK_FRAME
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(kernel_thread)
-@@ -1208,6 +1563,7 @@ ENTRY(child_rip)
+-END(kernel_thread)
++ENDPROC(kernel_thread)
+ 
+ ENTRY(child_rip)
+ 	pushq $0		# fake return address
+@@ -1208,13 +1563,14 @@ ENTRY(child_rip)
  	 */
  	movq %rdi, %rax
  	movq %rsi, %rdi
@@ -12979,22 +13462,56 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	call *%rax
  	# exit
  	mov %eax, %edi
-@@ -1243,6 +1599,7 @@ ENTRY(kernel_execve)
+ 	call do_exit
+ 	ud2			# padding for call trace
+ 	CFI_ENDPROC
+-END(child_rip)
++ENDPROC(child_rip)
+ 
+ /*
+  * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
+@@ -1243,9 +1599,10 @@ ENTRY(kernel_execve)
  	je int_ret_from_sys_call
  	RESTORE_ARGS
  	UNFAKE_STACK_FRAME
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(kernel_execve)
-@@ -1263,6 +1620,7 @@ ENTRY(call_softirq)
+-END(kernel_execve)
++ENDPROC(kernel_execve)
+ 
+ /* Call softirq on interrupt stack. Interrupts are off. */
+ ENTRY(call_softirq)
+@@ -1263,9 +1620,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
- END(call_softirq)
+-END(call_softirq)
++ENDPROC(call_softirq)
+ 
+ #ifdef CONFIG_XEN
+ zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
+@@ -1303,7 +1661,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+ 	decl PER_CPU_VAR(irq_count)
+ 	jmp  error_exit
+ 	CFI_ENDPROC
+-END(xen_do_hypervisor_callback)
++ENDPROC(xen_do_hypervisor_callback)
+ 
+ /*
+  * Hypervisor uses this for application faults while it executes.
+@@ -1362,7 +1720,7 @@ ENTRY(xen_failsafe_callback)
+ 	SAVE_ALL
+ 	jmp error_exit
+ 	CFI_ENDPROC
+-END(xen_failsafe_callback)
++ENDPROC(xen_failsafe_callback)
+ 
+ #endif /* CONFIG_XEN */
+ 
 @@ -1405,16 +1763,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
@@ -13028,6 +13545,15 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
+@@ -1443,7 +1816,7 @@ paranoid_schedule:
+ 	TRACE_IRQS_OFF
+ 	jmp paranoid_userspace
+ 	CFI_ENDPROC
+-END(paranoid_exit)
++ENDPROC(paranoid_exit)
+ 
+ /*
+  * Exception entry point. This expects an error code/orig_rax on the stack.
 @@ -1470,12 +1843,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
@@ -13043,6 +13569,24 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	ret
  	CFI_ENDPROC
  
+@@ -1497,7 +1871,7 @@ error_kernelspace:
+ 	cmpq $gs_change,RIP+8(%rsp)
+ 	je error_swapgs
+ 	jmp error_sti
+-END(error_entry)
++ENDPROC(error_entry)
+ 
+ 
+ /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
+@@ -1517,7 +1891,7 @@ ENTRY(error_exit)
+ 	jnz retint_careful
+ 	jmp retint_swapgs
+ 	CFI_ENDPROC
+-END(error_exit)
++ENDPROC(error_exit)
+ 
+ 
+ 	/* runs on exception stack */
 @@ -1529,6 +1903,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
@@ -13090,6 +13634,23 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
+@@ -1573,14 +1973,14 @@ nmi_schedule:
+ 	jmp paranoid_exit
+ 	CFI_ENDPROC
+ #endif
+-END(nmi)
++ENDPROC(nmi)
+ 
+ ENTRY(ignore_sysret)
+ 	CFI_STARTPROC
+ 	mov $-ENOSYS,%eax
+ 	sysret
+ 	CFI_ENDPROC
+-END(ignore_sysret)
++ENDPROC(ignore_sysret)
+ 
+ /*
+  * End of kprobes section
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/kernel/ftrace.c linux-2.6.32.46-pax/arch/x86/kernel/ftrace.c
 --- linux-2.6.32.46/arch/x86/kernel/ftrace.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/arch/x86/kernel/ftrace.c	2011-06-25 10:34:08.688000354 +0200
@@ -14222,7 +14783,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  				return single_step_cont(regs, args);
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/kernel/kprobes.c linux-2.6.32.46-pax/arch/x86/kernel/kprobes.c
 --- linux-2.6.32.46/arch/x86/kernel/kprobes.c	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.46-pax/arch/x86/kernel/kprobes.c	2011-06-25 10:34:08.700000354 +0200
++++ linux-2.6.32.46-pax/arch/x86/kernel/kprobes.c	2011-10-25 17:42:40.356044761 +0200
 @@ -166,9 +166,13 @@ static void __kprobes set_jmp_op(void *f
  		char op;
  		s32 raddr;
@@ -14306,7 +14867,17 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  		/*
  		 * The breakpoint instruction was removed right
  		 * after we hit it.  Another cpu has removed
-@@ -775,7 +783,7 @@ static void __kprobes resume_execution(s
+@@ -635,6 +643,9 @@ static void __used __kprobes kretprobe_t
+ 			/* Skip orig_ax, ip, cs */
+ 			"	addq $24, %rsp\n"
+ 			"	popfq\n"
++#ifdef CONFIG_PAX_KERNEXEC_PLUGIN
++			"	btsq $63,(%rsp)\n"
++#endif
+ #else
+ 			"	pushf\n"
+ 			/*
+@@ -775,7 +786,7 @@ static void __kprobes resume_execution(s
  		struct pt_regs *regs, struct kprobe_ctlblk *kcb)
  {
  	unsigned long *tos = stack_addr(regs);
@@ -14315,7 +14886,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	unsigned long orig_ip = (unsigned long)p->addr;
  	kprobe_opcode_t *insn = p->ainsn.insn;
  
-@@ -958,7 +966,7 @@ int __kprobes kprobe_exceptions_notify(s
+@@ -958,7 +969,7 @@ int __kprobes kprobe_exceptions_notify(s
  	struct die_args *args = data;
  	int ret = NOTIFY_DONE;
  
@@ -16890,6 +17461,17 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  
  #define APIC_LVT_NUM			6
  /* 14 is the version for Xeon and Pentium 8.4.8*/
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/kvm/paging_tmpl.h linux-2.6.32.46-pax/arch/x86/kvm/paging_tmpl.h
+--- linux-2.6.32.46/arch/x86/kvm/paging_tmpl.h	2011-06-25 10:30:34.392000322 +0200
++++ linux-2.6.32.46-pax/arch/x86/kvm/paging_tmpl.h	2011-10-25 23:48:06.640689431 +0200
+@@ -461,6 +461,7 @@ static int FNAME(page_fault)(struct kvm_
+ 	kvm_mmu_free_some_pages(vcpu);
+ 	sptep = FNAME(fetch)(vcpu, addr, &walker, user_fault, write_fault,
+ 			     level, &write_pt, pfn);
++	(void)sptep;
+ 	pgprintk("%s: shadow pte %p %llx ptwrite %d\n", __func__,
+ 		 sptep, *sptep, write_pt);
+ 
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/kvm/svm.c linux-2.6.32.46-pax/arch/x86/kvm/svm.c
 --- linux-2.6.32.46/arch/x86/kvm/svm.c	2011-06-25 10:30:34.396000322 +0200
 +++ linux-2.6.32.46-pax/arch/x86/kvm/svm.c	2011-07-18 00:51:58.007001744 +0200
@@ -19377,7 +19959,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/mm/fault.c linux-2.6.32.46-pax/arch/x86/mm/fault.c
 --- linux-2.6.32.46/arch/x86/mm/fault.c	2011-06-25 10:30:34.408000322 +0200
-+++ linux-2.6.32.46-pax/arch/x86/mm/fault.c	2011-10-06 09:32:44.554213200 +0200
++++ linux-2.6.32.46-pax/arch/x86/mm/fault.c	2011-10-25 17:54:17.468065257 +0200
 @@ -11,10 +11,19 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
@@ -19431,10 +20013,14 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  			break;
  
  		instr++;
-@@ -172,6 +187,30 @@ force_sig_info_fault(int si_signo, int s
+@@ -172,6 +187,34 @@ force_sig_info_fault(int si_signo, int s
  	force_sig_info(si_signo, &info, tsk);
  }
  
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++static bool pax_is_fetch_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address);
++#endif
++
 +#ifdef CONFIG_PAX_EMUTRAMP
 +static int pax_handle_fetch_fault(struct pt_regs *regs);
 +#endif
@@ -19462,7 +20048,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  DEFINE_SPINLOCK(pgd_lock);
  LIST_HEAD(pgd_list);
  
-@@ -224,11 +263,24 @@ void vmalloc_sync_all(void)
+@@ -224,11 +267,24 @@ void vmalloc_sync_all(void)
  	     address += PMD_SIZE) {
  
  		unsigned long flags;
@@ -19488,7 +20074,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  				break;
  		}
  		spin_unlock_irqrestore(&pgd_lock, flags);
-@@ -258,6 +310,11 @@ static noinline int vmalloc_fault(unsign
+@@ -258,6 +314,11 @@ static noinline int vmalloc_fault(unsign
  	 * an interrupt in the middle of a task switch..
  	 */
  	pgd_paddr = read_cr3();
@@ -19500,7 +20086,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	pmd_k = vmalloc_sync_one(__va(pgd_paddr), address);
  	if (!pmd_k)
  		return -1;
-@@ -332,15 +389,27 @@ void vmalloc_sync_all(void)
+@@ -332,15 +393,27 @@ void vmalloc_sync_all(void)
  
  		const pgd_t *pgd_ref = pgd_offset_k(address);
  		unsigned long flags;
@@ -19528,7 +20114,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  			if (pgd_none(*pgd))
  				set_pgd(pgd, *pgd_ref);
  			else
-@@ -373,7 +442,14 @@ static noinline int vmalloc_fault(unsign
+@@ -373,7 +446,14 @@ static noinline int vmalloc_fault(unsign
  	 * happen within a race in page table update. In the later
  	 * case just flush:
  	 */
@@ -19543,7 +20129,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	pgd_ref = pgd_offset_k(address);
  	if (pgd_none(*pgd_ref))
  		return -1;
-@@ -535,7 +611,7 @@ static int is_errata93(struct pt_regs *r
+@@ -535,7 +615,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -19552,7 +20138,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  		return 1;
  #endif
  	return 0;
-@@ -562,7 +638,7 @@ static int is_f00f_bug(struct pt_regs *r
+@@ -562,7 +642,7 @@ static int is_f00f_bug(struct pt_regs *r
  }
  
  static const char nx_warning[] = KERN_CRIT
@@ -19561,7 +20147,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  
  static void
  show_fault_oops(struct pt_regs *regs, unsigned long error_code,
-@@ -571,15 +647,21 @@ show_fault_oops(struct pt_regs *regs, un
+@@ -571,15 +651,21 @@ show_fault_oops(struct pt_regs *regs, un
  	if (!oops_may_print())
  		return;
  
@@ -19585,15 +20171,13 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -705,6 +787,71 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -705,6 +791,23 @@ __bad_area_nosemaphore(struct pt_regs *r
  {
  	struct task_struct *tsk = current;
  
-+#if defined(CONFIG_X86_64) || defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
-+	struct mm_struct *mm = tsk->mm;
-+#endif
-+
 +#ifdef CONFIG_X86_64
++	struct mm_struct *mm = tsk->mm;
++
 +	if (mm && (error_code & PF_INSTR) && mm->context.vdso) {
 +		if (regs->ip == (unsigned long)vgettimeofday) {
 +			regs->ip = (unsigned long)VDSO64_SYMBOL(mm->context.vdso, fallback_gettimeofday);
@@ -19608,56 +20192,32 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
 +	}
 +#endif
 +
-+#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
-+	if (mm && (error_code & PF_USER)) {
-+		unsigned long ip = regs->ip;
-+
-+		if (v8086_mode(regs))
-+			ip = ((regs->cs & 0xffff) << 4) + (ip & 0xffff);
-+
-+		/*
-+		 * It's possible to have interrupts off here:
-+		 */
-+		local_irq_enable();
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+		if ((mm->pax_flags & MF_PAX_PAGEEXEC) &&
-+		    ((nx_enabled && (error_code & PF_INSTR)) || (!(error_code & (PF_PROT | PF_WRITE)) && ip == address))) {
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+			switch (pax_handle_fetch_fault(regs)) {
-+			case 2:
-+				return;
-+			}
-+#endif
-+
-+			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
-+			do_group_exit(SIGKILL);
-+		}
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+		if ((mm->pax_flags & MF_PAX_SEGMEXEC) && !(error_code & (PF_PROT | PF_WRITE)) && (ip + SEGMEXEC_TASK_SIZE == address)) {
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+			switch (pax_handle_fetch_fault(regs)) {
-+			case 2:
-+				return;
-+			}
-+#endif
-+
-+			pax_report_fault(regs, (void *)ip, (void *)regs->sp);
-+			do_group_exit(SIGKILL);
-+		}
-+#endif
-+
-+	}
-+#endif
-+
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -857,6 +1004,99 @@ static int spurious_fault_check(unsigned
+@@ -722,6 +825,21 @@ __bad_area_nosemaphore(struct pt_regs *r
+ 		if (is_errata100(regs, address))
+ 			return;
+ 
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++		if (pax_is_fetch_fault(regs, error_code, address)) {
++
++#ifdef CONFIG_PAX_EMUTRAMP
++			switch (pax_handle_fetch_fault(regs)) {
++			case 2:
++				return;
++			}
++#endif
++
++			pax_report_fault(regs, (void *)regs->ip, (void *)regs->sp);
++			do_group_exit(SIGKILL);
++		}
++#endif
++
+ 		if (unlikely(show_unhandled_signals))
+ 			show_signal_msg(regs, error_code, address, tsk);
+ 
+@@ -857,6 +975,99 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -19757,7 +20317,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -923,6 +1163,9 @@ int show_unhandled_signals = 1;
+@@ -923,6 +1134,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, int write, struct vm_area_struct *vma)
  {
@@ -19767,7 +20327,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	if (write) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -956,17 +1199,31 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -956,17 +1170,31 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -19803,7 +20363,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1026,7 +1283,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1026,7 +1254,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -19812,7 +20372,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1080,6 +1337,11 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1080,6 +1308,11 @@ do_page_fault(struct pt_regs *regs, unsi
  		might_sleep();
  	}
  
@@ -19824,7 +20384,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1091,18 +1353,24 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1091,18 +1324,24 @@ do_page_fault(struct pt_regs *regs, unsi
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -19848,22 +20408,53 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/arch/x86/
 +	if (unlikely(address + 65536 + 32 * sizeof(unsigned long) < task_pt_regs(tsk)->sp)) {
 +		bad_area(regs, error_code, address);
 +		return;
-+	}
+ 	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (unlikely((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)) {
 +		bad_area(regs, error_code, address);
 +		return;
- 	}
++	}
 +#endif
 +
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1146,3 +1414,199 @@ good_area:
+@@ -1146,3 +1385,230 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
++
++#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++static bool pax_is_fetch_fault(struct pt_regs *regs, unsigned long error_code, unsigned long address)
++{
++	struct mm_struct *mm = current->mm;
++	unsigned long ip = regs->ip;
++
++	if (v8086_mode(regs))
++		ip = ((regs->cs & 0xffff) << 4) + (ip & 0xffff);
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	if (mm->pax_flags & MF_PAX_PAGEEXEC) {
++		if ((__supported_pte_mask & _PAGE_NX) && (error_code & PF_INSTR))
++			return true;
++		if (!(error_code & (PF_PROT | PF_WRITE)) && ip == address)
++			return true;
++		return false;
++	}
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (mm->pax_flags & MF_PAX_SEGMEXEC) {
++		if (!(error_code & (PF_PROT | PF_WRITE)) && (ip + SEGMEXEC_TASK_SIZE == address))
++			return true;
++		return false;
++	}
++#endif
++
++	return false;
++}
++#endif
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
 +static int pax_handle_fetch_fault_32(struct pt_regs *regs)
@@ -22662,7 +23253,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/crypto/gf
  
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Documentation/dontdiff linux-2.6.32.46-pax/Documentation/dontdiff
 --- linux-2.6.32.46/Documentation/dontdiff	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.46-pax/Documentation/dontdiff	2011-06-25 10:34:08.376000464 +0200
++++ linux-2.6.32.46-pax/Documentation/dontdiff	2011-10-25 17:41:44.780043129 +0200
 @@ -1,13 +1,16 @@
  *.a
  *.aux
@@ -22720,7 +23311,16 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Documenta
  comp*.log
  compile.h*
  conf
-@@ -103,13 +117,14 @@ gen_crc32table
+@@ -84,6 +98,8 @@ config
+ config-*
+ config_data.h*
+ config_data.gz*
++config.c
++config.tmp
+ conmakehash
+ consolemap_deftbl.c*
+ cpustr.h
+@@ -103,13 +119,15 @@ gen_crc32table
  gen_init_cpio
  genksyms
  *_gray256.c
@@ -22733,10 +23333,11 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Documenta
  initramfs_list
  kallsyms
 -kconfig
++kern_constants.h
  keywords.c
  ksym.c*
  ksym.h*
-@@ -133,7 +148,9 @@ mkboot
+@@ -133,7 +151,9 @@ mkboot
  mkbugboot
  mkcpustr
  mkdep
@@ -22746,7 +23347,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Documenta
  mktables
  mktree
  modpost
-@@ -149,6 +166,7 @@ patches*
+@@ -149,6 +169,7 @@ patches*
  pca200e.bin
  pca200e_ecd.bin2
  piggy.gz
@@ -22754,7 +23355,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Documenta
  piggyback
  pnmtologo
  ppc_defs.h*
-@@ -157,12 +175,15 @@ qconf
+@@ -157,12 +178,15 @@ qconf
  raid6altivec*.c
  raid6int*.c
  raid6tables.c
@@ -22770,7 +23371,15 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Documenta
  sm_tbl*
  split-include
  syscalltab.h
-@@ -186,14 +207,20 @@ version.h*
+@@ -171,6 +195,7 @@ tftpboot.img
+ timeconst.h
+ times.h*
+ trix_boot.h
++user_constants.h
+ utsrelease.h*
+ vdso-syms.lds
+ vdso.lds
+@@ -186,14 +211,20 @@ version.h*
  vmlinux
  vmlinux-*
  vmlinux.aout
@@ -23060,7 +23669,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/a
  	else dev_kfree_skb(skb);
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/atm/eni.c linux-2.6.32.46-pax/drivers/atm/eni.c
 --- linux-2.6.32.46/drivers/atm/eni.c	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.46-pax/drivers/atm/eni.c	2011-06-25 10:34:08.936000354 +0200
++++ linux-2.6.32.46-pax/drivers/atm/eni.c	2011-10-25 17:37:18.324035293 +0200
 @@ -525,7 +525,7 @@ static int rx_aal0(struct atm_vcc *vcc)
  		DPRINTK(DEV_LABEL "(itf %d): trashing empty cell\n",
  		    vcc->dev->number);
@@ -23106,6 +23715,15 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/a
  		wake_up(&eni_dev->tx_wait);
  dma_complete++;
  	}
+@@ -1570,7 +1570,7 @@ tx_complete++;
+ /*--------------------------------- entries ---------------------------------*/
+ 
+ 
+-static const char *media_name[] __devinitdata = {
++static const char *media_name[] __devinitconst = {
+     "MMF", "SMF", "MMF", "03?", /*  0- 3 */
+     "UTP", "05?", "06?", "07?", /*  4- 7 */
+     "TAXI","09?", "10?", "11?", /*  8-11 */
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/atm/firestream.c linux-2.6.32.46-pax/drivers/atm/firestream.c
 --- linux-2.6.32.46/drivers/atm/firestream.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/atm/firestream.c	2011-06-25 10:34:08.936000354 +0200
@@ -24410,6 +25028,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/c
  };
  
  MODULE_DEVICE_TABLE(input, kbd_ids);
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/char/mbcs.c linux-2.6.32.46-pax/drivers/char/mbcs.c
+--- linux-2.6.32.46/drivers/char/mbcs.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/char/mbcs.c	2011-10-25 17:37:18.324035293 +0200
+@@ -799,7 +799,7 @@ static int mbcs_remove(struct cx_dev *de
+ 	return 0;
+ }
+ 
+-static const struct cx_device_id __devinitdata mbcs_id_table[] = {
++static const struct cx_device_id __devinitconst mbcs_id_table[] = {
+ 	{
+ 	 .part_num = MBCS_PART_NUM,
+ 	 .mfg_num = MBCS_MFG_NUM,
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/char/mem.c linux-2.6.32.46-pax/drivers/char/mem.c
 --- linux-2.6.32.46/drivers/char/mem.c	2011-06-25 10:30:34.508000322 +0200
 +++ linux-2.6.32.46-pax/drivers/char/mem.c	2011-06-25 10:34:08.984000354 +0200
@@ -24888,6 +25518,72 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/c
  {
  	kobject_put(&device->kobjs[i]->kobj);
  	wait_for_completion(&device->kobjs[i]->kobj_unregister);
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/dma/ioat/dma_v3.c linux-2.6.32.46-pax/drivers/dma/ioat/dma_v3.c
+--- linux-2.6.32.46/drivers/dma/ioat/dma_v3.c	2011-06-25 10:30:34.536000322 +0200
++++ linux-2.6.32.46-pax/drivers/dma/ioat/dma_v3.c	2011-10-25 17:37:18.348035293 +0200
+@@ -71,10 +71,10 @@
+ /* provide a lookup table for setting the source address in the base or
+  * extended descriptor of an xor or pq descriptor
+  */
+-static const u8 xor_idx_to_desc __read_mostly = 0xd0;
+-static const u8 xor_idx_to_field[] __read_mostly = { 1, 4, 5, 6, 7, 0, 1, 2 };
+-static const u8 pq_idx_to_desc __read_mostly = 0xf8;
+-static const u8 pq_idx_to_field[] __read_mostly = { 1, 4, 5, 0, 1, 2, 4, 5 };
++static const u8 xor_idx_to_desc = 0xd0;
++static const u8 xor_idx_to_field[] = { 1, 4, 5, 6, 7, 0, 1, 2 };
++static const u8 pq_idx_to_desc = 0xf8;
++static const u8 pq_idx_to_field[] = { 1, 4, 5, 0, 1, 2, 4, 5 };
+ 
+ static dma_addr_t xor_get_src(struct ioat_raw_descriptor *descs[2], int idx)
+ {
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/amd64_edac.c linux-2.6.32.46-pax/drivers/edac/amd64_edac.c
+--- linux-2.6.32.46/drivers/edac/amd64_edac.c	2011-06-25 10:30:34.540000322 +0200
++++ linux-2.6.32.46-pax/drivers/edac/amd64_edac.c	2011-10-25 17:37:18.348035293 +0200
+@@ -3099,7 +3099,7 @@ static void __devexit amd64_remove_one_i
+  * PCI core identifies what devices are on a system during boot, and then
+  * inquiry this table to see if this driver is for a given device found.
+  */
+-static const struct pci_device_id amd64_pci_table[] __devinitdata = {
++static const struct pci_device_id amd64_pci_table[] __devinitconst = {
+ 	{
+ 		.vendor		= PCI_VENDOR_ID_AMD,
+ 		.device		= PCI_DEVICE_ID_AMD_K8_NB_MEMCTL,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/amd76x_edac.c linux-2.6.32.46-pax/drivers/edac/amd76x_edac.c
+--- linux-2.6.32.46/drivers/edac/amd76x_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/amd76x_edac.c	2011-10-25 17:37:18.348035293 +0200
+@@ -322,7 +322,7 @@ static void __devexit amd76x_remove_one(
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id amd76x_pci_tbl[] __devinitdata = {
++static const struct pci_device_id amd76x_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_VEND_DEV(AMD, FE_GATE_700C), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 	 AMD762},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/e752x_edac.c linux-2.6.32.46-pax/drivers/edac/e752x_edac.c
+--- linux-2.6.32.46/drivers/edac/e752x_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/e752x_edac.c	2011-10-25 17:37:18.352035293 +0200
+@@ -1282,7 +1282,7 @@ static void __devexit e752x_remove_one(s
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id e752x_pci_tbl[] __devinitdata = {
++static const struct pci_device_id e752x_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_VEND_DEV(INTEL, 7520_0), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 	 E7520},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/e7xxx_edac.c linux-2.6.32.46-pax/drivers/edac/e7xxx_edac.c
+--- linux-2.6.32.46/drivers/edac/e7xxx_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/e7xxx_edac.c	2011-10-25 17:37:18.352035293 +0200
+@@ -526,7 +526,7 @@ static void __devexit e7xxx_remove_one(s
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id e7xxx_pci_tbl[] __devinitdata = {
++static const struct pci_device_id e7xxx_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_VEND_DEV(INTEL, 7205_0), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 	 E7205},
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/edac_pci_sysfs.c linux-2.6.32.46-pax/drivers/edac/edac_pci_sysfs.c
 --- linux-2.6.32.46/drivers/edac/edac_pci_sysfs.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/edac/edac_pci_sysfs.c	2011-07-18 00:46:53.339001854 +0200
@@ -24974,6 +25670,138 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/e
  			panic("EDAC: PCI Parity Error");
  	}
  }
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i3000_edac.c linux-2.6.32.46-pax/drivers/edac/i3000_edac.c
+--- linux-2.6.32.46/drivers/edac/i3000_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i3000_edac.c	2011-10-25 17:37:18.352035293 +0200
+@@ -471,7 +471,7 @@ static void __devexit i3000_remove_one(s
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id i3000_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i3000_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_VEND_DEV(INTEL, 3000_HB), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 	 I3000},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i3200_edac.c linux-2.6.32.46-pax/drivers/edac/i3200_edac.c
+--- linux-2.6.32.46/drivers/edac/i3200_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i3200_edac.c	2011-10-25 17:37:18.352035293 +0200
+@@ -444,7 +444,7 @@ static void __devexit i3200_remove_one(s
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id i3200_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i3200_pci_tbl[] __devinitconst = {
+ 	{
+ 		PCI_VEND_DEV(INTEL, 3200_HB), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 		I3200},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i5000_edac.c linux-2.6.32.46-pax/drivers/edac/i5000_edac.c
+--- linux-2.6.32.46/drivers/edac/i5000_edac.c	2011-06-25 10:30:34.544000322 +0200
++++ linux-2.6.32.46-pax/drivers/edac/i5000_edac.c	2011-10-25 17:37:18.352035293 +0200
+@@ -1516,7 +1516,7 @@ static void __devexit i5000_remove_one(s
+  *
+  *	The "E500P" device is the first device supported.
+  */
+-static const struct pci_device_id i5000_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i5000_pci_tbl[] __devinitconst = {
+ 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_I5000_DEV16),
+ 	 .driver_data = I5000P},
+ 
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i5100_edac.c linux-2.6.32.46-pax/drivers/edac/i5100_edac.c
+--- linux-2.6.32.46/drivers/edac/i5100_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i5100_edac.c	2011-10-25 17:37:18.352035293 +0200
+@@ -944,7 +944,7 @@ static void __devexit i5100_remove_one(s
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id i5100_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i5100_pci_tbl[] __devinitconst = {
+ 	/* Device 16, Function 0, Channel 0 Memory Map, Error Flag/Mask, ... */
+ 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_5100_16) },
+ 	{ 0, }
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i5400_edac.c linux-2.6.32.46-pax/drivers/edac/i5400_edac.c
+--- linux-2.6.32.46/drivers/edac/i5400_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i5400_edac.c	2011-10-25 17:37:18.352035293 +0200
+@@ -1383,7 +1383,7 @@ static void __devexit i5400_remove_one(s
+  *
+  *	The "E500P" device is the first device supported.
+  */
+-static const struct pci_device_id i5400_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i5400_pci_tbl[] __devinitconst = {
+ 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_5400_ERR)},
+ 	{0,}			/* 0 terminated list. */
+ };
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i82443bxgx_edac.c linux-2.6.32.46-pax/drivers/edac/i82443bxgx_edac.c
+--- linux-2.6.32.46/drivers/edac/i82443bxgx_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i82443bxgx_edac.c	2011-10-25 17:37:18.356035294 +0200
+@@ -381,7 +381,7 @@ static void __devexit i82443bxgx_edacmc_
+ 
+ EXPORT_SYMBOL_GPL(i82443bxgx_edacmc_remove_one);
+ 
+-static const struct pci_device_id i82443bxgx_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i82443bxgx_pci_tbl[] __devinitconst = {
+ 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82443BX_0)},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82443BX_2)},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82443GX_0)},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i82860_edac.c linux-2.6.32.46-pax/drivers/edac/i82860_edac.c
+--- linux-2.6.32.46/drivers/edac/i82860_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i82860_edac.c	2011-10-25 17:37:18.356035294 +0200
+@@ -271,7 +271,7 @@ static void __devexit i82860_remove_one(
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id i82860_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i82860_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_VEND_DEV(INTEL, 82860_0), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 	 I82860},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i82875p_edac.c linux-2.6.32.46-pax/drivers/edac/i82875p_edac.c
+--- linux-2.6.32.46/drivers/edac/i82875p_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i82875p_edac.c	2011-10-25 17:37:18.356035294 +0200
+@@ -512,7 +512,7 @@ static void __devexit i82875p_remove_one
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id i82875p_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i82875p_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_VEND_DEV(INTEL, 82875_0), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 	 I82875P},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/i82975x_edac.c linux-2.6.32.46-pax/drivers/edac/i82975x_edac.c
+--- linux-2.6.32.46/drivers/edac/i82975x_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/i82975x_edac.c	2011-10-25 17:37:18.356035294 +0200
+@@ -586,7 +586,7 @@ static void __devexit i82975x_remove_one
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id i82975x_pci_tbl[] __devinitdata = {
++static const struct pci_device_id i82975x_pci_tbl[] __devinitconst = {
+ 	{
+ 		PCI_VEND_DEV(INTEL, 82975_0), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 		I82975X
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/r82600_edac.c linux-2.6.32.46-pax/drivers/edac/r82600_edac.c
+--- linux-2.6.32.46/drivers/edac/r82600_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/r82600_edac.c	2011-10-25 17:37:18.356035294 +0200
+@@ -374,7 +374,7 @@ static void __devexit r82600_remove_one(
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id r82600_pci_tbl[] __devinitdata = {
++static const struct pci_device_id r82600_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_DEVICE(PCI_VENDOR_ID_RADISYS, R82600_BRIDGE_ID)
+ 	 },
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/edac/x38_edac.c linux-2.6.32.46-pax/drivers/edac/x38_edac.c
+--- linux-2.6.32.46/drivers/edac/x38_edac.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/edac/x38_edac.c	2011-10-25 17:37:18.356035294 +0200
+@@ -441,7 +441,7 @@ static void __devexit x38_remove_one(str
+ 	edac_mc_free(mci);
+ }
+ 
+-static const struct pci_device_id x38_pci_tbl[] __devinitdata = {
++static const struct pci_device_id x38_pci_tbl[] __devinitconst = {
+ 	{
+ 	 PCI_VEND_DEV(INTEL, X38_HB), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+ 	 X38},
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/firewire/core-card.c linux-2.6.32.46-pax/drivers/firewire/core-card.c
 --- linux-2.6.32.46/drivers/firewire/core-card.c	2011-06-25 10:30:34.544000322 +0200
 +++ linux-2.6.32.46-pax/drivers/firewire/core-card.c	2011-08-24 02:51:17.168953058 +0200
@@ -26314,6 +27142,225 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/i
  
  /* Wrapper access functions for multiplexed SMBus */
  static DEFINE_MUTEX(nforce2_lock);
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/aec62xx.c linux-2.6.32.46-pax/drivers/ide/aec62xx.c
+--- linux-2.6.32.46/drivers/ide/aec62xx.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/aec62xx.c	2011-10-25 17:37:18.356035294 +0200
+@@ -180,7 +180,7 @@ static const struct ide_port_ops atp86x_
+ 	.cable_detect		= atp86x_cable_detect,
+ };
+ 
+-static const struct ide_port_info aec62xx_chipsets[] __devinitdata = {
++static const struct ide_port_info aec62xx_chipsets[] __devinitconst = {
+ 	{	/* 0: AEC6210 */
+ 		.name		= DRV_NAME,
+ 		.init_chipset	= init_chipset_aec62xx,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/alim15x3.c linux-2.6.32.46-pax/drivers/ide/alim15x3.c
+--- linux-2.6.32.46/drivers/ide/alim15x3.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/alim15x3.c	2011-10-25 17:37:18.356035294 +0200
+@@ -509,7 +509,7 @@ static const struct ide_dma_ops ali_dma_
+ 	.dma_sff_read_status	= ide_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info ali15x3_chipset __devinitdata = {
++static const struct ide_port_info ali15x3_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_chipset	= init_chipset_ali15x3,
+ 	.init_hwif	= init_hwif_ali15x3,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/amd74xx.c linux-2.6.32.46-pax/drivers/ide/amd74xx.c
+--- linux-2.6.32.46/drivers/ide/amd74xx.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/amd74xx.c	2011-10-25 17:37:18.360035294 +0200
+@@ -221,7 +221,7 @@ static const struct ide_port_ops amd_por
+ 		.udma_mask	= udma,					\
+ 	}
+ 
+-static const struct ide_port_info amd74xx_chipsets[] __devinitdata = {
++static const struct ide_port_info amd74xx_chipsets[] __devinitconst = {
+ 	/* 0: AMD7401 */	DECLARE_AMD_DEV(0x00, ATA_UDMA2),
+ 	/* 1: AMD7409 */	DECLARE_AMD_DEV(ATA_SWDMA2, ATA_UDMA4),
+ 	/* 2: AMD7411/7441 */	DECLARE_AMD_DEV(ATA_SWDMA2, ATA_UDMA5),
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/atiixp.c linux-2.6.32.46-pax/drivers/ide/atiixp.c
+--- linux-2.6.32.46/drivers/ide/atiixp.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/atiixp.c	2011-10-25 17:37:18.360035294 +0200
+@@ -137,7 +137,7 @@ static const struct ide_port_ops atiixp_
+ 	.cable_detect		= atiixp_cable_detect,
+ };
+ 
+-static const struct ide_port_info atiixp_pci_info[] __devinitdata = {
++static const struct ide_port_info atiixp_pci_info[] __devinitconst = {
+ 	{	/* 0: IXP200/300/400/700 */
+ 		.name		= DRV_NAME,
+ 		.enablebits	= {{0x48,0x01,0x00}, {0x48,0x08,0x00}},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/cmd64x.c linux-2.6.32.46-pax/drivers/ide/cmd64x.c
+--- linux-2.6.32.46/drivers/ide/cmd64x.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/cmd64x.c	2011-10-25 17:37:18.360035294 +0200
+@@ -372,7 +372,7 @@ static const struct ide_dma_ops cmd646_r
+ 	.dma_sff_read_status	= ide_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info cmd64x_chipsets[] __devinitdata = {
++static const struct ide_port_info cmd64x_chipsets[] __devinitconst = {
+ 	{	/* 0: CMD643 */
+ 		.name		= DRV_NAME,
+ 		.init_chipset	= init_chipset_cmd64x,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/cs5520.c linux-2.6.32.46-pax/drivers/ide/cs5520.c
+--- linux-2.6.32.46/drivers/ide/cs5520.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/cs5520.c	2011-10-25 17:37:18.360035294 +0200
+@@ -93,7 +93,7 @@ static const struct ide_port_ops cs5520_
+ 	.set_dma_mode		= cs5520_set_dma_mode,
+ };
+ 
+-static const struct ide_port_info cyrix_chipset __devinitdata = {
++static const struct ide_port_info cyrix_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.enablebits	= { { 0x60, 0x01, 0x01 }, { 0x60, 0x02, 0x02 } },
+ 	.port_ops	= &cs5520_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/cs5530.c linux-2.6.32.46-pax/drivers/ide/cs5530.c
+--- linux-2.6.32.46/drivers/ide/cs5530.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/cs5530.c	2011-10-25 17:37:18.360035294 +0200
+@@ -244,7 +244,7 @@ static const struct ide_port_ops cs5530_
+ 	.udma_filter		= cs5530_udma_filter,
+ };
+ 
+-static const struct ide_port_info cs5530_chipset __devinitdata = {
++static const struct ide_port_info cs5530_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_chipset	= init_chipset_cs5530,
+ 	.init_hwif	= init_hwif_cs5530,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/cs5535.c linux-2.6.32.46-pax/drivers/ide/cs5535.c
+--- linux-2.6.32.46/drivers/ide/cs5535.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/cs5535.c	2011-10-25 17:37:18.360035294 +0200
+@@ -170,7 +170,7 @@ static const struct ide_port_ops cs5535_
+ 	.cable_detect		= cs5535_cable_detect,
+ };
+ 
+-static const struct ide_port_info cs5535_chipset __devinitdata = {
++static const struct ide_port_info cs5535_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.port_ops	= &cs5535_port_ops,
+ 	.host_flags	= IDE_HFLAG_SINGLE | IDE_HFLAG_POST_SET_MODE,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/cy82c693.c linux-2.6.32.46-pax/drivers/ide/cy82c693.c
+--- linux-2.6.32.46/drivers/ide/cy82c693.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/cy82c693.c	2011-10-25 17:37:18.360035294 +0200
+@@ -288,7 +288,7 @@ static const struct ide_port_ops cy82c69
+ 	.set_dma_mode		= cy82c693_set_dma_mode,
+ };
+ 
+-static const struct ide_port_info cy82c693_chipset __devinitdata = {
++static const struct ide_port_info cy82c693_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_iops	= init_iops_cy82c693,
+ 	.port_ops	= &cy82c693_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/hpt366.c linux-2.6.32.46-pax/drivers/ide/hpt366.c
+--- linux-2.6.32.46/drivers/ide/hpt366.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/hpt366.c	2011-10-25 17:37:18.360035294 +0200
+@@ -507,7 +507,7 @@ static struct hpt_timings hpt37x_timings
+ 	}
+ };
+ 
+-static const struct hpt_info hpt36x __devinitdata = {
++static const struct hpt_info hpt36x __devinitconst = {
+ 	.chip_name	= "HPT36x",
+ 	.chip_type	= HPT36x,
+ 	.udma_mask	= HPT366_ALLOW_ATA66_3 ? (HPT366_ALLOW_ATA66_4 ? ATA_UDMA4 : ATA_UDMA3) : ATA_UDMA2,
+@@ -515,7 +515,7 @@ static const struct hpt_info hpt36x __de
+ 	.timings	= &hpt36x_timings
+ };
+ 
+-static const struct hpt_info hpt370 __devinitdata = {
++static const struct hpt_info hpt370 __devinitconst = {
+ 	.chip_name	= "HPT370",
+ 	.chip_type	= HPT370,
+ 	.udma_mask	= HPT370_ALLOW_ATA100_5 ? ATA_UDMA5 : ATA_UDMA4,
+@@ -523,7 +523,7 @@ static const struct hpt_info hpt370 __de
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt370a __devinitdata = {
++static const struct hpt_info hpt370a __devinitconst = {
+ 	.chip_name	= "HPT370A",
+ 	.chip_type	= HPT370A,
+ 	.udma_mask	= HPT370_ALLOW_ATA100_5 ? ATA_UDMA5 : ATA_UDMA4,
+@@ -531,7 +531,7 @@ static const struct hpt_info hpt370a __d
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt374 __devinitdata = {
++static const struct hpt_info hpt374 __devinitconst = {
+ 	.chip_name	= "HPT374",
+ 	.chip_type	= HPT374,
+ 	.udma_mask	= ATA_UDMA5,
+@@ -539,7 +539,7 @@ static const struct hpt_info hpt374 __de
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt372 __devinitdata = {
++static const struct hpt_info hpt372 __devinitconst = {
+ 	.chip_name	= "HPT372",
+ 	.chip_type	= HPT372,
+ 	.udma_mask	= HPT372_ALLOW_ATA133_6 ? ATA_UDMA6 : ATA_UDMA5,
+@@ -547,7 +547,7 @@ static const struct hpt_info hpt372 __de
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt372a __devinitdata = {
++static const struct hpt_info hpt372a __devinitconst = {
+ 	.chip_name	= "HPT372A",
+ 	.chip_type	= HPT372A,
+ 	.udma_mask	= HPT372_ALLOW_ATA133_6 ? ATA_UDMA6 : ATA_UDMA5,
+@@ -555,7 +555,7 @@ static const struct hpt_info hpt372a __d
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt302 __devinitdata = {
++static const struct hpt_info hpt302 __devinitconst = {
+ 	.chip_name	= "HPT302",
+ 	.chip_type	= HPT302,
+ 	.udma_mask	= HPT302_ALLOW_ATA133_6 ? ATA_UDMA6 : ATA_UDMA5,
+@@ -563,7 +563,7 @@ static const struct hpt_info hpt302 __de
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt371 __devinitdata = {
++static const struct hpt_info hpt371 __devinitconst = {
+ 	.chip_name	= "HPT371",
+ 	.chip_type	= HPT371,
+ 	.udma_mask	= HPT371_ALLOW_ATA133_6 ? ATA_UDMA6 : ATA_UDMA5,
+@@ -571,7 +571,7 @@ static const struct hpt_info hpt371 __de
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt372n __devinitdata = {
++static const struct hpt_info hpt372n __devinitconst = {
+ 	.chip_name	= "HPT372N",
+ 	.chip_type	= HPT372N,
+ 	.udma_mask	= HPT372_ALLOW_ATA133_6 ? ATA_UDMA6 : ATA_UDMA5,
+@@ -579,7 +579,7 @@ static const struct hpt_info hpt372n __d
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt302n __devinitdata = {
++static const struct hpt_info hpt302n __devinitconst = {
+ 	.chip_name	= "HPT302N",
+ 	.chip_type	= HPT302N,
+ 	.udma_mask	= HPT302_ALLOW_ATA133_6 ? ATA_UDMA6 : ATA_UDMA5,
+@@ -587,7 +587,7 @@ static const struct hpt_info hpt302n __d
+ 	.timings	= &hpt37x_timings
+ };
+ 
+-static const struct hpt_info hpt371n __devinitdata = {
++static const struct hpt_info hpt371n __devinitconst = {
+ 	.chip_name	= "HPT371N",
+ 	.chip_type	= HPT371N,
+ 	.udma_mask	= HPT371_ALLOW_ATA133_6 ? ATA_UDMA6 : ATA_UDMA5,
+@@ -1422,7 +1422,7 @@ static const struct ide_dma_ops hpt36x_d
+ 	.dma_sff_read_status	= ide_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info hpt366_chipsets[] __devinitdata = {
++static const struct ide_port_info hpt366_chipsets[] __devinitconst = {
+ 	{	/* 0: HPT36x */
+ 		.name		= DRV_NAME,
+ 		.init_chipset	= init_chipset_hpt366,
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/ide-cd.c linux-2.6.32.46-pax/drivers/ide/ide-cd.c
 --- linux-2.6.32.46/drivers/ide/ide-cd.c	2011-06-25 10:30:34.668000322 +0200
 +++ linux-2.6.32.46-pax/drivers/ide/ide-cd.c	2011-06-25 10:34:09.080000354 +0200
@@ -26326,6 +27373,270 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/i
  			drive->dma = 0;
  	}
  }
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/ide-pci-generic.c linux-2.6.32.46-pax/drivers/ide/ide-pci-generic.c
+--- linux-2.6.32.46/drivers/ide/ide-pci-generic.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/ide-pci-generic.c	2011-10-25 17:37:18.360035294 +0200
+@@ -53,7 +53,7 @@ static const struct ide_port_ops netcell
+ 		.udma_mask	= ATA_UDMA6, \
+ 	}
+ 
+-static const struct ide_port_info generic_chipsets[] __devinitdata = {
++static const struct ide_port_info generic_chipsets[] __devinitconst = {
+ 	/*  0: Unknown */
+ 	DECLARE_GENERIC_PCI_DEV(0),
+ 
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/it8172.c linux-2.6.32.46-pax/drivers/ide/it8172.c
+--- linux-2.6.32.46/drivers/ide/it8172.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/it8172.c	2011-10-25 17:37:18.364035293 +0200
+@@ -115,7 +115,7 @@ static const struct ide_port_ops it8172_
+ 	.set_dma_mode	= it8172_set_dma_mode,
+ };
+ 
+-static const struct ide_port_info it8172_port_info __devinitdata = {
++static const struct ide_port_info it8172_port_info __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.port_ops	= &it8172_port_ops,
+ 	.enablebits	= { {0x41, 0x80, 0x80}, {0x00, 0x00, 0x00} },
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/it8213.c linux-2.6.32.46-pax/drivers/ide/it8213.c
+--- linux-2.6.32.46/drivers/ide/it8213.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/it8213.c	2011-10-25 17:37:18.364035293 +0200
+@@ -156,7 +156,7 @@ static const struct ide_port_ops it8213_
+ 	.cable_detect		= it8213_cable_detect,
+ };
+ 
+-static const struct ide_port_info it8213_chipset __devinitdata = {
++static const struct ide_port_info it8213_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.enablebits	= { {0x41, 0x80, 0x80} },
+ 	.port_ops	= &it8213_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/it821x.c linux-2.6.32.46-pax/drivers/ide/it821x.c
+--- linux-2.6.32.46/drivers/ide/it821x.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/it821x.c	2011-10-25 17:37:18.364035293 +0200
+@@ -627,7 +627,7 @@ static const struct ide_port_ops it821x_
+ 	.cable_detect		= it821x_cable_detect,
+ };
+ 
+-static const struct ide_port_info it821x_chipset __devinitdata = {
++static const struct ide_port_info it821x_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_chipset	= init_chipset_it821x,
+ 	.init_hwif	= init_hwif_it821x,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/jmicron.c linux-2.6.32.46-pax/drivers/ide/jmicron.c
+--- linux-2.6.32.46/drivers/ide/jmicron.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/jmicron.c	2011-10-25 17:37:18.364035293 +0200
+@@ -102,7 +102,7 @@ static const struct ide_port_ops jmicron
+ 	.cable_detect		= jmicron_cable_detect,
+ };
+ 
+-static const struct ide_port_info jmicron_chipset __devinitdata = {
++static const struct ide_port_info jmicron_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.enablebits	= { { 0x40, 0x01, 0x01 }, { 0x40, 0x10, 0x10 } },
+ 	.port_ops	= &jmicron_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/ns87415.c linux-2.6.32.46-pax/drivers/ide/ns87415.c
+--- linux-2.6.32.46/drivers/ide/ns87415.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/ns87415.c	2011-10-25 17:37:18.364035293 +0200
+@@ -293,7 +293,7 @@ static const struct ide_dma_ops ns87415_
+ 	.dma_sff_read_status	= superio_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info ns87415_chipset __devinitdata = {
++static const struct ide_port_info ns87415_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_hwif	= init_hwif_ns87415,
+ 	.tp_ops 	= &ns87415_tp_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/opti621.c linux-2.6.32.46-pax/drivers/ide/opti621.c
+--- linux-2.6.32.46/drivers/ide/opti621.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/opti621.c	2011-10-25 17:37:18.364035293 +0200
+@@ -202,7 +202,7 @@ static const struct ide_port_ops opti621
+ 	.set_pio_mode		= opti621_set_pio_mode,
+ };
+ 
+-static const struct ide_port_info opti621_chipset __devinitdata = {
++static const struct ide_port_info opti621_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.enablebits	= { {0x45, 0x80, 0x00}, {0x40, 0x08, 0x00} },
+ 	.port_ops	= &opti621_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/pdc202xx_new.c linux-2.6.32.46-pax/drivers/ide/pdc202xx_new.c
+--- linux-2.6.32.46/drivers/ide/pdc202xx_new.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/pdc202xx_new.c	2011-10-25 17:37:18.364035293 +0200
+@@ -465,7 +465,7 @@ static const struct ide_port_ops pdcnew_
+ 		.udma_mask	= udma, \
+ 	}
+ 
+-static const struct ide_port_info pdcnew_chipsets[] __devinitdata = {
++static const struct ide_port_info pdcnew_chipsets[] __devinitconst = {
+ 	/* 0: PDC202{68,70} */		DECLARE_PDCNEW_DEV(ATA_UDMA5),
+ 	/* 1: PDC202{69,71,75,76,77} */	DECLARE_PDCNEW_DEV(ATA_UDMA6),
+ };
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/pdc202xx_old.c linux-2.6.32.46-pax/drivers/ide/pdc202xx_old.c
+--- linux-2.6.32.46/drivers/ide/pdc202xx_old.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/pdc202xx_old.c	2011-10-25 17:37:18.364035293 +0200
+@@ -285,7 +285,7 @@ static const struct ide_dma_ops pdc2026x
+ 		.max_sectors	= sectors, \
+ 	}
+ 
+-static const struct ide_port_info pdc202xx_chipsets[] __devinitdata = {
++static const struct ide_port_info pdc202xx_chipsets[] __devinitconst = {
+ 	{	/* 0: PDC20246 */
+ 		.name		= DRV_NAME,
+ 		.init_chipset	= init_chipset_pdc202xx,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/piix.c linux-2.6.32.46-pax/drivers/ide/piix.c
+--- linux-2.6.32.46/drivers/ide/piix.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/piix.c	2011-10-25 17:37:18.364035293 +0200
+@@ -344,7 +344,7 @@ static const struct ide_port_ops ich_por
+ 		.udma_mask	= udma, \
+ 	}
+ 
+-static const struct ide_port_info piix_pci_info[] __devinitdata = {
++static const struct ide_port_info piix_pci_info[] __devinitconst = {
+ 	/* 0: MPIIX */
+ 	{	/*
+ 		 * MPIIX actually has only a single IDE channel mapped to
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/rz1000.c linux-2.6.32.46-pax/drivers/ide/rz1000.c
+--- linux-2.6.32.46/drivers/ide/rz1000.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/rz1000.c	2011-10-25 17:37:18.364035293 +0200
+@@ -38,7 +38,7 @@ static int __devinit rz1000_disable_read
+ 	}
+ }
+ 
+-static const struct ide_port_info rz1000_chipset __devinitdata = {
++static const struct ide_port_info rz1000_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.host_flags	= IDE_HFLAG_NO_DMA,
+ };
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/sc1200.c linux-2.6.32.46-pax/drivers/ide/sc1200.c
+--- linux-2.6.32.46/drivers/ide/sc1200.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/sc1200.c	2011-10-25 17:37:18.364035293 +0200
+@@ -290,7 +290,7 @@ static const struct ide_dma_ops sc1200_d
+ 	.dma_sff_read_status	= ide_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info sc1200_chipset __devinitdata = {
++static const struct ide_port_info sc1200_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.port_ops	= &sc1200_port_ops,
+ 	.dma_ops	= &sc1200_dma_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/scc_pata.c linux-2.6.32.46-pax/drivers/ide/scc_pata.c
+--- linux-2.6.32.46/drivers/ide/scc_pata.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/scc_pata.c	2011-10-25 17:37:18.368035293 +0200
+@@ -811,7 +811,7 @@ static const struct ide_dma_ops scc_dma_
+ 	.dma_sff_read_status	= scc_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info scc_chipset __devinitdata = {
++static const struct ide_port_info scc_chipset __devinitconst = {
+ 	.name		= "sccIDE",
+ 	.init_iops	= init_iops_scc,
+ 	.init_dma	= scc_init_dma,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/serverworks.c linux-2.6.32.46-pax/drivers/ide/serverworks.c
+--- linux-2.6.32.46/drivers/ide/serverworks.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/serverworks.c	2011-10-25 17:37:18.368035293 +0200
+@@ -353,7 +353,7 @@ static const struct ide_port_ops svwks_p
+ 	.cable_detect		= svwks_cable_detect,
+ };
+ 
+-static const struct ide_port_info serverworks_chipsets[] __devinitdata = {
++static const struct ide_port_info serverworks_chipsets[] __devinitconst = {
+ 	{	/* 0: OSB4 */
+ 		.name		= DRV_NAME,
+ 		.init_chipset	= init_chipset_svwks,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/siimage.c linux-2.6.32.46-pax/drivers/ide/siimage.c
+--- linux-2.6.32.46/drivers/ide/siimage.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/siimage.c	2011-10-25 17:37:18.368035293 +0200
+@@ -719,7 +719,7 @@ static const struct ide_dma_ops sil_dma_
+ 		.udma_mask	= ATA_UDMA6,		\
+ 	}
+ 
+-static const struct ide_port_info siimage_chipsets[] __devinitdata = {
++static const struct ide_port_info siimage_chipsets[] __devinitconst = {
+ 	/* 0: SiI680 */  DECLARE_SII_DEV(&sil_pata_port_ops),
+ 	/* 1: SiI3112 */ DECLARE_SII_DEV(&sil_sata_port_ops)
+ };
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/sis5513.c linux-2.6.32.46-pax/drivers/ide/sis5513.c
+--- linux-2.6.32.46/drivers/ide/sis5513.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/sis5513.c	2011-10-25 17:37:18.368035293 +0200
+@@ -561,7 +561,7 @@ static const struct ide_port_ops sis_ata
+ 	.cable_detect		= sis_cable_detect,
+ };
+ 
+-static const struct ide_port_info sis5513_chipset __devinitdata = {
++static const struct ide_port_info sis5513_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_chipset	= init_chipset_sis5513,
+ 	.enablebits	= { {0x4a, 0x02, 0x02}, {0x4a, 0x04, 0x04} },
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/sl82c105.c linux-2.6.32.46-pax/drivers/ide/sl82c105.c
+--- linux-2.6.32.46/drivers/ide/sl82c105.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/sl82c105.c	2011-10-25 17:37:18.368035293 +0200
+@@ -319,7 +319,7 @@ static const struct ide_dma_ops sl82c105
+ 	.dma_sff_read_status	= ide_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info sl82c105_chipset __devinitdata = {
++static const struct ide_port_info sl82c105_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_chipset	= init_chipset_sl82c105,
+ 	.enablebits	= {{0x40,0x01,0x01}, {0x40,0x10,0x10}},
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/slc90e66.c linux-2.6.32.46-pax/drivers/ide/slc90e66.c
+--- linux-2.6.32.46/drivers/ide/slc90e66.c	2011-06-25 10:30:34.668000322 +0200
++++ linux-2.6.32.46-pax/drivers/ide/slc90e66.c	2011-10-25 17:37:18.368035293 +0200
+@@ -131,7 +131,7 @@ static const struct ide_port_ops slc90e6
+ 	.cable_detect		= slc90e66_cable_detect,
+ };
+ 
+-static const struct ide_port_info slc90e66_chipset __devinitdata = {
++static const struct ide_port_info slc90e66_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.enablebits	= { {0x41, 0x80, 0x80}, {0x43, 0x80, 0x80} },
+ 	.port_ops	= &slc90e66_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/tc86c001.c linux-2.6.32.46-pax/drivers/ide/tc86c001.c
+--- linux-2.6.32.46/drivers/ide/tc86c001.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/tc86c001.c	2011-10-25 17:37:18.368035293 +0200
+@@ -190,7 +190,7 @@ static const struct ide_dma_ops tc86c001
+ 	.dma_sff_read_status	= ide_dma_sff_read_status,
+ };
+ 
+-static const struct ide_port_info tc86c001_chipset __devinitdata = {
++static const struct ide_port_info tc86c001_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_hwif	= init_hwif_tc86c001,
+ 	.port_ops	= &tc86c001_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/triflex.c linux-2.6.32.46-pax/drivers/ide/triflex.c
+--- linux-2.6.32.46/drivers/ide/triflex.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/triflex.c	2011-10-25 17:37:18.368035293 +0200
+@@ -92,7 +92,7 @@ static const struct ide_port_ops triflex
+ 	.set_dma_mode		= triflex_set_mode,
+ };
+ 
+-static const struct ide_port_info triflex_device __devinitdata = {
++static const struct ide_port_info triflex_device __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.enablebits	= {{0x80, 0x01, 0x01}, {0x80, 0x02, 0x02}},
+ 	.port_ops	= &triflex_port_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/trm290.c linux-2.6.32.46-pax/drivers/ide/trm290.c
+--- linux-2.6.32.46/drivers/ide/trm290.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/trm290.c	2011-10-25 17:37:18.368035293 +0200
+@@ -324,7 +324,7 @@ static struct ide_dma_ops trm290_dma_ops
+ 	.dma_check		= trm290_dma_check,
+ };
+ 
+-static const struct ide_port_info trm290_chipset __devinitdata = {
++static const struct ide_port_info trm290_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_hwif	= init_hwif_trm290,
+ 	.tp_ops 	= &trm290_tp_ops,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ide/via82cxxx.c linux-2.6.32.46-pax/drivers/ide/via82cxxx.c
+--- linux-2.6.32.46/drivers/ide/via82cxxx.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/ide/via82cxxx.c	2011-10-25 17:37:18.368035293 +0200
+@@ -374,7 +374,7 @@ static const struct ide_port_ops via_por
+ 	.cable_detect		= via82cxxx_cable_detect,
+ };
+ 
+-static const struct ide_port_info via82cxxx_chipset __devinitdata = {
++static const struct ide_port_info via82cxxx_chipset __devinitconst = {
+ 	.name		= DRV_NAME,
+ 	.init_chipset	= init_chipset_via82cxxx,
+ 	.enablebits	= { { 0x40, 0x02, 0x02 }, { 0x40, 0x01, 0x01 } },
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/ieee1394/dv1394.c linux-2.6.32.46-pax/drivers/ieee1394/dv1394.c
 --- linux-2.6.32.46/drivers/ieee1394/dv1394.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/ieee1394/dv1394.c	2011-06-25 10:34:09.080000354 +0200
@@ -27336,6 +28647,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/l
  
  // Every interrupt can come to us here
  // But we must truly tell each apart.
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/macintosh/macio_asic.c linux-2.6.32.46-pax/drivers/macintosh/macio_asic.c
+--- linux-2.6.32.46/drivers/macintosh/macio_asic.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/macintosh/macio_asic.c	2011-10-25 17:37:18.372035294 +0200
+@@ -701,7 +701,7 @@ static void __devexit macio_pci_remove(s
+  * MacIO is matched against any Apple ID, it's probe() function
+  * will then decide wether it applies or not
+  */
+-static const struct pci_device_id __devinitdata pci_ids [] = { {
++static const struct pci_device_id __devinitconst pci_ids [] = { {
+ 	.vendor		= PCI_VENDOR_ID_APPLE,
+ 	.device		= PCI_ANY_ID,
+ 	.subvendor	= PCI_ANY_ID,
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/md/dm.c linux-2.6.32.46-pax/drivers/md/dm.c
 --- linux-2.6.32.46/drivers/md/dm.c	2011-08-24 02:06:48.381095546 +0200
 +++ linux-2.6.32.46-pax/drivers/md/dm.c	2011-08-24 02:06:31.873096428 +0200
@@ -28248,6 +29571,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/m
  	INIT_LIST_HEAD(&c->context_list);
  #endif
  
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/mfd/ab3100-core.c linux-2.6.32.46-pax/drivers/mfd/ab3100-core.c
+--- linux-2.6.32.46/drivers/mfd/ab3100-core.c	2011-06-25 10:30:34.800000322 +0200
++++ linux-2.6.32.46-pax/drivers/mfd/ab3100-core.c	2011-10-25 17:40:29.708040920 +0200
+@@ -777,7 +777,7 @@ struct ab_family_id {
+ 	char	*name;
+ };
+ 
+-static const struct ab_family_id ids[] __initdata = {
++static const struct ab_family_id ids[] __initconst = {
+ 	/* AB3100 */
+ 	{
+ 		.id = 0xc0,
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/misc/sgi-gru/gruhandles.c linux-2.6.32.46-pax/drivers/misc/sgi-gru/gruhandles.c
 --- linux-2.6.32.46/drivers/misc/sgi-gru/gruhandles.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/misc/sgi-gru/gruhandles.c	2011-06-25 10:34:09.164000354 +0200
@@ -28474,6 +29809,38 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/m
  			} while (0)
  
  #ifdef CONFIG_SGI_GRU_DEBUG
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/misc/sgi-xp/xpc.h linux-2.6.32.46-pax/drivers/misc/sgi-xp/xpc.h
+--- linux-2.6.32.46/drivers/misc/sgi-xp/xpc.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/misc/sgi-xp/xpc.h	2011-10-25 17:37:18.452035296 +0200
+@@ -835,6 +835,7 @@ struct xpc_arch_operations {
+ 	void (*received_payload) (struct xpc_channel *, void *);
+ 	void (*notify_senders_of_disconnect) (struct xpc_channel *);
+ };
++typedef struct xpc_arch_operations __no_const xpc_arch_operations_no_const;
+ 
+ /* struct xpc_partition act_state values (for XPC HB) */
+ 
+@@ -876,7 +877,7 @@ extern struct xpc_registration xpc_regis
+ /* found in xpc_main.c */
+ extern struct device *xpc_part;
+ extern struct device *xpc_chan;
+-extern struct xpc_arch_operations xpc_arch_ops;
++extern xpc_arch_operations_no_const xpc_arch_ops;
+ extern int xpc_disengage_timelimit;
+ extern int xpc_disengage_timedout;
+ extern int xpc_activate_IRQ_rcvd;
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/misc/sgi-xp/xpc_main.c linux-2.6.32.46-pax/drivers/misc/sgi-xp/xpc_main.c
+--- linux-2.6.32.46/drivers/misc/sgi-xp/xpc_main.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/misc/sgi-xp/xpc_main.c	2011-10-25 17:37:18.452035296 +0200
+@@ -169,7 +169,7 @@ static struct notifier_block xpc_die_not
+ 	.notifier_call = xpc_system_die,
+ };
+ 
+-struct xpc_arch_operations xpc_arch_ops;
++xpc_arch_operations_no_const xpc_arch_ops;
+ 
+ /*
+  * Timer function to enforce the timelimit on the partition disengage.
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/misc/sgi-xp/xp.h linux-2.6.32.46-pax/drivers/misc/sgi-xp/xp.h
 --- linux-2.6.32.46/drivers/misc/sgi-xp/xp.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/misc/sgi-xp/xp.h	2011-07-16 00:43:07.019011442 +0200
@@ -28486,6 +29853,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/m
  
  extern struct xpc_interface xpc_interface;
  
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/mmc/host/sdhci-pci.c linux-2.6.32.46-pax/drivers/mmc/host/sdhci-pci.c
+--- linux-2.6.32.46/drivers/mmc/host/sdhci-pci.c	2011-06-25 10:30:34.812000322 +0200
++++ linux-2.6.32.46-pax/drivers/mmc/host/sdhci-pci.c	2011-10-25 17:37:18.452035296 +0200
+@@ -297,7 +297,7 @@ static const struct sdhci_pci_fixes sdhc
+ 	.probe		= via_probe,
+ };
+ 
+-static const struct pci_device_id pci_ids[] __devinitdata = {
++static const struct pci_device_id pci_ids[] __devinitconst = {
+ 	{
+ 		.vendor		= PCI_VENDOR_ID_RICOH,
+ 		.device		= PCI_DEVICE_ID_RICOH_R5C822,
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/mtd/devices/doc2000.c linux-2.6.32.46-pax/drivers/mtd/devices/doc2000.c
 --- linux-2.6.32.46/drivers/mtd/devices/doc2000.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/mtd/devices/doc2000.c	2011-06-25 10:34:09.168000354 +0200
@@ -28563,6 +29942,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/m
  }
  
  /**
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/atlx/atl2.c linux-2.6.32.46-pax/drivers/net/atlx/atl2.c
+--- linux-2.6.32.46/drivers/net/atlx/atl2.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/net/atlx/atl2.c	2011-10-25 17:37:18.452035296 +0200
+@@ -2845,7 +2845,7 @@ static void atl2_force_ps(struct atl2_hw
+  */
+ 
+ #define ATL2_PARAM(X, desc) \
+-    static const int __devinitdata X[ATL2_MAX_NIC + 1] = ATL2_PARAM_INIT; \
++    static const int __devinitconst X[ATL2_MAX_NIC + 1] = ATL2_PARAM_INIT; \
+     MODULE_PARM(X, "1-" __MODULE_STRING(ATL2_MAX_NIC) "i"); \
+     MODULE_PARM_DESC(X, desc);
+ #else
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/cxgb3/l2t.h linux-2.6.32.46-pax/drivers/net/cxgb3/l2t.h
 --- linux-2.6.32.46/drivers/net/cxgb3/l2t.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/net/cxgb3/l2t.h	2011-07-16 00:43:07.087011441 +0200
@@ -28648,6 +30039,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/n
  
  	enum e1000_nvm_type type;
  	enum e1000_nvm_override override;
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/fealnx.c linux-2.6.32.46-pax/drivers/net/fealnx.c
+--- linux-2.6.32.46/drivers/net/fealnx.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/net/fealnx.c	2011-10-25 17:37:18.452035296 +0200
+@@ -151,7 +151,7 @@ struct chip_info {
+ 	int flags;
+ };
+ 
+-static const struct chip_info skel_netdrv_tbl[] __devinitdata = {
++static const struct chip_info skel_netdrv_tbl[] __devinitconst = {
+  	{ "100/10M Ethernet PCI Adapter",	HAS_MII_XCVR },
+ 	{ "100/10M Ethernet PCI Adapter",	HAS_CHIP_XCVR },
+ 	{ "1000/100/10M Ethernet PCI Adapter",	HAS_MII_XCVR },
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/igb/e1000_hw.h linux-2.6.32.46-pax/drivers/net/igb/e1000_hw.h
 --- linux-2.6.32.46/drivers/net/igb/e1000_hw.h	2011-06-25 10:30:35.028000323 +0200
 +++ linux-2.6.32.46-pax/drivers/net/igb/e1000_hw.h	2011-08-24 03:10:41.056890951 +0200
@@ -29450,6 +30853,30 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/n
  			}
  		} else {
  			if (netif_msg_link(lp))
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/sis190.c linux-2.6.32.46-pax/drivers/net/sis190.c
+--- linux-2.6.32.46/drivers/net/sis190.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/net/sis190.c	2011-10-25 17:37:18.476035298 +0200
+@@ -1598,7 +1598,7 @@ static int __devinit sis190_get_mac_addr
+ static int __devinit sis190_get_mac_addr_from_apc(struct pci_dev *pdev,
+ 						  struct net_device *dev)
+ {
+-	static const u16 __devinitdata ids[] = { 0x0965, 0x0966, 0x0968 };
++	static const u16 __devinitconst ids[] = { 0x0965, 0x0966, 0x0968 };
+ 	struct sis190_private *tp = netdev_priv(dev);
+ 	struct pci_dev *isa_bridge;
+ 	u8 reg, tmp8;
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/sundance.c linux-2.6.32.46-pax/drivers/net/sundance.c
+--- linux-2.6.32.46/drivers/net/sundance.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/net/sundance.c	2011-10-25 17:37:18.476035298 +0200
+@@ -225,7 +225,7 @@ enum {
+ struct pci_id_info {
+         const char *name;
+ };
+-static const struct pci_id_info pci_id_tbl[] __devinitdata = {
++static const struct pci_id_info pci_id_tbl[] __devinitconst = {
+ 	{"D-Link DFE-550TX FAST Ethernet Adapter"},
+ 	{"D-Link DFE-550FX 100Mbps Fiber-optics Adapter"},
+ 	{"D-Link DFE-580TX 4 port Server Adapter"},
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/tg3.h linux-2.6.32.46-pax/drivers/net/tg3.h
 --- linux-2.6.32.46/drivers/net/tg3.h	2011-06-25 10:30:35.096000323 +0200
 +++ linux-2.6.32.46-pax/drivers/net/tg3.h	2011-06-25 10:34:09.192000354 +0200
@@ -29555,6 +30982,30 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/n
  		return -EFAULT;
  	break;
      }
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/tulip/eeprom.c linux-2.6.32.46-pax/drivers/net/tulip/eeprom.c
+--- linux-2.6.32.46/drivers/net/tulip/eeprom.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/net/tulip/eeprom.c	2011-10-25 17:37:18.476035298 +0200
+@@ -80,7 +80,7 @@ static struct eeprom_fixup eeprom_fixups
+   {NULL}};
+ 
+ 
+-static const char *block_name[] __devinitdata = {
++static const char *block_name[] __devinitconst = {
+ 	"21140 non-MII",
+ 	"21140 MII PHY",
+ 	"21142 Serial PHY",
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/tulip/winbond-840.c linux-2.6.32.46-pax/drivers/net/tulip/winbond-840.c
+--- linux-2.6.32.46/drivers/net/tulip/winbond-840.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/net/tulip/winbond-840.c	2011-10-25 17:37:18.476035298 +0200
+@@ -235,7 +235,7 @@ struct pci_id_info {
+         int drv_flags;		/* Driver use, intended as capability flags. */
+ };
+ 
+-static const struct pci_id_info pci_id_tbl[] __devinitdata = {
++static const struct pci_id_info pci_id_tbl[] __devinitconst = {
+ 	{ 				/* Sometime a Level-One switch card. */
+ 	  "Winbond W89c840",	CanHaveMII | HasBrokenTx | FDXOnNoMII},
+ 	{ "Winbond W89c840",	CanHaveMII | HasBrokenTx},
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/net/usb/hso.c linux-2.6.32.46-pax/drivers/net/usb/hso.c
 --- linux-2.6.32.46/drivers/net/usb/hso.c	2011-06-25 10:30:35.108000323 +0200
 +++ linux-2.6.32.46-pax/drivers/net/usb/hso.c	2011-06-25 10:34:09.200000354 +0200
@@ -30232,6 +31683,30 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/s
  
  /*
   *	Define which interrupt handler needs to be installed
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/scsi/aacraid/linit.c linux-2.6.32.46-pax/drivers/scsi/aacraid/linit.c
+--- linux-2.6.32.46/drivers/scsi/aacraid/linit.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/scsi/aacraid/linit.c	2011-10-25 17:37:18.476035298 +0200
+@@ -91,7 +91,7 @@ static DECLARE_PCI_DEVICE_TABLE(aac_pci_
+ #elif defined(__devinitconst)
+ static const struct pci_device_id aac_pci_tbl[] __devinitconst = {
+ #else
+-static const struct pci_device_id aac_pci_tbl[] __devinitdata = {
++static const struct pci_device_id aac_pci_tbl[] __devinitconst = {
+ #endif
+ 	{ 0x1028, 0x0001, 0x1028, 0x0001, 0, 0, 0 }, /* PERC 2/Si (Iguana/PERC2Si) */
+ 	{ 0x1028, 0x0002, 0x1028, 0x0002, 0, 0, 1 }, /* PERC 3/Di (Opal/PERC3Di) */
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/scsi/aic94xx/aic94xx_init.c linux-2.6.32.46-pax/drivers/scsi/aic94xx/aic94xx_init.c
+--- linux-2.6.32.46/drivers/scsi/aic94xx/aic94xx_init.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/scsi/aic94xx/aic94xx_init.c	2011-10-25 17:37:18.480035298 +0200
+@@ -1011,7 +1011,7 @@ static struct sas_domain_function_templa
+ 	.lldd_control_phy	= asd_control_phy,
+ };
+ 
+-static const struct pci_device_id aic94xx_pci_table[] __devinitdata = {
++static const struct pci_device_id aic94xx_pci_table[] __devinitconst = {
+ 	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x410),0, 0, 1},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x412),0, 0, 1},
+ 	{PCI_DEVICE(PCI_VENDOR_ID_ADAPTEC2, 0x416),0, 0, 1},
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/scsi/bfa/bfa_iocfc.h linux-2.6.32.46-pax/drivers/scsi/bfa/bfa_iocfc.h
 --- linux-2.6.32.46/drivers/scsi/bfa/bfa_iocfc.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/scsi/bfa/bfa_iocfc.h	2011-07-17 21:35:08.723002331 +0200
@@ -31137,6 +32612,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/s
  #endif
  				dev_kfree_skb_irq(skb);
  			}
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/staging/otus/80211core/pub_zfi.h linux-2.6.32.46-pax/drivers/staging/otus/80211core/pub_zfi.h
+--- linux-2.6.32.46/drivers/staging/otus/80211core/pub_zfi.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/staging/otus/80211core/pub_zfi.h	2011-10-19 23:26:57.569752377 +0200
+@@ -531,7 +531,7 @@ struct zsCbFuncTbl
+     u8_t (*zfcbClassifyTxPacket)(zdev_t* dev, zbuf_t* buf);
+ 
+     void (*zfcbHwWatchDogNotify)(zdev_t* dev);
+-};
++} __no_const;
+ 
+ extern void zfZeroMemory(u8_t* va, u16_t length);
+ #define ZM_INIT_CB_FUNC_TABLE(p)        zfZeroMemory((u8_t *)p, sizeof(struct zsCbFuncTbl));
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/staging/pohmelfs/inode.c linux-2.6.32.46-pax/drivers/staging/pohmelfs/inode.c
 --- linux-2.6.32.46/drivers/staging/pohmelfs/inode.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/staging/pohmelfs/inode.c	2011-06-25 10:34:09.336000354 +0200
@@ -31551,6 +33038,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/u
  	enum wlp_assc_error assc_err;
  	char enonce_buf[WLP_WSS_NONCE_STRSIZE];
  	char rnonce_buf[WLP_WSS_NONCE_STRSIZE];
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/video/aty/aty128fb.c linux-2.6.32.46-pax/drivers/video/aty/aty128fb.c
+--- linux-2.6.32.46/drivers/video/aty/aty128fb.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/video/aty/aty128fb.c	2011-10-25 17:37:18.480035298 +0200
+@@ -149,7 +149,7 @@ enum {
+ };
+ 
+ /* Must match above enum */
+-static const char *r128_family[] __devinitdata = {
++static const char *r128_family[] __devinitconst = {
+ 	"AGP",
+ 	"PCI",
+ 	"PRO AGP",
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/video/fbcmap.c linux-2.6.32.46-pax/drivers/video/fbcmap.c
 --- linux-2.6.32.46/drivers/video/fbcmap.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/video/fbcmap.c	2011-06-25 10:34:09.392000354 +0200
@@ -31594,6 +33093,39 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/v
  			return -EINVAL;
  		if (!registered_fb[con2fb.framebuffer])
  			request_module("fb%d", con2fb.framebuffer);
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/video/geode/gx1fb_core.c linux-2.6.32.46-pax/drivers/video/geode/gx1fb_core.c
+--- linux-2.6.32.46/drivers/video/geode/gx1fb_core.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/video/geode/gx1fb_core.c	2011-10-25 17:40:57.044041722 +0200
+@@ -30,7 +30,7 @@ static int  crt_option = 1;
+ static char panel_option[32] = "";
+ 
+ /* Modes relevant to the GX1 (taken from modedb.c) */
+-static const struct fb_videomode __initdata gx1_modedb[] = {
++static const struct fb_videomode __initconst gx1_modedb[] = {
+ 	/* 640x480-60 VESA */
+ 	{ NULL, 60, 640, 480, 39682,  48, 16, 33, 10, 96, 2,
+ 	  0, FB_VMODE_NONINTERLACED, FB_MODE_IS_VESA },
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/video/gxt4500.c linux-2.6.32.46-pax/drivers/video/gxt4500.c
+--- linux-2.6.32.46/drivers/video/gxt4500.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/video/gxt4500.c	2011-10-25 17:37:18.480035298 +0200
+@@ -156,7 +156,7 @@ struct gxt4500_par {
+ static char *mode_option;
+ 
+ /* default mode: 1280x1024 @ 60 Hz, 8 bpp */
+-static const struct fb_videomode defaultmode __devinitdata = {
++static const struct fb_videomode defaultmode __devinitconst = {
+ 	.refresh = 60,
+ 	.xres = 1280,
+ 	.yres = 1024,
+@@ -581,7 +581,7 @@ static int gxt4500_blank(int blank, stru
+ 	return 0;
+ }
+ 
+-static const struct fb_fix_screeninfo gxt4500_fix __devinitdata = {
++static const struct fb_fix_screeninfo gxt4500_fix __devinitconst = {
+ 	.id = "IBM GXT4500P",
+ 	.type = FB_TYPE_PACKED_PIXELS,
+ 	.visual = FB_VISUAL_PSEUDOCOLOR,
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/video/i810/i810_accel.c linux-2.6.32.46-pax/drivers/video/i810/i810_accel.c
 --- linux-2.6.32.46/drivers/video/i810/i810_accel.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/video/i810/i810_accel.c	2011-06-25 10:34:09.392000354 +0200
@@ -31605,6 +33137,18 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/v
  	i810_report_error(mmio); 
  	par->dev_flags |= LOCKUP;
  	info->pixmap.scan_align = 1;
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/video/i810/i810_main.c linux-2.6.32.46-pax/drivers/video/i810/i810_main.c
+--- linux-2.6.32.46/drivers/video/i810/i810_main.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.46-pax/drivers/video/i810/i810_main.c	2011-10-25 17:37:18.480035298 +0200
+@@ -97,7 +97,7 @@ static int i810fb_blank      (int blank_
+ static void i810fb_release_resource       (struct fb_info *info, struct i810fb_par *par);
+ 
+ /* PCI */
+-static const char *i810_pci_list[] __devinitdata = {
++static const char *i810_pci_list[] __devinitconst = {
+ 	"Intel(R) 810 Framebuffer Device"                                 ,
+ 	"Intel(R) 810-DC100 Framebuffer Device"                           ,
+ 	"Intel(R) 810E Framebuffer Device"                                ,
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/drivers/video/uvesafb.c linux-2.6.32.46-pax/drivers/video/uvesafb.c
 --- linux-2.6.32.46/drivers/video/uvesafb.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.46-pax/drivers/video/uvesafb.c	2011-06-25 10:34:09.396000354 +0200
@@ -38356,6 +39900,17 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/include/l
   
  /** create a directory */
  struct dentry * oprofilefs_mkdir(struct super_block * sb, struct dentry * root,
+diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/include/linux/pagemap.h linux-2.6.32.46-pax/include/linux/pagemap.h
+--- linux-2.6.32.46/include/linux/pagemap.h	2011-06-25 10:30:36.120000323 +0200
++++ linux-2.6.32.46-pax/include/linux/pagemap.h	2011-10-25 23:45:17.672684466 +0200
+@@ -426,6 +426,7 @@ static inline int fault_in_pages_readabl
+ 				((unsigned long)end & PAGE_MASK))
+ 		 	ret = __get_user(c, end);
+ 	}
++	(void)c;
+ 	return ret;
+ }
+ 
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/include/linux/perf_event.h linux-2.6.32.46-pax/include/linux/perf_event.h
 --- linux-2.6.32.46/include/linux/perf_event.h	2011-06-25 10:30:36.124000323 +0200
 +++ linux-2.6.32.46-pax/include/linux/perf_event.h	2011-06-25 10:34:09.608000354 +0200
@@ -43359,7 +44914,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/lib/vspri
  
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Makefile linux-2.6.32.46-pax/Makefile
 --- linux-2.6.32.46/Makefile	2011-08-30 23:25:21.068004089 +0200
-+++ linux-2.6.32.46-pax/Makefile	2011-10-08 13:09:20.714269086 +0200
++++ linux-2.6.32.46-pax/Makefile	2011-10-25 17:53:31.820063916 +0200
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -43368,24 +44923,11 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Makefile 
 -HOSTCXXFLAGS = -O2
 +HOSTCFLAGS   = -Wall -W -Wmissing-prototypes -Wstrict-prototypes -Wno-unused-parameter -Wno-missing-field-initializers -O2 -fomit-frame-pointer -fno-delete-null-pointer-checks
 +HOSTCLFAGS  += $(call cc-option, -Wno-empty-body)
-+HOSTCXXFLAGS = -O2 -fno-delete-null-pointer-checks
++HOSTCXXFLAGS = -O2 -Wall -W -fno-delete-null-pointer-checks
  
  # Decide whether to build built-in, modular, or both.
  # Normally, just do built-in.
-@@ -342,10 +343,12 @@ LINUXINCLUDE    := -Iinclude \
- KBUILD_CPPFLAGS := -D__KERNEL__
- 
- KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
-+		   -W -Wno-unused-parameter -Wno-missing-field-initializers \
- 		   -fno-strict-aliasing -fno-common \
- 		   -Werror-implicit-function-declaration \
- 		   -Wno-format-security \
- 		   -fno-delete-null-pointer-checks
-+KBUILD_CFLAGS   += $(call cc-option, -Wno-empty-body)
- KBUILD_AFLAGS   := -D__ASSEMBLY__
- 
- # Read KERNELRELEASE from include/config/kernel.release (if it exists)
-@@ -376,8 +379,8 @@ export RCS_TAR_IGNORE := --exclude SCCS
+@@ -376,8 +377,8 @@ export RCS_TAR_IGNORE := --exclude SCCS
  # Rules shared between *config targets and build targets
  
  # Basic helpers built in scripts/
@@ -43396,7 +44938,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Makefile 
  	$(Q)$(MAKE) $(build)=scripts/basic
  
  # To avoid any implicit rule to kick in, define an empty command.
-@@ -403,7 +406,7 @@ endif
+@@ -403,7 +404,7 @@ endif
  # of make so .config is not included in this case either (for *config).
  
  no-dot-config-targets := clean mrproper distclean \
@@ -43405,12 +44947,14 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/Makefile 
  			 include/linux/version.h headers_% \
  			 kernelrelease kernelversion
  
-@@ -526,6 +529,36 @@ else
+@@ -526,6 +527,38 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
 +ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(CC)"), y)
++ifdef CONFIG_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
++endif
 +ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +STACKLEAK_PLUGIN := -fplugin=$(objtree)/tools/gcc/stackleak_plugin.so -fplugin-arg-stackleak_plugin-track-lowest-sp=100
 +endif
@@ -49796,8 +51340,8 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/security/
  	return 0;
 diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/security/Kconfig linux-2.6.32.46-pax/security/Kconfig
 --- linux-2.6.32.46/security/Kconfig	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.46-pax/security/Kconfig	2011-10-06 09:32:44.738213190 +0200
-@@ -4,6 +4,542 @@
++++ linux-2.6.32.46-pax/security/Kconfig	2011-10-25 17:52:42.812062481 +0200
+@@ -4,6 +4,558 @@
  
  menu "Security options"
  
@@ -50333,6 +51877,22 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/security/
 +	  Since this has a negligible performance impact, you should enable
 +	  this feature.
 +
++config PAX_CONSTIFY_PLUGIN
++	bool "Automatically constify eligible structures"
++	help
++	  By saying Y here the compiler will automatically constify a class
++	  of types that contain only function pointers.  This reduces the
++	  kernel's attack surface and also produces a better memory layout.
++
++	  Note that the implementation requires a gcc with plugin support,
++	  i.e., gcc 4.5 or newer.  You may need to install the supporting
++	  headers explicitly in addition to the normal gcc package.
++
++	  Note that if some code really has to modify constified variables
++	  then the source code will have to be patched to allow it.  Examples
++	  can be found in PaX itself (the no_const attribute) and for some
++	  out-of-tree modules at http://www.grsecurity.net/~paxguy1/ .
++
 +endmenu
 +
 +endmenu
@@ -50340,7 +51900,7 @@ diff -NurpX linux-2.6.32.46-pax/Documentation/dontdiff linux-2.6.32.46/security/
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +682,7 @@ config INTEL_TXT
+@@ -146,7 +698,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
