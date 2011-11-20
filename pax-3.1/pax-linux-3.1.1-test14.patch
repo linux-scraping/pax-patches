@@ -21388,14 +21388,38 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/arch/x86/mm/tlb.c
  
 diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/arch/x86/net/bpf_jit_comp.c linux-3.1.1-pax/arch/x86/net/bpf_jit_comp.c
 --- linux-3.1.1/arch/x86/net/bpf_jit_comp.c	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.1.1-pax/arch/x86/net/bpf_jit_comp.c	2011-11-18 15:11:09.891945495 +0100
-@@ -586,10 +586,12 @@ cond_branch:			f_offset = addrs[i + filt
++++ linux-3.1.1-pax/arch/x86/net/bpf_jit_comp.c	2011-11-20 22:56:50.126455367 +0100
+@@ -117,6 +117,10 @@ static inline void bpf_flush_icache(void
+ 	set_fs(old_fs);
+ }
+ 
++struct bpf_jit_work {
++	struct work_struct work;
++	void *image;
++};
+ 
+ void bpf_jit_compile(struct sk_filter *fp)
+ {
+@@ -141,6 +145,10 @@ void bpf_jit_compile(struct sk_filter *f
+ 	if (addrs == NULL)
+ 		return;
+ 
++	fp->work = kmalloc(sizeof(*fp->work), GFP_KERNEL);
++	if (!fp->work)
++		goto out;
++
+ 	/* Before first pass, make a rough estimation of addrs[]
+ 	 * each bpf instruction is translated to less than 64 bytes
+ 	 */
+@@ -585,11 +593,12 @@ cond_branch:			f_offset = addrs[i + filt
+ 			if (image) {
  				if (unlikely(proglen + ilen > oldproglen)) {
  					pr_err("bpb_jit_compile fatal error\n");
- 					kfree(addrs);
+-					kfree(addrs);
 -					module_free(NULL, image);
+-					return;
 +					module_free_exec(NULL, image);
- 					return;
++					goto out;
  				}
 +				pax_open_kernel();
  				memcpy(image + proglen, temp, ilen);
@@ -21403,7 +21427,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/arch/x86/net/bpf_
  			}
  			proglen += ilen;
  			addrs[i] = proglen;
-@@ -609,7 +611,7 @@ cond_branch:			f_offset = addrs[i + filt
+@@ -609,7 +618,7 @@ cond_branch:			f_offset = addrs[i + filt
  			break;
  		}
  		if (proglen == oldproglen) {
@@ -21412,12 +21436,20 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/arch/x86/net/bpf_
  						   proglen,
  						   sizeof(struct work_struct)));
  			if (!image)
-@@ -637,11 +639,11 @@ out:
+@@ -631,24 +640,27 @@ cond_branch:			f_offset = addrs[i + filt
+ 		fp->bpf_func = (void *)image;
+ 	}
+ out:
++	kfree(fp->work);
+ 	kfree(addrs);
+ 	return;
+ }
  
  static void jit_free_defer(struct work_struct *arg)
  {
 -	module_free(NULL, arg);
-+	module_free_exec(NULL, arg);
++	module_free_exec(NULL, ((struct bpf_jit_work*)arg)->image);
++	kfree(arg);
  }
  
  /* run from softirq, we must use a work_struct to call
@@ -21426,6 +21458,15 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/arch/x86/net/bpf_
   */
  void bpf_jit_free(struct sk_filter *fp)
  {
+ 	if (fp->bpf_func != sk_run_filter) {
+-		struct work_struct *work = (struct work_struct *)fp->bpf_func;
++		struct work_struct *work = &fp->work->work;
+ 
+ 		INIT_WORK(work, jit_free_defer);
++		fp->work->image = fp->bpf_func;
+ 		schedule_work(work);
+ 	}
+ }
 diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/arch/x86/net/bpf_jit.S linux-3.1.1-pax/arch/x86/net/bpf_jit.S
 --- linux-3.1.1/arch/x86/net/bpf_jit.S	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.1.1-pax/arch/x86/net/bpf_jit.S	2011-10-24 13:07:45.867029860 +0200
@@ -40214,6 +40255,27 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/include/linux/elf
  
  #endif
  
+diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/include/linux/filter.h linux-3.1.1-pax/include/linux/filter.h
+--- linux-3.1.1/include/linux/filter.h	2011-10-24 12:48:41.151090978 +0200
++++ linux-3.1.1-pax/include/linux/filter.h	2011-11-20 20:09:06.266213249 +0100
+@@ -134,6 +134,7 @@ struct sock_fprog {	/* Required for SO_A
+ 
+ struct sk_buff;
+ struct sock;
++struct bpf_jit_work;
+ 
+ struct sk_filter
+ {
+@@ -141,6 +142,9 @@ struct sk_filter
+ 	unsigned int         	len;	/* Number of filter blocks */
+ 	unsigned int		(*bpf_func)(const struct sk_buff *skb,
+ 					    const struct sock_filter *filter);
++#ifdef CONFIG_BPF_JIT
++	struct bpf_jit_work	*work;
++#endif
+ 	struct rcu_head		rcu;
+ 	struct sock_filter     	insns[0];
+ };
 diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/include/linux/firewire.h linux-3.1.1-pax/include/linux/firewire.h
 --- linux-3.1.1/include/linux/firewire.h	2011-10-24 12:48:41.155090979 +0200
 +++ linux-3.1.1-pax/include/linux/firewire.h	2011-10-24 13:07:46.339029832 +0200
@@ -53162,10 +53224,10 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/scripts/basic/fix
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/scripts/gcc-plugin.sh linux-3.1.1-pax/scripts/gcc-plugin.sh
 --- linux-3.1.1/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.1.1-pax/scripts/gcc-plugin.sh	2011-10-24 13:07:46.491029823 +0200
++++ linux-3.1.1-pax/scripts/gcc-plugin.sh	2011-11-20 22:40:20.214431286 +0100
 @@ -0,0 +1,2 @@
 +#!/bin/sh
-+echo "#include \"gcc-plugin.h\"\n#include \"rtl.h\"" | $1 -x c -shared - -o /dev/null -I`$2 -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
++echo -e "#include \"gcc-plugin.h\"\n#include \"tree.h\"\n#include \"tm.h\"\n#include \"rtl.h\"" | $1 -x c -shared - -o /dev/null -I`$2 -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
 diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/scripts/Makefile.build linux-3.1.1-pax/scripts/Makefile.build
 --- linux-3.1.1/scripts/Makefile.build	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.1.1-pax/scripts/Makefile.build	2011-10-25 14:02:06.748368327 +0200
