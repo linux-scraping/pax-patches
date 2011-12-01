@@ -44915,7 +44915,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/lockdep_pr
  	if (!name) {
 diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c linux-3.1.1-pax/kernel/module.c
 --- linux-3.1.1/kernel/module.c	2011-10-24 12:48:41.919090936 +0200
-+++ linux-3.1.1-pax/kernel/module.c	2011-10-24 13:07:46.399029833 +0200
++++ linux-3.1.1-pax/kernel/module.c	2011-12-01 02:37:18.767872111 +0100
 @@ -119,7 +119,8 @@ static BLOCKING_NOTIFIER_HEAD(module_not
  
  /* Bounds of module allocation, for speeding __module_address.
@@ -45226,7 +45226,31 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  		mutex_unlock(&module_mutex);
  	}
  	return ret;
-@@ -2589,7 +2597,7 @@ static int move_module(struct module *mo
+@@ -2474,8 +2482,14 @@ static struct module *setup_load_info(st
+ static int check_modinfo(struct module *mod, struct load_info *info)
+ {
+ 	const char *modmagic = get_modinfo(info, "vermagic");
++	const char *license = get_modinfo(info, "license");
+ 	int err;
+ 
++#ifdef CONFIG_PAX_KERNEXEC_PLUGIN_METHOD_OR
++	if (!license || !license_is_gpl_compatible(license))
++		return -ENOEXEC;
++#endif
++
+ 	/* This is allowed: modprobe --force will invalidate it. */
+ 	if (!modmagic) {
+ 		err = try_to_force_load(mod, "bad vermagic");
+@@ -2495,7 +2509,7 @@ static int check_modinfo(struct module *
+ 	}
+ 
+ 	/* Set up license info based on the info section */
+-	set_license(mod, get_modinfo(info, "license"));
++	set_license(mod, license);
+ 
+ 	return 0;
+ }
+@@ -2589,7 +2603,7 @@ static int move_module(struct module *mo
  	void *ptr;
  
  	/* Do the allocs. */
@@ -45235,7 +45259,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2599,23 +2607,50 @@ static int move_module(struct module *mo
+@@ -2599,23 +2613,50 @@ static int move_module(struct module *mo
  	if (!ptr)
  		return -ENOMEM;
  
@@ -45258,8 +45282,10 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
 +	kmemleak_not_leak(ptr);
 +	if (!ptr && mod->init_size_rw) {
 +		module_free(mod, mod->module_core_rw);
-+		return -ENOMEM;
-+	}
+ 		return -ENOMEM;
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
 +	memset(ptr, 0, mod->init_size_rw);
 +	mod->module_init_rw = ptr;
 +
@@ -45268,10 +45294,8 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
 +	if (!ptr) {
 +		module_free(mod, mod->module_init_rw);
 +		module_free(mod, mod->module_core_rw);
- 		return -ENOMEM;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
++		return -ENOMEM;
++	}
 +
 +	pax_open_kernel();
 +	memset(ptr, 0, mod->core_size_rx);
@@ -45294,7 +45318,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  
  	/* Transfer each section which specifies SHF_ALLOC */
  	DEBUGP("final section addresses:\n");
-@@ -2626,16 +2661,45 @@ static int move_module(struct module *mo
+@@ -2626,16 +2667,45 @@ static int move_module(struct module *mo
  		if (!(shdr->sh_flags & SHF_ALLOC))
  			continue;
  
@@ -45347,7 +45371,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  		DEBUGP("\t0x%lx %s\n",
  		       shdr->sh_addr, info->secstrings + shdr->sh_name);
  	}
-@@ -2686,12 +2750,12 @@ static void flush_module_icache(const st
+@@ -2686,12 +2756,12 @@ static void flush_module_icache(const st
  	 * Do it before processing of module parameters, so the module
  	 * can provide parameter accessor functions of its own.
  	 */
@@ -45366,7 +45390,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  
  	set_fs(old_fs);
  }
-@@ -2771,8 +2835,10 @@ static void module_deallocate(struct mod
+@@ -2771,8 +2841,10 @@ static void module_deallocate(struct mod
  {
  	kfree(info->strmap);
  	percpu_modfree(mod);
@@ -45379,7 +45403,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  }
  
  int __weak module_finalize(const Elf_Ehdr *hdr,
-@@ -2965,16 +3031,16 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -2965,16 +3037,16 @@ SYSCALL_DEFINE3(init_module, void __user
  			MODULE_STATE_COMING, mod);
  
  	/* Set RO and NX regions for core */
@@ -45404,7 +45428,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  
  	do_mod_ctors(mod);
  	/* Start the module */
-@@ -3020,11 +3086,12 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -3020,11 +3092,12 @@ SYSCALL_DEFINE3(init_module, void __user
  	mod->strtab = mod->core_strtab;
  #endif
  	unset_module_init_ro_nx(mod);
@@ -45422,7 +45446,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  	mutex_unlock(&module_mutex);
  
  	return 0;
-@@ -3055,10 +3122,16 @@ static const char *get_ksymbol(struct mo
+@@ -3055,10 +3128,16 @@ static const char *get_ksymbol(struct mo
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -45442,7 +45466,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  
  	/* Scan for closest preceding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -3304,7 +3377,7 @@ static int m_show(struct seq_file *m, vo
+@@ -3304,7 +3383,7 @@ static int m_show(struct seq_file *m, vo
  	char buf[8];
  
  	seq_printf(m, "%s %u",
@@ -45451,7 +45475,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -3313,7 +3386,7 @@ static int m_show(struct seq_file *m, vo
+@@ -3313,7 +3392,7 @@ static int m_show(struct seq_file *m, vo
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -45460,7 +45484,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  
  	/* Taints info */
  	if (mod->taints)
-@@ -3408,12 +3481,12 @@ struct module *__module_address(unsigned
+@@ -3408,12 +3487,12 @@ struct module *__module_address(unsigned
  {
  	struct module *mod;
  
@@ -45476,7 +45500,7 @@ diff -NurpX linux-3.1.1-pax/Documentation/dontdiff linux-3.1.1/kernel/module.c l
  			return mod;
  	return NULL;
  }
-@@ -3447,11 +3520,20 @@ bool is_module_text_address(unsigned lon
+@@ -3447,11 +3526,20 @@ bool is_module_text_address(unsigned lon
   */
  struct module *__module_text_address(unsigned long addr)
  {
