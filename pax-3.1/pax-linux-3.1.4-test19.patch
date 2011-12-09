@@ -241,6 +241,24 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/alpha/mm/fau
  	} else if (!cause) {
  		/* Allow reads even for write-only mappings */
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
+diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/arm/include/asm/atomic.h linux-3.1.4-pax/arch/arm/include/asm/atomic.h
+--- linux-3.1.4/arch/arm/include/asm/atomic.h	2011-10-24 12:48:18.799092171 +0200
++++ linux-3.1.4-pax/arch/arm/include/asm/atomic.h	2011-12-08 00:13:16.187497178 +0100
+@@ -239,6 +239,14 @@ typedef struct {
+ 	u64 __aligned(8) counter;
+ } atomic64_t;
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++typedef struct {
++	u64 __aligned(8) counter;
++} atomic64_unchecked_t;
++#else
++typedef atomic64_t atomic64_unchecked_t;
++#endif
++
+ #define ATOMIC64_INIT(i) { (i) }
+ 
+ static inline u64 atomic64_read(atomic64_t *v)
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/arm/include/asm/elf.h linux-3.1.4-pax/arch/arm/include/asm/elf.h
 --- linux-3.1.4/arch/arm/include/asm/elf.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.1.4-pax/arch/arm/include/asm/elf.h	2011-10-24 13:07:45.759029838 +0200
@@ -9500,7 +9518,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/asm/uaccess_64.h linux-3.1.4-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-3.1.4/arch/x86/include/asm/uaccess_64.h	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.1.4-pax/arch/x86/include/asm/uaccess_64.h	2011-10-24 13:07:45.807029865 +0200
++++ linux-3.1.4-pax/arch/x86/include/asm/uaccess_64.h	2011-12-08 03:03:42.394951300 +0100
 @@ -10,6 +10,9 @@
  #include <asm/alternative.h>
  #include <asm/cpufeature.h>
@@ -9511,25 +9529,41 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  
  /*
   * Copy To/From Userspace
-@@ -36,26 +39,26 @@ copy_user_generic(void *to, const void *
+@@ -17,12 +20,12 @@
+ 
+ /* Handles exceptions in both to and from, but doesn't do access_ok */
+ __must_check unsigned long
+-copy_user_generic_string(void *to, const void *from, unsigned len);
++copy_user_generic_string(void *to, const void *from, unsigned long len);
+ __must_check unsigned long
+-copy_user_generic_unrolled(void *to, const void *from, unsigned len);
++copy_user_generic_unrolled(void *to, const void *from, unsigned long len);
+ 
+ static __always_inline __must_check unsigned long
+-copy_user_generic(void *to, const void *from, unsigned len)
++copy_user_generic(void *to, const void *from, unsigned long len)
+ {
+ 	unsigned ret;
+ 
+@@ -36,138 +39,222 @@ copy_user_generic(void *to, const void *
  	return ret;
  }
  
--__must_check unsigned long
++static __always_inline __must_check unsigned long
++__copy_to_user(void __user *to, const void *from, unsigned long len);
++static __always_inline __must_check unsigned long
++__copy_from_user(void *to, const void __user *from, unsigned long len);
+ __must_check unsigned long
 -_copy_to_user(void __user *to, const void *from, unsigned len);
 -__must_check unsigned long
 -_copy_from_user(void *to, const void __user *from, unsigned len);
-+static __always_inline __must_check unsigned long
-+__copy_to_user(void __user *to, const void *from, unsigned len);
-+static __always_inline __must_check unsigned long
-+__copy_from_user(void *to, const void __user *from, unsigned len);
- __must_check unsigned long
- copy_in_user(void __user *to, const void __user *from, unsigned len);
+-__must_check unsigned long
+-copy_in_user(void __user *to, const void __user *from, unsigned len);
++copy_in_user(void __user *to, const void __user *from, unsigned long len);
  
  static inline unsigned long __must_check copy_from_user(void *to,
  					  const void __user *from,
--					  unsigned long n)
-+					  unsigned n)
+ 					  unsigned long n)
  {
 -	int sz = __compiletime_object_size(to);
 -
@@ -9543,7 +9577,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
 +
 +	if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if ((int)n > 0) {
++	else if (n < INT_MAX) {
 +		if (!__builtin_constant_p(n))
 +			check_object_size(to, n, false);
 +		memset(to, 0, n);
@@ -9551,7 +9585,9 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  	return n;
  }
  
-@@ -64,110 +67,194 @@ int copy_to_user(void __user *dst, const
+ static __always_inline __must_check
+-int copy_to_user(void __user *dst, const void *src, unsigned size)
++int copy_to_user(void __user *dst, const void *src, unsigned long size)
  {
  	might_fault();
  
@@ -9563,7 +9599,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  
  static __always_inline __must_check
 -int __copy_from_user(void *dst, const void __user *src, unsigned size)
-+unsigned long __copy_from_user(void *dst, const void __user *src, unsigned size)
++unsigned long __copy_from_user(void *dst, const void __user *src, unsigned long size)
  {
 -	int ret = 0;
 +	int sz = __compiletime_object_size(dst);
@@ -9573,7 +9609,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
 -	if (!__builtin_constant_p(size))
 -		return copy_user_generic(dst, (__force void *)src, size);
 +
-+	if ((int)size < 0)
++	if (size > INT_MAX)
 +		return size;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9651,7 +9687,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  
  static __always_inline __must_check
 -int __copy_to_user(void __user *dst, const void *src, unsigned size)
-+unsigned long __copy_to_user(void __user *dst, const void *src, unsigned size)
++unsigned long __copy_to_user(void __user *dst, const void *src, unsigned long size)
  {
 -	int ret = 0;
 +	int sz = __compiletime_object_size(src);
@@ -9661,7 +9697,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
 -	if (!__builtin_constant_p(size))
 -		return copy_user_generic((__force void *)dst, src, size);
 +
-+	if ((int)size < 0)
++	if (size > INT_MAX)
 +		return size;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9739,7 +9775,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  
  static __always_inline __must_check
 -int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
-+unsigned long __copy_in_user(void __user *dst, const void __user *src, unsigned size)
++unsigned long __copy_in_user(void __user *dst, const void __user *src, unsigned long size)
  {
 -	int ret = 0;
 +	unsigned ret = 0;
@@ -9749,7 +9785,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
 -		return copy_user_generic((__force void *)dst,
 -					 (__force void *)src, size);
 +
-+	if ((int)size < 0)
++	if (size > INT_MAX)
 +		return size;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9825,12 +9861,15 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  	}
  }
  
-@@ -221,33 +316,70 @@ __must_check unsigned long __clear_user(
+@@ -219,35 +314,72 @@ __must_check unsigned long clear_user(vo
+ __must_check unsigned long __clear_user(void __user *mem, unsigned long len);
+ 
  static __must_check __always_inline int
- __copy_from_user_inatomic(void *dst, const void __user *src, unsigned size)
+-__copy_from_user_inatomic(void *dst, const void __user *src, unsigned size)
++__copy_from_user_inatomic(void *dst, const void __user *src, unsigned long size)
  {
 -	return copy_user_generic(dst, (__force const void *)src, size);
-+	if ((int)size < 0)
++	if (size > INT_MAX)
 +		return size;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9845,11 +9884,12 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  }
  
 -static __must_check __always_inline int
+-__copy_to_user_inatomic(void __user *dst, const void *src, unsigned size)
 +static __must_check __always_inline unsigned long
- __copy_to_user_inatomic(void __user *dst, const void *src, unsigned size)
++__copy_to_user_inatomic(void __user *dst, const void *src, unsigned long size)
  {
 -	return copy_user_generic((__force void *)dst, src, size);
-+	if ((int)size < 0)
++	if (size > INT_MAX)
 +		return size;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9864,16 +9904,17 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  }
  
 -extern long __copy_user_nocache(void *dst, const void __user *src,
+-				unsigned size, int zerorest);
 +extern unsigned long __copy_user_nocache(void *dst, const void __user *src,
- 				unsigned size, int zerorest);
++				unsigned long size, int zerorest);
  
 -static inline int
 -__copy_from_user_nocache(void *dst, const void __user *src, unsigned size)
-+static inline unsigned long __copy_from_user_nocache(void *dst, const void __user *src, unsigned size)
++static inline unsigned long __copy_from_user_nocache(void *dst, const void __user *src, unsigned long size)
  {
  	might_sleep();
 +
-+	if ((int)size < 0)
++	if (size > INT_MAX)
 +		return size;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9886,10 +9927,11 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  
 -static inline int
 -__copy_from_user_inatomic_nocache(void *dst, const void __user *src,
+-				  unsigned size)
 +static inline unsigned long __copy_from_user_inatomic_nocache(void *dst, const void __user *src,
- 				  unsigned size)
++				  unsigned long size)
  {
-+	if ((int)size < 0)
++	if (size > INT_MAX)
 +		return size;
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -9903,7 +9945,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
 -unsigned long
 -copy_user_handle_tail(char *to, char *from, unsigned len, unsigned zerorest);
 +extern unsigned long
-+copy_user_handle_tail(char __user *to, char __user *from, unsigned len, unsigned zerorest);
++copy_user_handle_tail(char __user *to, char __user *from, unsigned long len, unsigned zerorest);
  
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/asm/uaccess.h linux-3.1.4-pax/arch/x86/include/asm/uaccess.h
@@ -12300,7 +12342,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  /*
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/entry_64.S linux-3.1.4-pax/arch/x86/kernel/entry_64.S
 --- linux-3.1.4/arch/x86/kernel/entry_64.S	2011-10-24 12:48:26.243091773 +0200
-+++ linux-3.1.4-pax/arch/x86/kernel/entry_64.S	2011-12-02 21:07:35.419459916 +0100
++++ linux-3.1.4-pax/arch/x86/kernel/entry_64.S	2011-12-09 02:14:08.427282584 +0100
 @@ -55,6 +55,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -12657,6 +12699,17 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
+@@ -231,8 +515,8 @@ ENDPROC(native_usergs_sysret64)
+ 	.endm
+ 
+ 	.macro UNFAKE_STACK_FRAME
+-	addq $8*6, %rsp
+-	CFI_ADJUST_CFA_OFFSET	-(6*8)
++	addq $8*6 + ARG_SKIP, %rsp
++	CFI_ADJUST_CFA_OFFSET	-(6*8 + ARG_SKIP)
+ 	.endm
+ 
+ /*
 @@ -319,7 +603,7 @@ ENDPROC(native_usergs_sysret64)
  	movq %rsp, %rsi
  
@@ -13082,9 +13135,11 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1184,9 +1554,10 @@ ENTRY(kernel_execve)
+@@ -1182,11 +1552,11 @@ ENTRY(kernel_execve)
+ 	RESTORE_REST
+ 	testq %rax,%rax
  	je int_ret_from_sys_call
- 	RESTORE_ARGS
+-	RESTORE_ARGS
  	UNFAKE_STACK_FRAME
 +	pax_force_retaddr
  	ret
@@ -13094,7 +13149,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1204,9 +1575,10 @@ ENTRY(call_softirq)
+@@ -1204,9 +1574,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -13106,7 +13161,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1244,7 +1616,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1244,7 +1615,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -13115,7 +13170,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1303,7 +1675,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1303,7 +1674,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -13124,7 +13179,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  apicinterrupt XEN_HVM_EVTCHN_CALLBACK \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1352,16 +1724,31 @@ ENTRY(paranoid_exit)
+@@ -1352,16 +1723,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -13157,7 +13212,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1390,7 +1777,7 @@ paranoid_schedule:
+@@ -1390,7 +1776,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -13166,7 +13221,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1417,12 +1804,13 @@ ENTRY(error_entry)
+@@ -1417,12 +1803,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -13181,7 +13236,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  	ret
  
  /*
-@@ -1449,7 +1837,7 @@ bstep_iret:
+@@ -1449,7 +1836,7 @@ bstep_iret:
  	movq %rcx,RIP+8(%rsp)
  	jmp error_swapgs
  	CFI_ENDPROC
@@ -13190,7 +13245,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1469,7 +1857,7 @@ ENTRY(error_exit)
+@@ -1469,7 +1856,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -13199,7 +13254,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  
  
  	/* runs on exception stack */
-@@ -1481,6 +1869,16 @@ ENTRY(nmi)
+@@ -1481,6 +1868,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -13216,7 +13271,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1491,12 +1889,28 @@ ENTRY(nmi)
+@@ -1491,12 +1888,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -13246,7 +13301,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/e
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1525,14 +1939,14 @@ nmi_schedule:
+@@ -1525,14 +1938,14 @@ nmi_schedule:
  	jmp paranoid_exit
  	CFI_ENDPROC
  #endif
@@ -13782,7 +13837,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
 +	.endr
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/head_64.S linux-3.1.4-pax/arch/x86/kernel/head_64.S
 --- linux-3.1.4/arch/x86/kernel/head_64.S	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.1.4-pax/arch/x86/kernel/head_64.S	2011-11-29 13:21:15.714766030 +0100
++++ linux-3.1.4-pax/arch/x86/kernel/head_64.S	2011-12-08 23:29:40.483809485 +0100
 @@ -19,6 +19,8 @@
  #include <asm/cache.h>
  #include <asm/processor-flags.h>
@@ -13792,22 +13847,25 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  
  #ifdef CONFIG_PARAVIRT
  #include <asm/asm-offsets.h>
-@@ -38,6 +40,10 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
+@@ -38,6 +40,12 @@ L4_PAGE_OFFSET = pgd_index(__PAGE_OFFSET
  L3_PAGE_OFFSET = pud_index(__PAGE_OFFSET)
  L4_START_KERNEL = pgd_index(__START_KERNEL_map)
  L3_START_KERNEL = pud_index(__START_KERNEL_map)
 +L4_VMALLOC_START = pgd_index(VMALLOC_START)
 +L3_VMALLOC_START = pud_index(VMALLOC_START)
++L4_VMALLOC_END = pgd_index(VMALLOC_END)
++L3_VMALLOC_END = pud_index(VMALLOC_END)
 +L4_VMEMMAP_START = pgd_index(VMEMMAP_START)
 +L3_VMEMMAP_START = pud_index(VMEMMAP_START)
  
  	.text
  	__HEAD
-@@ -85,35 +91,22 @@ startup_64:
+@@ -85,35 +93,23 @@ startup_64:
  	 */
  	addq	%rbp, init_level4_pgt + 0(%rip)
  	addq	%rbp, init_level4_pgt + (L4_PAGE_OFFSET*8)(%rip)
 +	addq	%rbp, init_level4_pgt + (L4_VMALLOC_START*8)(%rip)
++	addq	%rbp, init_level4_pgt + (L4_VMALLOC_END*8)(%rip)
 +	addq	%rbp, init_level4_pgt + (L4_VMEMMAP_START*8)(%rip)
  	addq	%rbp, init_level4_pgt + (L4_START_KERNEL*8)(%rip)
  
@@ -13849,7 +13907,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  
  	/*
  	 * Fixup the kernel text+data virtual addresses. Note that
-@@ -160,8 +153,8 @@ ENTRY(secondary_startup_64)
+@@ -160,8 +156,8 @@ ENTRY(secondary_startup_64)
  	 * after the boot processor executes this code.
  	 */
  
@@ -13860,7 +13918,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  	movq	%rax, %cr4
  
  	/* Setup early boot stage 4 level pagetables. */
-@@ -183,9 +176,16 @@ ENTRY(secondary_startup_64)
+@@ -183,9 +179,17 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -13873,12 +13931,13 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
 +	btsq	$_PAGE_BIT_NX, 8*L4_PAGE_OFFSET(%rdi)
 +#endif
 +	btsq	$_PAGE_BIT_NX, 8*L4_VMALLOC_START(%rdi)
++	btsq	$_PAGE_BIT_NX, 8*L4_VMALLOC_END(%rdi)
 +	btsq	$_PAGE_BIT_NX, 8*L4_VMEMMAP_START(%rdi)
 +	btsq	$_PAGE_BIT_NX, __supported_pte_mask(%rip)
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -247,6 +247,7 @@ ENTRY(secondary_startup_64)
+@@ -247,6 +251,7 @@ ENTRY(secondary_startup_64)
  	 * jump.  In addition we need to ensure %cs is set so we make this
  	 * a far return.
  	 */
@@ -13886,7 +13945,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -269,7 +270,7 @@ ENTRY(secondary_startup_64)
+@@ -269,7 +274,7 @@ ENTRY(secondary_startup_64)
  bad_address:
  	jmp bad_address
  
@@ -13895,7 +13954,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  #ifdef CONFIG_EARLY_PRINTK
  	.globl early_idt_handlers
  early_idt_handlers:
-@@ -314,18 +315,23 @@ ENTRY(early_idt_handler)
+@@ -314,18 +319,23 @@ ENTRY(early_idt_handler)
  #endif /* EARLY_PRINTK */
  1:	hlt
  	jmp 1b
@@ -13920,7 +13979,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -338,7 +344,6 @@ ENTRY(name)
+@@ -338,7 +348,6 @@ ENTRY(name)
  	i = i + 1 ;					\
  	.endr
  
@@ -13928,12 +13987,14 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  	/*
  	 * This default setting generates an ident mapping at address 0x100000
  	 * and a mapping for the kernel that precisely maps virtual address
-@@ -349,13 +354,36 @@ NEXT_PAGE(init_level4_pgt)
+@@ -349,13 +358,41 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
 +	.org	init_level4_pgt + L4_VMALLOC_START*8, 0
-+	.quad	level3_vmalloc_pgt - __START_KERNEL_map + _KERNPG_TABLE
++	.quad	level3_vmalloc_start_pgt - __START_KERNEL_map + _KERNPG_TABLE
++	.org	init_level4_pgt + L4_VMALLOC_END*8, 0
++	.quad	level3_vmalloc_end_pgt - __START_KERNEL_map + _KERNPG_TABLE
 +	.org	init_level4_pgt + L4_VMEMMAP_START*8, 0
 +	.quad	level3_vmemmap_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_START_KERNEL*8, 0
@@ -13956,7 +14017,10 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
 +	.fill	510,8,0
 +#endif
 +
-+NEXT_PAGE(level3_vmalloc_pgt)
++NEXT_PAGE(level3_vmalloc_start_pgt)
++	.fill	512,8,0
++
++NEXT_PAGE(level3_vmalloc_end_pgt)
 +	.fill	512,8,0
 +
 +NEXT_PAGE(level3_vmemmap_pgt)
@@ -13965,7 +14029,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -363,20 +391,23 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -363,20 +400,23 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -13997,7 +14061,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/kernel/h
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -389,33 +420,55 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -389,33 +429,55 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -19213,17 +19277,71 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/lib/putu
  	EXIT
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/lib/rwlock.S linux-3.1.4-pax/arch/x86/lib/rwlock.S
 --- linux-3.1.4/arch/x86/lib/rwlock.S	2011-10-24 12:48:26.351091768 +0200
-+++ linux-3.1.4-pax/arch/x86/lib/rwlock.S	2011-10-24 13:07:45.859029858 +0200
-@@ -23,6 +23,7 @@ ENTRY(__write_lock_failed)
++++ linux-3.1.4-pax/arch/x86/lib/rwlock.S	2011-12-06 20:22:20.651982845 +0100
+@@ -16,13 +16,34 @@ ENTRY(__write_lock_failed)
+ 	FRAME
+ 0:	LOCK_PREFIX
+ 	WRITE_LOCK_ADD($RW_LOCK_BIAS) (%__lock_ptr)
++
++#ifdef CONFIG_PAX_REFCOUNT
++	jno 1234f
++	LOCK_PREFIX
++	WRITE_LOCK_SUB($RW_LOCK_BIAS) (%__lock_ptr)
++	int $4
++1234:
++	_ASM_EXTABLE(1234b, 1234b)
++#endif
++
+ 1:	rep; nop
+ 	cmpl	$WRITE_LOCK_CMP, (%__lock_ptr)
+ 	jne	1b
+ 	LOCK_PREFIX
  	WRITE_LOCK_SUB($RW_LOCK_BIAS) (%__lock_ptr)
++
++#ifdef CONFIG_PAX_REFCOUNT
++	jno 1234f
++	LOCK_PREFIX
++	WRITE_LOCK_ADD($RW_LOCK_BIAS) (%__lock_ptr)
++	int $4
++1234:
++	_ASM_EXTABLE(1234b, 1234b)
++#endif
++
  	jnz	0b
  	ENDFRAME
 +	pax_force_retaddr
  	ret
  	CFI_ENDPROC
  END(__write_lock_failed)
-@@ -39,6 +40,7 @@ ENTRY(__read_lock_failed)
+@@ -32,13 +53,34 @@ ENTRY(__read_lock_failed)
+ 	FRAME
+ 0:	LOCK_PREFIX
+ 	READ_LOCK_SIZE(inc) (%__lock_ptr)
++
++#ifdef CONFIG_PAX_REFCOUNT
++	jno 1234f
++	LOCK_PREFIX
++	READ_LOCK_SIZE(dec) (%__lock_ptr)
++	int $4
++1234:
++	_ASM_EXTABLE(1234b, 1234b)
++#endif
++
+ 1:	rep; nop
+ 	READ_LOCK_SIZE(cmp) $1, (%__lock_ptr)
+ 	js	1b
+ 	LOCK_PREFIX
  	READ_LOCK_SIZE(dec) (%__lock_ptr)
++
++#ifdef CONFIG_PAX_REFCOUNT
++	jno 1234f
++	LOCK_PREFIX
++	READ_LOCK_SIZE(inc) (%__lock_ptr)
++	int $4
++1234:
++	_ASM_EXTABLE(1234b, 1234b)
++#endif
++
  	js	0b
  	ENDFRAME
 +	pax_force_retaddr
@@ -19910,7 +20028,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/lib/user
 +#endif
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/lib/usercopy_64.c linux-3.1.4-pax/arch/x86/lib/usercopy_64.c
 --- linux-3.1.4/arch/x86/lib/usercopy_64.c	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.1.4-pax/arch/x86/lib/usercopy_64.c	2011-10-24 13:07:45.859029858 +0200
++++ linux-3.1.4-pax/arch/x86/lib/usercopy_64.c	2011-12-08 03:09:57.634931107 +0100
 @@ -42,6 +42,12 @@ long
  __strncpy_from_user(char *dst, const char __user *src, long count)
  {
@@ -19937,9 +20055,12 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/lib/user
  	/* no memory constraint because it doesn't change any memory gcc knows
  	   about */
  	asm volatile(
-@@ -151,10 +163,18 @@ EXPORT_SYMBOL(strlen_user);
+@@ -149,12 +161,20 @@ long strlen_user(const char __user *s)
+ }
+ EXPORT_SYMBOL(strlen_user);
  
- unsigned long copy_in_user(void __user *to, const void __user *from, unsigned len)
+-unsigned long copy_in_user(void __user *to, const void __user *from, unsigned len)
++unsigned long copy_in_user(void __user *to, const void __user *from, unsigned long len)
  {
 -	if (access_ok(VERIFY_WRITE, to, len) && access_ok(VERIFY_READ, from, len)) { 
 -		return copy_user_generic((__force void *)to, (__force void *)from, len);
@@ -19965,7 +20086,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/lib/user
   */
  unsigned long
 -copy_user_handle_tail(char *to, char *from, unsigned len, unsigned zerorest)
-+copy_user_handle_tail(char __user *to, char __user *from, unsigned len, unsigned zerorest)
++copy_user_handle_tail(char __user *to, char __user *from, unsigned long len, unsigned zerorest)
  {
  	char c;
  	unsigned zero_len;
@@ -26123,7 +26244,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/drivers/gpio/gpio
  }
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/drivers/gpu/drm/drm_crtc.c linux-3.1.4-pax/drivers/gpu/drm/drm_crtc.c
 --- linux-3.1.4/drivers/gpu/drm/drm_crtc.c	2011-10-24 12:48:28.179091672 +0200
-+++ linux-3.1.4-pax/drivers/gpu/drm/drm_crtc.c	2011-10-24 13:07:45.911029855 +0200
++++ linux-3.1.4-pax/drivers/gpu/drm/drm_crtc.c	2011-12-07 18:58:51.280504521 +0100
 @@ -1374,7 +1374,7 @@ int drm_mode_getconnector(struct drm_dev
  	 */
  	if ((out_resp->count_modes >= mode_count) && mode_count) {
@@ -26559,7 +26680,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/drivers/gpu/drm/i
  }
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/drivers/gpu/drm/i915/i915_gem_execbuffer.c linux-3.1.4-pax/drivers/gpu/drm/i915/i915_gem_execbuffer.c
 --- linux-3.1.4/drivers/gpu/drm/i915/i915_gem_execbuffer.c	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.1.4-pax/drivers/gpu/drm/i915/i915_gem_execbuffer.c	2011-10-24 13:07:45.919029856 +0200
++++ linux-3.1.4-pax/drivers/gpu/drm/i915/i915_gem_execbuffer.c	2011-12-09 01:09:14.431490523 +0100
 @@ -188,7 +188,7 @@ i915_gem_object_set_to_gpu_domain(struct
  		i915_gem_clflush_object(obj);
  
@@ -26569,6 +26690,18 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/drivers/gpu/drm/i
  
  	/* The actual obj->write_domain will be updated with
  	 * pending_write_domain after we emit the accumulated flush for all
+@@ -864,9 +864,9 @@ i915_gem_check_execbuffer(struct drm_i91
+ 
+ static int
+ validate_exec_list(struct drm_i915_gem_exec_object2 *exec,
+-		   int count)
++		   unsigned int count)
+ {
+-	int i;
++	unsigned int i;
+ 
+ 	for (i = 0; i < count; i++) {
+ 		char __user *ptr = (char __user *)(uintptr_t)exec[i].relocs_ptr;
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/drivers/gpu/drm/i915/i915_irq.c linux-3.1.4-pax/drivers/gpu/drm/i915/i915_irq.c
 --- linux-3.1.4/drivers/gpu/drm/i915/i915_irq.c	2011-10-24 12:48:28.199091666 +0200
 +++ linux-3.1.4-pax/drivers/gpu/drm/i915/i915_irq.c	2011-10-24 13:07:45.919029856 +0200
@@ -39362,6 +39495,28 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/fs/ocfs2/symlink.
  	if (!IS_ERR(link))
  		kfree(link);
  }
+diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/fs/partitions/efi.c linux-3.1.4-pax/fs/partitions/efi.c
+--- linux-3.1.4/fs/partitions/efi.c	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.1.4-pax/fs/partitions/efi.c	2011-12-07 16:52:10.892910204 +0100
+@@ -234,14 +234,14 @@ static gpt_entry *alloc_read_gpt_entries
+ 	if (!gpt)
+ 		return NULL;
+ 
+-	count = le32_to_cpu(gpt->num_partition_entries) *
+-                le32_to_cpu(gpt->sizeof_partition_entry);
+-	if (!count)
++	if (!le32_to_cpu(gpt->num_partition_entries))
+ 		return NULL;
+-	pte = kzalloc(count, GFP_KERNEL);
++	pte = kcalloc(le32_to_cpu(gpt->num_partition_entries), le32_to_cpu(gpt->sizeof_partition_entry), GFP_KERNEL);
+ 	if (!pte)
+ 		return NULL;
+ 
++	count = le32_to_cpu(gpt->num_partition_entries) *
++                le32_to_cpu(gpt->sizeof_partition_entry);
+ 	if (read_lba(state, le64_to_cpu(gpt->partition_entry_lba),
+                      (u8 *) pte,
+ 		     count) < count) {
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/fs/pipe.c linux-3.1.4-pax/fs/pipe.c
 --- linux-3.1.4/fs/pipe.c	2011-10-24 12:48:40.187091029 +0200
 +++ linux-3.1.4-pax/fs/pipe.c	2011-10-24 13:07:46.319029842 +0200
@@ -40121,6 +40276,33 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/include/acpi/acpi
  
  #define ACPI_DRIVER_ALL_NOTIFY_EVENTS	0x1	/* system AND device events */
  
+diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/include/asm-generic/atomic64.h linux-3.1.4-pax/include/asm-generic/atomic64.h
+--- linux-3.1.4/include/asm-generic/atomic64.h	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.1.4-pax/include/asm-generic/atomic64.h	2011-12-09 00:03:16.363702063 +0100
+@@ -16,6 +16,8 @@ typedef struct {
+ 	long long counter;
+ } atomic64_t;
+ 
++typedef atomic64_t atomic64_unchecked_t;
++
+ #define ATOMIC64_INIT(i)	{ (i) }
+ 
+ extern long long atomic64_read(const atomic64_t *v);
+@@ -39,4 +41,14 @@ extern int	 atomic64_add_unless(atomic64
+ #define atomic64_dec_and_test(v)	(atomic64_dec_return((v)) == 0)
+ #define atomic64_inc_not_zero(v) 	atomic64_add_unless((v), 1LL, 0LL)
+ 
++#define atomic64_read_unchecked(v) atomic64_read(v)
++#define atomic64_set_unchecked(v, i) atomic64_set((v), (i))
++#define atomic64_add_unchecked(a, v) atomic64_add((a), (v))
++#define atomic64_add_return_unchecked(a, v) atomic64_add_return((a), (v))
++#define atomic64_sub_unchecked(a, v) atomic64_sub((a), (v))
++#define atomic64_inc_unchecked(v) atomic64_inc(v)
++#define atomic64_inc_return_unchecked(v) atomic64_inc_return(v)
++#define atomic64_dec_unchecked(v) atomic64_dec(v)
++#define atomic64_cmpxchg_unchecked(v, o, n) atomic64_cmpxchg((v), (o), (n))
++
+ #endif  /*  _ASM_GENERIC_ATOMIC64_H  */
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/include/asm-generic/atomic-long.h linux-3.1.4-pax/include/asm-generic/atomic-long.h
 --- linux-3.1.4/include/asm-generic/atomic-long.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.1.4-pax/include/asm-generic/atomic-long.h	2011-10-24 13:07:46.327029840 +0200
@@ -55953,7 +56135,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/checker
 +}
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/constify_plugin.c linux-3.1.4-pax/tools/gcc/constify_plugin.c
 --- linux-3.1.4/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.1.4-pax/tools/gcc/constify_plugin.c	2011-11-15 02:51:24.980277948 +0100
++++ linux-3.1.4-pax/tools/gcc/constify_plugin.c	2011-12-08 00:29:46.979446811 +0100
 @@ -0,0 +1,303 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
@@ -56090,7 +56272,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/constif
 +	.type_required		= false,
 +	.function_type_required	= false,
 +	.handler		= handle_no_const_attribute,
-+#if __GNUC__ > 4 || __GNUC_MINOR__ >= 7
++#if BUILDING_GCC_VERSION >= 4007
 +	.affects_type_identity	= true
 +#endif
 +};
@@ -56103,7 +56285,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/constif
 +	.type_required		= false,
 +	.function_type_required	= false,
 +	.handler		= handle_do_const_attribute,
-+#if __GNUC__ > 4 || __GNUC_MINOR__ >= 7
++#if BUILDING_GCC_VERSION >= 4007
 +	.affects_type_identity	= true
 +#endif
 +};
@@ -56191,7 +56373,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/constif
 +	tree var;
 +	referenced_var_iterator rvi;
 +
-+#if __GNUC__ == 4 && __GNUC_MINOR__ == 5
++#if BUILDING_GCC_VERSION == 4005
 +	FOR_EACH_REFERENCED_VAR(var, rvi) {
 +#else
 +	FOR_EACH_REFERENCED_VAR(cfun, var, rvi) {
@@ -56808,7 +56990,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/Makefil
 +checker_plugin-objs := checker_plugin.o
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/stackleak_plugin.c linux-3.1.4-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.1.4/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.1.4-pax/tools/gcc/stackleak_plugin.c	2011-11-15 02:51:17.176278365 +0100
++++ linux-3.1.4-pax/tools/gcc/stackleak_plugin.c	2011-12-08 00:29:49.003445671 +0100
 @@ -0,0 +1,291 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
@@ -56936,7 +57118,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/stackle
 +	gsi_insert_after(&gsi, track_stack, GSI_CONTINUE_LINKING);
 +}
 +
-+#if __GNUC__ == 4 && __GNUC_MINOR__ == 5
++#if BUILDING_GCC_VERSION == 4005
 +static bool gimple_call_builtin_p(gimple stmt, enum built_in_function code)
 +{
 +	tree fndecl;
@@ -56958,7 +57140,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/stackle
 +	if (gimple_call_builtin_p(stmt, BUILT_IN_ALLOCA))
 +		return true;
 +
-+#if __GNUC__ > 4 || __GNUC_MINOR__ >= 7
++#if BUILDING_GCC_VERSION >= 4007
 +	if (gimple_call_builtin_p(stmt, BUILT_IN_ALLOCA_WITH_ALIGN))
 +		return true;
 +#endif
@@ -57034,7 +57216,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/tools/gcc/stackle
 +//		warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
 +		// 2. delete call
 +		insn = delete_insn_and_edges(insn);
-+#if __GNUC__ > 4 || __GNUC_MINOR__ >= 7
++#if BUILDING_GCC_VERSION >= 4007
 +		if (GET_CODE(insn) == NOTE && NOTE_KIND(insn) == NOTE_INSN_CALL_ARG_LOCATION)
 +			insn = delete_insn_and_edges(insn);
 +#endif
