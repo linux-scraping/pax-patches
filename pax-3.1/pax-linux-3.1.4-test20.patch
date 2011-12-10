@@ -8229,12 +8229,13 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  /*
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/asm/pgtable_64.h linux-3.1.4-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-3.1.4/arch/x86/include/asm/pgtable_64.h	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.1.4-pax/arch/x86/include/asm/pgtable_64.h	2011-10-24 13:07:45.803029865 +0200
-@@ -16,10 +16,13 @@
++++ linux-3.1.4-pax/arch/x86/include/asm/pgtable_64.h	2011-12-10 23:21:33.863343262 +0100
+@@ -16,10 +16,14 @@
  
  extern pud_t level3_kernel_pgt[512];
  extern pud_t level3_ident_pgt[512];
-+extern pud_t level3_vmalloc_pgt[512];
++extern pud_t level3_vmalloc_start_pgt[512];
++extern pud_t level3_vmalloc_end_pgt[512];
 +extern pud_t level3_vmemmap_pgt[512];
 +extern pud_t level2_vmemmap_pgt[512];
  extern pmd_t level2_kernel_pgt[512];
@@ -8246,7 +8247,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  
  #define swapper_pg_dir init_level4_pgt
  
-@@ -61,7 +64,9 @@ static inline void native_set_pte_atomic
+@@ -61,7 +65,9 @@ static inline void native_set_pte_atomic
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -8256,7 +8257,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/include/
  }
  
  static inline void native_pmd_clear(pmd_t *pmd)
-@@ -107,6 +112,13 @@ static inline void native_pud_clear(pud_
+@@ -107,6 +113,13 @@ static inline void native_pud_clear(pud_
  
  static inline void native_set_pgd(pgd_t *pgdp, pgd_t pgd)
  {
@@ -20802,8 +20803,17 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/mm/fault
 +}
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/mm/gup.c linux-3.1.4-pax/arch/x86/mm/gup.c
 --- linux-3.1.4/arch/x86/mm/gup.c	2011-11-15 21:25:51.553328678 +0100
-+++ linux-3.1.4-pax/arch/x86/mm/gup.c	2011-11-15 21:26:09.173327730 +0100
-@@ -253,7 +253,7 @@ int __get_user_pages_fast(unsigned long
++++ linux-3.1.4-pax/arch/x86/mm/gup.c	2011-12-11 00:01:26.615215438 +0100
+@@ -201,6 +201,8 @@ static noinline int gup_huge_pud(pud_t p
+ 	do {
+ 		VM_BUG_ON(compound_head(page) != head);
+ 		pages[*nr] = page;
++		if (PageTail(page))
++			get_huge_page_tail(page);
+ 		(*nr)++;
+ 		page++;
+ 		refs++;
+@@ -253,7 +255,7 @@ int __get_user_pages_fast(unsigned long
  	addr = start;
  	len = (unsigned long) nr_pages << PAGE_SHIFT;
  	end = start + len;
@@ -23320,28 +23330,30 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/xen/enli
  #ifdef CONFIG_ACPI_NUMA
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/xen/mmu.c linux-3.1.4-pax/arch/x86/xen/mmu.c
 --- linux-3.1.4/arch/x86/xen/mmu.c	2011-10-24 12:48:26.407091765 +0200
-+++ linux-3.1.4-pax/arch/x86/xen/mmu.c	2011-10-24 13:07:45.871029860 +0200
-@@ -1768,6 +1768,8 @@ pgd_t * __init xen_setup_kernel_pagetabl
++++ linux-3.1.4-pax/arch/x86/xen/mmu.c	2011-12-10 23:21:11.723344220 +0100
+@@ -1768,6 +1768,9 @@ pgd_t * __init xen_setup_kernel_pagetabl
  	convert_pfn_mfn(init_level4_pgt);
  	convert_pfn_mfn(level3_ident_pgt);
  	convert_pfn_mfn(level3_kernel_pgt);
-+	convert_pfn_mfn(level3_vmalloc_pgt);
++	convert_pfn_mfn(level3_vmalloc_start_pgt);
++	convert_pfn_mfn(level3_vmalloc_end_pgt);
 +	convert_pfn_mfn(level3_vmemmap_pgt);
  
  	l3 = m2v(pgd[pgd_index(__START_KERNEL_map)].pgd);
  	l2 = m2v(l3[pud_index(__START_KERNEL_map)].pud);
-@@ -1786,7 +1788,10 @@ pgd_t * __init xen_setup_kernel_pagetabl
+@@ -1786,7 +1789,11 @@ pgd_t * __init xen_setup_kernel_pagetabl
  	set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_ident_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_kernel_pgt, PAGE_KERNEL_RO);
-+	set_page_prot(level3_vmalloc_pgt, PAGE_KERNEL_RO);
++	set_page_prot(level3_vmalloc_start_pgt, PAGE_KERNEL_RO);
++	set_page_prot(level3_vmalloc_end_pgt, PAGE_KERNEL_RO);
 +	set_page_prot(level3_vmemmap_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level3_user_vsyscall, PAGE_KERNEL_RO);
 +	set_page_prot(level2_vmemmap_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
  	set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
  
-@@ -2000,6 +2005,7 @@ static void __init xen_post_allocator_in
+@@ -2000,6 +2007,7 @@ static void __init xen_post_allocator_in
  	pv_mmu_ops.set_pud = xen_set_pud;
  #if PAGETABLE_LEVELS == 4
  	pv_mmu_ops.set_pgd = xen_set_pgd;
@@ -23349,7 +23361,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/arch/x86/xen/mmu.
  #endif
  
  	/* This will work as long as patching hasn't happened yet
-@@ -2081,6 +2087,7 @@ static const struct pv_mmu_ops xen_mmu_o
+@@ -2081,6 +2089,7 @@ static const struct pv_mmu_ops xen_mmu_o
  	.pud_val = PV_CALLEE_SAVE(xen_pud_val),
  	.make_pud = PV_CALLEE_SAVE(xen_make_pud),
  	.set_pgd = xen_set_pgd_hyper,
@@ -47654,8 +47666,16 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/huge_memory.c 
  	}
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/hugetlb.c linux-3.1.4-pax/mm/hugetlb.c
 --- linux-3.1.4/mm/hugetlb.c	2011-10-24 12:48:42.183090923 +0200
-+++ linux-3.1.4-pax/mm/hugetlb.c	2011-10-24 13:07:46.423029829 +0200
-@@ -2346,6 +2346,27 @@ static int unmap_ref_private(struct mm_s
++++ linux-3.1.4-pax/mm/hugetlb.c	2011-12-11 00:00:04.099219744 +0100
+@@ -576,6 +576,7 @@ static void prep_compound_gigantic_page(
+ 	__SetPageHead(page);
+ 	for (i = 1; i < nr_pages; i++, p = mem_map_next(p, page, i)) {
+ 		__SetPageTail(p);
++		set_page_count(p, 0);
+ 		p->first_page = page;
+ 	}
+ }
+@@ -2346,6 +2347,27 @@ static int unmap_ref_private(struct mm_s
  	return 1;
  }
  
@@ -47683,7 +47703,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/hugetlb.c linu
  /*
   * Hugetlb_cow() should be called with page lock of the original hugepage held.
   */
-@@ -2447,6 +2468,11 @@ retry_avoidcopy:
+@@ -2447,6 +2469,11 @@ retry_avoidcopy:
  				make_huge_pte(vma, new_page, 1));
  		page_remove_rmap(old_page);
  		hugepage_add_new_anon_rmap(new_page, vma, address);
@@ -47695,7 +47715,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/hugetlb.c linu
  		/* Make the old page be freed below */
  		new_page = old_page;
  		mmu_notifier_invalidate_range_end(mm,
-@@ -2598,6 +2624,10 @@ retry:
+@@ -2598,6 +2625,10 @@ retry:
  				&& (vma->vm_flags & VM_SHARED)));
  	set_huge_pte_at(mm, address, ptep, new_pte);
  
@@ -47706,7 +47726,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/hugetlb.c linu
  	if ((flags & FAULT_FLAG_WRITE) && !(vma->vm_flags & VM_SHARED)) {
  		/* Optimization, do the COW without a second fault */
  		ret = hugetlb_cow(mm, vma, address, ptep, new_pte, page);
-@@ -2627,6 +2657,10 @@ int hugetlb_fault(struct mm_struct *mm,
+@@ -2627,6 +2658,10 @@ int hugetlb_fault(struct mm_struct *mm,
  	static DEFINE_MUTEX(hugetlb_instantiation_mutex);
  	struct hstate *h = hstate_vma(vma);
  
@@ -47717,7 +47737,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/hugetlb.c linu
  	ptep = huge_pte_offset(mm, address);
  	if (ptep) {
  		entry = huge_ptep_get(ptep);
-@@ -2638,6 +2672,26 @@ int hugetlb_fault(struct mm_struct *mm,
+@@ -2638,6 +2673,26 @@ int hugetlb_fault(struct mm_struct *mm,
  			       VM_FAULT_SET_HINDEX(h - hstates);
  	}
  
@@ -48571,6 +48591,20 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/mempolicy.c li
  	if (end == start)
  		return 0;
  
+diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/migrate.c linux-3.1.4-pax/mm/migrate.c
+--- linux-3.1.4/mm/migrate.c	2011-10-24 12:48:42.199090922 +0200
++++ linux-3.1.4-pax/mm/migrate.c	2011-12-10 23:59:08.835222644 +0100
+@@ -866,9 +866,9 @@ static int unmap_and_move_huge_page(new_
+ 
+ 	if (anon_vma)
+ 		put_anon_vma(anon_vma);
+-out:
+ 	unlock_page(hpage);
+ 
++out:
+ 	if (rc != -EAGAIN) {
+ 		list_del(&hpage->lru);
+ 		put_page(hpage);
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/mlock.c linux-3.1.4-pax/mm/mlock.c
 --- linux-3.1.4/mm/mlock.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.1.4-pax/mm/mlock.c	2011-10-24 13:07:46.427029831 +0200
@@ -50205,7 +50239,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/nommu.c linux-
  
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/page_alloc.c linux-3.1.4-pax/mm/page_alloc.c
 --- linux-3.1.4/mm/page_alloc.c	2011-10-24 12:48:42.207090922 +0200
-+++ linux-3.1.4-pax/mm/page_alloc.c	2011-10-24 13:07:46.431029831 +0200
++++ linux-3.1.4-pax/mm/page_alloc.c	2011-12-11 00:00:28.651218416 +0100
 @@ -340,7 +340,7 @@ out:
   * This usage means that zero-order pages may not be compound.
   */
@@ -50214,6 +50248,16 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/page_alloc.c l
 +void free_compound_page(struct page *page)
  {
  	__free_pages_ok(page, compound_order(page));
+ }
+@@ -355,8 +355,8 @@ void prep_compound_page(struct page *pag
+ 	__SetPageHead(page);
+ 	for (i = 1; i < nr_pages; i++) {
+ 		struct page *p = page + i;
+-
+ 		__SetPageTail(p);
++		set_page_count(p, 0);
+ 		p->first_page = page;
+ 	}
  }
 @@ -653,6 +653,10 @@ static bool free_pages_prepare(struct pa
  	int i;
@@ -50250,6 +50294,14 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/page_alloc.c l
  
  	if (order && (gfp_flags & __GFP_COMP))
  		prep_compound_page(page, order);
+@@ -3373,6 +3385,7 @@ static void setup_zone_migrate_reserve(s
+ 	/* Get the start pfn, end pfn and the number of blocks to reserve */
+ 	start_pfn = zone->zone_start_pfn;
+ 	end_pfn = start_pfn + zone->spanned_pages;
++	start_pfn = roundup(start_pfn, pageblock_nr_pages);
+ 	reserve = roundup(min_wmark_pages(zone), pageblock_nr_pages) >>
+ 							pageblock_order;
+ 
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/percpu.c linux-3.1.4-pax/mm/percpu.c
 --- linux-3.1.4/mm/percpu.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.1.4-pax/mm/percpu.c	2011-10-24 13:07:46.435029830 +0200
@@ -51153,7 +51205,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/util.c linux-3
  }
 diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linux-3.1.4-pax/mm/vmalloc.c
 --- linux-3.1.4/mm/vmalloc.c	2011-11-15 21:25:52.049328651 +0100
-+++ linux-3.1.4-pax/mm/vmalloc.c	2011-11-15 21:33:46.001303345 +0100
++++ linux-3.1.4-pax/mm/vmalloc.c	2011-12-10 23:56:53.651229868 +0100
 @@ -39,8 +39,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -51300,7 +51352,16 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  	area = __get_vm_area_node(size, align, VM_ALLOC | VM_UNLIST,
  				  start, end, node, gfp_mask, caller);
  
-@@ -1672,6 +1734,7 @@ static void *__vmalloc_node(unsigned lon
+@@ -1634,6 +1696,8 @@ void *__vmalloc_node_range(unsigned long
+ 		return NULL;
+ 
+ 	addr = __vmalloc_area_node(area, gfp_mask, prot, node, caller);
++	if (!addr)
++		return NULL;
+ 
+ 	/*
+ 	 * In this function, newly allocated vm_struct is not added
+@@ -1672,6 +1736,7 @@ static void *__vmalloc_node(unsigned lon
  				gfp_mask, prot, node, caller);
  }
  
@@ -51308,7 +51369,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot)
  {
  	return __vmalloc_node(size, 1, gfp_mask, prot, -1,
-@@ -1695,6 +1758,7 @@ static inline void *__vmalloc_node_flags
+@@ -1695,6 +1760,7 @@ static inline void *__vmalloc_node_flags
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -51316,7 +51377,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *vmalloc(unsigned long size)
  {
  	return __vmalloc_node_flags(size, -1, GFP_KERNEL | __GFP_HIGHMEM);
-@@ -1711,6 +1775,7 @@ EXPORT_SYMBOL(vmalloc);
+@@ -1711,6 +1777,7 @@ EXPORT_SYMBOL(vmalloc);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -51324,7 +51385,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *vzalloc(unsigned long size)
  {
  	return __vmalloc_node_flags(size, -1,
-@@ -1725,6 +1790,7 @@ EXPORT_SYMBOL(vzalloc);
+@@ -1725,6 +1792,7 @@ EXPORT_SYMBOL(vzalloc);
   * The resulting memory area is zeroed so it can be mapped to userspace
   * without leaking data.
   */
@@ -51332,7 +51393,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *vmalloc_user(unsigned long size)
  {
  	struct vm_struct *area;
-@@ -1752,6 +1818,7 @@ EXPORT_SYMBOL(vmalloc_user);
+@@ -1752,6 +1820,7 @@ EXPORT_SYMBOL(vmalloc_user);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -51340,7 +51401,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *vmalloc_node(unsigned long size, int node)
  {
  	return __vmalloc_node(size, 1, GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL,
-@@ -1771,6 +1838,7 @@ EXPORT_SYMBOL(vmalloc_node);
+@@ -1771,6 +1840,7 @@ EXPORT_SYMBOL(vmalloc_node);
   * For tight control over page level allocator and protection flags
   * use __vmalloc_node() instead.
   */
@@ -51348,7 +51409,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *vzalloc_node(unsigned long size, int node)
  {
  	return __vmalloc_node_flags(size, node,
-@@ -1793,10 +1861,10 @@ EXPORT_SYMBOL(vzalloc_node);
+@@ -1793,10 +1863,10 @@ EXPORT_SYMBOL(vzalloc_node);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -51361,7 +51422,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  			      -1, __builtin_return_address(0));
  }
  
-@@ -1815,6 +1883,7 @@ void *vmalloc_exec(unsigned long size)
+@@ -1815,6 +1885,7 @@ void *vmalloc_exec(unsigned long size)
   *	Allocate enough 32bit PA addressable pages to cover @size from the
   *	page level allocator and map them into contiguous kernel virtual space.
   */
@@ -51369,7 +51430,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *vmalloc_32(unsigned long size)
  {
  	return __vmalloc_node(size, 1, GFP_VMALLOC32, PAGE_KERNEL,
-@@ -1829,6 +1898,7 @@ EXPORT_SYMBOL(vmalloc_32);
+@@ -1829,6 +1900,7 @@ EXPORT_SYMBOL(vmalloc_32);
   * The resulting memory area is 32bit addressable and zeroed so it can be
   * mapped to userspace without leaking data.
   */
@@ -51377,7 +51438,7 @@ diff -NurpX linux-3.1.4-pax/Documentation/dontdiff linux-3.1.4/mm/vmalloc.c linu
  void *vmalloc_32_user(unsigned long size)
  {
  	struct vm_struct *area;
-@@ -2091,6 +2161,8 @@ int remap_vmalloc_range(struct vm_area_s
+@@ -2091,6 +2163,8 @@ int remap_vmalloc_range(struct vm_area_s
  	unsigned long uaddr = vma->vm_start;
  	unsigned long usize = vma->vm_end - vma->vm_start;
  
