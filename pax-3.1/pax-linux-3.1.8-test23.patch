@@ -2575,18 +2575,6 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/s390/kernel/
 -		return base;
 -	return ret;
 -}
-diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/s390/kernel/setup.c linux-3.1.8-pax/arch/s390/kernel/setup.c
---- linux-3.1.8/arch/s390/kernel/setup.c	2011-10-24 12:48:25.395091819 +0200
-+++ linux-3.1.8-pax/arch/s390/kernel/setup.c	2011-10-24 13:07:45.779029872 +0200
-@@ -271,7 +271,7 @@ static int __init early_parse_mem(char *
- }
- early_param("mem", early_parse_mem);
- 
--unsigned int user_mode = HOME_SPACE_MODE;
-+unsigned int user_mode = SECONDARY_SPACE_MODE;
- EXPORT_SYMBOL_GPL(user_mode);
- 
- static int set_amode_and_uaccess(unsigned long user_amode,
 diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/s390/mm/mmap.c linux-3.1.8-pax/arch/s390/mm/mmap.c
 --- linux-3.1.8/arch/s390/mm/mmap.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.1.8-pax/arch/s390/mm/mmap.c	2011-10-24 13:07:45.779029872 +0200
@@ -6006,7 +5994,20 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/ia32/sys
  
 diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/include/asm/alternative-asm.h linux-3.1.8-pax/arch/x86/include/asm/alternative-asm.h
 --- linux-3.1.8/arch/x86/include/asm/alternative-asm.h	2011-10-24 12:48:26.059091782 +0200
-+++ linux-3.1.8-pax/arch/x86/include/asm/alternative-asm.h	2011-12-02 19:06:05.331851615 +0100
++++ linux-3.1.8-pax/arch/x86/include/asm/alternative-asm.h	2012-01-08 19:22:10.467555159 +0100
+@@ -4,10 +4,10 @@
+ 
+ #ifdef CONFIG_SMP
+ 	.macro LOCK_PREFIX
+-1:	lock
++672:	lock
+ 	.section .smp_locks,"a"
+ 	.balign 4
+-	.long 1b - .
++	.long 672b - .
+ 	.previous
+ 	.endm
+ #else
 @@ -15,6 +15,45 @@
  	.endm
  #endif
@@ -6576,7 +6577,7 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/include/
  #define atomic64_inc_not_zero(v) atomic64_add_unless((v), 1, 0)
 diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/include/asm/atomic.h linux-3.1.8-pax/arch/x86/include/asm/atomic.h
 --- linux-3.1.8/arch/x86/include/asm/atomic.h	2011-10-24 12:48:26.071091784 +0200
-+++ linux-3.1.8-pax/arch/x86/include/asm/atomic.h	2011-10-24 13:07:45.795029858 +0200
++++ linux-3.1.8-pax/arch/x86/include/asm/atomic.h	2012-01-08 03:46:50.937673168 +0100
 @@ -22,7 +22,18 @@
   */
  static inline int atomic_read(const atomic_t *v)
@@ -6827,10 +6828,11 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/include/
  		     : "+m" (v->counter), "=qm" (c)
  		     : "ir" (i) : "memory");
  	return c;
-@@ -180,6 +342,46 @@ static inline int atomic_add_return(int
+@@ -180,16 +342,56 @@ static inline int atomic_add_return(int
  #endif
  	/* Modern 486+ processor */
  	__i = i;
+-	asm volatile(LOCK_PREFIX "xaddl %0, %1"
 +	asm volatile(LOCK_PREFIX "xaddl %0, %1\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
@@ -6840,15 +6842,16 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/include/
 +		     _ASM_EXTABLE(0b, 0b)
 +#endif
 +
-+		     : "+r" (i), "+m" (v->counter)
-+		     : : "memory");
-+	return i + __i;
-+
-+#ifdef CONFIG_M386
-+no_xadd: /* Legacy 386 processor */
+ 		     : "+r" (i), "+m" (v->counter)
+ 		     : : "memory");
+ 	return i + __i;
+ 
+ #ifdef CONFIG_M386
+ no_xadd: /* Legacy 386 processor */
+-	raw_local_irq_save(flags);
 +	local_irq_save(flags);
-+	__i = atomic_read(v);
-+	atomic_set(v, i + __i);
+ 	__i = atomic_read(v);
+ 	atomic_set(v, i + __i);
 +	local_irq_restore(flags);
 +	return i + __i;
 +#endif
@@ -6871,9 +6874,19 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/include/
 +#endif
 +	/* Modern 486+ processor */
 +	__i = i;
- 	asm volatile(LOCK_PREFIX "xaddl %0, %1"
- 		     : "+r" (i), "+m" (v->counter)
- 		     : : "memory");
++	asm volatile(LOCK_PREFIX "xaddl %0, %1"
++		     : "+r" (i), "+m" (v->counter)
++		     : : "memory");
++	return i + __i;
++
++#ifdef CONFIG_M386
++no_xadd: /* Legacy 386 processor */
++	raw_local_irq_save(flags);
++	__i = atomic_read_unchecked(v);
++	atomic_set_unchecked(v, i + __i);
+ 	raw_local_irq_restore(flags);
+ 	return i + __i;
+ #endif
 @@ -208,6 +410,10 @@ static inline int atomic_sub_return(int
  }
  
@@ -20132,7 +20145,7 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/mm/extab
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/mm/fault.c linux-3.1.8-pax/arch/x86/mm/fault.c
 --- linux-3.1.8/arch/x86/mm/fault.c	2011-10-24 12:48:26.363091767 +0200
-+++ linux-3.1.8-pax/arch/x86/mm/fault.c	2011-11-15 18:04:32.837973586 +0100
++++ linux-3.1.8-pax/arch/x86/mm/fault.c	2012-01-09 21:49:13.922572670 +0100
 @@ -13,11 +13,18 @@
  #include <linux/perf_event.h>		/* perf_sw_event		*/
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
@@ -20563,7 +20576,7 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/mm/fault
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1193,3 +1405,240 @@ good_area:
+@@ -1193,3 +1405,292 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -20603,6 +20616,30 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/mm/fault
 +static int pax_handle_fetch_fault_32(struct pt_regs *regs)
 +{
 +	int err;
++
++	do { /* PaX: libffi trampoline emulation */
++		unsigned char mov, jmp;
++		unsigned int addr1, addr2;
++
++#ifdef CONFIG_X86_64
++		if ((regs->ip + 9) >> 32)
++			break;
++#endif
++
++		err = get_user(mov, (unsigned char __user *)regs->ip);
++		err |= get_user(addr1, (unsigned int __user *)(regs->ip + 1));
++		err |= get_user(jmp, (unsigned char __user *)(regs->ip + 5));
++		err |= get_user(addr2, (unsigned int __user *)(regs->ip + 6));
++
++		if (err)
++			break;
++
++		if (mov == 0xB8 && jmp == 0xE9) {
++			regs->ax = addr1;
++			regs->ip = (unsigned int)(regs->ip + addr2 + 10);
++			return 2;
++		}
++	} while (0);
 +
 +	do { /* PaX: gcc trampoline emulation #1 */
 +		unsigned char mov1, mov2;
@@ -20662,6 +20699,34 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/arch/x86/mm/fault
 +static int pax_handle_fetch_fault_64(struct pt_regs *regs)
 +{
 +	int err;
++
++	do { /* PaX: libffi trampoline emulation */
++		unsigned short mov1, mov2, jmp1;
++		unsigned char stcclc, jmp2;
++		unsigned long addr1, addr2;
++
++		err = get_user(mov1, (unsigned short __user *)regs->ip);
++		err |= get_user(addr1, (unsigned long __user *)(regs->ip + 2));
++		err |= get_user(mov2, (unsigned short __user *)(regs->ip + 10));
++		err |= get_user(addr2, (unsigned long __user *)(regs->ip + 12));
++		err |= get_user(stcclc, (unsigned char __user *)(regs->ip + 20));
++		err |= get_user(jmp1, (unsigned short __user *)(regs->ip + 21));
++		err |= get_user(jmp2, (unsigned char __user *)(regs->ip + 23));
++
++		if (err)
++			break;
++
++		if (mov1 == 0xBB49 && mov2 == 0xBA49 && (stcclc == 0xF8 || stcclc == 0xF9) && jmp1 == 0xFF49 && jmp2 == 0xE3) {
++			regs->r11 = addr1;
++			regs->r10 = addr2;
++			if (stcclc == 0xF8)
++				regs->flags &= ~X86_EFLAGS_CF;
++			else
++				regs->flags |= X86_EFLAGS_CF;
++			regs->ip = addr1;
++			return 2;
++		}
++	} while (0);
 +
 +	do { /* PaX: gcc trampoline emulation #1 */
 +		unsigned short mov1, mov2, jmp1;
@@ -52670,7 +52735,7 @@ diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/net/ipv4/ip_sockg
  
 diff -NurpX linux-3.1.8-pax/Documentation/dontdiff linux-3.1.8/net/ipv4/netfilter/nf_nat_snmp_basic.c linux-3.1.8-pax/net/ipv4/netfilter/nf_nat_snmp_basic.c
 --- linux-3.1.8/net/ipv4/netfilter/nf_nat_snmp_basic.c	2011-10-24 12:48:42.595090901 +0200
-+++ linux-3.1.8-pax/net/ipv4/netfilter/nf_nat_snmp_basic.c	2011-10-24 13:07:46.455029825 +0200
++++ linux-3.1.8-pax/net/ipv4/netfilter/nf_nat_snmp_basic.c	2012-01-07 13:10:33.904480384 +0100
 @@ -399,7 +399,7 @@ static unsigned char asn1_octets_decode(
  
  	*len = 0;
