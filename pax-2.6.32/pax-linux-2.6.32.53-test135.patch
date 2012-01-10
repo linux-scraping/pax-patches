@@ -6152,7 +6152,20 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
  
 diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/include/asm/alternative-asm.h linux-2.6.32.53-pax/arch/x86/include/asm/alternative-asm.h
 --- linux-2.6.32.53/arch/x86/include/asm/alternative-asm.h	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.53-pax/arch/x86/include/asm/alternative-asm.h	2011-12-04 14:32:38.469592651 +0100
++++ linux-2.6.32.53-pax/arch/x86/include/asm/alternative-asm.h	2012-01-10 13:36:52.035536889 +0100
+@@ -8,10 +8,10 @@
+ 
+ #ifdef CONFIG_SMP
+ 	.macro LOCK_PREFIX
+-1:	lock
++672:	lock
+ 	.section .smp_locks,"a"
+ 	.align 4
+-	X86_ALIGN 1b
++	X86_ALIGN 672b
+ 	.previous
+ 	.endm
+ #else
 @@ -19,4 +19,43 @@
  	.endm
  #endif
@@ -6244,7 +6257,7 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
  		"popl %%edi\n\t"
 diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/include/asm/atomic_32.h linux-2.6.32.53-pax/arch/x86/include/asm/atomic_32.h
 --- linux-2.6.32.53/arch/x86/include/asm/atomic_32.h	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.53-pax/arch/x86/include/asm/atomic_32.h	2011-06-25 10:34:08.588000354 +0200
++++ linux-2.6.32.53-pax/arch/x86/include/asm/atomic_32.h	2012-01-10 13:37:41.919534218 +0100
 @@ -25,6 +25,17 @@ static inline int atomic_read(const atom
  }
  
@@ -6493,10 +6506,11 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
  		     : "+m" (v->counter), "=qm" (c)
  		     : "ir" (i) : "memory");
  	return c;
-@@ -179,6 +341,46 @@ static inline int atomic_add_return(int
+@@ -179,7 +341,15 @@ static inline int atomic_add_return(int
  #endif
  	/* Modern 486+ processor */
  	__i = i;
+-	asm volatile(LOCK_PREFIX "xaddl %0, %1"
 +	asm volatile(LOCK_PREFIX "xaddl %0, %1\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
@@ -6506,21 +6520,13 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
 +		     _ASM_EXTABLE(0b, 0b)
 +#endif
 +
-+		     : "+r" (i), "+m" (v->counter)
-+		     : : "memory");
-+	return i + __i;
-+
-+#ifdef CONFIG_M386
-+no_xadd: /* Legacy 386 processor */
-+	local_irq_save(flags);
-+	__i = atomic_read(v);
-+	atomic_set(v, i + __i);
-+	local_irq_restore(flags);
-+	return i + __i;
-+#endif
-+}
-+
-+/**
+ 		     : "+r" (i), "+m" (v->counter)
+ 		     : : "memory");
+ 	return i + __i;
+@@ -195,6 +365,38 @@ no_xadd: /* Legacy 386 processor */
+ }
+ 
+ /**
 + * atomic_add_return_unchecked - add integer and return
 + * @v: pointer of type atomic_unchecked_t
 + * @i: integer value to add
@@ -6537,9 +6543,25 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
 +#endif
 +	/* Modern 486+ processor */
 +	__i = i;
- 	asm volatile(LOCK_PREFIX "xaddl %0, %1"
- 		     : "+r" (i), "+m" (v->counter)
- 		     : : "memory");
++	asm volatile(LOCK_PREFIX "xaddl %0, %1"
++		     : "+r" (i), "+m" (v->counter)
++		     : : "memory");
++	return i + __i;
++
++#ifdef CONFIG_M386
++no_xadd: /* Legacy 386 processor */
++	local_irq_save(flags);
++	__i = atomic_read_unchecked(v);
++	atomic_set_unchecked(v, i + __i);
++	local_irq_restore(flags);
++	return i + __i;
++#endif
++}
++
++/**
+  * atomic_sub_return - subtract integer and return
+  * @v: pointer of type atomic_t
+  * @i: integer value to subtract
 @@ -211,11 +413,21 @@ static inline int atomic_cmpxchg(atomic_
  	return cmpxchg(&v->counter, old, new);
  }
@@ -20662,7 +20684,7 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/mm/fault.c linux-2.6.32.53-pax/arch/x86/mm/fault.c
 --- linux-2.6.32.53/arch/x86/mm/fault.c	2011-06-25 10:30:34.408000322 +0200
-+++ linux-2.6.32.53-pax/arch/x86/mm/fault.c	2011-11-18 16:00:59.400066123 +0100
++++ linux-2.6.32.53-pax/arch/x86/mm/fault.c	2012-01-10 13:39:03.955529844 +0100
 @@ -11,10 +11,19 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
@@ -21120,19 +21142,19 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
 +	if (unlikely(address + 65536 + 32 * sizeof(unsigned long) < task_pt_regs(tsk)->sp)) {
 +		bad_area(regs, error_code, address);
 +		return;
- 	}
++	}
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (unlikely((mm->pax_flags & MF_PAX_SEGMEXEC) && vma->vm_end - SEGMEXEC_TASK_SIZE - 1 < address - SEGMEXEC_TASK_SIZE - 1)) {
 +		bad_area(regs, error_code, address);
 +		return;
-+	}
+ 	}
 +#endif
 +
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1146,3 +1385,240 @@ good_area:
+@@ -1146,3 +1385,292 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -21172,6 +21194,30 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
 +static int pax_handle_fetch_fault_32(struct pt_regs *regs)
 +{
 +	int err;
++
++	do { /* PaX: libffi trampoline emulation */
++		unsigned char mov, jmp;
++		unsigned int addr1, addr2;
++
++#ifdef CONFIG_X86_64
++		if ((regs->ip + 9) >> 32)
++			break;
++#endif
++
++		err = get_user(mov, (unsigned char __user *)regs->ip);
++		err |= get_user(addr1, (unsigned int __user *)(regs->ip + 1));
++		err |= get_user(jmp, (unsigned char __user *)(regs->ip + 5));
++		err |= get_user(addr2, (unsigned int __user *)(regs->ip + 6));
++
++		if (err)
++			break;
++
++		if (mov == 0xB8 && jmp == 0xE9) {
++			regs->ax = addr1;
++			regs->ip = (unsigned int)(regs->ip + addr2 + 10);
++			return 2;
++		}
++	} while (0);
 +
 +	do { /* PaX: gcc trampoline emulation #1 */
 +		unsigned char mov1, mov2;
@@ -21231,6 +21277,34 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/arch/x86/
 +static int pax_handle_fetch_fault_64(struct pt_regs *regs)
 +{
 +	int err;
++
++	do { /* PaX: libffi trampoline emulation */
++		unsigned short mov1, mov2, jmp1;
++		unsigned char stcclc, jmp2;
++		unsigned long addr1, addr2;
++
++		err = get_user(mov1, (unsigned short __user *)regs->ip);
++		err |= get_user(addr1, (unsigned long __user *)(regs->ip + 2));
++		err |= get_user(mov2, (unsigned short __user *)(regs->ip + 10));
++		err |= get_user(addr2, (unsigned long __user *)(regs->ip + 12));
++		err |= get_user(stcclc, (unsigned char __user *)(regs->ip + 20));
++		err |= get_user(jmp1, (unsigned short __user *)(regs->ip + 21));
++		err |= get_user(jmp2, (unsigned char __user *)(regs->ip + 23));
++
++		if (err)
++			break;
++
++		if (mov1 == 0xBB49 && mov2 == 0xBA49 && (stcclc == 0xF8 || stcclc == 0xF9) && jmp1 == 0xFF49 && jmp2 == 0xE3) {
++			regs->r11 = addr1;
++			regs->r10 = addr2;
++			if (stcclc == 0xF8)
++				regs->flags &= ~X86_EFLAGS_CF;
++			else
++				regs->flags |= X86_EFLAGS_CF;
++			regs->ip = addr1;
++			return 2;
++		}
++	} while (0);
 +
 +	do { /* PaX: gcc trampoline emulation #1 */
 +		unsigned short mov1, mov2, jmp1;
@@ -52379,8 +52453,8 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/security/
  	return 0;
 diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/security/Kconfig linux-2.6.32.53-pax/security/Kconfig
 --- linux-2.6.32.53/security/Kconfig	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.53-pax/security/Kconfig	2012-01-07 03:19:51.307832107 +0100
-@@ -4,6 +4,621 @@
++++ linux-2.6.32.53-pax/security/Kconfig	2012-01-07 11:51:20.068734189 +0100
+@@ -4,6 +4,619 @@
  
  menu "Security options"
  
@@ -52473,8 +52547,6 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/security/
 +	select EXT4_FS_XATTR if EXT4_FS
 +	select JFFS2_FS_XATTR if JFFS2_FS
 +	select REISERFS_FS_XATTR if REISERFS_FS
-+	select SQUASHFS_XATTR if SQUASHFS
-+	select TMPFS_XATTR if TMPFS
 +	select UBIFS_FS_XATTR if UBIFS_FS
 +	help
 +	  Enabling this option will allow you to control PaX features on
@@ -52484,8 +52556,8 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/security/
 +	  applications that self-check themselves (e.g., skype) and would
 +	  not tolerate chpax/paxctl changes.  The main drawback is that
 +	  extended attributes are not supported by some filesystems (e.g.,
-+	  isofs, udf, vfat) so copying files through such filesystems will
-+	  lose the extended attributes and these PaX markings.
++	  isofs, squashfs, tmpfs, udf, vfat) so copying files through such
++	  filesystems will lose the extended attributes and these PaX markings.
 +
 +	  If you have applications not marked by the PT_PAX_FLAGS ELF program
 +	  header then you MUST enable either XATTR_PAX_FLAGS or EI_PAX marking
@@ -53002,7 +53074,7 @@ diff -NurpX linux-2.6.32.53-pax/Documentation/dontdiff linux-2.6.32.53/security/
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +761,7 @@ config INTEL_TXT
+@@ -146,7 +759,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
