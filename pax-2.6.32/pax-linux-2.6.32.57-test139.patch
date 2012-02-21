@@ -44435,8 +44435,21 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/kernel/mu
  static inline void mutex_clear_owner(struct mutex *lock)
 diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/kernel/panic.c linux-2.6.32.57-pax/kernel/panic.c
 --- linux-2.6.32.57/kernel/panic.c	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.57-pax/kernel/panic.c	2011-06-25 10:34:09.692000354 +0200
-@@ -392,7 +392,8 @@ EXPORT_SYMBOL(warn_slowpath_null);
++++ linux-2.6.32.57-pax/kernel/panic.c	2012-02-21 21:56:28.284792021 +0100
+@@ -71,7 +71,11 @@ NORET_TYPE void panic(const char * fmt,
+ 	va_end(args);
+ 	printk(KERN_EMERG "Kernel panic - not syncing: %s\n",buf);
+ #ifdef CONFIG_DEBUG_BUGVERBOSE
+-	dump_stack();
++	/*
++	 * Avoid nested stack-dumping if a panic occurs during oops processing
++	 */
++	if (!oops_in_progress)
++		dump_stack();
+ #endif
+ 
+ 	/*
+@@ -392,7 +396,8 @@ EXPORT_SYMBOL(warn_slowpath_null);
   */
  void __stack_chk_fail(void)
  {
@@ -47293,7 +47306,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mlock.
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c linux-2.6.32.57-pax/mm/mmap.c
 --- linux-2.6.32.57/mm/mmap.c	2011-11-18 16:06:30.092084080 +0100
-+++ linux-2.6.32.57-pax/mm/mmap.c	2011-11-18 16:18:32.860123270 +0100
++++ linux-2.6.32.57-pax/mm/mmap.c	2012-02-21 21:58:21.680784834 +0100
 @@ -45,6 +45,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -47884,20 +47897,60 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  }
  
  unsigned long
-@@ -1545,6 +1758,27 @@ out:
- 	return prev ? prev->vm_next : vma;
- }
+@@ -1510,40 +1723,41 @@ struct vm_area_struct *find_vma(struct m
  
+ EXPORT_SYMBOL(find_vma);
+ 
+-/* Same as find_vma, but also return a pointer to the previous VMA in *pprev. */
++/*
++ * Same as find_vma, but also return a pointer to the previous VMA in *pprev.
++ * Note: pprev is set to NULL when return value is NULL.
++ */
+ struct vm_area_struct *
+ find_vma_prev(struct mm_struct *mm, unsigned long addr,
+ 			struct vm_area_struct **pprev)
+ {
+-	struct vm_area_struct *vma = NULL, *prev = NULL;
+-	struct rb_node *rb_node;
+-	if (!mm)
+-		goto out;
+-
+-	/* Guard against addr being lower than the first VMA */
+-	vma = mm->mmap;
++	struct vm_area_struct *vma;
+ 
+-	/* Go through the RB tree quickly. */
+-	rb_node = mm->mm_rb.rb_node;
++	vma = find_vma(mm, addr);
++	*pprev = vma ? vma->vm_prev : NULL;
++	return vma;
++}
+ 
+-	while (rb_node) {
+-		struct vm_area_struct *vma_tmp;
+-		vma_tmp = rb_entry(rb_node, struct vm_area_struct, vm_rb);
 +#ifdef CONFIG_PAX_SEGMEXEC
 +struct vm_area_struct *pax_find_mirror_vma(struct vm_area_struct *vma)
 +{
 +	struct vm_area_struct *vma_m;
-+
+ 
+-		if (addr < vma_tmp->vm_end) {
+-			rb_node = rb_node->rb_left;
+-		} else {
+-			prev = vma_tmp;
+-			if (!prev->vm_next || (addr < prev->vm_next->vm_end))
+-				break;
+-			rb_node = rb_node->rb_right;
+-		}
 +	BUG_ON(!vma || vma->vm_start >= vma->vm_end);
 +	if (!(vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC) || !(vma->vm_flags & VM_EXEC)) {
 +		BUG_ON(vma->vm_mirror);
 +		return NULL;
-+	}
+ 	}
+-
+-out:
+-	*pprev = prev;
+-	return prev ? prev->vm_next : vma;
 +	BUG_ON(vma->vm_start < SEGMEXEC_TASK_SIZE && SEGMEXEC_TASK_SIZE < vma->vm_end);
 +	vma_m = vma->vm_mirror;
 +	BUG_ON(!vma_m || vma_m->vm_mirror != vma);
@@ -47906,13 +47959,12 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
 +	BUG_ON(vma->vm_pgoff != vma_m->vm_pgoff || vma->anon_vma != vma_m->anon_vma);
 +	BUG_ON((vma->vm_flags ^ vma_m->vm_flags) & ~(VM_WRITE | VM_MAYWRITE | VM_ACCOUNT | VM_LOCKED | VM_RESERVED));
 +	return vma_m;
-+}
+ }
 +#endif
-+
+ 
  /*
   * Verify that the stack growth is acceptable and
-  * update accounting. This is shared with both the
-@@ -1603,34 +1837,42 @@ static int acct_stack_growth(struct vm_a
+@@ -1603,34 +1817,42 @@ static int acct_stack_growth(struct vm_a
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
  	int error;
@@ -47964,7 +48016,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1643,6 +1885,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1643,6 +1865,8 @@ int expand_upwards(struct vm_area_struct
  				vma->vm_end = address;
  		}
  	}
@@ -47973,7 +48025,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	anon_vma_unlock(vma);
  	return error;
  }
-@@ -1655,6 +1899,8 @@ static int expand_downwards(struct vm_ar
+@@ -1655,6 +1879,8 @@ static int expand_downwards(struct vm_ar
  				   unsigned long address)
  {
  	int error;
@@ -47982,7 +48034,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1668,6 +1914,15 @@ static int expand_downwards(struct vm_ar
+@@ -1668,6 +1894,15 @@ static int expand_downwards(struct vm_ar
  	if (error)
  		return error;
  
@@ -47998,7 +48050,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	anon_vma_lock(vma);
  
  	/*
-@@ -1677,9 +1932,17 @@ static int expand_downwards(struct vm_ar
+@@ -1677,9 +1912,17 @@ static int expand_downwards(struct vm_ar
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -48017,7 +48069,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1689,10 +1952,21 @@ static int expand_downwards(struct vm_ar
+@@ -1689,10 +1932,21 @@ static int expand_downwards(struct vm_ar
  			if (!error) {
  				vma->vm_start = address;
  				vma->vm_pgoff -= grow;
@@ -48039,7 +48091,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	return error;
  }
  
-@@ -1768,6 +2042,13 @@ static void remove_vma_list(struct mm_st
+@@ -1768,6 +2022,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -48053,7 +48105,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1813,6 +2094,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1813,6 +2074,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -48070,7 +48122,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1840,10 +2131,25 @@ int split_vma(struct mm_struct * mm, str
+@@ -1840,10 +2111,25 @@ int split_vma(struct mm_struct * mm, str
  	struct mempolicy *pol;
  	struct vm_area_struct *new;
  
@@ -48096,7 +48148,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -1851,6 +2157,16 @@ int split_vma(struct mm_struct * mm, str
+@@ -1851,6 +2137,16 @@ int split_vma(struct mm_struct * mm, str
  	if (!new)
  		return -ENOMEM;
  
@@ -48113,7 +48165,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1861,8 +2177,29 @@ int split_vma(struct mm_struct * mm, str
+@@ -1861,8 +2157,29 @@ int split_vma(struct mm_struct * mm, str
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -48143,7 +48195,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		kmem_cache_free(vm_area_cachep, new);
  		return PTR_ERR(pol);
  	}
-@@ -1883,6 +2220,28 @@ int split_vma(struct mm_struct * mm, str
+@@ -1883,6 +2200,28 @@ int split_vma(struct mm_struct * mm, str
  	else
  		vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -48172,13 +48224,13 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	return 0;
  }
  
-@@ -1891,11 +2250,30 @@ int split_vma(struct mm_struct * mm, str
+@@ -1891,11 +2230,30 @@ int split_vma(struct mm_struct * mm, str
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
 +#ifdef CONFIG_PAX_SEGMEXEC
- int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
- {
++int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
++{
 +	int ret = __do_munmap(mm, start, len);
 +	if (ret || !(mm->pax_flags & MF_PAX_SEGMEXEC))
 +		return ret;
@@ -48188,9 +48240,9 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
 +
 +int __do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#else
-+int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
+ int do_munmap(struct mm_struct *mm, unsigned long start, size_t len)
 +#endif
-+{
+ {
  	unsigned long end;
  	struct vm_area_struct *vma, *prev, *last;
  
@@ -48203,7 +48255,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -1959,6 +2337,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -1959,6 +2317,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -48212,7 +48264,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	return 0;
  }
  
-@@ -1971,22 +2351,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -1971,22 +2331,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  
  	profile_munmap(addr);
  
@@ -48241,7 +48293,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2000,6 +2376,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2000,6 +2356,7 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -48249,7 +48301,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2011,16 +2388,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -2011,16 +2368,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -48281,7 +48333,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2037,22 +2428,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2037,22 +2408,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -48308,7 +48360,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2066,7 +2457,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2066,7 +2437,7 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -48317,7 +48369,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  		return -ENOMEM;
  	}
  
-@@ -2078,11 +2469,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2078,11 +2449,12 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -48332,7 +48384,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	return addr;
  }
  
-@@ -2129,8 +2521,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2129,8 +2501,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -48344,7 +48396,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2144,6 +2538,10 @@ int insert_vm_struct(struct mm_struct *
+@@ -2144,6 +2518,10 @@ int insert_vm_struct(struct mm_struct *
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -48355,7 +48407,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2166,7 +2564,22 @@ int insert_vm_struct(struct mm_struct *
+@@ -2166,7 +2544,22 @@ int insert_vm_struct(struct mm_struct *
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -48378,7 +48430,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	return 0;
  }
  
-@@ -2184,6 +2597,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2184,6 +2577,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -48387,7 +48439,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2227,6 +2642,35 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2227,6 +2622,35 @@ struct vm_area_struct *copy_vma(struct v
  	return new_vma;
  }
  
@@ -48423,7 +48475,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/mm/mmap.c
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2307,6 +2751,17 @@ int install_special_mapping(struct mm_st
+@@ -2307,6 +2731,17 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -54475,8 +54527,8 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +}
 diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc/kernexec_plugin.c linux-2.6.32.57-pax/tools/gcc/kernexec_plugin.c
 --- linux-2.6.32.57/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.57-pax/tools/gcc/kernexec_plugin.c	2011-12-03 01:26:05.427294967 +0100
-@@ -0,0 +1,348 @@
++++ linux-2.6.32.57-pax/tools/gcc/kernexec_plugin.c	2012-02-21 21:59:10.480782461 +0100
+@@ -0,0 +1,427 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -54524,12 +54576,31 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	.help		= "method=[bts|or]\tinstrumentation method\n"
 +};
 +
++static unsigned int execute_kernexec_reload(void);
 +static unsigned int execute_kernexec_fptr(void);
 +static unsigned int execute_kernexec_retaddr(void);
 +static bool kernexec_cmodel_check(void);
 +
-+static void (*kernexec_instrument_fptr)(gimple_stmt_iterator);
++static void (*kernexec_instrument_fptr)(gimple_stmt_iterator *);
 +static void (*kernexec_instrument_retaddr)(rtx);
++
++static struct gimple_opt_pass kernexec_reload_pass = {
++	.pass = {
++		.type			= GIMPLE_PASS,
++		.name			= "kernexec_reload",
++		.gate			= kernexec_cmodel_check,
++		.execute		= execute_kernexec_reload,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_remove_unused_locals | TODO_update_ssa_no_phi
++	}
++};
 +
 +static struct gimple_opt_pass kernexec_fptr_pass = {
 +	.pass = {
@@ -54586,15 +54657,66 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +}
 +
 +/*
++ * add special KERNEXEC instrumentation: reload %r10 after it has been clobbered
++ */
++static void kernexec_reload_fptr_mask(gimple_stmt_iterator *gsi)
++{
++	gimple asm_movabs_stmt;
++
++	// build asm volatile("movabs $0x8000000000000000, %%r10\n\t" : : : );
++	asm_movabs_stmt = gimple_build_asm_vec("movabs $0x8000000000000000, %%r10\n\t", NULL, NULL, NULL, NULL);
++	gimple_asm_set_volatile(asm_movabs_stmt, true);
++	gsi_insert_after(gsi, asm_movabs_stmt, GSI_CONTINUE_LINKING);
++	update_stmt(asm_movabs_stmt);
++}
++
++/*
++ * find all asm() stmts that clobber r10 and add a reload of r10
++ */
++static unsigned int execute_kernexec_reload(void)
++{
++	basic_block bb;
++
++	// 1. loop through BBs and GIMPLE statements
++	FOR_EACH_BB(bb) {
++		gimple_stmt_iterator gsi;
++
++		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
++			// gimple match: __asm__ ("" :  :  : "r10");
++			gimple asm_stmt;
++			size_t nclobbers;
++
++			// is it an asm ...
++			asm_stmt = gsi_stmt(gsi);
++			if (gimple_code(asm_stmt) != GIMPLE_ASM)
++				continue;
++
++			// ... clobbering r10
++			nclobbers = gimple_asm_nclobbers(asm_stmt);
++			while (nclobbers--) {
++				tree op = gimple_asm_clobber_op(asm_stmt, nclobbers);
++				if (strcmp(TREE_STRING_POINTER(TREE_VALUE(op)), "r10"))
++					continue;
++				kernexec_reload_fptr_mask(&gsi);
++//print_gimple_stmt(stderr, asm_stmt, 0, TDF_LINENO);
++				break;
++			}
++		}
++	}
++
++	return 0;
++}
++
++/*
 + * add special KERNEXEC instrumentation: force MSB of fptr to 1, which will produce
 + * a non-canonical address from a userland ptr and will just trigger a GPF on dereference
 + */
-+static void kernexec_instrument_fptr_bts(gimple_stmt_iterator gsi)
++static void kernexec_instrument_fptr_bts(gimple_stmt_iterator *gsi)
 +{
 +	gimple assign_intptr, assign_new_fptr, call_stmt;
 +	tree intptr, old_fptr, new_fptr, kernexec_mask;
 +
-+	call_stmt = gsi_stmt(gsi);
++	call_stmt = gsi_stmt(*gsi);
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary unsigned long variable used for bitops and cast fptr to it
@@ -54602,14 +54724,14 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	add_referenced_var(intptr);
 +	mark_sym_for_renaming(intptr);
 +	assign_intptr = gimple_build_assign(intptr, fold_convert(long_unsigned_type_node, old_fptr));
-+	gsi_insert_before(&gsi, assign_intptr, GSI_SAME_STMT);
++	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
 +
 +	// apply logical or to temporary unsigned long and bitmask
 +	kernexec_mask = build_int_cstu(long_long_unsigned_type_node, 0x8000000000000000LL);
 +//	kernexec_mask = build_int_cstu(long_long_unsigned_type_node, 0xffffffff80000000LL);
 +	assign_intptr = gimple_build_assign(intptr, fold_build2(BIT_IOR_EXPR, long_long_unsigned_type_node, intptr, kernexec_mask));
-+	gsi_insert_before(&gsi, assign_intptr, GSI_SAME_STMT);
++	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
 +
 +	// cast temporary unsigned long back to a temporary fptr variable
@@ -54617,7 +54739,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
 +	assign_new_fptr = gimple_build_assign(new_fptr, fold_convert(TREE_TYPE(old_fptr), intptr));
-+	gsi_insert_before(&gsi, assign_new_fptr, GSI_SAME_STMT);
++	gsi_insert_before(gsi, assign_new_fptr, GSI_SAME_STMT);
 +	update_stmt(assign_new_fptr);
 +
 +	// replace call stmt fn with the new fptr
@@ -54625,14 +54747,14 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	update_stmt(call_stmt);
 +}
 +
-+static void kernexec_instrument_fptr_or(gimple_stmt_iterator gsi)
++static void kernexec_instrument_fptr_or(gimple_stmt_iterator *gsi)
 +{
 +	gimple asm_or_stmt, call_stmt;
 +	tree old_fptr, new_fptr, input, output;
 +	VEC(tree, gc) *inputs = NULL;
 +	VEC(tree, gc) *outputs = NULL;
 +
-+	call_stmt = gsi_stmt(gsi);
++	call_stmt = gsi_stmt(*gsi);
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary fptr variable
@@ -54649,7 +54771,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	VEC_safe_push(tree, gc, outputs, output);
 +	asm_or_stmt = gimple_build_asm_vec("orq %%r10, %0\n\t", inputs, outputs, NULL, NULL);
 +	gimple_asm_set_volatile(asm_or_stmt, true);
-+	gsi_insert_before(&gsi, asm_or_stmt, GSI_SAME_STMT);
++	gsi_insert_before(gsi, asm_or_stmt, GSI_SAME_STMT);
 +	update_stmt(asm_or_stmt);
 +
 +	// replace call stmt fn with the new fptr
@@ -54663,10 +54785,11 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +static unsigned int execute_kernexec_fptr(void)
 +{
 +	basic_block bb;
-+	gimple_stmt_iterator gsi;
 +
 +	// 1. loop through BBs and GIMPLE statements
 +	FOR_EACH_BB(bb) {
++		gimple_stmt_iterator gsi;
++
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +			// gimple match: h_1 = get_fptr (); D.2709_3 = h_1 (x_2(D));
 +			tree fn;
@@ -54693,7 +54816,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +			if (TREE_CODE(fn) != FUNCTION_TYPE)
 +				continue;
 +
-+			kernexec_instrument_fptr(gsi);
++			kernexec_instrument_fptr(&gsi);
 +
 +//debug_tree(gimple_call_fn(call_stmt));
 +//print_gimple_stmt(stderr, call_stmt, 0, TDF_LINENO);
@@ -54775,6 +54898,12 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	const int argc = plugin_info->argc;
 +	const struct plugin_argument * const argv = plugin_info->argv;
 +	int i;
++	struct register_pass_info kernexec_reload_pass_info = {
++		.pass				= &kernexec_reload_pass.pass,
++		.reference_pass_name		= "ssa",
++		.ref_pass_instance_number	= 0,
++		.pos_op 			= PASS_POS_INSERT_AFTER
++	};
 +	struct register_pass_info kernexec_fptr_pass_info = {
 +		.pass				= &kernexec_fptr_pass.pass,
 +		.reference_pass_name		= "ssa",
@@ -54820,6 +54949,8 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	if (!kernexec_instrument_fptr || !kernexec_instrument_retaddr)
 +		error(G_("no instrumentation method was selected via '-fplugin-arg-%s-method'"), plugin_name);
 +
++	if (kernexec_instrument_fptr == kernexec_instrument_fptr_or)
++		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &kernexec_reload_pass_info);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &kernexec_fptr_pass_info);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &kernexec_retaddr_pass_info);
 +
@@ -54852,8 +54983,8 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +checker_plugin-objs := checker_plugin.o
 diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc/stackleak_plugin.c linux-2.6.32.57-pax/tools/gcc/stackleak_plugin.c
 --- linux-2.6.32.57/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.57-pax/tools/gcc/stackleak_plugin.c	2011-12-09 15:20:38.297402045 +0100
-@@ -0,0 +1,291 @@
++++ linux-2.6.32.57-pax/tools/gcc/stackleak_plugin.c	2012-02-21 21:59:10.492783116 +0100
+@@ -0,0 +1,295 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -54953,7 +55084,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	return track_frame_size >= 0;
 +}
 +
-+static void stackleak_check_alloca(gimple_stmt_iterator gsi)
++static void stackleak_check_alloca(gimple_stmt_iterator *gsi)
 +{
 +	gimple check_alloca;
 +	tree fndecl, fntype, alloca_size;
@@ -54962,12 +55093,12 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	fntype = build_function_type_list(void_type_node, long_unsigned_type_node, NULL_TREE);
 +	fndecl = build_fn_decl(check_function, fntype);
 +	DECL_ASSEMBLER_NAME(fndecl); // for LTO
-+	alloca_size = gimple_call_arg(gsi_stmt(gsi), 0);
++	alloca_size = gimple_call_arg(gsi_stmt(*gsi), 0);
 +	check_alloca = gimple_build_call(fndecl, 1, alloca_size);
-+	gsi_insert_before(&gsi, check_alloca, GSI_CONTINUE_LINKING);
++	gsi_insert_before(gsi, check_alloca, GSI_SAME_STMT);
 +}
 +
-+static void stackleak_add_instrumentation(gimple_stmt_iterator gsi)
++static void stackleak_add_instrumentation(gimple_stmt_iterator *gsi)
 +{
 +	gimple track_stack;
 +	tree fndecl, fntype;
@@ -54977,7 +55108,7 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	fndecl = build_fn_decl(track_function, fntype);
 +	DECL_ASSEMBLER_NAME(fndecl); // for LTO
 +	track_stack = gimple_build_call(fndecl, 0);
-+	gsi_insert_after(&gsi, track_stack, GSI_CONTINUE_LINKING);
++	gsi_insert_after(gsi, track_stack, GSI_CONTINUE_LINKING);
 +}
 +
 +#if BUILDING_GCC_VERSION == 4005
@@ -55020,16 +55151,17 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +	// 1. loop through BBs and GIMPLE statements
 +	FOR_EACH_BB(bb) {
 +		gimple_stmt_iterator gsi;
++
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +			// gimple match: align 8 built-in BUILT_IN_NORMAL:BUILT_IN_ALLOCA attributes <tree_list 0xb7576450>
 +			if (!is_alloca(gsi_stmt(gsi)))
 +				continue;
 +
 +			// 2. insert stack overflow check before each __builtin_alloca call
-+			stackleak_check_alloca(gsi);
++			stackleak_check_alloca(&gsi);
 +
 +			// 3. insert track call after each __builtin_alloca call
-+			stackleak_add_instrumentation(gsi);
++			stackleak_add_instrumentation(&gsi);
 +			if (bb == entry_bb)
 +				prologue_instrumented = true;
 +		}
@@ -55037,10 +55169,13 @@ diff -NurpX linux-2.6.32.57-pax/Documentation/dontdiff linux-2.6.32.57/tools/gcc
 +
 +	// 4. insert track call at the beginning
 +	if (!prologue_instrumented) {
++		gimple_stmt_iterator gsi;
++
 +		bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
 +		if (dom_info_available_p(CDI_DOMINATORS))
 +			set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR);
-+		stackleak_add_instrumentation(gsi_start_bb(bb));
++		gsi = gsi_start_bb(bb);
++		stackleak_add_instrumentation(&gsi);
 +	}
 +
 +	return 0;
