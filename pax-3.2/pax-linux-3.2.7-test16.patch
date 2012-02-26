@@ -45890,7 +45890,7 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/kernel/padata.c l
  	pd->pinst = pinst;
 diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/kernel/panic.c linux-3.2.7-pax/kernel/panic.c
 --- linux-3.2.7/kernel/panic.c	2012-02-13 22:10:03.733713477 +0100
-+++ linux-3.2.7-pax/kernel/panic.c	2012-02-19 20:26:49.315346516 +0100
++++ linux-3.2.7-pax/kernel/panic.c	2012-02-27 00:49:45.123512206 +0100
 @@ -78,7 +78,11 @@ NORET_TYPE void panic(const char * fmt,
  	va_end(args);
  	printk(KERN_EMERG "Kernel panic - not syncing: %s\n",buf);
@@ -47493,7 +47493,7 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/lib/vsprintf.c li
  
 diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/Makefile linux-3.2.7-pax/Makefile
 --- linux-3.2.7/Makefile	2012-02-21 01:43:57.163976980 +0100
-+++ linux-3.2.7-pax/Makefile	2012-02-26 01:09:30.909404641 +0100
++++ linux-3.2.7-pax/Makefile	2012-02-27 00:45:57.407526531 +0100
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -47517,31 +47517,33 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -564,6 +565,44 @@ else
+@@ -564,6 +565,46 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
 +ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(CC)"), y)
 +ifdef CONFIG_PAX_CONSTIFY_PLUGIN
-+CONSTIFY_PLUGIN := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
++CONSTIFY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
 +endif
 +ifdef CONFIG_PAX_MEMORY_STACKLEAK
-+STACKLEAK_PLUGIN := -fplugin=$(objtree)/tools/gcc/stackleak_plugin.so -DSTACKLEAK_PLUGIN
-+STACKLEAK_PLUGIN += -fplugin-arg-stackleak_plugin-track-lowest-sp=100
++STACKLEAK_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/stackleak_plugin.so -DSTACKLEAK_PLUGIN
++STACKLEAK_PLUGIN_CFLAGS += -fplugin-arg-stackleak_plugin-track-lowest-sp=100
 +endif
 +ifdef CONFIG_KALLOCSTAT_PLUGIN
-+KALLOCSTAT_PLUGIN := -fplugin=$(objtree)/tools/gcc/kallocstat_plugin.so
++KALLOCSTAT_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/kallocstat_plugin.so
 +endif
 +ifdef CONFIG_PAX_KERNEXEC_PLUGIN
-+KERNEXEC_PLUGIN := -fplugin=$(objtree)/tools/gcc/kernexec_plugin.so
-+KERNEXEC_PLUGIN += -fplugin-arg-kernexec_plugin-method=$(CONFIG_PAX_KERNEXEC_PLUGIN_METHOD) -DKERNEXEC_PLUGIN
++KERNEXEC_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/kernexec_plugin.so
++KERNEXEC_PLUGIN_CFLAGS += -fplugin-arg-kernexec_plugin-method=$(CONFIG_PAX_KERNEXEC_PLUGIN_METHOD) -DKERNEXEC_PLUGIN
++KERNEXEC_PLUGIN_AFLAGS := -DKERNEXEC_PLUGIN
 +endif
 +ifdef CONFIG_CHECKER_PLUGIN
 +ifeq ($(call cc-ifversion, -ge, 0406, y), y)
-+CHECKER_PLUGIN := -fplugin=$(objtree)/tools/gcc/checker_plugin.so -DCHECKER_PLUGIN
++CHECKER_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/checker_plugin.so -DCHECKER_PLUGIN
 +endif
 +endif
-+GCC_PLUGINS := $(CONSTIFY_PLUGIN) $(STACKLEAK_PLUGIN) $(KALLOCSTAT_PLUGIN) $(KERNEXEC_PLUGIN) $(CHECKER_PLUGIN)
++GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS) $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS)
++GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
 +export CONSTIFY_PLUGIN STACKLEAK_PLUGIN KERNEXEC_PLUGIN CHECKER_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
 +gcc-plugins:
@@ -47562,15 +47564,16 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/Makefile linux-3.
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -932,6 +971,7 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
+@@ -932,6 +973,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
-+$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): KBUILD_CFLAGS += $(GCC_PLUGINS)
++$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++$(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
  $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -941,7 +981,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
+@@ -941,7 +984,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -47579,23 +47582,24 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=$@
  
  # Store (new) KERNELRELASE string in include/config/kernel.release
-@@ -985,6 +1025,7 @@ prepare0: archprepare FORCE
+@@ -985,6 +1028,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=.
  
  # All the preparing..
-+prepare: KBUILD_CFLAGS := $(filter-out $(GCC_PLUGINS),$(KBUILD_CFLAGS))
++prepare: KBUILD_CFLAGS := $(filter-out $(GCC_PLUGINS_CFLAGS),$(KBUILD_CFLAGS))
  prepare: prepare0
  
  # Generate some files
-@@ -1086,6 +1127,7 @@ all: modules
+@@ -1086,6 +1130,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
-+modules: KBUILD_CFLAGS += $(GCC_PLUGINS)
++modules: KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++modules: KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1101,7 +1143,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
+@@ -1101,7 +1147,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -47604,7 +47608,7 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/Makefile linux-3.
  
  # Target to install modules
  PHONY += modules_install
-@@ -1198,6 +1240,7 @@ distclean: mrproper
+@@ -1198,6 +1244,7 @@ distclean: mrproper
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
  		-o -name '.*.rej' \
@@ -47612,26 +47616,29 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/Makefile linux-3.
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1358,6 +1401,7 @@ PHONY += $(module-dirs) modules
+@@ -1358,6 +1405,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
-+modules: KBUILD_CFLAGS += $(GCC_PLUGINS)
++modules: KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++modules: KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1484,17 +1528,19 @@ else
+@@ -1484,17 +1533,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
 -%.s: %.c prepare scripts FORCE
-+%.s: KBUILD_CFLAGS += $(GCC_PLUGINS)
++%.s: KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++%.s: KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
 +%.s: %.c gcc-plugins prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.i: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
 -%.o: %.c prepare scripts FORCE
-+%.o: KBUILD_CFLAGS += $(GCC_PLUGINS)
++%.o: KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++%.o: KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
 +%.o: %.c gcc-plugins prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.lst: %.c prepare scripts FORCE
@@ -47644,18 +47651,20 @@ diff -NurpX linux-3.2.7-pax/Documentation/dontdiff linux-3.2.7/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1504,11 +1550,13 @@ endif
+@@ -1504,11 +1557,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
 -%/: prepare scripts FORCE
-+%/: KBUILD_CFLAGS += $(GCC_PLUGINS)
++%/: KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++%/: KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
 +%/: gcc-plugins prepare scripts FORCE
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
 -%.ko: prepare scripts FORCE
-+%.ko: KBUILD_CFLAGS += $(GCC_PLUGINS)
++%.ko: KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++%.ko: KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
 +%.ko: gcc-plugins prepare scripts FORCE
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1)   \
