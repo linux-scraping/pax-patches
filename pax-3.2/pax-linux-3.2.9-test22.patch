@@ -263,7 +263,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/alpha/mm/fau
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/atomic.h linux-3.2.9-pax/arch/arm/include/asm/atomic.h
 --- linux-3.2.9/arch/arm/include/asm/atomic.h	2011-10-24 12:48:18.799092171 +0200
-+++ linux-3.2.9-pax/arch/arm/include/asm/atomic.h	2012-02-27 20:44:14.837063603 +0100
++++ linux-3.2.9-pax/arch/arm/include/asm/atomic.h	2012-03-12 01:17:12.829849645 +0100
 @@ -15,6 +15,10 @@
  #include <linux/types.h>
  #include <asm/system.h>
@@ -275,7 +275,163 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/
  #define ATOMIC_INIT(i)	{ (i) }
  
  #ifdef __KERNEL__
-@@ -239,6 +243,14 @@ typedef struct {
+@@ -27,6 +31,9 @@
+ #define atomic_read(v)	(*(volatile int *)&(v)->counter)
+ #define atomic_set(v,i)	(((v)->counter) = (i))
+ 
++#define atomic_read_unchecked(v)	(*(volatile int *)&(v)->counter)
++#define atomic_set_unchecked(v,i)	(((v)->counter) = (i))
++
+ #if __LINUX_ARM_ARCH__ >= 6
+ 
+ /*
+@@ -42,6 +49,28 @@ static inline void atomic_add(int i, ato
+ 	__asm__ __volatile__("@ atomic_add\n"
+ "1:	ldrex	%0, [%3]\n"
+ "	add	%0, %0, %4\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	"bvc 2f\n"
++	"\tbkpt 0xf103\n2:\n"
++#endif
++
++"	strex	%1, %0, [%3]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
++	: "r" (&v->counter), "Ir" (i)
++	: "cc");
++}
++
++static inline void atomic_add_unchecked(int i, atomic_unchecked_t *v)
++{
++	unsigned long tmp;
++	int result;
++
++	__asm__ __volatile__("@ atomic_add_unchecked\n"
++"1:	ldrex	%0, [%3]\n"
++"	add	%0, %0, %4\n"
+ "	strex	%1, %0, [%3]\n"
+ "	teq	%1, #0\n"
+ "	bne	1b"
+@@ -60,6 +89,34 @@ static inline int atomic_add_return(int
+ 	__asm__ __volatile__("@ atomic_add_return\n"
+ "1:	ldrex	%0, [%3]\n"
+ "	add	%0, %0, %4\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	"bvc 2f\n"
++	"\tbkpt 0xf103\n2:\n"
++#endif
++
++"	strex	%1, %0, [%3]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
++	: "r" (&v->counter), "Ir" (i)
++	: "cc");
++
++	smp_mb();
++
++	return result;
++}
++
++static inline int atomic_add_return_unchecked(int i, atomic_unchecked_t *v)
++{
++	unsigned long tmp;
++	int result;
++
++	smp_mb();
++
++	__asm__ __volatile__("@ atomic_add_return_unchecked\n"
++"1:	ldrex	%0, [%3]\n"
++"	add	%0, %0, %4\n"
+ "	strex	%1, %0, [%3]\n"
+ "	teq	%1, #0\n"
+ "	bne	1b"
+@@ -80,6 +137,28 @@ static inline void atomic_sub(int i, ato
+ 	__asm__ __volatile__("@ atomic_sub\n"
+ "1:	ldrex	%0, [%3]\n"
+ "	sub	%0, %0, %4\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	"bvc 2f\n"
++	"\tbkpt 0xf103\n2:\n"
++#endif
++
++"	strex	%1, %0, [%3]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
++	: "r" (&v->counter), "Ir" (i)
++	: "cc");
++}
++
++static inline void atomic_sub_unchecked(int i, atomic_unchecked_t *v)
++{
++	unsigned long tmp;
++	int result;
++
++	__asm__ __volatile__("@ atomic_sub_unchecked\n"
++"1:	ldrex	%0, [%3]\n"
++"	sub	%0, %0, %4\n"
+ "	strex	%1, %0, [%3]\n"
+ "	teq	%1, #0\n"
+ "	bne	1b"
+@@ -132,6 +211,28 @@ static inline int atomic_cmpxchg(atomic_
+ 	return oldval;
+ }
+ 
++static inline int atomic_cmpxchg_unchecked(atomic_unchecked_t *ptr, int old, int new)
++{
++	unsigned long oldval, res;
++
++	smp_mb();
++
++	do {
++		__asm__ __volatile__("@ atomic_cmpxchg_unchecked\n"
++		"ldrex	%1, [%3]\n"
++		"mov	%0, #0\n"
++		"teq	%1, %4\n"
++		"strexeq %0, %5, [%3]\n"
++		    : "=&r" (res), "=&r" (oldval), "+Qo" (ptr->counter)
++		    : "r" (&ptr->counter), "Ir" (old), "r" (new)
++		    : "cc");
++	} while (res);
++
++	smp_mb();
++
++	return oldval;
++}
++
+ static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
+ {
+ 	unsigned long tmp, tmp2;
+@@ -207,6 +308,7 @@ static inline void atomic_clear_mask(uns
+ #endif /* __LINUX_ARM_ARCH__ */
+ 
+ #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
++#define atomic_xchg_unchecked(v, new) (xchg_unchecked(&((v)->counter), new))
+ 
+ static inline int __atomic_add_unless(atomic_t *v, int a, int u)
+ {
+@@ -219,11 +321,15 @@ static inline int __atomic_add_unless(at
+ }
+ 
+ #define atomic_inc(v)		atomic_add(1, v)
++#define atomic_inc_unchecked(v)		atomic_add_unchecked(1, v)
+ #define atomic_dec(v)		atomic_sub(1, v)
++#define atomic_dec_unchecked(v)		atomic_sub_unchecked(1, v)
+ 
+ #define atomic_inc_and_test(v)	(atomic_add_return(1, v) == 0)
++#define atomic_inc_and_test_unchecked(v)	(atomic_add_return_unchecked(1, v) == 0)
+ #define atomic_dec_and_test(v)	(atomic_sub_return(1, v) == 0)
+ #define atomic_inc_return(v)    (atomic_add_return(1, v))
++#define atomic_inc_return_unchecked(v)    (atomic_add_return_unchecked(1, v))
+ #define atomic_dec_return(v)    (atomic_sub_return(1, v))
+ #define atomic_sub_and_test(i, v) (atomic_sub_return(i, v) == 0)
+ 
+@@ -239,6 +345,14 @@ typedef struct {
  	u64 __aligned(8) counter;
  } atomic64_t;
  
@@ -290,23 +446,212 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/
  #define ATOMIC64_INIT(i) { (i) }
  
  static inline u64 atomic64_read(atomic64_t *v)
-@@ -459,6 +471,16 @@ static inline int atomic64_add_unless(at
+@@ -254,6 +368,19 @@ static inline u64 atomic64_read(atomic64
+ 	return result;
+ }
+ 
++static inline u64 atomic64_read_unchecked(atomic64_unchecked_t *v)
++{
++	u64 result;
++
++	__asm__ __volatile__("@ atomic64_read_unchecked\n"
++"	ldrexd	%0, %H0, [%1]"
++	: "=&r" (result)
++	: "r" (&v->counter), "Qo" (v->counter)
++	);
++
++	return result;
++}
++
+ static inline void atomic64_set(atomic64_t *v, u64 i)
+ {
+ 	u64 tmp;
+@@ -268,6 +395,20 @@ static inline void atomic64_set(atomic64
+ 	: "cc");
+ }
+ 
++static inline void atomic64_set_unchecked(atomic64_unchecked_t *v, u64 i)
++{
++	u64 tmp;
++
++	__asm__ __volatile__("@ atomic64_set_unchecked\n"
++"1:	ldrexd	%0, %H0, [%2]\n"
++"	strexd	%0, %3, %H3, [%2]\n"
++"	teq	%0, #0\n"
++"	bne	1b"
++	: "=&r" (tmp), "=Qo" (v->counter)
++	: "r" (&v->counter), "r" (i)
++	: "cc");
++}
++
+ static inline void atomic64_add(u64 i, atomic64_t *v)
+ {
+ 	u64 result;
+@@ -277,6 +418,29 @@ static inline void atomic64_add(u64 i, a
+ "1:	ldrexd	%0, %H0, [%3]\n"
+ "	adds	%0, %0, %4\n"
+ "	adc	%H0, %H0, %H4\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	"bvc 2f\n"
++	"\tbkpt 0xf103\n2:\n"
++#endif
++
++"	strexd	%1, %0, %H0, [%3]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
++	: "r" (&v->counter), "r" (i)
++	: "cc");
++}
++
++static inline void atomic64_add_unchecked(u64 i, atomic64_unchecked_t *v)
++{
++	u64 result;
++	unsigned long tmp;
++
++	__asm__ __volatile__("@ atomic64_add_unchecked\n"
++"1:	ldrexd	%0, %H0, [%3]\n"
++"	adds	%0, %0, %4\n"
++"	adc	%H0, %H0, %H4\n"
+ "	strexd	%1, %0, %H0, [%3]\n"
+ "	teq	%1, #0\n"
+ "	bne	1b"
+@@ -296,6 +460,35 @@ static inline u64 atomic64_add_return(u6
+ "1:	ldrexd	%0, %H0, [%3]\n"
+ "	adds	%0, %0, %4\n"
+ "	adc	%H0, %H0, %H4\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	"bvc 2f\n"
++	"\tbkpt 0xf103\n2:\n"
++#endif
++
++"	strexd	%1, %0, %H0, [%3]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
++	: "r" (&v->counter), "r" (i)
++	: "cc");
++
++	smp_mb();
++
++	return result;
++}
++
++static inline u64 atomic64_add_return_unchecked(u64 i, atomic64_unchecked_t *v)
++{
++	u64 result;
++	unsigned long tmp;
++
++	smp_mb();
++
++	__asm__ __volatile__("@ atomic64_add_return_unchecked\n"
++"1:	ldrexd	%0, %H0, [%3]\n"
++"	adds	%0, %0, %4\n"
++"	adc	%H0, %H0, %H4\n"
+ "	strexd	%1, %0, %H0, [%3]\n"
+ "	teq	%1, #0\n"
+ "	bne	1b"
+@@ -317,6 +510,29 @@ static inline void atomic64_sub(u64 i, a
+ "1:	ldrexd	%0, %H0, [%3]\n"
+ "	subs	%0, %0, %4\n"
+ "	sbc	%H0, %H0, %H4\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	"bvc 2f\n"
++	"\tbkpt 0xf103\n2:\n"
++#endif
++
++"	strexd	%1, %0, %H0, [%3]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
++	: "r" (&v->counter), "r" (i)
++	: "cc");
++}
++
++static inline void atomic64_sub_unchecked(u64 i, atomic64_unchecked_t *v)
++{
++	u64 result;
++	unsigned long tmp;
++
++	__asm__ __volatile__("@ atomic64_sub_unchecked\n"
++"1:	ldrexd	%0, %H0, [%3]\n"
++"	subs	%0, %0, %4\n"
++"	sbc	%H0, %H0, %H4\n"
+ "	strexd	%1, %0, %H0, [%3]\n"
+ "	teq	%1, #0\n"
+ "	bne	1b"
+@@ -372,6 +588,30 @@ static inline u64 atomic64_cmpxchg(atomi
+ 	return oldval;
+ }
+ 
++static inline u64 atomic64_cmpxchg_unchecked(atomic64_unchecked_t *ptr, u64 old, u64 new)
++{
++	u64 oldval;
++	unsigned long res;
++
++	smp_mb();
++
++	do {
++		__asm__ __volatile__("@ atomic64_cmpxchg_unchecked\n"
++		"ldrexd		%1, %H1, [%3]\n"
++		"mov		%0, #0\n"
++		"teq		%1, %4\n"
++		"teqeq		%H1, %H4\n"
++		"strexdeq	%0, %5, %H5, [%3]"
++		: "=&r" (res), "=&r" (oldval), "+Qo" (ptr->counter)
++		: "r" (&ptr->counter), "r" (old), "r" (new)
++		: "cc");
++	} while (res);
++
++	smp_mb();
++
++	return oldval;
++}
++
+ static inline u64 atomic64_xchg(atomic64_t *ptr, u64 new)
+ {
+ 	u64 result;
+@@ -451,10 +691,13 @@ static inline int atomic64_add_unless(at
+ 
+ #define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
+ #define atomic64_inc(v)			atomic64_add(1LL, (v))
++#define atomic64_inc_unchecked(v)	atomic64_add_unchecked(1LL, (v))
+ #define atomic64_inc_return(v)		atomic64_add_return(1LL, (v))
++#define atomic64_inc_return_unchecked(v)	atomic64_add_return_unchecked(1LL, (v))
+ #define atomic64_inc_and_test(v)	(atomic64_inc_return(v) == 0)
+ #define atomic64_sub_and_test(a, v)	(atomic64_sub_return((a), (v)) == 0)
+ #define atomic64_dec(v)			atomic64_sub(1LL, (v))
++#define atomic64_dec_unchecked(v)	atomic64_sub_unchecked(1LL, (v))
+ #define atomic64_dec_return(v)		atomic64_sub_return(1LL, (v))
  #define atomic64_dec_and_test(v)	(atomic64_dec_return((v)) == 0)
  #define atomic64_inc_not_zero(v)	atomic64_add_unless((v), 1LL, 0LL)
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/cacheflush.h linux-3.2.9-pax/arch/arm/include/asm/cacheflush.h
+--- linux-3.2.9/arch/arm/include/asm/cacheflush.h	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.2.9-pax/arch/arm/include/asm/cacheflush.h	2012-03-12 00:33:24.737993869 +0100
+@@ -108,7 +108,7 @@ struct cpu_cache_fns {
+ 	void (*dma_unmap_area)(const void *, size_t, int);
  
-+#define atomic64_read_unchecked(v)		atomic64_read(v)
-+#define atomic64_set_unchecked(v, i)		atomic64_set((v), (i))
-+#define atomic64_add_unchecked(a, v)		atomic64_add((a), (v))
-+#define atomic64_add_return_unchecked(a, v)	atomic64_add_return((a), (v))
-+#define atomic64_sub_unchecked(a, v)		atomic64_sub((a), (v))
-+#define atomic64_inc_unchecked(v)		atomic64_inc(v)
-+#define atomic64_inc_return_unchecked(v)	atomic64_inc_return(v)
-+#define atomic64_dec_unchecked(v)		atomic64_dec(v)
-+#define atomic64_cmpxchg_unchecked(v, o, n)	atomic64_cmpxchg((v), (o), (n))
-+
- #endif /* !CONFIG_GENERIC_ATOMIC64 */
- #endif
- #endif
+ 	void (*dma_flush_range)(const void *, const void *);
+-};
++} __no_const;
+ 
+ /*
+  * Select the calling method
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/cache.h linux-3.2.9-pax/arch/arm/include/asm/cache.h
+--- linux-3.2.9/arch/arm/include/asm/cache.h	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.2.9-pax/arch/arm/include/asm/cache.h	2012-03-12 00:53:47.885924309 +0100
+@@ -5,7 +5,7 @@
+ #define __ASMARM_CACHE_H
+ 
+ #define L1_CACHE_SHIFT		CONFIG_ARM_L1_CACHE_SHIFT
+-#define L1_CACHE_BYTES		(1 << L1_CACHE_SHIFT)
++#define L1_CACHE_BYTES		(_AC(1,UL) << L1_CACHE_SHIFT)
+ 
+ /*
+  * Memory returned by kmalloc() may be used for DMA, so we must make
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/elf.h linux-3.2.9-pax/arch/arm/include/asm/elf.h
 --- linux-3.2.9/arch/arm/include/asm/elf.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.2.9-pax/arch/arm/include/asm/elf.h	2012-02-27 20:44:14.837063603 +0100
@@ -348,6 +693,51 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/
  	KM_TYPE_NR
  };
  
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/outercache.h linux-3.2.9-pax/arch/arm/include/asm/outercache.h
+--- linux-3.2.9/arch/arm/include/asm/outercache.h	2012-01-08 19:47:31.027473972 +0100
++++ linux-3.2.9-pax/arch/arm/include/asm/outercache.h	2012-03-12 00:33:24.737993869 +0100
+@@ -35,7 +35,7 @@ struct outer_cache_fns {
+ #endif
+ 	void (*set_debug)(unsigned long);
+ 	void (*resume)(void);
+-};
++} __no_const;
+ 
+ #ifdef CONFIG_OUTER_CACHE
+ 
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/page.h linux-3.2.9-pax/arch/arm/include/asm/page.h
+--- linux-3.2.9/arch/arm/include/asm/page.h	2012-01-08 19:47:31.031473972 +0100
++++ linux-3.2.9-pax/arch/arm/include/asm/page.h	2012-03-12 00:33:24.737993869 +0100
+@@ -123,7 +123,7 @@ struct cpu_user_fns {
+ 	void (*cpu_clear_user_highpage)(struct page *page, unsigned long vaddr);
+ 	void (*cpu_copy_user_highpage)(struct page *to, struct page *from,
+ 			unsigned long vaddr, struct vm_area_struct *vma);
+-};
++} __no_const;
+ 
+ #ifdef MULTI_USER
+ extern struct cpu_user_fns cpu_user;
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/system.h linux-3.2.9-pax/arch/arm/include/asm/system.h
+--- linux-3.2.9/arch/arm/include/asm/system.h	2012-01-08 19:47:31.083473969 +0100
++++ linux-3.2.9-pax/arch/arm/include/asm/system.h	2012-03-12 00:30:37.253998523 +0100
+@@ -90,6 +90,8 @@ void hook_ifault_code(int nr, int (*fn)(
+ 
+ #define xchg(ptr,x) \
+ 	((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
++#define xchg_unchecked(ptr,x) \
++	((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
+ 
+ extern asmlinkage void c_backtrace(unsigned long fp, int pmode);
+ 
+@@ -101,7 +103,7 @@ extern int __pure cpu_architecture(void)
+ extern void cpu_init(void);
+ 
+ void arm_machine_restart(char mode, const char *cmd);
+-extern void (*arm_pm_restart)(char str, const char *cmd);
++extern void (*arm_pm_restart)(char str, const char *cmd) __noreturn;
+ 
+ #define UDBG_UNDEFINED	(1 << 0)
+ #define UDBG_SYSCALL	(1 << 1)
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/include/asm/uaccess.h linux-3.2.9-pax/arch/arm/include/asm/uaccess.h
 --- linux-3.2.9/arch/arm/include/asm/uaccess.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.2.9-pax/arch/arm/include/asm/uaccess.h	2012-02-27 20:44:14.841063915 +0100
@@ -422,7 +812,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/kernel/a
  EXPORT_SYMBOL(__get_user_1);
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/kernel/process.c linux-3.2.9-pax/arch/arm/kernel/process.c
 --- linux-3.2.9/arch/arm/kernel/process.c	2012-01-08 19:47:31.339473955 +0100
-+++ linux-3.2.9-pax/arch/arm/kernel/process.c	2012-02-27 20:44:14.841063915 +0100
++++ linux-3.2.9-pax/arch/arm/kernel/process.c	2012-03-12 00:31:49.217996516 +0100
 @@ -28,7 +28,6 @@
  #include <linux/tick.h>
  #include <linux/utsname.h>
@@ -431,7 +821,33 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/kernel/p
  #include <linux/hw_breakpoint.h>
  #include <linux/cpuidle.h>
  
-@@ -484,12 +483,6 @@ unsigned long get_wchan(struct task_stru
+@@ -92,7 +91,7 @@ static int __init hlt_setup(char *__unus
+ __setup("nohlt", nohlt_setup);
+ __setup("hlt", hlt_setup);
+ 
+-void arm_machine_restart(char mode, const char *cmd)
++__noreturn void arm_machine_restart(char mode, const char *cmd)
+ {
+ 	/* Disable interrupts first */
+ 	local_irq_disable();
+@@ -134,7 +133,7 @@ void arm_machine_restart(char mode, cons
+ void (*pm_power_off)(void);
+ EXPORT_SYMBOL(pm_power_off);
+ 
+-void (*arm_pm_restart)(char str, const char *cmd) = arm_machine_restart;
++void (*arm_pm_restart)(char str, const char *cmd) __noreturn = arm_machine_restart;
+ EXPORT_SYMBOL_GPL(arm_pm_restart);
+ 
+ static void do_nothing(void *unused)
+@@ -248,6 +247,7 @@ void machine_power_off(void)
+ 	machine_shutdown();
+ 	if (pm_power_off)
+ 		pm_power_off();
++	BUG();
+ }
+ 
+ void machine_restart(char *cmd)
+@@ -484,12 +484,6 @@ unsigned long get_wchan(struct task_stru
  	return 0;
  }
  
@@ -444,6 +860,26 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/kernel/p
  #ifdef CONFIG_MMU
  /*
   * The vectors page is always readable from user space for the
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/kernel/setup.c linux-3.2.9-pax/arch/arm/kernel/setup.c
+--- linux-3.2.9/arch/arm/kernel/setup.c	2012-01-08 19:47:31.351473955 +0100
++++ linux-3.2.9-pax/arch/arm/kernel/setup.c	2012-03-12 00:33:24.737993869 +0100
+@@ -108,13 +108,13 @@ struct processor processor __read_mostly
+ struct cpu_tlb_fns cpu_tlb __read_mostly;
+ #endif
+ #ifdef MULTI_USER
+-struct cpu_user_fns cpu_user __read_mostly;
++struct cpu_user_fns cpu_user __read_only;
+ #endif
+ #ifdef MULTI_CACHE
+-struct cpu_cache_fns cpu_cache __read_mostly;
++struct cpu_cache_fns cpu_cache __read_only;
+ #endif
+ #ifdef CONFIG_OUTER_CACHE
+-struct outer_cache_fns outer_cache __read_mostly;
++struct outer_cache_fns outer_cache __read_only;
+ EXPORT_SYMBOL(outer_cache);
+ #endif
+ 
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/lib/copy_from_user.S linux-3.2.9-pax/arch/arm/lib/copy_from_user.S
 --- linux-3.2.9/arch/arm/lib/copy_from_user.S	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.2.9-pax/arch/arm/lib/copy_from_user.S	2012-02-27 20:44:14.841063915 +0100
@@ -470,6 +906,17 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/lib/copy
  
  	.pushsection .fixup,"ax"
  	.align 0
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/lib/copy_page.S linux-3.2.9-pax/arch/arm/lib/copy_page.S
+--- linux-3.2.9/arch/arm/lib/copy_page.S	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.2.9-pax/arch/arm/lib/copy_page.S	2012-03-12 00:54:41.509921424 +0100
+@@ -10,6 +10,7 @@
+  *  ASM optimised string functions
+  */
+ #include <linux/linkage.h>
++#include <linux/const.h>
+ #include <asm/assembler.h>
+ #include <asm/asm-offsets.h>
+ #include <asm/cache.h>
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/lib/copy_to_user.S linux-3.2.9-pax/arch/arm/lib/copy_to_user.S
 --- linux-3.2.9/arch/arm/lib/copy_to_user.S	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.2.9-pax/arch/arm/lib/copy_to_user.S	2012-02-27 20:44:14.841063915 +0100
@@ -667,6 +1114,30 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/mm/mmap.
  			/*
  			 * Remember the place where we stopped the search:
  			 */
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/plat-samsung/include/plat/dma-ops.h linux-3.2.9-pax/arch/arm/plat-samsung/include/plat/dma-ops.h
+--- linux-3.2.9/arch/arm/plat-samsung/include/plat/dma-ops.h	2012-01-08 19:47:41.207473429 +0100
++++ linux-3.2.9-pax/arch/arm/plat-samsung/include/plat/dma-ops.h	2012-03-12 00:36:45.837978182 +0100
+@@ -41,7 +41,7 @@ struct samsung_dma_ops {
+ 	int (*started)(unsigned ch);
+ 	int (*flush)(unsigned ch);
+ 	int (*stop)(unsigned ch);
+-};
++} __no_const;
+ 
+ extern void *samsung_dmadev_get_ops(void);
+ extern void *s3c_dma_get_ops(void);
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/arm/plat-samsung/include/plat/ehci.h linux-3.2.9-pax/arch/arm/plat-samsung/include/plat/ehci.h
+--- linux-3.2.9/arch/arm/plat-samsung/include/plat/ehci.h	2012-01-08 19:47:41.215473428 +0100
++++ linux-3.2.9-pax/arch/arm/plat-samsung/include/plat/ehci.h	2012-03-12 01:05:58.573886311 +0100
+@@ -14,7 +14,7 @@
+ struct s5p_ehci_platdata {
+ 	int (*phy_init)(struct platform_device *pdev, int type);
+ 	int (*phy_exit)(struct platform_device *pdev, int type);
+-};
++} __no_const;
+ 
+ extern void s5p_ehci_set_platdata(struct s5p_ehci_platdata *pd);
+ 
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/avr32/include/asm/elf.h linux-3.2.9-pax/arch/avr32/include/asm/elf.h
 --- linux-3.2.9/arch/avr32/include/asm/elf.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.2.9-pax/arch/avr32/include/asm/elf.h	2012-02-27 20:44:14.845064192 +0100
@@ -2159,6 +2630,33 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/powerpc/kern
  	mr	r5,r3
  	addi	r3,r1,STACK_FRAME_OVERHEAD
  	lwz	r4,_DAR(r1)
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/powerpc/kernel/irq.c linux-3.2.9-pax/arch/powerpc/kernel/irq.c
+--- linux-3.2.9/arch/powerpc/kernel/irq.c	2012-01-13 23:41:06.507850262 +0100
++++ linux-3.2.9-pax/arch/powerpc/kernel/irq.c	2012-03-11 09:05:23.572962492 +0100
+@@ -547,9 +547,6 @@ struct irq_host *irq_alloc_host(struct d
+ 	host->ops = ops;
+ 	host->of_node = of_node_get(of_node);
+ 
+-	if (host->ops->match == NULL)
+-		host->ops->match = default_irq_host_match;
+-
+ 	raw_spin_lock_irqsave(&irq_big_lock, flags);
+ 
+ 	/* If it's a legacy controller, check for duplicates and
+@@ -622,7 +619,12 @@ struct irq_host *irq_find_host(struct de
+ 	 */
+ 	raw_spin_lock_irqsave(&irq_big_lock, flags);
+ 	list_for_each_entry(h, &irq_hosts, link)
+-		if (h->ops->match(h, node)) {
++		if (h->ops->match) {
++			if (h->ops->match(h, node)) {
++				found = h;
++				break;
++			}
++		} else if (default_irq_host_match(h, node)) {
+ 			found = h;
+ 			break;
+ 		}
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/arch/powerpc/kernel/module_32.c linux-3.2.9-pax/arch/powerpc/kernel/module_32.c
 --- linux-3.2.9/arch/powerpc/kernel/module_32.c	2011-10-24 12:48:24.903091847 +0200
 +++ linux-3.2.9-pax/arch/powerpc/kernel/module_32.c	2012-02-27 20:44:14.913065658 +0100
@@ -24001,7 +24499,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/crypto/cryptd.c l
  
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/Documentation/dontdiff linux-3.2.9-pax/Documentation/dontdiff
 --- linux-3.2.9/Documentation/dontdiff	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.2.9-pax/Documentation/dontdiff	2012-02-27 20:44:15.221065648 +0100
++++ linux-3.2.9-pax/Documentation/dontdiff	2012-03-12 01:12:02.401865850 +0100
 @@ -5,6 +5,7 @@
  *.cis
  *.cpio
@@ -24096,15 +24594,16 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/Documentation/don
  keywords.c
  ksym.c*
  ksym.h*
-@@ -154,7 +168,6 @@ kxgettext
+@@ -154,7 +168,7 @@ kxgettext
  lkc_defs.h
  lex.c
  lex.*.c
 -linux
++lib1funcs.S
  logo_*.c
  logo_*_clut224.c
  logo_*_mono.c
-@@ -166,14 +179,15 @@ machtypes.h
+@@ -166,14 +180,15 @@ machtypes.h
  map
  map_hugetlb
  maui_boot.h
@@ -24121,7 +24620,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/Documentation/don
  mkprep
  mkregtable
  mktables
-@@ -209,6 +223,7 @@ r300_reg_safe.h
+@@ -209,6 +224,7 @@ r300_reg_safe.h
  r420_reg_safe.h
  r600_reg_safe.h
  recordmcount
@@ -24129,7 +24628,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/Documentation/don
  relocs
  rlim_names.h
  rn50_reg_safe.h
-@@ -219,6 +234,7 @@ setup
+@@ -219,6 +235,7 @@ setup
  setup.bin
  setup.elf
  sImage
@@ -24137,7 +24636,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/Documentation/don
  sm_tbl*
  split-include
  syscalltab.h
-@@ -229,6 +245,7 @@ tftpboot.img
+@@ -229,6 +246,7 @@ tftpboot.img
  timeconst.h
  times.h*
  trix_boot.h
@@ -24145,7 +24644,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/Documentation/don
  utsrelease.h*
  vdso-syms.lds
  vdso.lds
-@@ -246,7 +263,9 @@ vmlinux
+@@ -246,7 +264,9 @@ vmlinux
  vmlinux-*
  vmlinux.aout
  vmlinux.bin.all
@@ -24155,7 +24654,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/Documentation/don
  vmlinuz
  voffset.h
  vsyscall.lds
-@@ -254,9 +273,11 @@ vsyscall_32.lds
+@@ -254,9 +274,11 @@ vsyscall_32.lds
  wanxlfw.inc
  uImage
  unifdef
@@ -40609,6 +41108,18 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/include/asm-gener
 +#define L1_CACHE_BYTES		(1UL << L1_CACHE_SHIFT)
  
  #endif /* __ASM_GENERIC_CACHE_H */
+diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/include/asm-generic/emergency-restart.h linux-3.2.9-pax/include/asm-generic/emergency-restart.h
+--- linux-3.2.9/include/asm-generic/emergency-restart.h	2011-07-22 04:17:23.000000000 +0200
++++ linux-3.2.9-pax/include/asm-generic/emergency-restart.h	2012-03-12 00:38:15.705974062 +0100
+@@ -1,7 +1,7 @@
+ #ifndef _ASM_GENERIC_EMERGENCY_RESTART_H
+ #define _ASM_GENERIC_EMERGENCY_RESTART_H
+ 
+-static inline void machine_emergency_restart(void)
++static inline __noreturn void machine_emergency_restart(void)
+ {
+ 	machine_restart(NULL);
+ }
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/include/asm-generic/int-l64.h linux-3.2.9-pax/include/asm-generic/int-l64.h
 --- linux-3.2.9/include/asm-generic/int-l64.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.2.9-pax/include/asm-generic/int-l64.h	2012-02-27 20:44:15.945065671 +0100
@@ -54797,7 +55308,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/security/integrit
  	return 0;
 diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/security/Kconfig linux-3.2.9-pax/security/Kconfig
 --- linux-3.2.9/security/Kconfig	2012-01-08 19:48:31.667470734 +0100
-+++ linux-3.2.9-pax/security/Kconfig	2012-02-27 20:44:16.457065686 +0100
++++ linux-3.2.9-pax/security/Kconfig	2012-03-11 22:40:37.774350867 +0100
 @@ -4,6 +4,622 @@
  
  menu "Security options"
@@ -55356,7 +55867,7 @@ diff -NurpX linux-3.2.9-pax/Documentation/dontdiff linux-3.2.9/security/Kconfig 
 +
 +config PAX_REFCOUNT
 +	bool "Prevent various kernel object reference counter overflows"
-+	depends on X86 || SPARC64
++	depends on (ARM && (CPU_32v6 || CPU_32v6K || CPU_32v7)) || SPARC64 || X86
 +	help
 +	  By saying Y here the kernel will detect and prevent overflowing
 +	  various (but not all) kinds of object reference counters.  Such
