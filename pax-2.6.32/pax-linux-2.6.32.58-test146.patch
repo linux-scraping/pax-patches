@@ -263,7 +263,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/alph
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/include/asm/atomic.h linux-2.6.32.58-pax/arch/arm/include/asm/atomic.h
 --- linux-2.6.32.58/arch/arm/include/asm/atomic.h	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.58-pax/arch/arm/include/asm/atomic.h	2012-02-25 16:55:10.402988399 +0100
++++ linux-2.6.32.58-pax/arch/arm/include/asm/atomic.h	2012-03-13 12:55:13.420163221 +0100
 @@ -15,6 +15,10 @@
  #include <linux/types.h>
  #include <asm/system.h>
@@ -275,6 +275,266 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/
  #define ATOMIC_INIT(i)	{ (i) }
  
  #ifdef __KERNEL__
+@@ -24,8 +28,16 @@
+  * strex/ldrex monitor on some implementations. The reason we can use it for
+  * atomic_set() is the clrex or dummy strex done on every exception return.
+  */
+-#define atomic_read(v)	((v)->counter)
++#define atomic_read(v)	(*(volatile int *)&(v)->counter)
++static inline int atomic_read_unchecked(const atomic_unchecked_t *v)
++{
++	return v->counter;
++}
+ #define atomic_set(v,i)	(((v)->counter) = (i))
++static inline void atomic_set_unchecked(atomic_unchecked_t *v, int i)
++{
++	v->counter = i;
++}
+ 
+ #if __LINUX_ARM_ARCH__ >= 6
+ 
+@@ -40,6 +52,35 @@ static inline void atomic_add(int i, ato
+ 	int result;
+ 
+ 	__asm__ __volatile__("@ atomic_add\n"
++"1:	ldrex	%1, [%2]\n"
++"	add	%0, %1, %3\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	bvc	3f\n"
++"2:	bkpt	0xf103\n"
++"3:\n"
++#endif
++
++"	strex	%1, %0, [%2]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"\n4:\n"
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (result), "=&r" (tmp)
++	: "r" (&v->counter), "Ir" (i)
++	: "cc");
++}
++
++static inline void atomic_add_unchecked(int i, atomic_unchecked_t *v)
++{
++	unsigned long tmp;
++	int result;
++
++	__asm__ __volatile__("@ atomic_add_unchecked\n"
+ "1:	ldrex	%0, [%2]\n"
+ "	add	%0, %0, %3\n"
+ "	strex	%1, %0, [%2]\n"
+@@ -58,6 +99,42 @@ static inline int atomic_add_return(int
+ 	smp_mb();
+ 
+ 	__asm__ __volatile__("@ atomic_add_return\n"
++"1:	ldrex	%1, [%2]\n"
++"	add	%0, %1, %3\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	bvc	3f\n"
++"	mov	%0, %1\n"
++"2:	bkpt 0xf103\n"
++"3:\n"
++#endif
++
++"	strex	%1, %0, [%2]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"\n4:\n"
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (result), "=&r" (tmp)
++	: "r" (&v->counter), "Ir" (i)
++	: "cc");
++
++	smp_mb();
++
++	return result;
++}
++
++static inline int atomic_add_return_unchecked(int i, atomic_unchecked_t *v)
++{
++	unsigned long tmp;
++	int result;
++
++	smp_mb();
++
++	__asm__ __volatile__("@ atomic_add_return_unchecked\n"
+ "1:	ldrex	%0, [%2]\n"
+ "	add	%0, %0, %3\n"
+ "	strex	%1, %0, [%2]\n"
+@@ -78,6 +155,35 @@ static inline void atomic_sub(int i, ato
+ 	int result;
+ 
+ 	__asm__ __volatile__("@ atomic_sub\n"
++"1:	ldrex	%1, [%2]\n"
++"	sub	%0, %1, %3\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	bvc	3f\n"
++"2:	bkpt	0xf103\n"
++"3:\n"
++#endif
++
++"	strex	%1, %0, [%2]\n"
++"	teq	%1, #0\n"
++"	bne	1b"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"\n4:\n"
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (result), "=&r" (tmp)
++	: "r" (&v->counter), "Ir" (i)
++	: "cc");
++}
++
++static inline void atomic_sub_unchecked(int i, atomic_unchecked_t *v)
++{
++	unsigned long tmp;
++	int result;
++
++	__asm__ __volatile__("@ atomic_sub_unchecked\n"
+ "1:	ldrex	%0, [%2]\n"
+ "	sub	%0, %0, %3\n"
+ "	strex	%1, %0, [%2]\n"
+@@ -96,11 +202,25 @@ static inline int atomic_sub_return(int
+ 	smp_mb();
+ 
+ 	__asm__ __volatile__("@ atomic_sub_return\n"
+-"1:	ldrex	%0, [%2]\n"
+-"	sub	%0, %0, %3\n"
++"1:	ldrex	%1, [%2]\n"
++"	sub	%0, %1, %3\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	bvc	3f\n"
++"	mov	%0, %1\n"
++"2:	bkpt	0xf103\n"
++"3:\n"
++#endif
++
+ "	strex	%1, %0, [%2]\n"
+ "	teq	%1, #0\n"
+ "	bne	1b"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"\n4:\n"
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
+ 	: "=&r" (result), "=&r" (tmp)
+ 	: "r" (&v->counter), "Ir" (i)
+ 	: "cc");
+@@ -132,6 +252,28 @@ static inline int atomic_cmpxchg(atomic_
+ 	return oldval;
+ }
+ 
++static inline int atomic_cmpxchg_unchecked(atomic_unchecked_t *ptr, int old, int new)
++{
++	unsigned long oldval, res;
++
++	smp_mb();
++
++	do {
++		__asm__ __volatile__("@ atomic_cmpxchg_unchecked\n"
++		"ldrex	%1, [%2]\n"
++		"mov	%0, #0\n"
++		"teq	%1, %3\n"
++		"strexeq %0, %4, [%2]\n"
++		    : "=&r" (res), "=&r" (oldval)
++		    : "r" (&ptr->counter), "Ir" (old), "r" (new)
++		    : "cc");
++	} while (res);
++
++	smp_mb();
++
++	return oldval;
++}
++
+ static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
+ {
+ 	unsigned long tmp, tmp2;
+@@ -207,6 +349,10 @@ static inline void atomic_clear_mask(uns
+ #endif /* __LINUX_ARM_ARCH__ */
+ 
+ #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
++static inline int atomic_xchg_unchecked(atomic_unchecked_t *v, int new)
++{
++	return xchg(&v->counter, new);
++}
+ 
+ static inline int atomic_add_unless(atomic_t *v, int a, int u)
+ {
+@@ -220,11 +366,27 @@ static inline int atomic_add_unless(atom
+ #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
+ 
+ #define atomic_inc(v)		atomic_add(1, v)
++static inline void atomic_inc_unchecked(atomic_unchecked_t *v)
++{
++	atomic_add_unchecked(1, v);
++}
+ #define atomic_dec(v)		atomic_sub(1, v)
++static inline void atomic_dec_unchecked(atomic_unchecked_t *v)
++{
++	atomic_sub_unchecked(1, v);
++}
+ 
+ #define atomic_inc_and_test(v)	(atomic_add_return(1, v) == 0)
++static inline int atomic_inc_and_test_unchecked(atomic_unchecked_t *v)
++{
++	return atomic_add_return_unchecked(1, v) == 0;
++}
+ #define atomic_dec_and_test(v)	(atomic_sub_return(1, v) == 0)
+ #define atomic_inc_return(v)    (atomic_add_return(1, v))
++static inline int atomic_inc_return_unchecked(atomic_unchecked_t *v)
++{
++	return atomic_add_return_unchecked(1, v);
++}
+ #define atomic_dec_return(v)    (atomic_sub_return(1, v))
+ #define atomic_sub_and_test(i, v) (atomic_sub_return(i, v) == 0)
+ 
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/include/asm/cacheflush.h linux-2.6.32.58-pax/arch/arm/include/asm/cacheflush.h
+--- linux-2.6.32.58/arch/arm/include/asm/cacheflush.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/arch/arm/include/asm/cacheflush.h	2012-03-13 11:26:27.304447593 +0100
+@@ -216,13 +216,13 @@ struct cpu_cache_fns {
+ 	void (*dma_inv_range)(const void *, const void *);
+ 	void (*dma_clean_range)(const void *, const void *);
+ 	void (*dma_flush_range)(const void *, const void *);
+-};
++} __no_const;
+ 
+ struct outer_cache_fns {
+ 	void (*inv_range)(unsigned long, unsigned long);
+ 	void (*clean_range)(unsigned long, unsigned long);
+ 	void (*flush_range)(unsigned long, unsigned long);
+-};
++} __no_const;
+ 
+ /*
+  * Select the calling method
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/include/asm/cache.h linux-2.6.32.58-pax/arch/arm/include/asm/cache.h
+--- linux-2.6.32.58/arch/arm/include/asm/cache.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/arch/arm/include/asm/cache.h	2012-03-13 11:17:22.028476707 +0100
+@@ -5,7 +5,7 @@
+ #define __ASMARM_CACHE_H
+ 
+ #define L1_CACHE_SHIFT		CONFIG_ARM_L1_CACHE_SHIFT
+-#define L1_CACHE_BYTES		(1 << L1_CACHE_SHIFT)
++#define L1_CACHE_BYTES		(_AC(1,UL) << L1_CACHE_SHIFT)
+ 
+ /*
+  * Memory returned by kmalloc() may be used for DMA, so we must make
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/include/asm/elf.h linux-2.6.32.58-pax/arch/arm/include/asm/elf.h
 --- linux-2.6.32.58/arch/arm/include/asm/elf.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/arch/arm/include/asm/elf.h	2011-06-25 10:34:08.392000308 +0200
@@ -305,6 +565,53 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/
  	KM_TYPE_NR
  };
  
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/include/asm/page.h linux-2.6.32.58-pax/arch/arm/include/asm/page.h
+--- linux-2.6.32.58/arch/arm/include/asm/page.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/arch/arm/include/asm/page.h	2012-03-13 11:25:19.900451192 +0100
+@@ -122,7 +122,7 @@ struct cpu_user_fns {
+ 	void (*cpu_clear_user_highpage)(struct page *page, unsigned long vaddr);
+ 	void (*cpu_copy_user_highpage)(struct page *to, struct page *from,
+ 			unsigned long vaddr);
+-};
++} __no_const;
+ 
+ #ifdef MULTI_USER
+ extern struct cpu_user_fns cpu_user;
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/include/asm/system.h linux-2.6.32.58-pax/arch/arm/include/asm/system.h
+--- linux-2.6.32.58/arch/arm/include/asm/system.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/arch/arm/include/asm/system.h	2012-03-13 11:24:33.056453693 +0100
+@@ -86,6 +86,8 @@ void hook_fault_code(int nr, int (*fn)(u
+ 
+ #define xchg(ptr,x) \
+ 	((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
++#define xchg_unchecked(ptr,x) \
++	((__typeof__(*(ptr)))__xchg((unsigned long)(x),(ptr),sizeof(*(ptr))))
+ 
+ extern asmlinkage void __backtrace(void);
+ extern asmlinkage void c_backtrace(unsigned long fp, int pmode);
+@@ -98,7 +100,7 @@ extern int cpu_architecture(void);
+ extern void cpu_init(void);
+ 
+ void arm_machine_restart(char mode, const char *cmd);
+-extern void (*arm_pm_restart)(char str, const char *cmd);
++extern void (*arm_pm_restart)(char str, const char *cmd) __noreturn;
+ 
+ #define UDBG_UNDEFINED	(1 << 0)
+ #define UDBG_SYSCALL	(1 << 1)
+@@ -505,6 +507,13 @@ static inline unsigned long long __cmpxc
+ 
+ #endif	/* __LINUX_ARM_ARCH__ >= 6 */
+ 
++#define _ASM_EXTABLE(from, to)		\
++"	.pushsection __ex_table,\"a\"\n"\
++"	.align	3\n"			\
++"	.long	" #from ", " #to"\n"	\
++"	.popsection"
++
++
+ #endif /* __ASSEMBLY__ */
+ 
+ #define arch_align_stack(x) (x)
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/include/asm/uaccess.h linux-2.6.32.58-pax/arch/arm/include/asm/uaccess.h
 --- linux-2.6.32.58/arch/arm/include/asm/uaccess.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/arch/arm/include/asm/uaccess.h	2011-07-06 17:52:22.001817413 +0200
@@ -388,6 +695,59 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/
  EXPORT_SYMBOL(__clear_user);
  
  EXPORT_SYMBOL(__get_user_1);
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/kernel/process.c linux-2.6.32.58-pax/arch/arm/kernel/process.c
+--- linux-2.6.32.58/arch/arm/kernel/process.c	2011-12-11 01:31:28.926926843 +0100
++++ linux-2.6.32.58-pax/arch/arm/kernel/process.c	2012-03-13 11:23:53.224455820 +0100
+@@ -83,7 +83,7 @@ static int __init hlt_setup(char *__unus
+ __setup("nohlt", nohlt_setup);
+ __setup("hlt", hlt_setup);
+ 
+-void arm_machine_restart(char mode, const char *cmd)
++__noreturn void arm_machine_restart(char mode, const char *cmd)
+ {
+ 	/*
+ 	 * Clean and disable cache, and turn off interrupts
+@@ -117,7 +117,7 @@ void arm_machine_restart(char mode, cons
+ void (*pm_power_off)(void);
+ EXPORT_SYMBOL(pm_power_off);
+ 
+-void (*arm_pm_restart)(char str, const char *cmd) = arm_machine_restart;
++void (*arm_pm_restart)(char str, const char *cmd) __noreturn = arm_machine_restart;
+ EXPORT_SYMBOL_GPL(arm_pm_restart);
+ 
+ 
+@@ -202,6 +202,7 @@ void machine_power_off(void)
+ {
+ 	if (pm_power_off)
+ 		pm_power_off();
++	BUG();
+ }
+ 
+ void machine_restart(char *cmd)
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/kernel/setup.c linux-2.6.32.58-pax/arch/arm/kernel/setup.c
+--- linux-2.6.32.58/arch/arm/kernel/setup.c	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/arch/arm/kernel/setup.c	2012-03-13 11:22:33.892460056 +0100
+@@ -92,16 +92,16 @@ EXPORT_SYMBOL(elf_hwcap);
+ struct processor processor;
+ #endif
+ #ifdef MULTI_TLB
+-struct cpu_tlb_fns cpu_tlb;
++struct cpu_tlb_fns cpu_tlb __read_only;
+ #endif
+ #ifdef MULTI_USER
+-struct cpu_user_fns cpu_user;
++struct cpu_user_fns cpu_user __read_only;
+ #endif
+ #ifdef MULTI_CACHE
+-struct cpu_cache_fns cpu_cache;
++struct cpu_cache_fns cpu_cache __read_only;
+ #endif
+ #ifdef CONFIG_OUTER_CACHE
+-struct outer_cache_fns outer_cache;
++struct outer_cache_fns outer_cache __read_only;
+ #endif
+ 
+ struct stack {
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/lib/copy_from_user.S linux-2.6.32.58-pax/arch/arm/lib/copy_from_user.S
 --- linux-2.6.32.58/arch/arm/lib/copy_from_user.S	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/arch/arm/lib/copy_from_user.S	2011-07-06 18:05:42.309817529 +0200
@@ -414,6 +774,17 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/
  
  	.section .fixup,"ax"
  	.align 0
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/lib/copy_page.S linux-2.6.32.58-pax/arch/arm/lib/copy_page.S
+--- linux-2.6.32.58/arch/arm/lib/copy_page.S	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/arch/arm/lib/copy_page.S	2012-03-13 11:17:23.172476646 +0100
+@@ -10,6 +10,7 @@
+  *  ASM optimised string functions
+  */
+ #include <linux/linkage.h>
++#include <linux/const.h>
+ #include <asm/assembler.h>
+ #include <asm/asm-offsets.h>
+ #include <asm/cache.h>
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/lib/copy_to_user.S linux-2.6.32.58-pax/arch/arm/lib/copy_to_user.S
 --- linux-2.6.32.58/arch/arm/lib/copy_to_user.S	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/arch/arm/lib/copy_to_user.S	2011-07-06 18:05:17.289817581 +0200
@@ -510,7 +881,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/
  	 * This test is stubbed out of the main function above to keep
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/mm/fault.c linux-2.6.32.58-pax/arch/arm/mm/fault.c
 --- linux-2.6.32.58/arch/arm/mm/fault.c	2011-06-25 10:30:34.128000322 +0200
-+++ linux-2.6.32.58-pax/arch/arm/mm/fault.c	2011-11-18 15:56:12.204050628 +0100
++++ linux-2.6.32.58-pax/arch/arm/mm/fault.c	2012-03-13 11:17:21.748476722 +0100
 @@ -166,6 +166,13 @@ __do_user_fault(struct task_struct *tsk,
  	}
  #endif
@@ -559,6 +930,27 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/
  /*
   * First Level Translation Fault Handler
   *
+@@ -569,6 +603,20 @@ do_PrefetchAbort(unsigned long addr, uns
+ 	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
+ 	struct siginfo info;
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++	if (fsr_fs(ifsr) == 2) {
++		unsigned int bkpt;
++
++		if (!probe_kernel_address((unsigned int *)addr, bkpt) && bkpt == 0xe12f1073) {
++			current->thread.error_code = ifsr;
++			current->thread.trap_no = 0;
++			pax_report_refcount_overflow(regs);
++			fixup_exception(regs);
++			return;
++		}
++	}
++#endif
++
+ 	if (!inf->fn(addr, ifsr | FSR_LNX_PF, regs))
+ 		return;
+ 
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/arm/mm/mmap.c linux-2.6.32.58-pax/arch/arm/mm/mmap.c
 --- linux-2.6.32.58/arch/arm/mm/mmap.c	2011-06-25 10:30:34.128000322 +0200
 +++ linux-2.6.32.58-pax/arch/arm/mm/mmap.c	2011-06-25 10:34:08.412000356 +0200
@@ -2083,6 +2475,33 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/powe
  	mr	r5,r3
  	addi	r3,r1,STACK_FRAME_OVERHEAD
  	lwz	r4,_DAR(r1)
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/powerpc/kernel/irq.c linux-2.6.32.58-pax/arch/powerpc/kernel/irq.c
+--- linux-2.6.32.58/arch/powerpc/kernel/irq.c	2011-06-25 10:30:34.200000322 +0200
++++ linux-2.6.32.58-pax/arch/powerpc/kernel/irq.c	2012-03-13 11:21:39.376462965 +0100
+@@ -490,9 +490,6 @@ struct irq_host *irq_alloc_host(struct d
+ 	host->ops = ops;
+ 	host->of_node = of_node_get(of_node);
+ 
+-	if (host->ops->match == NULL)
+-		host->ops->match = default_irq_host_match;
+-
+ 	spin_lock_irqsave(&irq_big_lock, flags);
+ 
+ 	/* If it's a legacy controller, check for duplicates and
+@@ -567,7 +564,12 @@ struct irq_host *irq_find_host(struct de
+ 	 */
+ 	spin_lock_irqsave(&irq_big_lock, flags);
+ 	list_for_each_entry(h, &irq_hosts, link)
+-		if (h->ops->match(h, node)) {
++		if (h->ops->match) {
++			if (h->ops->match(h, node)) {
++				found = h;
++				break;
++			}
++		} else if (default_irq_host_match(h, node)) {
+ 			found = h;
+ 			break;
+ 		}
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/powerpc/kernel/kgdb.c linux-2.6.32.58-pax/arch/powerpc/kernel/kgdb.c
 --- linux-2.6.32.58/arch/powerpc/kernel/kgdb.c	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/arch/powerpc/kernel/kgdb.c	2011-07-16 00:42:36.443011443 +0200
@@ -2979,6 +3398,18 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/sh/m
  
  bottomup:
  	/*
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/sparc/include/asm/atomic_32.h linux-2.6.32.58-pax/arch/sparc/include/asm/atomic_32.h
+--- linux-2.6.32.58/arch/sparc/include/asm/atomic_32.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/arch/sparc/include/asm/atomic_32.h	2012-03-13 11:17:25.176476539 +0100
+@@ -13,6 +13,8 @@
+ 
+ #include <linux/types.h>
+ 
++#include <asm-generic/atomic64.h>
++
+ #ifdef __KERNEL__
+ 
+ #include <asm/system.h>
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/sparc/include/asm/atomic_64.h linux-2.6.32.58-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-2.6.32.58/arch/sparc/include/asm/atomic_64.h	2011-06-25 10:30:34.248000322 +0200
 +++ linux-2.6.32.58-pax/arch/sparc/include/asm/atomic_64.h	2011-08-24 14:22:03.567056644 +0200
@@ -3174,16 +3605,6 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/spar
  }
  
  #define atomic64_inc_not_zero(v) atomic64_add_unless((v), 1, 0)
-diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/sparc/include/asm/atomic.h linux-2.6.32.58-pax/arch/sparc/include/asm/atomic.h
---- linux-2.6.32.58/arch/sparc/include/asm/atomic.h	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.58-pax/arch/sparc/include/asm/atomic.h	2012-02-25 16:32:09.343061998 +0100
-@@ -4,5 +4,6 @@
- #include <asm/atomic_64.h>
- #else
- #include <asm/atomic_32.h>
-+#include <asm-generic/atomic64.h>
- #endif
- #endif
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/arch/sparc/include/asm/cache.h linux-2.6.32.58-pax/arch/sparc/include/asm/cache.h
 --- linux-2.6.32.58/arch/sparc/include/asm/cache.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/arch/sparc/include/asm/cache.h	2011-06-30 16:41:10.508028852 +0200
@@ -24286,7 +24707,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/crypto/gf
  
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Documentation/dontdiff linux-2.6.32.58-pax/Documentation/dontdiff
 --- linux-2.6.32.58/Documentation/dontdiff	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.58-pax/Documentation/dontdiff	2011-12-03 00:26:52.659485373 +0100
++++ linux-2.6.32.58-pax/Documentation/dontdiff	2012-03-13 11:17:21.792476719 +0100
 @@ -1,15 +1,19 @@
  *.a
  *.aux
@@ -24374,7 +24795,15 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Documenta
  keywords.c
  ksym.c*
  ksym.h*
-@@ -127,13 +147,16 @@ machtypes.h
+@@ -117,6 +137,7 @@ kxgettext
+ lkc_defs.h
+ lex.c
+ lex.*.c
++lib1funcs.S
+ logo_*.c
+ logo_*_clut224.c
+ logo_*_mono.c
+@@ -127,13 +148,16 @@ machtypes.h
  map
  maui_boot.h
  mconf
@@ -24391,7 +24820,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Documenta
  mktables
  mktree
  modpost
-@@ -149,6 +172,7 @@ patches*
+@@ -149,6 +173,7 @@ patches*
  pca200e.bin
  pca200e_ecd.bin2
  piggy.gz
@@ -24399,7 +24828,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Documenta
  piggyback
  pnmtologo
  ppc_defs.h*
-@@ -157,12 +181,15 @@ qconf
+@@ -157,12 +182,15 @@ qconf
  raid6altivec*.c
  raid6int*.c
  raid6tables.c
@@ -24415,7 +24844,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Documenta
  sm_tbl*
  split-include
  syscalltab.h
-@@ -171,6 +198,7 @@ tftpboot.img
+@@ -171,6 +199,7 @@ tftpboot.img
  timeconst.h
  times.h*
  trix_boot.h
@@ -24423,7 +24852,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Documenta
  utsrelease.h*
  vdso-syms.lds
  vdso.lds
-@@ -186,14 +214,20 @@ version.h*
+@@ -186,14 +215,20 @@ version.h*
  vmlinux
  vmlinux-*
  vmlinux.aout
@@ -36085,7 +36514,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/fs/ecrypt
  		goto out_free;
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/fs/exec.c linux-2.6.32.58-pax/fs/exec.c
 --- linux-2.6.32.58/fs/exec.c	2011-06-25 10:30:35.844000323 +0200
-+++ linux-2.6.32.58-pax/fs/exec.c	2012-01-07 03:19:51.255835305 +0100
++++ linux-2.6.32.58-pax/fs/exec.c	2012-03-13 11:17:21.812476718 +0100
 @@ -56,12 +56,28 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -36452,7 +36881,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/fs/exec.c
 +#endif
 +}
 +
-+NORET_TYPE void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type)
++__noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type)
 +{
 +	printk(KERN_ERR "PAX: kernel memory %s attempt detected %s %p (%s) (%lu bytes)\n",
 +		to ? "leak" : "overwrite", to ? "from" : "to", ptr, type ? : "unknown", len);
@@ -39805,6 +40234,18 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/a
 +#define L1_CACHE_BYTES		(1UL << L1_CACHE_SHIFT)
  
  #endif /* __ASM_GENERIC_CACHE_H */
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/asm-generic/emergency-restart.h linux-2.6.32.58-pax/include/asm-generic/emergency-restart.h
+--- linux-2.6.32.58/include/asm-generic/emergency-restart.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/include/asm-generic/emergency-restart.h	2012-03-13 11:17:25.180476538 +0100
+@@ -1,7 +1,7 @@
+ #ifndef _ASM_GENERIC_EMERGENCY_RESTART_H
+ #define _ASM_GENERIC_EMERGENCY_RESTART_H
+ 
+-static inline void machine_emergency_restart(void)
++static inline __noreturn void machine_emergency_restart(void)
+ {
+ 	machine_restart(NULL);
+ }
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/asm-generic/futex.h linux-2.6.32.58-pax/include/asm-generic/futex.h
 --- linux-2.6.32.58/include/asm-generic/futex.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/include/asm-generic/futex.h	2011-06-25 10:34:09.548000354 +0200
@@ -41297,6 +41738,17 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/l
  
  /**
   * preempt_notifier - key for installing preemption notifiers
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/linux/prefetch.h linux-2.6.32.58-pax/include/linux/prefetch.h
+--- linux-2.6.32.58/include/linux/prefetch.h	2009-12-03 04:51:21.000000000 +0100
++++ linux-2.6.32.58-pax/include/linux/prefetch.h	2012-03-13 12:39:06.628214840 +0100
+@@ -11,6 +11,7 @@
+ #define _LINUX_PREFETCH_H
+ 
+ #include <linux/types.h>
++#include <linux/const.h>
+ #include <asm/processor.h>
+ #include <asm/cache.h>
+ 
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/linux/proc_fs.h linux-2.6.32.58-pax/include/linux/proc_fs.h
 --- linux-2.6.32.58/include/linux/proc_fs.h	2009-12-03 04:51:21.000000000 +0100
 +++ linux-2.6.32.58-pax/include/linux/proc_fs.h	2011-07-16 00:43:07.831011441 +0200
@@ -41411,7 +41863,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/l
  /**
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/linux/sched.h linux-2.6.32.58-pax/include/linux/sched.h
 --- linux-2.6.32.58/include/linux/sched.h	2011-06-25 10:30:36.128000323 +0200
-+++ linux-2.6.32.58-pax/include/linux/sched.h	2011-11-18 15:56:12.280050524 +0100
++++ linux-2.6.32.58-pax/include/linux/sched.h	2012-03-13 11:20:01.012468218 +0100
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -41511,7 +41963,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/l
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern NORET_TYPE void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type) ATTRIB_NORET;
++extern __noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
@@ -41531,7 +41983,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/include/l
  extern void flush_itimer_signals(void);
  
 -extern NORET_TYPE void do_group_exit(int);
-+extern NORET_TYPE void do_group_exit(int) ATTRIB_NORET;
++extern __noreturn void do_group_exit(int);
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
@@ -43424,7 +43876,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/kernel/cp
   * Should always be manipulated under cpu_add_remove_lock
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/kernel/exit.c linux-2.6.32.58-pax/kernel/exit.c
 --- linux-2.6.32.58/kernel/exit.c	2011-06-25 10:30:36.188000323 +0200
-+++ linux-2.6.32.58-pax/kernel/exit.c	2011-06-25 10:34:09.668000354 +0200
++++ linux-2.6.32.58-pax/kernel/exit.c	2012-03-13 11:17:21.936476712 +0100
 @@ -397,7 +397,7 @@ int allow_signal(int sig)
  	 * know it'll be handled, so that they don't get converted to
  	 * SIGKILL or just silently dropped.
@@ -43434,6 +43886,15 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/kernel/ex
  	recalc_sigpending();
  	spin_unlock_irq(&current->sighand->siglock);
  	return 0;
+@@ -1059,7 +1059,7 @@ SYSCALL_DEFINE1(exit, int, error_code)
+  * Take down every thread in the group.  This is called by fatal signals
+  * as well as by sys_exit_group (below).
+  */
+-NORET_TYPE void
++__noreturn void
+ do_group_exit(int exit_code)
+ {
+ 	struct signal_struct *sig = current->signal;
 @@ -1188,7 +1188,7 @@ static int wait_task_zombie(struct wait_
  
  	if (unlikely(wo->wo_flags & WNOWAIT)) {
@@ -46294,7 +46755,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/lib/vspri
  
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile linux-2.6.32.58-pax/Makefile
 --- linux-2.6.32.58/Makefile	2012-03-05 11:50:24.559969398 +0100
-+++ linux-2.6.32.58-pax/Makefile	2012-03-05 11:50:32.003969001 +0100
++++ linux-2.6.32.58-pax/Makefile	2012-03-13 11:17:21.940476711 +0100
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -46327,7 +46788,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  			 include/linux/version.h headers_% \
  			 kernelrelease kernelversion
  
-@@ -526,6 +527,46 @@ else
+@@ -526,6 +527,48 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
@@ -46352,7 +46813,9 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
 +CHECKER_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/checker_plugin.so -DCHECKER_PLUGIN
 +endif
 +endif
-+GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS) $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS)
++COLORIZE_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/colorize_plugin.so
++GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS)
++GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
 +export CONSTIFY_PLUGIN STACKLEAK_PLUGIN KERNEXEC_PLUGIN CHECKER_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
@@ -46374,7 +46837,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -868,6 +909,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
+@@ -868,6 +911,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -46383,7 +46846,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -877,7 +920,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
+@@ -877,7 +922,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -46392,7 +46855,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  	$(Q)$(MAKE) $(build)=$@
  
  # Build the kernel release string
-@@ -986,6 +1029,7 @@ prepare0: archprepare FORCE
+@@ -986,6 +1031,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=. missing-syscalls
  
  # All the preparing..
@@ -46400,7 +46863,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  prepare: prepare0
  
  # The asm symlink changes when $(ARCH) changes.
-@@ -1127,6 +1171,8 @@ all: modules
+@@ -1127,6 +1173,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -46409,7 +46872,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux)
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1136,7 +1182,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
+@@ -1136,7 +1184,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -46418,7 +46881,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  
  # Target to install modules
  PHONY += modules_install
-@@ -1201,7 +1247,7 @@ MRPROPER_FILES += .config .config.old in
+@@ -1201,7 +1249,7 @@ MRPROPER_FILES += .config .config.old in
                    include/linux/autoconf.h include/linux/version.h      \
                    include/linux/utsrelease.h                            \
                    include/linux/bounds.h include/asm*/asm-offsets.h     \
@@ -46427,7 +46890,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1245,7 +1291,7 @@ distclean: mrproper
+@@ -1245,7 +1293,7 @@ distclean: mrproper
  	@find $(srctree) $(RCS_FIND_IGNORE) \
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
@@ -46436,7 +46899,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1292,6 +1338,7 @@ help:
+@@ -1292,6 +1340,7 @@ help:
  	@echo  '  modules_prepare - Set up for building external modules'
  	@echo  '  tags/TAGS	  - Generate tags file for editors'
  	@echo  '  cscope	  - Generate cscope index'
@@ -46444,7 +46907,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  	@echo  '  kernelrelease	  - Output the release version string'
  	@echo  '  kernelversion	  - Output the version stored in Makefile'
  	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
-@@ -1393,6 +1440,8 @@ PHONY += $(module-dirs) modules
+@@ -1393,6 +1442,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -46453,7 +46916,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1448,7 +1497,7 @@ endif # KBUILD_EXTMOD
+@@ -1448,7 +1499,7 @@ endif # KBUILD_EXTMOD
  quiet_cmd_tags = GEN     $@
        cmd_tags = $(CONFIG_SHELL) $(srctree)/scripts/tags.sh $@
  
@@ -46462,7 +46925,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  	$(call cmd,tags)
  
  # Scripts to check various things for consistency
-@@ -1513,17 +1562,21 @@ else
+@@ -1513,17 +1564,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -46488,7 +46951,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/Makefile 
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1533,11 +1586,15 @@ endif
+@@ -1533,11 +1588,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -47528,7 +47991,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mlock.
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c linux-2.6.32.58-pax/mm/mmap.c
 --- linux-2.6.32.58/mm/mmap.c	2011-11-18 16:06:30.092084080 +0100
-+++ linux-2.6.32.58-pax/mm/mmap.c	2012-02-21 21:58:21.680784834 +0100
++++ linux-2.6.32.58-pax/mm/mmap.c	2012-03-13 11:17:21.952476710 +0100
 @@ -45,6 +45,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -48119,7 +48582,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  }
  
  unsigned long
-@@ -1510,40 +1723,41 @@ struct vm_area_struct *find_vma(struct m
+@@ -1510,40 +1723,50 @@ struct vm_area_struct *find_vma(struct m
  
  EXPORT_SYMBOL(find_vma);
  
@@ -48139,22 +48602,14 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
 -
 -	/* Guard against addr being lower than the first VMA */
 -	vma = mm->mmap;
-+	struct vm_area_struct *vma;
- 
+-
 -	/* Go through the RB tree quickly. */
 -	rb_node = mm->mm_rb.rb_node;
-+	vma = find_vma(mm, addr);
-+	*pprev = vma ? vma->vm_prev : NULL;
-+	return vma;
-+}
- 
+-
 -	while (rb_node) {
 -		struct vm_area_struct *vma_tmp;
 -		vma_tmp = rb_entry(rb_node, struct vm_area_struct, vm_rb);
-+#ifdef CONFIG_PAX_SEGMEXEC
-+struct vm_area_struct *pax_find_mirror_vma(struct vm_area_struct *vma)
-+{
-+	struct vm_area_struct *vma_m;
++	struct vm_area_struct *vma;
  
 -		if (addr < vma_tmp->vm_end) {
 -			rb_node = rb_node->rb_left;
@@ -48162,17 +48617,33 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
 -			prev = vma_tmp;
 -			if (!prev->vm_next || (addr < prev->vm_next->vm_end))
 -				break;
--			rb_node = rb_node->rb_right;
--		}
++	vma = find_vma(mm, addr);
++	if (vma) {
++		*pprev = vma->vm_prev;
++	} else {
++		struct rb_node *rb_node = mm->mm_rb.rb_node;
++		*pprev = NULL;
++		while (rb_node) {
++			*pprev = rb_entry(rb_node, struct vm_area_struct, vm_rb);
+ 			rb_node = rb_node->rb_right;
+ 		}
+ 	}
++	return vma;
++}
+ 
+-out:
+-	*pprev = prev;
+-	return prev ? prev->vm_next : vma;
++#ifdef CONFIG_PAX_SEGMEXEC
++struct vm_area_struct *pax_find_mirror_vma(struct vm_area_struct *vma)
++{
++	struct vm_area_struct *vma_m;
++
 +	BUG_ON(!vma || vma->vm_start >= vma->vm_end);
 +	if (!(vma->vm_mm->pax_flags & MF_PAX_SEGMEXEC) || !(vma->vm_flags & VM_EXEC)) {
 +		BUG_ON(vma->vm_mirror);
 +		return NULL;
- 	}
--
--out:
--	*pprev = prev;
--	return prev ? prev->vm_next : vma;
++	}
 +	BUG_ON(vma->vm_start < SEGMEXEC_TASK_SIZE && SEGMEXEC_TASK_SIZE < vma->vm_end);
 +	vma_m = vma->vm_mirror;
 +	BUG_ON(!vma_m || vma_m->vm_mirror != vma);
@@ -48186,7 +48657,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  
  /*
   * Verify that the stack growth is acceptable and
-@@ -1603,34 +1817,42 @@ static int acct_stack_growth(struct vm_a
+@@ -1603,34 +1826,42 @@ static int acct_stack_growth(struct vm_a
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
  	int error;
@@ -48238,7 +48709,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -1643,6 +1865,8 @@ int expand_upwards(struct vm_area_struct
+@@ -1643,6 +1874,8 @@ int expand_upwards(struct vm_area_struct
  				vma->vm_end = address;
  		}
  	}
@@ -48247,7 +48718,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	anon_vma_unlock(vma);
  	return error;
  }
-@@ -1655,6 +1879,8 @@ static int expand_downwards(struct vm_ar
+@@ -1655,6 +1888,8 @@ static int expand_downwards(struct vm_ar
  				   unsigned long address)
  {
  	int error;
@@ -48256,7 +48727,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -1668,6 +1894,15 @@ static int expand_downwards(struct vm_ar
+@@ -1668,6 +1903,15 @@ static int expand_downwards(struct vm_ar
  	if (error)
  		return error;
  
@@ -48272,7 +48743,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	anon_vma_lock(vma);
  
  	/*
-@@ -1677,9 +1912,17 @@ static int expand_downwards(struct vm_ar
+@@ -1677,9 +1921,17 @@ static int expand_downwards(struct vm_ar
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -48291,7 +48762,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -1689,10 +1932,21 @@ static int expand_downwards(struct vm_ar
+@@ -1689,10 +1941,21 @@ static int expand_downwards(struct vm_ar
  			if (!error) {
  				vma->vm_start = address;
  				vma->vm_pgoff -= grow;
@@ -48313,7 +48784,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	return error;
  }
  
-@@ -1768,6 +2022,13 @@ static void remove_vma_list(struct mm_st
+@@ -1768,6 +2031,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -48327,7 +48798,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		mm->total_vm -= nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
  		vma = remove_vma(vma);
-@@ -1813,6 +2074,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -1813,6 +2083,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -48344,7 +48815,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		rb_erase(&vma->vm_rb, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -1840,10 +2111,25 @@ int split_vma(struct mm_struct * mm, str
+@@ -1840,10 +2120,25 @@ int split_vma(struct mm_struct * mm, str
  	struct mempolicy *pol;
  	struct vm_area_struct *new;
  
@@ -48370,7 +48841,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -1851,6 +2137,16 @@ int split_vma(struct mm_struct * mm, str
+@@ -1851,6 +2146,16 @@ int split_vma(struct mm_struct * mm, str
  	if (!new)
  		return -ENOMEM;
  
@@ -48387,7 +48858,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -1861,8 +2157,29 @@ int split_vma(struct mm_struct * mm, str
+@@ -1861,8 +2166,29 @@ int split_vma(struct mm_struct * mm, str
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -48417,7 +48888,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		kmem_cache_free(vm_area_cachep, new);
  		return PTR_ERR(pol);
  	}
-@@ -1883,6 +2200,28 @@ int split_vma(struct mm_struct * mm, str
+@@ -1883,6 +2209,28 @@ int split_vma(struct mm_struct * mm, str
  	else
  		vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -48446,7 +48917,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	return 0;
  }
  
-@@ -1891,11 +2230,30 @@ int split_vma(struct mm_struct * mm, str
+@@ -1891,11 +2239,30 @@ int split_vma(struct mm_struct * mm, str
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -48477,7 +48948,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -1959,6 +2317,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -1959,6 +2326,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -48486,7 +48957,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	return 0;
  }
  
-@@ -1971,22 +2331,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -1971,22 +2340,18 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  
  	profile_munmap(addr);
  
@@ -48515,7 +48986,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2000,6 +2356,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2000,6 +2365,7 @@ unsigned long do_brk(unsigned long addr,
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -48523,7 +48994,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2011,16 +2368,30 @@ unsigned long do_brk(unsigned long addr,
+@@ -2011,16 +2377,30 @@ unsigned long do_brk(unsigned long addr,
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -48555,7 +49026,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		locked += mm->locked_vm;
  		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
  		lock_limit >>= PAGE_SHIFT;
-@@ -2037,22 +2408,22 @@ unsigned long do_brk(unsigned long addr,
+@@ -2037,22 +2417,22 @@ unsigned long do_brk(unsigned long addr,
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -48582,7 +49053,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2066,7 +2437,7 @@ unsigned long do_brk(unsigned long addr,
+@@ -2066,7 +2446,7 @@ unsigned long do_brk(unsigned long addr,
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -48591,7 +49062,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  		return -ENOMEM;
  	}
  
-@@ -2078,11 +2449,12 @@ unsigned long do_brk(unsigned long addr,
+@@ -2078,11 +2458,12 @@ unsigned long do_brk(unsigned long addr,
  	vma->vm_page_prot = vm_get_page_prot(flags);
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
@@ -48606,7 +49077,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	return addr;
  }
  
-@@ -2129,8 +2501,10 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2129,8 +2510,10 @@ void exit_mmap(struct mm_struct *mm)
  	 * Walk the list again, actually closing and freeing it,
  	 * with preemption enabled, without holding any MM locks.
  	 */
@@ -48618,7 +49089,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  
  	BUG_ON(mm->nr_ptes > (FIRST_USER_ADDRESS+PMD_SIZE-1)>>PMD_SHIFT);
  }
-@@ -2144,6 +2518,10 @@ int insert_vm_struct(struct mm_struct *
+@@ -2144,6 +2527,10 @@ int insert_vm_struct(struct mm_struct *
  	struct vm_area_struct * __vma, * prev;
  	struct rb_node ** rb_link, * rb_parent;
  
@@ -48629,7 +49100,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2166,7 +2544,22 @@ int insert_vm_struct(struct mm_struct *
+@@ -2166,7 +2553,22 @@ int insert_vm_struct(struct mm_struct *
  	if ((vma->vm_flags & VM_ACCOUNT) &&
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
@@ -48652,7 +49123,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	return 0;
  }
  
-@@ -2184,6 +2577,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2184,6 +2586,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	struct mempolicy *pol;
  
@@ -48661,7 +49132,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2227,6 +2622,35 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2227,6 +2631,35 @@ struct vm_area_struct *copy_vma(struct v
  	return new_vma;
  }
  
@@ -48697,7 +49168,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/mm/mmap.c
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2307,6 +2731,17 @@ int install_special_mapping(struct mm_st
+@@ -2307,6 +2740,17 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -52774,7 +53245,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/security/
  	return 0;
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/security/Kconfig linux-2.6.32.58-pax/security/Kconfig
 --- linux-2.6.32.58/security/Kconfig	2009-12-03 04:51:21.000000000 +0100
-+++ linux-2.6.32.58-pax/security/Kconfig	2012-02-04 01:58:36.232192426 +0100
++++ linux-2.6.32.58-pax/security/Kconfig	2012-03-13 11:17:21.956476711 +0100
 @@ -4,6 +4,620 @@
  
  menu "Security options"
@@ -53331,7 +53802,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/security/
 +
 +config PAX_REFCOUNT
 +	bool "Prevent various kernel object reference counter overflows"
-+	depends on X86 || SPARC64
++	depends on (ARM && (CPU_32v6 || CPU_32v6K || CPU_32v7)) || SPARC64 || X86
 +	help
 +	  By saying Y here the kernel will detect and prevent overflowing
 +	  various (but not all) kinds of object reference counters.  Such
@@ -54269,6 +54740,157 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc
 +
 +	return 0;
 +}
+diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc/colorize_plugin.c linux-2.6.32.58-pax/tools/gcc/colorize_plugin.c
+--- linux-2.6.32.58/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-2.6.32.58-pax/tools/gcc/colorize_plugin.c	2012-03-13 11:17:25.240476535 +0100
+@@ -0,0 +1,147 @@
++/*
++ * Copyright 2012 by PaX Team <pageexec@freemail.hu>
++ * Licensed under the GPL v2
++ *
++ * Note: the choice of the license means that the compilation process is
++ *       NOT 'eligible' as defined by gcc's library exception to the GPL v3,
++ *       but for the kernel it doesn't matter since it doesn't link against
++ *       any of the gcc libraries
++ *
++ * gcc plugin to colorize diagnostic output
++ *
++ */
++
++#include "gcc-plugin.h"
++#include "config.h"
++#include "system.h"
++#include "coretypes.h"
++#include "tree.h"
++#include "tree-pass.h"
++#include "flags.h"
++#include "intl.h"
++#include "toplev.h"
++#include "plugin.h"
++#include "diagnostic.h"
++#include "plugin-version.h"
++#include "tm.h"
++
++int plugin_is_GPL_compatible;
++
++static struct plugin_info colorize_plugin_info = {
++	.version	= "201203092200",
++};
++
++#define GREEN		"\033[32m\033[2m"
++#define LIGHTGREEN	"\033[32m\033[1m"
++#define YELLOW		"\033[33m\033[2m"
++#define LIGHTYELLOW	"\033[33m\033[1m"
++#define RED		"\033[31m\033[2m"
++#define LIGHTRED	"\033[31m\033[1m"
++#define BLUE		"\033[34m\033[2m"
++#define LIGHTBLUE	"\033[34m\033[1m"
++#define BRIGHT		"\033[m\033[1m"
++#define NORMAL		"\033[m"
++
++static diagnostic_starter_fn old_starter;
++static diagnostic_finalizer_fn old_finalizer;
++
++static void start_colorize(diagnostic_context *context, diagnostic_info *diagnostic)
++{
++	const char *color;
++	char *newprefix;
++
++	switch (diagnostic->kind) {
++	case DK_NOTE:
++		color = LIGHTBLUE;
++		break;
++
++	case DK_PEDWARN:
++	case DK_WARNING:
++		color = LIGHTYELLOW;
++		break;
++
++	case DK_ERROR:
++	case DK_FATAL:
++	case DK_ICE:
++	case DK_PERMERROR:
++	case DK_SORRY:
++		color = LIGHTRED;
++		break;
++
++	default:
++		color = NORMAL;
++	}
++
++	old_starter(context, diagnostic);
++	if (-1 == asprintf(&newprefix, "%s%s" NORMAL, color, context->printer->prefix))
++		return;
++	pp_destroy_prefix(context->printer);
++	pp_set_prefix(context->printer, newprefix);
++}
++
++static void finalize_colorize(diagnostic_context *context, diagnostic_info *diagnostic)
++{
++	old_finalizer(context, diagnostic);
++}
++
++static void colorize_arm(void)
++{
++	old_starter = diagnostic_starter(global_dc);
++	old_finalizer = diagnostic_finalizer(global_dc);
++
++	diagnostic_starter(global_dc) = start_colorize;
++	diagnostic_finalizer(global_dc) = finalize_colorize;
++}
++
++static unsigned int execute_colorize_rearm(void)
++{
++	if (diagnostic_starter(global_dc) == start_colorize)
++		return 0;
++
++	colorize_arm();
++	return 0;
++}
++
++struct simple_ipa_opt_pass pass_ipa_colorize_rearm = {
++	.pass = {
++		.type			= SIMPLE_IPA_PASS,
++		.name			= "colorize_rearm",
++		.gate			= NULL,
++		.execute		= execute_colorize_rearm,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= 0
++	}
++};
++
++static void colorize_start_unit(void *gcc_data, void *user_data)
++{
++	colorize_arm();
++}
++
++int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
++{
++	const char * const plugin_name = plugin_info->base_name;
++	struct register_pass_info colorize_rearm_pass_info = {
++		.pass				= &pass_ipa_colorize_rearm.pass,
++		.reference_pass_name		= "*free_lang_data",
++		.ref_pass_instance_number	= 0,
++		.pos_op 			= PASS_POS_INSERT_AFTER
++	};
++
++	if (!plugin_default_version_check(version, &gcc_version)) {
++		error(G_("incompatible gcc/plugin versions"));
++		return 1;
++	}
++
++	register_callback(plugin_name, PLUGIN_INFO, NULL, &colorize_plugin_info);
++	register_callback(plugin_name, PLUGIN_START_UNIT, &colorize_start_unit, NULL);
++	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &colorize_rearm_pass_info);
++	return 0;
++}
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc/constify_plugin.c linux-2.6.32.58-pax/tools/gcc/constify_plugin.c
 --- linux-2.6.32.58/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
 +++ linux-2.6.32.58-pax/tools/gcc/constify_plugin.c	2011-12-09 15:20:06.125403763 +0100
@@ -55180,8 +55802,8 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc
 +}
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc/Makefile linux-2.6.32.58-pax/tools/gcc/Makefile
 --- linux-2.6.32.58/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.58-pax/tools/gcc/Makefile	2012-03-05 11:48:40.091974976 +0100
-@@ -0,0 +1,21 @@
++++ linux-2.6.32.58-pax/tools/gcc/Makefile	2012-03-13 11:17:22.016476708 +0100
+@@ -0,0 +1,23 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
 +#PLUGIN_OBJECT_FILES := $(patsubst %.c,%.o,$(PLUGIN_SOURCE_FILES))
@@ -55195,6 +55817,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc
 +hostlibs-$(CONFIG_KALLOCSTAT_PLUGIN) += kallocstat_plugin.so
 +hostlibs-$(CONFIG_PAX_KERNEXEC_PLUGIN) += kernexec_plugin.so
 +hostlibs-$(CONFIG_CHECKER_PLUGIN) += checker_plugin.so
++hostlibs-y += colorize_plugin.so
 +
 +always := $(hostlibs-y)
 +
@@ -55203,9 +55826,10 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc
 +kallocstat_plugin-objs := kallocstat_plugin.o
 +kernexec_plugin-objs := kernexec_plugin.o
 +checker_plugin-objs := checker_plugin.o
++colorize_plugin-objs := colorize_plugin.o
 diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc/stackleak_plugin.c linux-2.6.32.58-pax/tools/gcc/stackleak_plugin.c
 --- linux-2.6.32.58/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.58-pax/tools/gcc/stackleak_plugin.c	2012-03-05 11:48:40.095974976 +0100
++++ linux-2.6.32.58-pax/tools/gcc/stackleak_plugin.c	2012-03-13 11:17:22.016476708 +0100
 @@ -0,0 +1,326 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
@@ -55457,7 +56081,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc
 +	return 0;
 +}
 +
-+static void stackleak_start_unit(void *gcc_data, void *user_dat)
++static void stackleak_start_unit(void *gcc_data, void *user_data)
 +{
 +	tree fntype;
 +
@@ -55527,7 +56151,7 @@ diff -NurpX linux-2.6.32.58-pax/Documentation/dontdiff linux-2.6.32.58/tools/gcc
 +		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
 +	}
 +
-+	register_callback("start_unit", PLUGIN_START_UNIT, &stackleak_start_unit, NULL);
++	register_callback(plugin_name, PLUGIN_START_UNIT, &stackleak_start_unit, NULL);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_tree_instrument_pass_info);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_final_pass_info);
 +
