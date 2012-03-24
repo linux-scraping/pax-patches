@@ -263,7 +263,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/alph
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/arm/include/asm/atomic.h linux-2.6.32.59-pax/arch/arm/include/asm/atomic.h
 --- linux-2.6.32.59/arch/arm/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/arm/include/asm/atomic.h	2012-03-13 13:15:34.272098333 +0100
++++ linux-2.6.32.59-pax/arch/arm/include/asm/atomic.h	2012-03-24 23:59:07.395489123 +0100
 @@ -15,6 +15,10 @@
  #include <linux/types.h>
  #include <asm/system.h>
@@ -465,7 +465,35 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/arm/
  static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
  {
  	unsigned long tmp, tmp2;
-@@ -207,6 +349,10 @@ static inline void atomic_clear_mask(uns
+@@ -165,7 +307,9 @@ static inline int atomic_add_return(int
+ 
+ 	return val;
+ }
++#define atomic_add_return_unchecked(i, v) atomic_add_return(i, v)
+ #define atomic_add(i, v)	(void) atomic_add_return(i, v)
++#define atomic_add_unchecked(i, v)	(void) atomic_add_return_unchecked(i, v)
+ 
+ static inline int atomic_sub_return(int i, atomic_t *v)
+ {
+@@ -179,7 +323,9 @@ static inline int atomic_sub_return(int
+ 
+ 	return val;
+ }
++#define atomic_sub_return_unchecked(i, v) atomic_sub_return(i, v)
+ #define atomic_sub(i, v)	(void) atomic_sub_return(i, v)
++#define atomic_sub_unchecked(i, v)	(void) atomic_sub_return_unchecked(i, v)
+ 
+ static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
+ {
+@@ -194,6 +340,7 @@ static inline int atomic_cmpxchg(atomic_
+ 
+ 	return ret;
+ }
++#define atomic_cmpxchg_unchecked(v, o, n) atomic_cmpxchg(v, o, n)
+ 
+ static inline void atomic_clear_mask(unsigned long mask, unsigned long *addr)
+ {
+@@ -207,6 +354,10 @@ static inline void atomic_clear_mask(uns
  #endif /* __LINUX_ARM_ARCH__ */
  
  #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
@@ -476,7 +504,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/arm/
  
  static inline int atomic_add_unless(atomic_t *v, int a, int u)
  {
-@@ -220,11 +366,27 @@ static inline int atomic_add_unless(atom
+@@ -220,11 +371,27 @@ static inline int atomic_add_unless(atom
  #define atomic_inc_not_zero(v) atomic_add_unless((v), 1, 0)
  
  #define atomic_inc(v)		atomic_add(1, v)
@@ -35503,7 +35531,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt_elf.c linux-2.6.32.59-pax/fs/binfmt_elf.c
 --- linux-2.6.32.59/fs/binfmt_elf.c	2012-03-18 17:44:12.476058731 +0100
-+++ linux-2.6.32.59-pax/fs/binfmt_elf.c	2012-03-20 21:06:41.524478865 +0100
++++ linux-2.6.32.59-pax/fs/binfmt_elf.c	2012-03-24 23:59:24.411488213 +0100
 @@ -31,6 +31,7 @@
  #include <linux/random.h>
  #include <linux/elf.h>
@@ -36134,19 +36162,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -866,6 +1323,11 @@ static int load_elf_binary(struct linux_
- 	start_data += load_bias;
- 	end_data += load_bias;
- 
-+#ifdef CONFIG_PAX_RANDMMAP
-+	if (current->mm->pax_flags & MF_PAX_RANDMMAP)
-+		elf_brk += PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
-+#endif
-+
- 	/* Calling set_brk effectively mmaps the pages that we need
- 	 * for the bss and break sections.  We must do this before
- 	 * mapping in the interpreter, to make sure it doesn't wind
-@@ -877,9 +1339,11 @@ static int load_elf_binary(struct linux_
+@@ -877,11 +1334,35 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -36160,8 +36176,32 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
 +		 */
  	}
  
++#ifdef CONFIG_PAX_RANDMMAP
++	if (current->mm->pax_flags & MF_PAX_RANDMMAP) {
++		unsigned long start, size;
++
++		start = ELF_PAGEALIGN(elf_brk);
++		size = PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
++		down_write(&current->mm->mmap_sem);
++		retval = -ENOMEM;
++		if (!find_vma_intersection(current->mm, start, start + size + PAGE_SIZE)) {
++			retval = do_mmap(NULL, start, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE, 0);
++			if (retval >= 0)
++				retval = do_mmap(NULL, ELF_PAGEALIGN(start + size), PAGE_SIZE, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_PRIVATE, 0);
++		}
++		up_write(&current->mm->mmap_sem);
++		if (retval < 0) {
++			send_sig(SIGKILL, current, 0);
++			goto out_free_dentry;
++		}
++		current->mm->start_brk = current->mm->brk = start + size + PAGE_SIZE;
++	}
++#endif
++
  	if (elf_interpreter) {
-@@ -1112,8 +1576,10 @@ static int dump_seek(struct file *file,
+ 		unsigned long uninitialized_var(interp_map_addr);
+ 
+@@ -1112,8 +1593,10 @@ static int dump_seek(struct file *file,
  			unsigned long n = off;
  			if (n > PAGE_SIZE)
  				n = PAGE_SIZE;
@@ -36173,7 +36213,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  			off -= n;
  		}
  		free_page((unsigned long)buf);
-@@ -1125,7 +1591,7 @@ static int dump_seek(struct file *file,
+@@ -1125,7 +1608,7 @@ static int dump_seek(struct file *file,
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -36182,7 +36222,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1159,7 +1625,7 @@ static unsigned long vma_dump_size(struc
+@@ -1159,7 +1642,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -36191,7 +36231,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  		goto whole;
  
  	/*
-@@ -1385,9 +1851,9 @@ static void fill_auxv_note(struct memelf
+@@ -1385,9 +1868,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -36203,7 +36243,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1973,7 +2439,7 @@ static int elf_core_dump(long signr, str
+@@ -1973,7 +2456,7 @@ static int elf_core_dump(long signr, str
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -36212,7 +36252,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2006,7 +2472,7 @@ static int elf_core_dump(long signr, str
+@@ -2006,7 +2489,7 @@ static int elf_core_dump(long signr, str
  		unsigned long addr;
  		unsigned long end;
  
@@ -36221,7 +36261,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2042,6 +2508,96 @@ out:
+@@ -2042,6 +2525,96 @@ out:
  
  #endif		/* USE_ELF_CORE_DUMP */
  
@@ -36355,7 +36395,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  		}
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/bio.c linux-2.6.32.59-pax/fs/bio.c
 --- linux-2.6.32.59/fs/bio.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/fs/bio.c	2012-03-13 13:15:35.360097978 +0100
++++ linux-2.6.32.59-pax/fs/bio.c	2012-03-24 23:59:07.411489122 +0100
 @@ -78,7 +78,7 @@ static struct kmem_cache *bio_find_or_cr
  
  	i = 0;
@@ -36365,6 +36405,15 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/bio.c 
  
  		if (!bslab->slab && entry == -1)
  			entry = i;
+@@ -841,7 +841,7 @@ struct bio *bio_copy_user_iov(struct req
+ 		/*
+ 		 * Overflow, abort
+ 		 */
+-		if (end < start)
++		if (end < start || end - start > INT_MAX - nr_pages)
+ 			return ERR_PTR(-EINVAL);
+ 
+ 		nr_pages += end - start;
 @@ -1236,7 +1236,7 @@ static void bio_copy_kern_endio(struct b
  	const int read = bio_data_dir(bio) == READ;
  	struct bio_map_data *bmd = bio->bi_private;
