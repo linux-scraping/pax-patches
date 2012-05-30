@@ -42794,6 +42794,18 @@ diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/include/linux/i
  extern void softirq_init(void);
  static inline void __raise_softirq_irqoff(unsigned int nr)
  {
+diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/include/linux/Kbuild linux-3.2.18-pax/include/linux/Kbuild
+--- linux-3.2.18/include/linux/Kbuild	2011-10-24 12:48:41.035090984 +0200
++++ linux-3.2.18-pax/include/linux/Kbuild	2012-05-30 18:38:08.608803341 +0200
+@@ -19,7 +19,7 @@ header-y += netfilter_ipv6/
+ header-y += usb/
+ header-y += wimax/
+ 
+-objhdr-y += version.h
++genhdr-y += version.h
+ 
+ ifneq ($(wildcard $(srctree)/arch/$(SRCARCH)/include/asm/a.out.h \
+ 		  $(srctree)/include/asm-$(SRCARCH)/a.out.h \
 diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/include/linux/kgdb.h linux-3.2.18-pax/include/linux/kgdb.h
 --- linux-3.2.18/include/linux/kgdb.h	2012-04-15 15:06:22.686613119 +0200
 +++ linux-3.2.18-pax/include/linux/kgdb.h	2012-04-15 15:06:56.990611272 +0200
@@ -58040,8 +58052,8 @@ diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/tools/gcc/color
 +}
 diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/tools/gcc/constify_plugin.c linux-3.2.18-pax/tools/gcc/constify_plugin.c
 --- linux-3.2.18/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.18-pax/tools/gcc/constify_plugin.c	2012-04-23 14:13:38.099264093 +0200
-@@ -0,0 +1,303 @@
++++ linux-3.2.18-pax/tools/gcc/constify_plugin.c	2012-05-30 18:38:08.604803178 +0200
+@@ -0,0 +1,328 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011 by PaX Team <pageexec@freemail.hu>
@@ -58082,24 +58094,47 @@ diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/tools/gcc/const
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201205300030",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
-+static void constify_type(tree type);
-+static bool walk_struct(tree node);
++static void deconstify_tree(tree node);
 +
-+static tree deconstify_type(tree old_type)
++static void deconstify_type(tree type)
 +{
-+	tree new_type, field;
++	tree field;
++
++	for (field = TYPE_FIELDS(type); field; field = TREE_CHAIN(field)) {
++		tree type = TREE_TYPE(field);
++
++		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
++			continue;
++		if (!TYPE_READONLY(type))
++			continue;
++
++		deconstify_tree(field);
++	}
++	TYPE_READONLY(type) = 0;
++	C_TYPE_FIELDS_READONLY(type) = 0;
++}
++
++static void deconstify_tree(tree node)
++{
++	tree old_type, new_type, field;
++
++	old_type = TREE_TYPE(node);
++
++	gcc_assert(TYPE_READONLY(old_type) && (TYPE_QUALS(old_type) & TYPE_QUAL_CONST));
 +
 +	new_type = build_qualified_type(old_type, TYPE_QUALS(old_type) & ~TYPE_QUAL_CONST);
 +	TYPE_FIELDS(new_type) = copy_list(TYPE_FIELDS(new_type));
 +	for (field = TYPE_FIELDS(new_type); field; field = TREE_CHAIN(field))
 +		DECL_FIELD_CONTEXT(field) = new_type;
-+	TYPE_READONLY(new_type) = 0;
-+	C_TYPE_FIELDS_READONLY(new_type) = 0;
-+	return new_type;
++
++	deconstify_type(new_type);
++
++	TREE_READONLY(node) = 0;
++	TREE_TYPE(node) = new_type;
 +}
 +
 +static tree handle_no_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
@@ -58143,12 +58178,17 @@ diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/tools/gcc/const
 +	}
 +
 +	if (TREE_CODE(*node) == TYPE_DECL) {
-+		TREE_TYPE(*node) = deconstify_type(type);
-+		TREE_READONLY(*node) = 0;
++		deconstify_tree(*node);
 +		return NULL_TREE;
 +	}
 +
 +	return NULL_TREE;
++}
++
++static void constify_type(tree type)
++{
++	TYPE_READONLY(type) = 1;
++	C_TYPE_FIELDS_READONLY(type) = 1;
 +}
 +
 +static tree handle_do_const_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
@@ -58201,12 +58241,6 @@ diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/tools/gcc/const
 +	register_attribute(&do_const_attr);
 +}
 +
-+static void constify_type(tree type)
-+{
-+	TYPE_READONLY(type) = 1;
-+	C_TYPE_FIELDS_READONLY(type) = 1;
-+}
-+
 +static bool is_fptr(tree field)
 +{
 +	tree ptr = TREE_TYPE(field);
@@ -58221,11 +58255,14 @@ diff -NurpX linux-3.2.18-pax/Documentation/dontdiff linux-3.2.18/tools/gcc/const
 +{
 +	tree field;
 +
-+	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node)))
-+		return false;
-+
 +	if (TYPE_FIELDS(node) == NULL_TREE)
 +		return false;
++
++	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(node))) {
++		gcc_assert(!TYPE_READONLY(node));
++		deconstify_type(node);
++		return false;
++	}
 +
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
 +		tree type = TREE_TYPE(field);
