@@ -10766,7 +10766,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/include/asm/uaccess_32.h linux-2.6.32.59-pax/arch/x86/include/asm/uaccess_32.h
 --- linux-2.6.32.59/arch/x86/include/asm/uaccess_32.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/x86/include/asm/uaccess_32.h	2012-05-20 19:30:54.333198216 +0200
++++ linux-2.6.32.59-pax/arch/x86/include/asm/uaccess_32.h	2012-06-18 00:58:03.218410117 +0200
 @@ -12,15 +12,15 @@
  #include <asm/page.h>
  
@@ -10855,7 +10855,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
  
-@@ -182,14 +201,62 @@ static __always_inline unsigned long
+@@ -182,14 +201,86 @@ static __always_inline unsigned long
  __copy_from_user_inatomic_nocache(void *to, const void __user *from,
  				  unsigned long n)
  {
@@ -10865,6 +10865,22 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +
 +	return __copy_from_user_ll_nocache_nozero(to, from, n);
 +}
++
++extern void copy_to_user_overflow(void)
++#ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
++	__compiletime_error("copy_to_user() buffer size is not provably correct")
++#else
++	__compiletime_warning("copy_to_user() buffer size is not provably correct")
++#endif
++;
++
++extern void copy_from_user_overflow(void)
++#ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
++	__compiletime_error("copy_from_user() buffer size is not provably correct")
++#else
++	__compiletime_warning("copy_from_user() buffer size is not provably correct")
++#endif
++;
 +
 +/**
 + * copy_to_user: - Copy a block of data into user space.
@@ -10882,7 +10898,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +static __always_inline unsigned long __must_check
 +copy_to_user(void __user *to, const void *from, unsigned long n)
 +{
-+	if (access_ok(VERIFY_WRITE, to, n))
++	int sz = __compiletime_object_size(from);
++
++	if (unlikely(sz != -1 && sz < n))
++		copy_to_user_overflow();
++	else if (access_ok(VERIFY_WRITE, to, n))
 +		n = __copy_to_user(to, from, n);
 +	return n;
 +}
@@ -10906,7 +10926,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +static __always_inline unsigned long __must_check
 +copy_from_user(void *to, const void __user *from, unsigned long n)
 +{
-+	if (access_ok(VERIFY_READ, from, n))
++	int sz = __compiletime_object_size(to);
++
++	if (unlikely(sz != -1 && sz < n))
++		copy_from_user_overflow();
++	else if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
 +	else if ((long)n > 0) {
 +		if (!__builtin_constant_p(n))
@@ -10924,7 +10948,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  long __must_check strncpy_from_user(char *dst, const char __user *src,
  				    long count);
  long __must_check __strncpy_from_user(char *dst,
-@@ -212,7 +279,7 @@ long __must_check __strncpy_from_user(ch
+@@ -212,7 +303,7 @@ long __must_check __strncpy_from_user(ch
  #define strlen_user(str) strnlen_user(str, LONG_MAX)
  
  long strnlen_user(const char __user *str, long n);
@@ -10936,7 +10960,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  #endif /* _ASM_X86_UACCESS_32_H */
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/include/asm/uaccess_64.h linux-2.6.32.59-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-2.6.32.59/arch/x86/include/asm/uaccess_64.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/x86/include/asm/uaccess_64.h	2012-05-20 19:36:26.257216199 +0200
++++ linux-2.6.32.59-pax/arch/x86/include/asm/uaccess_64.h	2012-06-18 00:37:56.226374635 +0200
 @@ -9,6 +9,9 @@
  #include <linux/prefetch.h>
  #include <linux/lockdep.h>
@@ -10947,7 +10971,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  
  /*
   * Copy To/From Userspace
-@@ -16,116 +19,201 @@
+@@ -16,116 +19,229 @@
  
  /* Handles exceptions in both to and from, but doesn't do access_ok */
  __must_check unsigned long
@@ -10961,12 +10985,29 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 -__must_check unsigned long
 -copy_in_user(void __user *to, const void __user *from, unsigned len);
 +copy_in_user(void __user *to, const void __user *from, unsigned long len);
++
++extern void copy_to_user_overflow(void)
++#ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
++	__compiletime_error("copy_to_user() buffer size is not provably correct")
++#else
++	__compiletime_warning("copy_to_user() buffer size is not provably correct")
++#endif
++;
++
++extern void copy_from_user_overflow(void)
++#ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
++	__compiletime_error("copy_from_user() buffer size is not provably correct")
++#else
++	__compiletime_warning("copy_from_user() buffer size is not provably correct")
++#endif
++;
  
  static __always_inline __must_check
 -int __copy_from_user(void *dst, const void __user *src, unsigned size)
 +unsigned long __copy_from_user(void *dst, const void __user *src, unsigned long size)
  {
 -	int ret = 0;
++	int sz = __compiletime_object_size(dst);
 +	unsigned ret = 0;
  
  	might_fault();
@@ -10980,6 +11021,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +	if (!__access_ok(VERIFY_READ, src, size))
 +		return size;
 +#endif
++
++	if (unlikely(sz != -1 && sz < size)) {
++		copy_from_user_overflow();
++		return size;
++	}
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(dst, size, false);
@@ -11047,6 +11093,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +unsigned long __copy_to_user(void __user *dst, const void *src, unsigned long size)
  {
 -	int ret = 0;
++	int sz = __compiletime_object_size(dst);
 +	unsigned ret = 0;
  
  	might_fault();
@@ -11060,6 +11107,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +	if (!__access_ok(VERIFY_WRITE, dst, size))
 +		return size;
 +#endif
++
++	if (unlikely(sz != -1 && sz < size)) {
++		copy_to_user_overflow();
++		return size;
++	}
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(src, size, true);
@@ -11119,26 +11171,21 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +#endif
 +
 +		return copy_user_generic((__force_kernel void *)dst, src, size);
- 	}
- }
- 
- static __always_inline __must_check
--int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
++	}
++}
++
++static __always_inline __must_check
 +unsigned long copy_to_user(void __user *to, const void *from, unsigned long len)
- {
--	int ret = 0;
++{
 +	if (access_ok(VERIFY_WRITE, to, len))
 +		len = __copy_to_user(to, from, len);
 +	return len;
 +}
- 
++
 +static __always_inline __must_check
 +unsigned long copy_from_user(void *to, const void __user *from, unsigned long len)
 +{
- 	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst,
--					 (__force void *)src, size);
++	might_fault();
 +
 +	if (access_ok(VERIFY_READ, from, len))
 +		len = __copy_from_user(to, from, len);
@@ -11146,16 +11193,21 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +		if (!__builtin_constant_p(len))
 +			check_object_size(to, len, false);
 +		memset(to, 0, len);
-+	}
+ 	}
 +	return len;
-+}
-+
-+static __always_inline __must_check
+ }
+ 
+ static __always_inline __must_check
+-int __copy_in_user(void __user *dst, const void __user *src, unsigned size)
 +unsigned long __copy_in_user(void __user *dst, const void __user *src, unsigned long size)
-+{
+ {
+-	int ret = 0;
 +	unsigned ret = 0;
-+
-+	might_fault();
+ 
+ 	might_fault();
+-	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst,
+-					 (__force void *)src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
@@ -11187,7 +11239,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  			       ret, "b", "b", "=q", 1);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u8 __user *)dst,
-@@ -134,7 +222,7 @@ int __copy_in_user(void __user *dst, con
+@@ -134,7 +250,7 @@ int __copy_in_user(void __user *dst, con
  	}
  	case 2: {
  		u16 tmp;
@@ -11196,7 +11248,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  			       ret, "w", "w", "=r", 2);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u16 __user *)dst,
-@@ -144,7 +232,7 @@ int __copy_in_user(void __user *dst, con
+@@ -144,7 +260,7 @@ int __copy_in_user(void __user *dst, con
  
  	case 4: {
  		u32 tmp;
@@ -11205,7 +11257,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  			       ret, "l", "k", "=r", 4);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u32 __user *)dst,
-@@ -153,7 +241,7 @@ int __copy_in_user(void __user *dst, con
+@@ -153,7 +269,7 @@ int __copy_in_user(void __user *dst, con
  	}
  	case 8: {
  		u64 tmp;
@@ -11214,7 +11266,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  			       ret, "q", "", "=r", 8);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u64 __user *)dst,
-@@ -161,8 +249,16 @@ int __copy_in_user(void __user *dst, con
+@@ -161,8 +277,16 @@ int __copy_in_user(void __user *dst, con
  		return ret;
  	}
  	default:
@@ -11233,7 +11285,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	}
  }
  
-@@ -173,36 +269,76 @@ __strncpy_from_user(char *dst, const cha
+@@ -173,36 +297,76 @@ __strncpy_from_user(char *dst, const cha
  __must_check long strnlen_user(const char __user *str, long n);
  __must_check long __strnlen_user(const char __user *str, long n);
  __must_check long strlen_user(const char __user *str);
@@ -11241,17 +11293,15 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 -__must_check unsigned long __clear_user(void __user *mem, unsigned long len);
 +__must_check unsigned long clear_user(void __user *mem, unsigned long len) __size_overflow(2);
 +__must_check unsigned long __clear_user(void __user *mem, unsigned long len) __size_overflow(2);
- 
--__must_check long __copy_from_user_inatomic(void *dst, const void __user *src,
--					    unsigned size);
++
 +static __must_check __always_inline unsigned long
 +__copy_from_user_inatomic(void *dst, const void __user *src, unsigned long size)
 +{
 +	if (size > INT_MAX)
 +		return size;
  
--static __must_check __always_inline int
--__copy_to_user_inatomic(void __user *dst, const void *src, unsigned size)
+-__must_check long __copy_from_user_inatomic(void *dst, const void __user *src,
+-					    unsigned size);
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_READ, src, size))
 +		return size;
@@ -11259,7 +11309,9 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
 +		src += PAX_USER_SHADOW_BASE;
 +#endif
-+
+ 
+-static __must_check __always_inline int
+-__copy_to_user_inatomic(void __user *dst, const void *src, unsigned size)
 +	return copy_user_generic(dst, (__force_kernel const void *)src, size);
 +}
 +
@@ -20908,7 +20960,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	CFI_ENDPROC
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/lib/usercopy_32.c linux-2.6.32.59-pax/arch/x86/lib/usercopy_32.c
 --- linux-2.6.32.59/arch/x86/lib/usercopy_32.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/x86/lib/usercopy_32.c	2012-03-22 12:10:10.904272079 +0100
++++ linux-2.6.32.59-pax/arch/x86/lib/usercopy_32.c	2012-06-18 00:59:24.866412856 +0200
 @@ -43,7 +43,7 @@ do {									   \
  	__asm__ __volatile__(						   \
  		"	testl %1,%1\n"					   \
@@ -21453,7 +21505,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	return n;
  }
  EXPORT_SYMBOL(__copy_from_user_ll_nozero);
-@@ -827,59 +949,38 @@ unsigned long __copy_from_user_ll_nocach
+@@ -827,59 +949,50 @@ unsigned long __copy_from_user_ll_nocach
  	if (n > 64 && cpu_has_xmm2)
  		n = __copy_user_intel_nocache(to, from, n);
  	else
@@ -21482,29 +21534,15 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 - */
 -unsigned long
 -copy_to_user(void __user *to, const void *from, unsigned long n)
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+void __set_fs(mm_segment_t x)
++void copy_from_user_overflow(void)
  {
 -	if (access_ok(VERIFY_WRITE, to, n))
 -		n = __copy_to_user(to, from, n);
 -	return n;
-+	switch (x.seg) {
-+	case 0:
-+		loadsegment(gs, 0);
-+		break;
-+	case TASK_SIZE_MAX:
-+		loadsegment(gs, __USER_DS);
-+		break;
-+	case -1UL:
-+		loadsegment(gs, __KERNEL_DS);
-+		break;
-+	default:
-+		BUG();
-+	}
-+	return;
++	WARN(1, "Buffer overflow detected!\n");
  }
 -EXPORT_SYMBOL(copy_to_user);
-+EXPORT_SYMBOL(__set_fs);
++EXPORT_SYMBOL(copy_from_user_overflow);
  
 -/**
 - * copy_from_user: - Copy a block of data from user space.
@@ -21524,22 +21562,48 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 - */
 -unsigned long
 -copy_from_user(void *to, const void __user *from, unsigned long n)
-+void set_fs(mm_segment_t x)
++void copy_to_user_overflow(void)
  {
 -	if (access_ok(VERIFY_READ, from, n))
 -		n = __copy_from_user(to, from, n);
 -	else
 -		memset(to, 0, n);
 -	return n;
-+	current_thread_info()->addr_limit = x;
-+	__set_fs(x);
++	WARN(1, "Buffer overflow detected!\n");
  }
 -EXPORT_SYMBOL(copy_from_user);
++EXPORT_SYMBOL(copy_to_user_overflow);
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++void __set_fs(mm_segment_t x)
++{
++	switch (x.seg) {
++	case 0:
++		loadsegment(gs, 0);
++		break;
++	case TASK_SIZE_MAX:
++		loadsegment(gs, __USER_DS);
++		break;
++	case -1UL:
++		loadsegment(gs, __KERNEL_DS);
++		break;
++	default:
++		BUG();
++	}
++	return;
++}
++EXPORT_SYMBOL(__set_fs);
++
++void set_fs(mm_segment_t x)
++{
++	current_thread_info()->addr_limit = x;
++	__set_fs(x);
++}
 +EXPORT_SYMBOL(set_fs);
 +#endif
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/lib/usercopy_64.c linux-2.6.32.59-pax/arch/x86/lib/usercopy_64.c
 --- linux-2.6.32.59/arch/x86/lib/usercopy_64.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/x86/lib/usercopy_64.c	2012-03-22 12:11:27.176272317 +0100
++++ linux-2.6.32.59-pax/arch/x86/lib/usercopy_64.c	2012-06-18 00:50:01.162395950 +0200
 @@ -42,6 +42,12 @@ long
  __strncpy_from_user(char *dst, const char __user *src, long count)
  {
@@ -21601,6 +21665,22 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  {
  	char c;
  	unsigned zero_len;
+@@ -181,3 +201,15 @@ copy_user_handle_tail(char *to, char *fr
+ 			break;
+ 	return len;
+ }
++
++void copy_from_user_overflow(void)
++{
++	WARN(1, "Buffer overflow detected!\n");
++}
++EXPORT_SYMBOL(copy_from_user_overflow);
++
++void copy_to_user_overflow(void)
++{
++	WARN(1, "Buffer overflow detected!\n");
++}
++EXPORT_SYMBOL(copy_to_user_overflow);
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/Makefile linux-2.6.32.59-pax/arch/x86/Makefile
 --- linux-2.6.32.59/arch/x86/Makefile	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.59-pax/arch/x86/Makefile	2012-03-13 13:15:34.612098018 +0100
@@ -41016,7 +41096,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  #endif
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/compiler-gcc4.h linux-2.6.32.59-pax/include/linux/compiler-gcc4.h
 --- linux-2.6.32.59/include/linux/compiler-gcc4.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/compiler-gcc4.h	2012-03-16 19:21:46.027707784 +0100
++++ linux-2.6.32.59-pax/include/linux/compiler-gcc4.h	2012-06-18 00:42:35.114382944 +0200
 @@ -14,6 +14,9 @@
  #define __compiler_offsetof(a,b) __builtin_offsetof(a,b)
  #define __always_inline		inline __attribute__((always_inline))
@@ -41027,7 +41107,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  /*
   * A trick to suppress uninitialized variable warning without generating any
   * code
-@@ -36,4 +39,16 @@
+@@ -36,4 +39,23 @@
     the kernel context */
  #define __cold			__attribute__((__cold__))
  
@@ -41035,6 +41115,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
 +#define __bos(ptr, arg)		__builtin_object_size((ptr), (arg))
 +#define __bos0(ptr)		__bos((ptr), 0)
 +#define __bos1(ptr)		__bos((ptr), 1)
++#endif
 +
 +#if __GNUC_MINOR__ >= 5
 +#ifdef CONSTIFY_PLUGIN
@@ -41043,10 +41124,16 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
 +#endif
 +#endif
 +
++#if __GNUC_MINOR__ > 0
++#define __compiletime_object_size(obj) __builtin_object_size(obj, 0)
++#endif
++#if __GNUC_MINOR__ >= 4 && !defined(__CHECKER__)
++#define __compiletime_warning(message) __attribute__((warning(message)))
++#define __compiletime_error(message) __attribute__((error(message)))
  #endif
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/compiler.h linux-2.6.32.59-pax/include/linux/compiler.h
 --- linux-2.6.32.59/include/linux/compiler.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/compiler.h	2012-03-16 19:21:46.031707784 +0100
++++ linux-2.6.32.59-pax/include/linux/compiler.h	2012-06-18 00:40:02.514378345 +0200
 @@ -5,11 +5,14 @@
  
  #ifdef __CHECKER__
@@ -41138,7 +41225,27 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -278,6 +329,7 @@ void ftrace_likely_update(struct ftrace_
+@@ -266,6 +317,19 @@ void ftrace_likely_update(struct ftrace_
+ # define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
+ #endif
+ 
++/* Compile time object size, -1 for unknown */
++#ifndef __compiletime_object_size
++# define __compiletime_object_size(obj) -1
++#endif
++#ifndef __compiletime_warning
++# define __compiletime_warning(message)
++#endif
++#ifndef __compiletime_error
++# define __compiletime_error(message)
++#endif
++#ifndef __linktime_error
++# define __linktime_error(message)
++#endif
+ /*
+  * Prevent the compiler from merging or refetching accesses.  The compiler
+  * is also forbidden from reordering successive instances of ACCESS_ONCE(),
+@@ -278,6 +342,7 @@ void ftrace_likely_update(struct ftrace_
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -47170,7 +47277,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/lib/vspri
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile linux-2.6.32.59-pax/Makefile
 --- linux-2.6.32.59/Makefile	2012-03-18 17:44:12.472058990 +0100
-+++ linux-2.6.32.59-pax/Makefile	2012-06-01 17:35:04.418572159 +0200
++++ linux-2.6.32.59-pax/Makefile	2012-06-18 00:31:56.566364061 +0200
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -47203,11 +47310,12 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  			 include/linux/version.h headers_% \
  			 kernelrelease kernelversion
  
-@@ -526,6 +527,51 @@ else
+@@ -526,6 +527,52 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
-+ifeq ($(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(CC)"), y)
++PLUGINCC := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(HOSTCXX)" "$(CC)")
++ifneq ($(PLUGINCC),)
 +ifdef CONFIG_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
 +endif
@@ -47235,7 +47343,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
 +GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS) $(SIZE_OVERFLOW_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
-+export CONSTIFY_PLUGIN STACKLEAK_PLUGIN KERNEXEC_PLUGIN CHECKER_PLUGIN SIZE_OVERFLOW_PLUGIN
++export PLUGINCC CONSTIFY_PLUGIN STACKLEAK_PLUGIN KERNEXEC_PLUGIN CHECKER_PLUGIN SIZE_OVERFLOW_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
 +gcc-plugins:
 +	$(Q)$(MAKE) $(build)=tools/gcc
@@ -47255,7 +47363,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -868,6 +914,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
+@@ -868,6 +915,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -47264,7 +47372,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -877,7 +925,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
+@@ -877,7 +926,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -47273,7 +47381,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  	$(Q)$(MAKE) $(build)=$@
  
  # Build the kernel release string
-@@ -986,6 +1034,7 @@ prepare0: archprepare FORCE
+@@ -986,6 +1035,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=. missing-syscalls
  
  # All the preparing..
@@ -47281,7 +47389,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  prepare: prepare0
  
  # The asm symlink changes when $(ARCH) changes.
-@@ -1127,6 +1176,8 @@ all: modules
+@@ -1127,6 +1177,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -47290,7 +47398,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux)
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1136,7 +1187,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
+@@ -1136,7 +1188,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -47299,7 +47407,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  
  # Target to install modules
  PHONY += modules_install
-@@ -1201,7 +1252,7 @@ MRPROPER_FILES += .config .config.old in
+@@ -1201,7 +1253,7 @@ MRPROPER_FILES += .config .config.old in
                    include/linux/autoconf.h include/linux/version.h      \
                    include/linux/utsrelease.h                            \
                    include/linux/bounds.h include/asm*/asm-offsets.h     \
@@ -47308,7 +47416,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1245,7 +1296,7 @@ distclean: mrproper
+@@ -1245,7 +1297,7 @@ distclean: mrproper
  	@find $(srctree) $(RCS_FIND_IGNORE) \
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
@@ -47317,7 +47425,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1292,6 +1343,7 @@ help:
+@@ -1292,6 +1344,7 @@ help:
  	@echo  '  modules_prepare - Set up for building external modules'
  	@echo  '  tags/TAGS	  - Generate tags file for editors'
  	@echo  '  cscope	  - Generate cscope index'
@@ -47325,7 +47433,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  	@echo  '  kernelrelease	  - Output the release version string'
  	@echo  '  kernelversion	  - Output the version stored in Makefile'
  	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
-@@ -1393,6 +1445,8 @@ PHONY += $(module-dirs) modules
+@@ -1393,6 +1446,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -47334,7 +47442,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1448,7 +1502,7 @@ endif # KBUILD_EXTMOD
+@@ -1448,7 +1503,7 @@ endif # KBUILD_EXTMOD
  quiet_cmd_tags = GEN     $@
        cmd_tags = $(CONFIG_SHELL) $(srctree)/scripts/tags.sh $@
  
@@ -47343,7 +47451,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  	$(call cmd,tags)
  
  # Scripts to check various things for consistency
-@@ -1513,17 +1567,21 @@ else
+@@ -1513,17 +1568,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -47369,7 +47477,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1533,11 +1591,15 @@ endif
+@@ -1533,11 +1592,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -53391,19 +53499,34 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/scripts/b
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/scripts/gcc-plugin.sh linux-2.6.32.59-pax/scripts/gcc-plugin.sh
 --- linux-2.6.32.59/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/scripts/gcc-plugin.sh	2012-03-13 13:15:36.060097940 +0100
-@@ -0,0 +1,2 @@
++++ linux-2.6.32.59-pax/scripts/gcc-plugin.sh	2012-06-18 00:30:55.438362264 +0200
+@@ -0,0 +1,17 @@
 +#!/bin/sh
-+echo -e "#include \"gcc-plugin.h\"\n#include \"tree.h\"\n#include \"tm.h\"\n#include \"rtl.h\"" | $1 -x c -shared - -o /dev/null -I`$2 -print-file-name=plugin`/include >/dev/null 2>&1 && echo "y"
++plugincc=`$1 -x c -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
++#include "gcc-plugin.h"
++#include "tree.h"
++#include "tm.h"
++#include "rtl.h"
++#ifdef ENABLE_BUILD_WITH_CXX
++#warning $2
++#else
++#warning $1
++#endif
++EOF`
++if [ $? -eq 0 ]
++then
++	[[ "$plugincc" =~ "$1" ]] && echo $1
++	[[ "$plugincc" =~ "$2" ]] && echo $2
++fi
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/scripts/Makefile.build linux-2.6.32.59-pax/scripts/Makefile.build
 --- linux-2.6.32.59/scripts/Makefile.build	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/scripts/Makefile.build	2012-03-13 13:15:36.060097940 +0100
++++ linux-2.6.32.59-pax/scripts/Makefile.build	2012-06-18 00:30:55.470362264 +0200
 @@ -59,7 +59,7 @@ endif
  endif
  
  # Do not include host rules unless needed
 -ifneq ($(hostprogs-y)$(hostprogs-m),)
-+ifneq ($(hostprogs-y)$(hostprogs-m)$(hostlibs-y)$(hostlibs-m),)
++ifneq ($(hostprogs-y)$(hostprogs-m)$(hostlibs-y)$(hostlibs-m)$(hostcxxlibs-y)$(hostcxxlibs-m),)
  include scripts/Makefile.host
  endif
  
@@ -53422,22 +53545,73 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/scripts/M
  # a $(obj) prefix, except for absolute paths
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/scripts/Makefile.host linux-2.6.32.59-pax/scripts/Makefile.host
 --- linux-2.6.32.59/scripts/Makefile.host	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/scripts/Makefile.host	2012-03-13 13:15:36.064097940 +0100
-@@ -31,6 +31,7 @@
++++ linux-2.6.32.59-pax/scripts/Makefile.host	2012-06-18 00:30:55.470362264 +0200
+@@ -31,6 +31,8 @@
  # Note: Shared libraries consisting of C++ files are not supported
  
  __hostprogs := $(sort $(hostprogs-y) $(hostprogs-m))
 +__hostlibs := $(sort $(hostlibs-y) $(hostlibs-m))
++__hostcxxlibs := $(sort $(hostcxxlibs-y) $(hostcxxlibs-m))
  
  # C code
  # Executables compiled from a single .c file
-@@ -54,6 +55,7 @@ host-cxxobjs	:= $(sort $(foreach m,$(hos
+@@ -54,11 +56,15 @@ host-cxxobjs	:= $(sort $(foreach m,$(hos
  # Shared libaries (only .c supported)
  # Shared libraries (.so) - all .so files referenced in "xxx-objs"
  host-cshlib	:= $(sort $(filter %.so, $(host-cobjs)))
 +host-cshlib	+= $(sort $(filter %.so, $(__hostlibs)))
++host-cxxshlib	:= $(sort $(filter %.so, $(__hostcxxlibs)))
  # Remove .so files from "xxx-objs"
  host-cobjs	:= $(filter-out %.so,$(host-cobjs))
++host-cxxobjs	:= $(filter-out %.so,$(host-cxxobjs))
+ 
+-#Object (.o) files used by the shared libaries
++# Object (.o) files used by the shared libaries
+ host-cshobjs	:= $(sort $(foreach m,$(host-cshlib),$($(m:.so=-objs))))
++host-cxxshobjs	:= $(sort $(foreach m,$(host-cxxshlib),$($(m:.so=-objs))))
+ 
+ # output directory for programs/.o files
+ # hostprogs-y := tools/build may have been specified. Retrieve directory
+@@ -82,7 +88,9 @@ host-cobjs	:= $(addprefix $(obj)/,$(host
+ host-cxxmulti	:= $(addprefix $(obj)/,$(host-cxxmulti))
+ host-cxxobjs	:= $(addprefix $(obj)/,$(host-cxxobjs))
+ host-cshlib	:= $(addprefix $(obj)/,$(host-cshlib))
++host-cxxshlib	:= $(addprefix $(obj)/,$(host-cxxshlib))
+ host-cshobjs	:= $(addprefix $(obj)/,$(host-cshobjs))
++host-cxxshobjs	:= $(addprefix $(obj)/,$(host-cxxshobjs))
+ host-objdirs    := $(addprefix $(obj)/,$(host-objdirs))
+ 
+ obj-dirs += $(host-objdirs)
+@@ -156,6 +164,13 @@ quiet_cmd_host-cshobjs	= HOSTCC  -fPIC $
+ $(host-cshobjs): $(obj)/%.o: $(src)/%.c FORCE
+ 	$(call if_changed_dep,host-cshobjs)
+ 
++# Compile .c file, create position independent .o file
++# host-cxxshobjs -> .o
++quiet_cmd_host-cxxshobjs	= HOSTCXX -fPIC $@
++      cmd_host-cxxshobjs	= $(HOSTCXX) $(hostcxx_flags) -fPIC -c -o $@ $<
++$(host-cxxshobjs): $(obj)/%.o: $(src)/%.c FORCE
++	$(call if_changed_dep,host-cxxshobjs)
++
+ # Link a shared library, based on position independent .o files
+ # *.o -> .so shared library (host-cshlib)
+ quiet_cmd_host-cshlib	= HOSTLLD -shared $@
+@@ -165,6 +180,15 @@ quiet_cmd_host-cshlib	= HOSTLLD -shared
+ $(host-cshlib): $(obj)/%: $(host-cshobjs) FORCE
+ 	$(call if_changed,host-cshlib)
+ 
++# Link a shared library, based on position independent .o files
++# *.o -> .so shared library (host-cxxshlib)
++quiet_cmd_host-cxxshlib	= HOSTLLD -shared $@
++      cmd_host-cxxshlib	= $(HOSTCXX) $(HOSTLDFLAGS) -shared -o $@ \
++			  $(addprefix $(obj)/,$($(@F:.so=-objs))) \
++			  $(HOST_LOADLIBES) $(HOSTLOADLIBES_$(@F))
++$(host-cxxshlib): $(obj)/%: $(host-cxxshobjs) FORCE
++	$(call if_changed,host-cxxshlib)
++
+ targets += $(host-csingle)  $(host-cmulti) $(host-cobjs)\
+-	   $(host-cxxmulti) $(host-cxxobjs) $(host-cshlib) $(host-cshobjs) 
++	   $(host-cxxmulti) $(host-cxxobjs) $(host-cshlib) $(host-cshobjs) $(host-cxxshlib) $(host-cxxshobjs)
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/scripts/mod/file2alias.c linux-2.6.32.59-pax/scripts/mod/file2alias.c
 --- linux-2.6.32.59/scripts/mod/file2alias.c	2012-03-04 18:49:44.000000000 +0100
@@ -55290,8 +55464,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +}
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/colorize_plugin.c linux-2.6.32.59-pax/tools/gcc/colorize_plugin.c
 --- linux-2.6.32.59/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/tools/gcc/colorize_plugin.c	2012-03-13 13:15:36.120097937 +0100
-@@ -0,0 +1,147 @@
++++ linux-2.6.32.59-pax/tools/gcc/colorize_plugin.c	2012-06-18 00:30:55.470362264 +0200
+@@ -0,0 +1,148 @@
 +/*
 + * Copyright 2012 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -55323,6 +55497,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +
 +static struct plugin_info colorize_plugin_info = {
 +	.version	= "201203092200",
++	.help		= NULL,
 +};
 +
 +#define GREEN		"\033[32m\033[2m"
@@ -56375,26 +56550,31 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +}
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/Makefile linux-2.6.32.59-pax/tools/gcc/Makefile
 --- linux-2.6.32.59/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/tools/gcc/Makefile	2012-03-16 19:23:29.475702262 +0100
-@@ -0,0 +1,26 @@
++++ linux-2.6.32.59-pax/tools/gcc/Makefile	2012-06-18 00:30:55.470362264 +0200
+@@ -0,0 +1,31 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
 +#PLUGIN_OBJECT_FILES := $(patsubst %.c,%.o,$(PLUGIN_SOURCE_FILES))
 +GCCPLUGINS_DIR := $(shell $(CC) -print-file-name=plugin)
 +#CFLAGS += -I$(GCCPLUGINS_DIR)/include -fPIC -O2 -Wall -W -std=gnu99
 +
++ifeq ($(PLUGINCC),$(HOSTCC))
++HOSTLIBS := hostlibs
 +HOST_EXTRACFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu99 -ggdb
-+CFLAGS_size_overflow_plugin.o := -Wno-missing-initializer
++else
++HOSTLIBS := hostcxxlibs
++HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu++98 -ggdb -Wno-unused-parameter
++endif
 +
-+hostlibs-$(CONFIG_PAX_CONSTIFY_PLUGIN) := constify_plugin.so
-+hostlibs-$(CONFIG_PAX_MEMORY_STACKLEAK) += stackleak_plugin.so
-+hostlibs-$(CONFIG_KALLOCSTAT_PLUGIN) += kallocstat_plugin.so
-+hostlibs-$(CONFIG_PAX_KERNEXEC_PLUGIN) += kernexec_plugin.so
-+hostlibs-$(CONFIG_CHECKER_PLUGIN) += checker_plugin.so
-+hostlibs-y += colorize_plugin.so
-+hostlibs-$(CONFIG_PAX_SIZE_OVERFLOW) += size_overflow_plugin.so
++$(HOSTLIBS)-$(CONFIG_PAX_CONSTIFY_PLUGIN) := constify_plugin.so
++$(HOSTLIBS)-$(CONFIG_PAX_MEMORY_STACKLEAK) += stackleak_plugin.so
++$(HOSTLIBS)-$(CONFIG_KALLOCSTAT_PLUGIN) += kallocstat_plugin.so
++$(HOSTLIBS)-$(CONFIG_PAX_KERNEXEC_PLUGIN) += kernexec_plugin.so
++$(HOSTLIBS)-$(CONFIG_CHECKER_PLUGIN) += checker_plugin.so
++$(HOSTLIBS)-y += colorize_plugin.so
++$(HOSTLIBS)-$(CONFIG_PAX_SIZE_OVERFLOW) += size_overflow_plugin.so
 +
-+always := $(hostlibs-y)
++always := $($(HOSTLIBS)-y)
 +
 +constify_plugin-objs := constify_plugin.o
 +stackleak_plugin-objs := stackleak_plugin.o
@@ -69675,8 +69855,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +};
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/size_overflow_plugin.c linux-2.6.32.59-pax/tools/gcc/size_overflow_plugin.c
 --- linux-2.6.32.59/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/tools/gcc/size_overflow_plugin.c	2012-06-13 01:32:46.883112294 +0200
-@@ -0,0 +1,1221 @@
++++ linux-2.6.32.59-pax/tools/gcc/size_overflow_plugin.c	2012-06-17 23:50:41.634291516 +0200
+@@ -0,0 +1,1203 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -69689,7 +69869,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 + * The recomputed argument is checked against TYPE_MAX and an event is logged on overflow and the triggering process is killed.
 + *
 + * Usage:
-+ * $ gcc -I`gcc -print-file-name=plugin`/include -fPIC -shared -O2 -o size_overflow_plugin.so size_overflow_plugin.c
++ * $ gcc -I`gcc -print-file-name=plugin`/include/c-family -I`gcc -print-file-name=plugin`/include -fPIC -shared -O2 -ggdb -Wall -W -Wno-missing-field-initializers -o size_overflow_plugin.so size_overflow_plugin.c
 + * $ gcc -fplugin=size_overflow_plugin.so test.c  -O2
 + */
 +
@@ -69743,8 +69923,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +static unsigned int handle_function(void);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20120612beta",
-+	.help		= "no-size_overflow\tturn off size overflow checking\n",
++	.version	= "20120617beta",
++	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
 +static tree handle_size_overflow_attribute(tree *node, tree __unused name, tree args, int __unused flags, bool *no_add_attrs)
@@ -69769,6 +69949,9 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	.type_required			= true,
 +	.function_type_required		= true,
 +	.handler			= handle_size_overflow_attribute
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity		= false
++#endif
 +};
 +
 +static void register_attributes(void __unused *event_data, void __unused *data)
@@ -70029,9 +70212,15 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +
 +static tree cast_a_tree(tree type, tree var)
 +{
++	gcc_assert(type != NULL_TREE && var != NULL_TREE);
 +	gcc_assert(fold_convertible_p(type, var));
 +
 +	return fold_convert(type, var);
++}
++
++static tree signed_cast(tree var)
++{
++	return cast_a_tree(signed_size_overflow_type, var);
 +}
 +
 +static gimple build_cast_stmt(tree type, tree var, tree new_var, location_t loc)
@@ -70132,7 +70321,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +
 +	if (rhs1 != NULL_TREE) {
 +		if (!gimple_assign_cast_p(oldstmt))
-+			rhs1 = cast_a_tree(signed_size_overflow_type, rhs1);
++			rhs1 = signed_cast(rhs1);
 +		gimple_assign_set_rhs1(stmt, rhs1);
 +	}
 +
@@ -70168,13 +70357,6 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	gsi_insert_after(&gsi, phi, GSI_NEW_STMT);
 +	gimple_set_bb(phi, bb);
 +	return phi;
-+}
-+
-+static tree signed_cast_constant(tree node)
-+{
-+	gcc_assert(is_gimple_constant(node));
-+
-+	return cast_a_tree(signed_size_overflow_type, node);
 +}
 +
 +static basic_block create_a_first_bb(void)
@@ -70272,7 +70454,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +
 +		arg = gimple_phi_arg_def(oldstmt, i);
 +		if (is_gimple_constant(arg))
-+			arg = signed_cast_constant(arg);
++			arg = signed_cast(arg);
 +		lhs = build_new_phi_arg(visited, potentionally_overflowed, arg, new_var);
 +		if (lhs == NULL_TREE)
 +			lhs = gimple_get_lhs(cast_old_phi_arg(oldstmt, arg, new_var, i));
@@ -70305,7 +70487,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	tree rhs1 = gimple_assign_rhs1(def_stmt);
 +
 +	if (is_gimple_constant(rhs1))
-+		return dup_assign(visited, potentionally_overflowed, def_stmt, signed_cast_constant(rhs1), NULL_TREE, NULL_TREE);
++		return dup_assign(visited, potentionally_overflowed, def_stmt, signed_cast(rhs1), NULL_TREE, NULL_TREE);
 +
 +	gcc_assert(TREE_CODE(rhs1) != COND_EXPR);
 +	switch (TREE_CODE(rhs1)) {
@@ -70434,19 +70616,6 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +//	print_the_code_insertions(stmt);
 +}
 +
-+static tree get_type_for_check(tree rhs)
-+{
-+	tree def_rhs;
-+	gimple def_stmt = get_def_stmt(rhs);
-+
-+	if (!gimple_assign_cast_p(def_stmt))
-+		return TREE_TYPE(rhs);
-+	def_rhs = gimple_assign_rhs1(def_stmt);
-+	if (TREE_CODE(TREE_TYPE(def_rhs)) == INTEGER_TYPE)
-+		return TREE_TYPE(def_rhs);
-+	return TREE_TYPE(rhs);
-+}
-+
 +static gimple cast_to_unsigned_size_overflow_type(gimple stmt, tree cast_rhs)
 +{
 +	gimple ucast_stmt;
@@ -70461,38 +70630,32 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +
 +static void check_size_overflow(gimple stmt, tree cast_rhs, tree rhs, bool *potentionally_overflowed)
 +{
-+	tree type_max, type_min, rhs_type;
++	tree type_max, type_min, rhs_type = TREE_TYPE(rhs);
 +	gimple ucast_stmt;
 +
 +	if (!*potentionally_overflowed)
 +		return;
-+
-+	rhs_type = get_type_for_check(rhs);
 +
 +	if (TYPE_UNSIGNED(rhs_type)) {
 +		ucast_stmt = cast_to_unsigned_size_overflow_type(stmt, cast_rhs);
 +		type_max = cast_a_tree(unsigned_size_overflow_type, TYPE_MAX_VALUE(rhs_type));
 +		insert_check_size_overflow(stmt, GT_EXPR, gimple_get_lhs(ucast_stmt), type_max);
 +	} else {
-+		type_max = cast_a_tree(signed_size_overflow_type, TYPE_MAX_VALUE(rhs_type));
++		type_max = signed_cast(TYPE_MAX_VALUE(rhs_type));
 +		insert_check_size_overflow(stmt, GT_EXPR, cast_rhs, type_max);
 +
-+		type_min = cast_a_tree(signed_size_overflow_type, TYPE_MIN_VALUE(rhs_type));
++		type_min = signed_cast(TYPE_MIN_VALUE(rhs_type));
 +		insert_check_size_overflow(stmt, LT_EXPR, cast_rhs, type_min);
 +	}
 +}
 +
-+static tree change_assign_rhs(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple stmt, tree orig_rhs)
++static tree change_assign_rhs(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple stmt, tree orig_rhs, tree new_rhs)
 +{
 +	gimple assign;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
-+	tree new_rhs, origtype = TREE_TYPE(orig_rhs);
++	tree origtype = TREE_TYPE(orig_rhs);
 +
 +	gcc_assert(gimple_code(stmt) == GIMPLE_ASSIGN);
-+
-+	new_rhs = expand(visited, potentionally_overflowed, orig_rhs);
-+	if (new_rhs == NULL_TREE)
-+		return NULL_TREE;
 +
 +	assign = build_cast_stmt(origtype, new_rhs, CREATE_NEW_VAR, gimple_location(stmt));
 +	gsi_insert_before(&gsi, assign, GSI_SAME_STMT);
@@ -70500,22 +70663,21 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	return gimple_get_lhs(assign);
 +}
 +
-+static tree handle_const_assign(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple def_stmt, tree var, tree rhs, tree new_rhs1, tree new_rhs2, void (*gimple_assign_set_rhs)(gimple, tree))
++static tree handle_const_assign(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple def_stmt, tree var, tree orig_rhs, tree var_rhs, tree new_rhs1, tree new_rhs2, void (*gimple_assign_set_rhs)(gimple, tree))
 +{
-+	tree new_rhs, cast_rhs;
++	tree new_rhs;
 +
 +	if (gimple_assign_rhs_code(def_stmt) == MIN_EXPR)
 +		return dup_assign(visited, potentionally_overflowed, def_stmt, new_rhs1, new_rhs2, NULL_TREE);
 +
-+	new_rhs = change_assign_rhs(visited, potentionally_overflowed, def_stmt, rhs);
-+	if (new_rhs != NULL_TREE) {
-+		gimple_assign_set_rhs(def_stmt, new_rhs);
-+		update_stmt(def_stmt);
++	if (var_rhs == NULL_TREE)
++		return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
 +
-+		cast_rhs = gimple_assign_rhs1(get_def_stmt(new_rhs));
++	new_rhs = change_assign_rhs(visited, potentionally_overflowed, def_stmt, orig_rhs, var_rhs);
++	gimple_assign_set_rhs(def_stmt, new_rhs);
++	update_stmt(def_stmt);
 +
-+		check_size_overflow(def_stmt, cast_rhs, rhs, potentionally_overflowed);
-+	}
++	check_size_overflow(def_stmt, var_rhs, orig_rhs, potentionally_overflowed);
 +	return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
 +}
 +
@@ -70556,10 +70718,10 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +		new_rhs2 = expand(visited, potentionally_overflowed, rhs2);
 +
 +	if (is_gimple_constant(rhs2))
-+		return handle_const_assign(visited, potentionally_overflowed, def_stmt, var, rhs1, new_rhs1, signed_cast_constant(rhs2), &gimple_assign_set_rhs1);
++		return handle_const_assign(visited, potentionally_overflowed, def_stmt, var, rhs1, new_rhs1, new_rhs1, signed_cast(rhs2), &gimple_assign_set_rhs1);
 +
 +	if (is_gimple_constant(rhs1))
-+		return handle_const_assign(visited, potentionally_overflowed, def_stmt, var, rhs2, signed_cast_constant(rhs1), new_rhs2, &gimple_assign_set_rhs2);
++		return handle_const_assign(visited, potentionally_overflowed, def_stmt, var, rhs2, new_rhs2, signed_cast(rhs1), new_rhs2, &gimple_assign_set_rhs2);
 +
 +	return dup_assign(visited, potentionally_overflowed, def_stmt, new_rhs1, new_rhs2, NULL_TREE);
 +}
@@ -70568,7 +70730,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +static tree get_new_rhs(struct pointer_set_t *visited, bool *potentionally_overflowed, tree rhs)
 +{
 +	if (is_gimple_constant(rhs))
-+		return signed_cast_constant(rhs);
++		return signed_cast(rhs);
 +	if (TREE_CODE(rhs) != SSA_NAME)
 +		return NULL_TREE;
 +	return expand(visited, potentionally_overflowed, rhs);
