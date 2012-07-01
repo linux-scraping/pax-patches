@@ -1,3 +1,6 @@
+- moved some ifdef's around to fix compiler warnings in the ELF loader hunks,
+  thanks to Thiébaud Weksteen for raising the problem and providing the initial patch.
+
 diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/arch/alpha/include/asm/atomic.h linux-3.2.21-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.21/arch/alpha/include/asm/atomic.h	2011-10-24 12:48:18.607092182 +0200
 +++ linux-3.2.21-pax/arch/alpha/include/asm/atomic.h	2012-02-27 20:44:14.829062874 +0100
@@ -36555,7 +36558,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c linux-3.2.21-pax/fs/binfmt_elf.c
 --- linux-3.2.21/fs/binfmt_elf.c	2012-03-13 12:02:21.124332596 +0100
-+++ linux-3.2.21-pax/fs/binfmt_elf.c	2012-05-07 17:46:00.704124836 +0200
++++ linux-3.2.21-pax/fs/binfmt_elf.c	2012-07-01 17:22:54.886441609 +0200
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -36684,16 +36687,15 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -528,6 +552,351 @@ out:
+@@ -528,6 +552,349 @@ out:
  	return error;
  }
  
-+#if defined(CONFIG_PAX_EI_PAX) || defined(CONFIG_PAX_PT_PAX_FLAGS) || defined(CONFIG_PAX_XATTR_PAX_FLAGS)
++#ifdef CONFIG_PAX_PT_PAX_FLAGS
++#ifdef CONFIG_PAX_SOFTMODE
 +static unsigned long pax_parse_pt_pax_softmode(const struct elf_phdr * const elf_phdata)
 +{
 +	unsigned long pax_flags = 0UL;
-+
-+#ifdef CONFIG_PAX_PT_PAX_FLAGS
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
 +	if (elf_phdata->p_flags & PF_PAGEEXEC)
@@ -36729,16 +36731,13 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
 +		pax_flags |= MF_PAX_RANDMMAP;
 +#endif
 +
-+#endif
-+
 +	return pax_flags;
 +}
++#endif
 +
 +static unsigned long pax_parse_pt_pax_hardmode(const struct elf_phdr * const elf_phdata)
 +{
 +	unsigned long pax_flags = 0UL;
-+
-+#ifdef CONFIG_PAX_PT_PAX_FLAGS
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
 +	if (!(elf_phdata->p_flags & PF_NOPAGEEXEC))
@@ -36774,11 +36773,97 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
 +		pax_flags |= MF_PAX_RANDMMAP;
 +#endif
 +
++	return pax_flags;
++}
++#endif
++
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++#ifdef CONFIG_PAX_SOFTMODE
++static unsigned long pax_parse_xattr_pax_softmode(unsigned long pax_flags_softmode)
++{
++	unsigned long pax_flags = 0UL;
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	if (pax_flags_softmode & MF_PAX_PAGEEXEC)
++		pax_flags |= MF_PAX_PAGEEXEC;
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (pax_flags_softmode & MF_PAX_SEGMEXEC)
++		pax_flags |= MF_PAX_SEGMEXEC;
++#endif
++
++#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_PAX_SEGMEXEC)
++	if ((pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) == (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
++		if ((__supported_pte_mask & _PAGE_NX))
++			pax_flags &= ~MF_PAX_SEGMEXEC;
++		else
++			pax_flags &= ~MF_PAX_PAGEEXEC;
++	}
++#endif
++
++#ifdef CONFIG_PAX_EMUTRAMP
++	if (pax_flags_softmode & MF_PAX_EMUTRAMP)
++		pax_flags |= MF_PAX_EMUTRAMP;
++#endif
++
++#ifdef CONFIG_PAX_MPROTECT
++	if (pax_flags_softmode & MF_PAX_MPROTECT)
++		pax_flags |= MF_PAX_MPROTECT;
++#endif
++
++#if defined(CONFIG_PAX_RANDMMAP) || defined(CONFIG_PAX_RANDUSTACK)
++	if (randomize_va_space && (pax_flags_softmode & MF_PAX_RANDMMAP))
++		pax_flags |= MF_PAX_RANDMMAP;
 +#endif
 +
 +	return pax_flags;
 +}
++#endif
 +
++static unsigned long pax_parse_xattr_pax_hardmode(unsigned long pax_flags_hardmode)
++{
++	unsigned long pax_flags = 0UL;
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	if (!(pax_flags_hardmode & MF_PAX_PAGEEXEC))
++		pax_flags |= MF_PAX_PAGEEXEC;
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	if (!(pax_flags_hardmode & MF_PAX_SEGMEXEC))
++		pax_flags |= MF_PAX_SEGMEXEC;
++#endif
++
++#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_PAX_SEGMEXEC)
++	if ((pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) == (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
++		if ((__supported_pte_mask & _PAGE_NX))
++			pax_flags &= ~MF_PAX_SEGMEXEC;
++		else
++			pax_flags &= ~MF_PAX_PAGEEXEC;
++	}
++#endif
++
++#ifdef CONFIG_PAX_EMUTRAMP
++	if (!(pax_flags_hardmode & MF_PAX_EMUTRAMP))
++		pax_flags |= MF_PAX_EMUTRAMP;
++#endif
++
++#ifdef CONFIG_PAX_MPROTECT
++	if (!(pax_flags_hardmode & MF_PAX_MPROTECT))
++		pax_flags |= MF_PAX_MPROTECT;
++#endif
++
++#if defined(CONFIG_PAX_RANDMMAP) || defined(CONFIG_PAX_RANDUSTACK)
++	if (randomize_va_space && !(pax_flags_hardmode & MF_PAX_RANDMMAP))
++		pax_flags |= MF_PAX_RANDMMAP;
++#endif
++
++	return pax_flags;
++}
++#endif
++
++#if defined(CONFIG_PAX_EI_PAX) || defined(CONFIG_PAX_PT_PAX_FLAGS) || defined(CONFIG_PAX_XATTR_PAX_FLAGS)
 +static unsigned long pax_parse_ei_pax(const struct elfhdr * const elf_ex)
 +{
 +	unsigned long pax_flags = 0UL;
@@ -36874,90 +36959,6 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
 +	return ~0UL;
 +}
 +
-+#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
-+static unsigned long pax_parse_xattr_pax_softmode(unsigned long pax_flags_softmode)
-+{
-+	unsigned long pax_flags = 0UL;
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+	if (pax_flags_softmode & MF_PAX_PAGEEXEC)
-+		pax_flags |= MF_PAX_PAGEEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	if (pax_flags_softmode & MF_PAX_SEGMEXEC)
-+		pax_flags |= MF_PAX_SEGMEXEC;
-+#endif
-+
-+#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_PAX_SEGMEXEC)
-+	if ((pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) == (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
-+		if ((__supported_pte_mask & _PAGE_NX))
-+			pax_flags &= ~MF_PAX_SEGMEXEC;
-+		else
-+			pax_flags &= ~MF_PAX_PAGEEXEC;
-+	}
-+#endif
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+	if (pax_flags_softmode & MF_PAX_EMUTRAMP)
-+		pax_flags |= MF_PAX_EMUTRAMP;
-+#endif
-+
-+#ifdef CONFIG_PAX_MPROTECT
-+	if (pax_flags_softmode & MF_PAX_MPROTECT)
-+		pax_flags |= MF_PAX_MPROTECT;
-+#endif
-+
-+#if defined(CONFIG_PAX_RANDMMAP) || defined(CONFIG_PAX_RANDUSTACK)
-+	if (randomize_va_space && (pax_flags_softmode & MF_PAX_RANDMMAP))
-+		pax_flags |= MF_PAX_RANDMMAP;
-+#endif
-+
-+	return pax_flags;
-+}
-+
-+static unsigned long pax_parse_xattr_pax_hardmode(unsigned long pax_flags_hardmode)
-+{
-+	unsigned long pax_flags = 0UL;
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+	if (!(pax_flags_hardmode & MF_PAX_PAGEEXEC))
-+		pax_flags |= MF_PAX_PAGEEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	if (!(pax_flags_hardmode & MF_PAX_SEGMEXEC))
-+		pax_flags |= MF_PAX_SEGMEXEC;
-+#endif
-+
-+#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_PAX_SEGMEXEC)
-+	if ((pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) == (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
-+		if ((__supported_pte_mask & _PAGE_NX))
-+			pax_flags &= ~MF_PAX_SEGMEXEC;
-+		else
-+			pax_flags &= ~MF_PAX_PAGEEXEC;
-+	}
-+#endif
-+
-+#ifdef CONFIG_PAX_EMUTRAMP
-+	if (!(pax_flags_hardmode & MF_PAX_EMUTRAMP))
-+		pax_flags |= MF_PAX_EMUTRAMP;
-+#endif
-+
-+#ifdef CONFIG_PAX_MPROTECT
-+	if (!(pax_flags_hardmode & MF_PAX_MPROTECT))
-+		pax_flags |= MF_PAX_MPROTECT;
-+#endif
-+
-+#if defined(CONFIG_PAX_RANDMMAP) || defined(CONFIG_PAX_RANDUSTACK)
-+	if (randomize_va_space && !(pax_flags_hardmode & MF_PAX_RANDMMAP))
-+		pax_flags |= MF_PAX_RANDMMAP;
-+#endif
-+
-+	return pax_flags;
-+}
-+#endif
-+
 +static unsigned long pax_parse_xattr_pax(struct file * const file)
 +{
 +
@@ -37036,7 +37037,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -544,6 +913,11 @@ static unsigned long randomize_stack_top
+@@ -544,6 +911,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -37048,7 +37049,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -562,7 +936,7 @@ static int load_elf_binary(struct linux_
+@@ -562,7 +934,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -37057,7 +37058,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -572,11 +946,11 @@ static int load_elf_binary(struct linux_
+@@ -572,11 +944,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -37070,7 +37071,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -713,11 +1087,81 @@ static int load_elf_binary(struct linux_
+@@ -713,11 +1085,81 @@ static int load_elf_binary(struct linux_
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -37153,7 +37154,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -808,6 +1252,20 @@ static int load_elf_binary(struct linux_
+@@ -808,6 +1250,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -37174,7 +37175,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -840,9 +1298,9 @@ static int load_elf_binary(struct linux_
+@@ -840,9 +1296,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -37187,7 +37188,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -881,10 +1339,39 @@ static int load_elf_binary(struct linux_
+@@ -881,11 +1337,40 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -37199,8 +37200,8 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
 +		 * file specifies odd protections. So
 +		 * we don't check the return value
 +		 */
-+	}
-+
+ 	}
+ 
 +#ifdef CONFIG_PAX_RANDMMAP
 +	if (current->mm->pax_flags & MF_PAX_RANDMMAP) {
 +		unsigned long start, size;
@@ -37225,12 +37226,13 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
 +			send_sig(SIGKILL, current, 0);
 +			goto out_free_dentry;
 +		}
- 	}
++	}
 +#endif
- 
++
  	if (elf_interpreter) {
  		unsigned long uninitialized_var(interp_map_addr);
-@@ -1098,7 +1585,7 @@ out:
+ 
+@@ -1098,7 +1583,7 @@ out:
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -37239,7 +37241,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1132,7 +1619,7 @@ static unsigned long vma_dump_size(struc
+@@ -1132,7 +1617,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -37248,7 +37250,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  		goto whole;
  
  	/*
-@@ -1354,9 +1841,9 @@ static void fill_auxv_note(struct memelf
+@@ -1354,9 +1839,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -37260,7 +37262,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1862,14 +2349,14 @@ static void fill_extnum_info(struct elfh
+@@ -1862,14 +2347,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -37277,7 +37279,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  	return size;
  }
  
-@@ -1963,7 +2450,7 @@ static int elf_core_dump(struct coredump
+@@ -1963,7 +2448,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -37286,7 +37288,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -1994,7 +2481,7 @@ static int elf_core_dump(struct coredump
+@@ -1994,7 +2479,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -37295,7 +37297,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2029,7 +2516,7 @@ static int elf_core_dump(struct coredump
+@@ -2029,7 +2514,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -37304,7 +37306,7 @@ diff -NurpX linux-3.2.21-pax/Documentation/dontdiff linux-3.2.21/fs/binfmt_elf.c
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2075,6 +2562,96 @@ out:
+@@ -2075,6 +2560,96 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
