@@ -1,6 +1,5 @@
-- reorganized the USERCOPY infrastructure so that grsecurity can depend on certain parts of it
+- fix up the last changes as pointed out by spender
 
-  can use the latter for HIDESYM
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/alpha/include/asm/atomic.h linux-3.4.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.4.6/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
 +++ linux-3.4.6-pax/arch/alpha/include/asm/atomic.h	2012-05-21 12:10:08.400048827 +0200
@@ -36022,7 +36021,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/binfmt_aout.c 
  		if (error != N_DATADDR(ex)) {
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/binfmt_elf.c linux-3.4.6-pax/fs/binfmt_elf.c
 --- linux-3.4.6/fs/binfmt_elf.c	2012-05-21 11:33:34.279929659 +0200
-+++ linux-3.4.6-pax/fs/binfmt_elf.c	2012-07-16 23:36:32.754470559 +0200
++++ linux-3.4.6-pax/fs/binfmt_elf.c	2012-07-24 02:16:58.658745429 +0200
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -37631,7 +37630,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/ecryptfs/read_
  }
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3.4.6-pax/fs/exec.c
 --- linux-3.4.6/fs/exec.c	2012-07-21 01:28:44.730708088 +0200
-+++ linux-3.4.6-pax/fs/exec.c	2012-07-24 00:27:40.474552832 +0200
++++ linux-3.4.6-pax/fs/exec.c	2012-07-24 02:17:57.182746974 +0200
 @@ -55,6 +55,13 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -37876,7 +37875,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1821,6 +1857,241 @@ out:
+@@ -1821,6 +1857,238 @@ out:
  	return ispipe;
  }
  
@@ -38014,7 +38013,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +/* 0: not at all, 1: fully, 2: fully inside frame, -1: partially (implies an error) */
-+static int check_stack_object(const void *obj, unsigned long len)
++static noinline int check_stack_object(const void *obj, unsigned long len)
 +{
 +	const void * const stack = task_stack_page(current);
 +	const void * const stackend = stack + THREAD_SIZE;
@@ -38073,19 +38072,16 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
-+	const char *type = "<process stack>";
++	const char *type;
 +
 +	if (!n)
 +		return;
 +
-+	switch (check_stack_object(ptr, n)) {
-+	case 1:
-+	case 2:
-+		return;
-+	case 0:
-+		type = check_heap_object(ptr, n, to);
-+		if (!type)
++	type = check_heap_object(ptr, n, to);
++	if (!type) {
++		if (check_stack_object(ptr, n) != -1)
 +			return;
++		type = "<process stack>";
 +	}
 +
 +	pax_report_usercopy(ptr, n, to, type);
@@ -38118,7 +38114,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -2018,17 +2289,17 @@ static void wait_for_dump_helpers(struct
+@@ -2018,17 +2286,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -38141,7 +38137,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
  	pipe_unlock(pipe);
  
  }
-@@ -2089,7 +2360,7 @@ void do_coredump(long signr, int exit_co
+@@ -2089,7 +2357,7 @@ void do_coredump(long signr, int exit_co
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -38150,7 +38146,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2171,7 +2442,7 @@ void do_coredump(long signr, int exit_co
+@@ -2171,7 +2439,7 @@ void do_coredump(long signr, int exit_co
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -38159,7 +38155,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2241,7 +2512,7 @@ close_fail:
+@@ -2241,7 +2509,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -38168,7 +38164,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/fs/exec.c linux-3
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2260,7 +2531,7 @@ fail:
+@@ -2260,7 +2528,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
@@ -51709,7 +51705,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slab.c linux-3
   * @objp: Pointer to the object
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3.4.6-pax/mm/slob.c
 --- linux-3.4.6/mm/slob.c	2012-01-08 19:48:29.467470852 +0100
-+++ linux-3.4.6-pax/mm/slob.c	2012-07-24 01:04:00.986616845 +0200
++++ linux-3.4.6-pax/mm/slob.c	2012-07-24 01:59:14.790714613 +0200
 @@ -29,7 +29,7 @@
   * If kmalloc is asked for objects of PAGE_SIZE or larger, it calls
   * alloc_pages() directly, allocating compound pages so the page order
@@ -51858,7 +51854,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3
  	return ret;
  }
  EXPORT_SYMBOL(__kmalloc_node);
-@@ -533,13 +547,92 @@ void kfree(const void *block)
+@@ -533,13 +547,83 @@ void kfree(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -51878,16 +51874,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3
  
 +bool is_usercopy_object(const void *ptr)
 +{
-+	struct slob_page *sp;
-+
-+	if (ZERO_OR_NULL_PTR(ptr))
-+		return false;
-+
-+	if (!virt_addr_valid(ptr))
-+		return false;
-+
-+	sp = slob_page(ptr);
-+	return PageSlab((struct page *)sp);
++	return false;
 +}
 +
 +#ifdef CONFIG_PAX_USERCOPY
@@ -51954,7 +51941,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -552,10 +645,10 @@ size_t ksize(const void *block)
+@@ -552,10 +636,10 @@ size_t ksize(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -51968,7 +51955,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -571,8 +664,13 @@ struct kmem_cache *kmem_cache_create(con
+@@ -571,8 +655,13 @@ struct kmem_cache *kmem_cache_create(con
  {
  	struct kmem_cache *c;
  
@@ -51982,7 +51969,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3
  
  	if (c) {
  		c->name = name;
-@@ -614,17 +712,25 @@ void *kmem_cache_alloc_node(struct kmem_
+@@ -614,17 +703,25 @@ void *kmem_cache_alloc_node(struct kmem_
  
  	lockdep_trace_alloc(flags);
  
@@ -52008,7 +51995,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -636,10 +742,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -636,10 +733,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -52027,7 +52014,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/mm/slob.c linux-3
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -652,17 +764,31 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -652,17 +755,31 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
