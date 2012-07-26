@@ -1,4 +1,4 @@
-- fix up the last changes as pointed out by spender
+- reworked the latent entropy plugin to use an explicit function attribute
 
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/alpha/include/asm/atomic.h linux-3.4.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.4.6/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -41768,8 +41768,8 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/cle
  	cleancache_register_ops(struct cleancache_ops *ops);
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/compiler-gcc4.h linux-3.4.6-pax/include/linux/compiler-gcc4.h
 --- linux-3.4.6/include/linux/compiler-gcc4.h	2012-03-19 10:39:10.852049231 +0100
-+++ linux-3.4.6-pax/include/linux/compiler-gcc4.h	2012-05-22 15:28:31.419384614 +0200
-@@ -32,6 +32,16 @@
++++ linux-3.4.6-pax/include/linux/compiler-gcc4.h	2012-07-26 17:26:14.853326147 +0200
+@@ -32,6 +32,20 @@
  #define __linktime_error(message) __attribute__((__error__(message)))
  
  #if __GNUC_MINOR__ >= 5
@@ -41783,10 +41783,14 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/com
 +#define __size_overflow(...) __attribute__((size_overflow(__VA_ARGS__)))
 +#endif
 +
++#ifdef LATENT_ENTROPY_PLUGIN
++#define __latent_entropy __attribute__((latent_entropy))
++#endif
++
  /*
   * Mark a position in code as unreachable.  This can be used to
   * suppress control flow warnings after asm blocks that transfer
-@@ -47,6 +57,11 @@
+@@ -47,6 +61,11 @@
  #define __noclone	__attribute__((__noclone__))
  
  #endif
@@ -41800,7 +41804,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/com
  #if __GNUC_MINOR__ > 0
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/compiler.h linux-3.4.6-pax/include/linux/compiler.h
 --- linux-3.4.6/include/linux/compiler.h	2012-05-21 11:33:37.311929823 +0200
-+++ linux-3.4.6-pax/include/linux/compiler.h	2012-05-22 15:28:31.483384610 +0200
++++ linux-3.4.6-pax/include/linux/compiler.h	2012-07-26 17:26:51.633327498 +0200
 @@ -5,31 +5,62 @@
  
  #ifdef __CHECKER__
@@ -41874,7 +41878,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/com
  #endif
  
  #ifdef __KERNEL__
-@@ -264,6 +297,18 @@ void ftrace_likely_update(struct ftrace_
+@@ -264,6 +297,22 @@ void ftrace_likely_update(struct ftrace_
  # define __attribute_const__	/* unimplemented */
  #endif
  
@@ -41890,10 +41894,14 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/com
 +# define __size_overflow(...)
 +#endif
 +
++#ifndef __latent_entropy
++# define __latent_entropy
++#endif
++
  /*
   * Tell gcc if a function is cold. The compiler will assume any path
   * directly leading to the call is unlikely.
-@@ -273,6 +318,22 @@ void ftrace_likely_update(struct ftrace_
+@@ -273,6 +322,22 @@ void ftrace_likely_update(struct ftrace_
  #define __cold
  #endif
  
@@ -41916,7 +41924,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/com
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -308,6 +369,7 @@ void ftrace_likely_update(struct ftrace_
+@@ -308,6 +373,7 @@ void ftrace_likely_update(struct ftrace_
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -42320,8 +42328,52 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/if_
  
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/linux/init.h linux-3.4.6-pax/include/linux/init.h
 --- linux-3.4.6/include/linux/init.h	2012-03-19 10:39:10.976049229 +0100
-+++ linux-3.4.6-pax/include/linux/init.h	2012-05-21 12:10:11.456048993 +0200
-@@ -294,13 +294,13 @@ void __init parse_early_options(char *cm
++++ linux-3.4.6-pax/include/linux/init.h	2012-07-26 18:32:24.389442825 +0200
+@@ -39,9 +39,15 @@
+  * Also note, that this data cannot be "const".
+  */
+ 
++#ifdef MODULE
++#define add_latent_entropy
++#else
++#define add_latent_entropy __latent_entropy
++#endif
++
+ /* These are for everybody (although not all archs will actually
+    discard it in modules) */
+-#define __init		__section(.init.text) __cold notrace
++#define __init		__section(.init.text) __cold notrace add_latent_entropy
+ #define __initdata	__section(.init.data)
+ #define __initconst	__section(.init.rodata)
+ #define __exitdata	__section(.exit.data)
+@@ -83,7 +89,7 @@
+ #define __exit          __section(.exit.text) __exitused __cold notrace
+ 
+ /* Used for HOTPLUG */
+-#define __devinit        __section(.devinit.text) __cold notrace
++#define __devinit        __section(.devinit.text) __cold notrace add_latent_entropy
+ #define __devinitdata    __section(.devinit.data)
+ #define __devinitconst   __section(.devinit.rodata)
+ #define __devexit        __section(.devexit.text) __exitused __cold notrace
+@@ -91,7 +97,7 @@
+ #define __devexitconst   __section(.devexit.rodata)
+ 
+ /* Used for HOTPLUG_CPU */
+-#define __cpuinit        __section(.cpuinit.text) __cold notrace
++#define __cpuinit        __section(.cpuinit.text) __cold notrace add_latent_entropy
+ #define __cpuinitdata    __section(.cpuinit.data)
+ #define __cpuinitconst   __section(.cpuinit.rodata)
+ #define __cpuexit        __section(.cpuexit.text) __exitused __cold notrace
+@@ -99,7 +105,7 @@
+ #define __cpuexitconst   __section(.cpuexit.rodata)
+ 
+ /* Used for MEMORY_HOTPLUG */
+-#define __meminit        __section(.meminit.text) __cold notrace
++#define __meminit        __section(.meminit.text) __cold notrace add_latent_entropy
+ #define __meminitdata    __section(.meminit.data)
+ #define __meminitconst   __section(.meminit.rodata)
+ #define __memexit        __section(.memexit.text) __exitused __cold notrace
+@@ -294,13 +300,13 @@ void __init parse_early_options(char *cm
  
  /* Each module must use one module_init(). */
  #define module_init(initfn)					\
@@ -48438,7 +48490,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/lib/vsprintf.c li
  
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/Makefile linux-3.4.6-pax/Makefile
 --- linux-3.4.6/Makefile	2012-07-21 01:28:43.878708063 +0200
-+++ linux-3.4.6-pax/Makefile	2012-07-21 01:28:55.306708398 +0200
++++ linux-3.4.6-pax/Makefile	2012-07-26 17:28:09.513329170 +0200
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -48493,11 +48545,11 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/Makefile linux-3.
 +SIZE_OVERFLOW_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/size_overflow_plugin.so -DSIZE_OVERFLOW_PLUGIN
 +endif
 +ifdef CONFIG_PAX_LATENT_ENTROPY
-+LATENT_ENTROPY := -fplugin=$(objtree)/tools/gcc/latent_entropy_plugin.so
++LATENT_ENTROPY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/latent_entropy_plugin.so -DLATENT_ENTROPY_PLUGIN
 +endif
 +GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
-+GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY)
++GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
 +export PLUGINCC CONSTIFY_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
@@ -58461,8 +58513,8 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/kernexe
 +}
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_entropy_plugin.c linux-3.4.6-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.4.6/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.4.6-pax/tools/gcc/latent_entropy_plugin.c	2012-07-20 23:39:46.382515849 +0200
-@@ -0,0 +1,291 @@
++++ linux-3.4.6-pax/tools/gcc/latent_entropy_plugin.c	2012-07-26 20:50:10.357685558 +0200
+@@ -0,0 +1,273 @@
 +/*
 + * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -58476,7 +58528,9 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 + * used during boot in the kernel
 + *
 + * TODO:
-+ * - quite a few, see the comments :)
++ * - add ipa pass to identify not explicitly marked candidate functions
++ * - mix in more program state (function arguments/return values, loop variables, etc)
++ * - more instrumentation control via attribute parameters
 + *
 + * BUGS:
 + * - none known
@@ -58501,17 +58555,13 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
-+#include "cpplib.h"
-+#include "c-pragma.h"
-+
-+#include "linux/kconfig.h"
 +
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207202140",
++	.version	= "201207261850",
 +	.help		= NULL
 +};
 +
@@ -58536,54 +58586,39 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 +	}
 +};
 +
-+// for kernel use we just want to instrument some of the boot code
-+// for userland use this would need changes
++static tree handle_latent_entropy_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
++{
++	if (TREE_CODE(*node) != FUNCTION_DECL) {
++		*no_add_attrs = true;
++		error("%qE attribute only applies to functions", name);
++	}
++	return NULL_TREE;
++}
++
++static struct attribute_spec latent_entropy_attr = {
++	.name				= "latent_entropy",
++	.min_length			= 0,
++	.max_length			= 0,
++	.decl_required			= true,
++	.type_required			= false,
++	.function_type_required		= false,
++	.handler			= handle_latent_entropy_attribute,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity		= false
++#endif
++};
++
++static void register_attributes(void *event_data, void *data)
++{
++	register_attribute(&latent_entropy_attr);
++}
++
 +static bool gate_latent_entropy(void)
 +{
-+	tree section_attr;
-+	const char *section_name;
++	tree latent_entropy_attr;
 +
-+	// don't instrument modules
-+	if (cpp_defined(parse_in, (const unsigned char *)"MODULE", 6))
-+		return false;
-+
-+	// don't instrument normal code
-+	section_attr = lookup_attribute("section", DECL_ATTRIBUTES(current_function_decl));
-+	if (!section_attr || !TREE_VALUE(section_attr))
-+		return false;
-+
-+	section_name = TREE_STRING_POINTER(TREE_VALUE(TREE_VALUE(section_attr)));
-+
-+	// instrument code in boot related sections
-+	if (!strncmp(section_name, ".init.text", 10))
-+		return true;
-+
-+	if (!strncmp(section_name, ".initcall", 9))
-+		return true;
-+
-+	if (!strncmp(section_name, ".con_initcall", 13))
-+		return true;
-+
-+	if (!strncmp(section_name, ".security_initcall", 18))
-+		return true;
-+
-+#ifndef CONFIG_HOTPLUG
-+	if (!strncmp(section_name, ".devinit.text", 13))
-+		return true;
-+#endif
-+
-+#ifndef CONFIG_HOTPLUG_CPU
-+	if (!strncmp(section_name, ".cpuinit.text", 13))
-+		return true;
-+#endif
-+
-+#ifndef CONFIG_HOTPLUG_MEMORY
-+	if (!strncmp(section_name, ".meminit.text", 13))
-+		return true;
-+#endif
-+
-+	// TODO check whether cfun is static and all its callers meet the above criteria
-+	return false;
++	latent_entropy_attr = lookup_attribute("latent_entropy", DECL_ATTRIBUTES(current_function_decl));
++	return latent_entropy_attr != NULL_TREE;
 +}
 +
 +static unsigned HOST_WIDE_INT seed;
@@ -58669,8 +58704,6 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 +	find_referenced_vars_in(assign);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
-+
-+	// TODO we could mix in more local state such as function return values, etc
 +}
 +
 +static unsigned int execute_latent_entropy(void)
@@ -58751,12 +58784,13 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &latent_entropy_plugin_info);
 +	register_callback ("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &latent_entropy_pass_info);
++	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
 +	return 0;
 +}
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/Makefile linux-3.4.6-pax/tools/gcc/Makefile
 --- linux-3.4.6/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.4.6-pax/tools/gcc/Makefile	2012-07-15 23:54:27.498723722 +0200
++++ linux-3.4.6-pax/tools/gcc/Makefile	2012-07-26 19:19:14.753525476 +0200
 @@ -0,0 +1,43 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
@@ -58766,10 +58800,10 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/Makefil
 +
 +ifeq ($(PLUGINCC),$(HOSTCC))
 +HOSTLIBS := hostlibs
-+HOST_EXTRACFLAGS += -Iinclude -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu99 -ggdb
++HOST_EXTRACFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu99 -ggdb
 +else
 +HOSTLIBS := hostcxxlibs
-+HOST_EXTRACXXFLAGS += -Iinclude -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu++98 -ggdb -Wno-unused-parameter
++HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu++98 -ggdb -Wno-unused-parameter
 +endif
 +
 +$(HOSTLIBS)-$(CONFIG_PAX_CONSTIFY_PLUGIN) := constify_plugin.so
