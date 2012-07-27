@@ -1,4 +1,5 @@
-- reworked the latent entropy plugin to use an explicit function attribute
+- fixed a recent REFCOUNT change that broke !X86
+- made the latent entropy plugin sort of LTO compatible
 
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/alpha/include/asm/atomic.h linux-3.4.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.4.6/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -281,7 +282,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/alpha/mm/fau
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/arm/include/asm/atomic.h linux-3.4.6-pax/arch/arm/include/asm/atomic.h
 --- linux-3.4.6/arch/arm/include/asm/atomic.h	2012-05-21 11:32:31.575926252 +0200
-+++ linux-3.4.6-pax/arch/arm/include/asm/atomic.h	2012-06-12 13:08:04.401524307 +0200
++++ linux-3.4.6-pax/arch/arm/include/asm/atomic.h	2012-07-27 20:34:54.146207456 +0200
 @@ -17,17 +17,35 @@
  #include <asm/barrier.h>
  #include <asm/cmpxchg.h>
@@ -41057,7 +41058,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/asm-gener
  
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/asm-generic/atomic-long.h linux-3.4.6-pax/include/asm-generic/atomic-long.h
 --- linux-3.4.6/include/asm-generic/atomic-long.h	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.4.6-pax/include/asm-generic/atomic-long.h	2012-07-04 19:51:51.476068258 +0200
++++ linux-3.4.6-pax/include/asm-generic/atomic-long.h	2012-07-27 20:34:50.910207361 +0200
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -41308,7 +41309,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/asm-gener
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -255,4 +393,53 @@ static inline long atomic_long_add_unles
+@@ -255,4 +393,55 @@ static inline long atomic_long_add_unles
  
  #endif  /*  BITS_PER_LONG == 64  */
  
@@ -41326,8 +41327,10 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/include/asm-gener
 +	atomic_dec_unchecked((atomic_unchecked_t *)NULL);
 +	atomic_cmpxchg_unchecked((atomic_unchecked_t *)NULL, 0, 0);
 +	(void)atomic_xchg_unchecked((atomic_unchecked_t *)NULL, 0);
++#ifdef CONFIG_X86
 +	atomic_clear_mask_unchecked(0, NULL);
 +	atomic_set_mask_unchecked(0, NULL);
++#endif
 +
 +	atomic_long_read_unchecked((atomic_long_unchecked_t *)NULL);
 +	atomic_long_set_unchecked((atomic_long_unchecked_t *)NULL, 0);
@@ -58513,8 +58516,8 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/kernexe
 +}
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_entropy_plugin.c linux-3.4.6-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.4.6/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.4.6-pax/tools/gcc/latent_entropy_plugin.c	2012-07-26 20:50:10.357685558 +0200
-@@ -0,0 +1,273 @@
++++ linux-3.4.6-pax/tools/gcc/latent_entropy_plugin.c	2012-07-27 20:18:02.238177704 +0200
+@@ -0,0 +1,295 @@
 +/*
 + * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -58533,7 +58536,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 + * - more instrumentation control via attribute parameters
 + *
 + * BUGS:
-+ * - none known
++ * - LTO needs -flto-partition=none for now
 + */
 +#include "gcc-plugin.h"
 +#include "config.h"
@@ -58561,7 +58564,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207261850",
++	.version	= "201207271820",
 +	.help		= NULL
 +};
 +
@@ -58713,6 +58716,23 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 +	gimple_stmt_iterator gsi;
 +	tree local_entropy;
 +
++	if (!latent_entropy_decl) {
++		struct varpool_node *node;
++
++		for (node = varpool_nodes; node; node = node->next) {
++			tree var = node->decl;
++			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
++				continue;
++			latent_entropy_decl = var;
++//			debug_tree(var);
++			break;
++		}
++		if (!latent_entropy_decl) {
++//			debug_tree(current_function_decl);
++			return 0;
++		}
++	}
++
 +//fprintf(stderr, "latent_entropy: %s\n", IDENTIFIER_POINTER(DECL_NAME(current_function_decl)));
 +
 +	// 1. create local entropy variable
@@ -58746,24 +58766,29 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/latent_
 +
 +static void start_unit_callback(void *gcc_data, void *user_data)
 +{
-+	// extern u64 latent_entropy
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
-+
-+	TREE_STATIC(latent_entropy_decl) = 1;
-+	TREE_PUBLIC(latent_entropy_decl) = 1;
-+	DECL_EXTERNAL(latent_entropy_decl) = 1;
-+	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
-+	DECL_INITIAL(latent_entropy_decl) = NULL;
-+//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
-+//	varpool_finalize_decl(latent_entropy_decl);
-+//	varpool_mark_needed_node(latent_entropy_decl);
-+
 +#if BUILDING_GCC_VERSION >= 4007
 +	seed = get_random_seed(false);
 +#else
 +	sscanf(get_random_seed(false), "%" HOST_WIDE_INT_PRINT "x", &seed);
 +	seed *= seed;
 +#endif
++
++	if (in_lto_p)
++		return;
++
++	// extern u64 latent_entropy
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
++
++	TREE_STATIC(latent_entropy_decl) = 1;
++	TREE_PUBLIC(latent_entropy_decl) = 1;
++	TREE_USED(latent_entropy_decl) = 1;
++	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
++	DECL_EXTERNAL(latent_entropy_decl) = 1;
++	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
++	DECL_INITIAL(latent_entropy_decl) = NULL;
++//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
++//	varpool_finalize_decl(latent_entropy_decl);
++//	varpool_mark_needed_node(latent_entropy_decl);
 +}
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
