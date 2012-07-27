@@ -1,10 +1,9 @@
-- more REFCOUNT instrumentation
-- DEBUG_STRICT_USER_COPY_CHECKS cannot yet be enabled
-- new gcc plugin: latent_entropy
-- cleaned up PaX control flag handling
-- some infrastructure for generic USERCOPY slabs
-- fixed plugin ref_pass_instance_number fields (no functional change)
-
+- reorganized the USERCOPY infrastructure so that grsecurity can depend on certain parts of it
+- fix up the last changes as pointed out by spender
+- reworked the latent entropy plugin to use an explicit function attribute
+- fixed a recent REFCOUNT change that broke !X86
+- made the latent entropy plugin sort of LTO compatible
+`
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/alpha/include/asm/atomic.h linux-2.6.32.59-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.59/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.59-pax/arch/alpha/include/asm/atomic.h	2012-03-13 13:15:34.268098438 +0100
@@ -27100,7 +27099,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/drivers/c
  	 .mfg_num = MBCS_MFG_NUM,
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/drivers/char/mem.c linux-2.6.32.59-pax/drivers/char/mem.c
 --- linux-2.6.32.59/drivers/char/mem.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/drivers/char/mem.c	2012-03-13 13:15:34.944098000 +0100
++++ linux-2.6.32.59-pax/drivers/char/mem.c	2012-07-27 21:50:49.110341381 +0200
 @@ -155,6 +155,8 @@ static ssize_t read_mem(struct file * fi
  #endif
  
@@ -27116,7 +27115,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/drivers/c
  
 -		if (copy_to_user(buf, ptr, sz)) {
 +#ifdef CONFIG_PAX_USERCOPY
-+		temp = kmalloc(sz, GFP_KERNEL);
++		temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
 +		if (!temp) {
 +			unxlate_dev_mem_ptr(p, ptr);
 +			return -ENOMEM;
@@ -27169,7 +27168,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/drivers/c
  
 -			if (copy_to_user(buf, kbuf, sz))
 +#ifdef CONFIG_PAX_USERCOPY
-+			temp = kmalloc(sz, GFP_KERNEL);
++			temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
 +			if (!temp)
 +				return -ENOMEM;
 +			memcpy(temp, kbuf, sz);
@@ -37042,7 +37041,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/ecrypt
  		goto out_free;
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c linux-2.6.32.59-pax/fs/exec.c
 --- linux-2.6.32.59/fs/exec.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/fs/exec.c	2012-06-14 09:57:00.609196698 +0200
++++ linux-2.6.32.59-pax/fs/exec.c	2012-07-27 21:50:49.114341381 +0200
 @@ -56,12 +56,31 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -37228,7 +37227,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1591,6 +1627,216 @@ out:
+@@ -1591,6 +1627,238 @@ out:
  	return ispipe;
  }
  
@@ -37366,7 +37365,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +/* 0: not at all, 1: fully, 2: fully inside frame, -1: partially (implies an error) */
-+int object_is_on_stack(const void *obj, unsigned long len)
++static noinline int check_stack_object(const void *obj, unsigned long len)
 +{
 +	const void * const stack = task_stack_page(current);
 +	const void * const stackend = stack + THREAD_SIZE;
@@ -37412,7 +37411,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
 +#endif
 +}
 +
-+__noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type)
++static __noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type)
 +{
 +	printk(KERN_ERR "PAX: kernel memory %s attempt detected %s %p (%s) (%lu bytes)\n",
 +		to ? "leak" : "overwrite", to ? "from" : "to", ptr, type ? : "unknown", len);
@@ -37420,6 +37419,28 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
 +	do_group_exit(SIGKILL);
 +}
 +#endif
++
++void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++
++#ifdef CONFIG_PAX_USERCOPY
++	const char *type;
++
++	if (!n)
++		return;
++
++	type = check_heap_object(ptr, n, to);
++	if (!type) {
++		if (check_stack_object(ptr, n) != -1)
++			return;
++		type = "<process stack>";
++	}
++
++	pax_report_usercopy(ptr, n, to, type);
++#endif
++
++}
++EXPORT_SYMBOL(check_object_size);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +void pax_track_stack(void)
@@ -37445,7 +37466,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2039,17 @@ static void wait_for_dump_helpers(struct
+@@ -1793,17 +2061,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -37468,7 +37489,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
  	pipe_unlock(pipe);
  
  }
-@@ -1826,7 +2072,7 @@ void do_coredump(long signr, int exit_co
+@@ -1826,7 +2094,7 @@ void do_coredump(long signr, int exit_co
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -37477,7 +37498,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
  
  	audit_core_dumps(signr);
  
-@@ -1908,7 +2154,7 @@ void do_coredump(long signr, int exit_co
+@@ -1908,7 +2176,7 @@ void do_coredump(long signr, int exit_co
  			goto fail_unlock;
  		}
  
@@ -37486,7 +37507,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/exec.c
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2218,7 @@ close_fail:
+@@ -1972,7 +2240,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
@@ -40467,7 +40488,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/a
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/asm-generic/atomic-long.h linux-2.6.32.59-pax/include/asm-generic/atomic-long.h
 --- linux-2.6.32.59/include/asm-generic/atomic-long.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/asm-generic/atomic-long.h	2012-07-21 11:21:27.473060476 +0200
++++ linux-2.6.32.59-pax/include/asm-generic/atomic-long.h	2012-07-27 21:50:49.130341382 +0200
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -40686,7 +40707,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/a
  static inline long atomic_long_dec_return(atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -255,4 +375,51 @@ static inline long atomic_long_add_unles
+@@ -255,4 +375,53 @@ static inline long atomic_long_add_unles
  
  #endif  /*  BITS_PER_LONG == 64  */
  
@@ -40704,8 +40725,10 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/a
 +	atomic_dec_unchecked((atomic_unchecked_t *)NULL);
 +	atomic_cmpxchg_unchecked((atomic_unchecked_t *)NULL, 0, 0);
 +	(void)atomic_xchg_unchecked((atomic_unchecked_t *)NULL, 0);
++#ifdef CONFIG_X86
 +	atomic_clear_mask_unchecked(0, NULL);
 +	atomic_set_mask_unchecked(0, NULL);
++#endif
 +
 +	atomic_long_read_unchecked((atomic_long_unchecked_t *)NULL);
 +	atomic_long_set_unchecked((atomic_long_unchecked_t *)NULL, 0);
@@ -41172,18 +41195,23 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  #endif
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/compiler-gcc4.h linux-2.6.32.59-pax/include/linux/compiler-gcc4.h
 --- linux-2.6.32.59/include/linux/compiler-gcc4.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/compiler-gcc4.h	2012-06-18 00:42:35.114382944 +0200
-@@ -14,6 +14,9 @@
++++ linux-2.6.32.59-pax/include/linux/compiler-gcc4.h	2012-07-27 21:58:28.874354899 +0200
+@@ -14,6 +14,14 @@
  #define __compiler_offsetof(a,b) __builtin_offsetof(a,b)
  #define __always_inline		inline __attribute__((always_inline))
  
 +#ifdef SIZE_OVERFLOW_PLUGIN
 +#define __size_overflow(...) __attribute__((size_overflow(__VA_ARGS__)))
 +#endif
++
++#ifdef LATENT_ENTROPY_PLUGIN
++#define __latent_entropy __attribute__((latent_entropy))
++#endif
++
  /*
   * A trick to suppress uninitialized variable warning without generating any
   * code
-@@ -36,4 +39,23 @@
+@@ -36,4 +44,23 @@
     the kernel context */
  #define __cold			__attribute__((__cold__))
  
@@ -41209,7 +41237,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  #endif
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/compiler.h linux-2.6.32.59-pax/include/linux/compiler.h
 --- linux-2.6.32.59/include/linux/compiler.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/compiler.h	2012-06-18 00:40:02.514378345 +0200
++++ linux-2.6.32.59-pax/include/linux/compiler.h	2012-07-27 21:50:49.166341383 +0200
 @@ -5,11 +5,14 @@
  
  #ifdef __CHECKER__
@@ -41260,7 +41288,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  # define __chk_user_ptr(x) (void)0
  # define __chk_io_ptr(x) (void)0
  # define __builtin_warning(x, y...) (1)
-@@ -247,6 +271,17 @@ void ftrace_likely_update(struct ftrace_
+@@ -247,6 +271,22 @@ void ftrace_likely_update(struct ftrace_
  # define __attribute_const__	/* unimplemented */
  #endif
  
@@ -41275,10 +41303,15 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
 +#ifndef __size_overflow
 +# define __size_overflow(...)
 +#endif
++
++#ifndef __latent_entropy
++# define __latent_entropy
++#endif
++
  /*
   * Tell gcc if a function is cold. The compiler will assume any path
   * directly leading to the call is unlikely.
-@@ -256,6 +291,22 @@ void ftrace_likely_update(struct ftrace_
+@@ -256,6 +296,22 @@ void ftrace_likely_update(struct ftrace_
  #define __cold
  #endif
  
@@ -41301,7 +41334,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -266,6 +317,19 @@ void ftrace_likely_update(struct ftrace_
+@@ -266,6 +322,19 @@ void ftrace_likely_update(struct ftrace_
  # define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
  #endif
  
@@ -41321,7 +41354,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  /*
   * Prevent the compiler from merging or refetching accesses.  The compiler
   * is also forbidden from reordering successive instances of ACCESS_ONCE(),
-@@ -278,6 +342,7 @@ void ftrace_likely_update(struct ftrace_
+@@ -278,6 +347,7 @@ void ftrace_likely_update(struct ftrace_
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -41573,12 +41606,12 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  	struct blk_integrity *integrity;
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/gfp.h linux-2.6.32.59-pax/include/linux/gfp.h
 --- linux-2.6.32.59/include/linux/gfp.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/gfp.h	2012-07-21 11:41:51.013096412 +0200
++++ linux-2.6.32.59-pax/include/linux/gfp.h	2012-07-27 21:58:45.738355395 +0200
 @@ -53,6 +53,12 @@ struct vm_area_struct;
  #define __GFP_THISNODE	((__force gfp_t)0x40000u)/* No fallback, no policies */
  #define __GFP_RECLAIMABLE ((__force gfp_t)0x80000u) /* Page is reclaimable */
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +#define __GFP_USERCOPY	((__force gfp_t)0x1000000u)
 +#else
 +#define __GFP_USERCOPY	((__force gfp_t)0)
@@ -41662,6 +41695,53 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  	struct list_head context_list;	/* list of context id's
  					   and pointers */
  #endif
+diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/init.h linux-2.6.32.59-pax/include/linux/init.h
+--- linux-2.6.32.59/include/linux/init.h	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.59-pax/include/linux/init.h	2012-07-27 22:01:00.154359347 +0200
+@@ -38,9 +38,15 @@
+  * Also note, that this data cannot be "const".
+  */
+ 
++#ifdef MODULE
++#define add_latent_entropy
++#else
++#define add_latent_entropy __latent_entropy
++#endif
++
+ /* These are for everybody (although not all archs will actually
+    discard it in modules) */
+-#define __init		__section(.init.text) __cold notrace
++#define __init		__section(.init.text) __cold notrace add_latent_entropy
+ #define __initdata	__section(.init.data)
+ #define __initconst	__section(.init.rodata)
+ #define __exitdata	__section(.exit.data)
+@@ -75,7 +81,7 @@
+ #define __exit          __section(.exit.text) __exitused __cold
+ 
+ /* Used for HOTPLUG */
+-#define __devinit        __section(.devinit.text) __cold
++#define __devinit        __section(.devinit.text) __cold add_latent_entropy
+ #define __devinitdata    __section(.devinit.data)
+ #define __devinitconst   __section(.devinit.rodata)
+ #define __devexit        __section(.devexit.text) __exitused __cold
+@@ -83,7 +89,7 @@
+ #define __devexitconst   __section(.devexit.rodata)
+ 
+ /* Used for HOTPLUG_CPU */
+-#define __cpuinit        __section(.cpuinit.text) __cold
++#define __cpuinit        __section(.cpuinit.text) __cold add_latent_entropy
+ #define __cpuinitdata    __section(.cpuinit.data)
+ #define __cpuinitconst   __section(.cpuinit.rodata)
+ #define __cpuexit        __section(.cpuexit.text) __exitused __cold
+@@ -91,7 +97,7 @@
+ #define __cpuexitconst   __section(.cpuexit.rodata)
+ 
+ /* Used for MEMORY_HOTPLUG */
+-#define __meminit        __section(.meminit.text) __cold
++#define __meminit        __section(.meminit.text) __cold add_latent_entropy
+ #define __meminitdata    __section(.meminit.data)
+ #define __meminitconst   __section(.meminit.rodata)
+ #define __memexit        __section(.memexit.text) __exitused __cold
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/init_task.h linux-2.6.32.59-pax/include/linux/init_task.h
 --- linux-2.6.32.59/include/linux/init_task.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.59-pax/include/linux/init_task.h	2012-03-13 13:15:35.500097970 +0100
@@ -42525,7 +42605,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  /**
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/sched.h linux-2.6.32.59-pax/include/linux/sched.h
 --- linux-2.6.32.59/include/linux/sched.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/sched.h	2012-03-13 13:15:35.536097968 +0100
++++ linux-2.6.32.59-pax/include/linux/sched.h	2012-07-27 21:59:35.786356865 +0200
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -42625,7 +42705,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern __noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to, const char *type);
++extern void check_object_size(const void *ptr, unsigned long n, bool to);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
@@ -42649,7 +42729,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,13 +2339,17 @@ static inline unsigned long *end_of_stac
+@@ -2284,9 +2339,9 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -42661,14 +42741,6 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  
  	return (obj >= stack) && (obj < (stack + THREAD_SIZE));
  }
- 
-+#ifdef CONFIG_PAX_USERCOPY
-+extern int object_is_on_stack(const void *obj, unsigned long len);
-+#endif
-+
- extern void thread_info_cache_init(void);
- 
- #ifdef CONFIG_DEBUG_STACK_USAGE
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/screen_info.h linux-2.6.32.59-pax/include/linux/screen_info.h
 --- linux-2.6.32.59/include/linux/screen_info.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.59-pax/include/linux/screen_info.h	2012-03-13 13:15:35.536097968 +0100
@@ -42734,7 +42806,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  extern int ___pskb_trim(struct sk_buff *skb, unsigned int len);
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/slab_def.h linux-2.6.32.59-pax/include/linux/slab_def.h
 --- linux-2.6.32.59/include/linux/slab_def.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/slab_def.h	2012-07-21 11:23:04.857063069 +0200
++++ linux-2.6.32.59-pax/include/linux/slab_def.h	2012-07-27 21:50:49.198341384 +0200
 @@ -69,10 +69,10 @@ struct kmem_cache {
  	unsigned long node_allocs;
  	unsigned long node_frees;
@@ -42755,7 +42827,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  	struct kmem_cache	*cs_dmacachep;
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	struct kmem_cache	*cs_usercopycachep;
 +#endif
 +
@@ -42773,7 +42845,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  		else
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		if (flags & GFP_USERCOPY)
 +			cachep = malloc_sizes[i].cs_usercopycachep;
 +		else
@@ -42796,7 +42868,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  		else
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		if (flags & GFP_USERCOPY)
 +			cachep = malloc_sizes[i].cs_usercopycachep;
 +		else
@@ -42807,7 +42879,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  		ret = kmem_cache_alloc_node_notrace(cachep, flags, node);
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/linux/slab.h linux-2.6.32.59-pax/include/linux/slab.h
 --- linux-2.6.32.59/include/linux/slab.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/include/linux/slab.h	2012-05-20 19:21:25.465167284 +0200
++++ linux-2.6.32.59-pax/include/linux/slab.h	2012-07-27 21:50:49.206341384 +0200
 @@ -11,12 +11,20 @@
  
  #include <linux/gfp.h>
@@ -42820,7 +42892,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
   */
  #define SLAB_DEBUG_FREE		0x00000100UL	/* DEBUG: Perform (expensive) checks on free */
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +#define SLAB_USERCOPY		0x00000200UL	/* PaX: Allow copying objs to/from userland */
 +#else
 +#define SLAB_USERCOPY		0x00000000UL
@@ -42846,15 +42918,16 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  
  /*
   * struct kmem_cache related prototypes
-@@ -138,6 +149,7 @@ void * __must_check krealloc(const void
+@@ -138,6 +149,8 @@ void * __must_check krealloc(const void
  void kfree(const void *);
  void kzfree(const void *);
  size_t ksize(const void *);
-+void check_object_size(const void *ptr, unsigned long n, bool to);
++const char *check_heap_object(const void *ptr, unsigned long n, bool to);
++bool is_usercopy_object(const void *ptr);
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
-@@ -263,7 +275,7 @@ static inline void *kmem_cache_alloc_nod
+@@ -263,7 +276,7 @@ static inline void *kmem_cache_alloc_nod
   * request comes from.
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB)
@@ -42863,7 +42936,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/l
  #define kmalloc_track_caller(size, flags) \
  	__kmalloc_track_caller(size, flags, _RET_IP_)
  #else
-@@ -281,7 +293,7 @@ extern void *__kmalloc_track_caller(size
+@@ -281,7 +294,7 @@ extern void *__kmalloc_track_caller(size
   * allocation request comes from.
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB)
@@ -47468,7 +47541,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/lib/vspri
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile linux-2.6.32.59-pax/Makefile
 --- linux-2.6.32.59/Makefile	2012-03-18 17:44:12.472058990 +0100
-+++ linux-2.6.32.59-pax/Makefile	2012-07-21 11:25:00.873066748 +0200
++++ linux-2.6.32.59-pax/Makefile	2012-07-27 21:50:49.214341384 +0200
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -47532,11 +47605,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/Makefile 
 +SIZE_OVERFLOW_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/size_overflow_plugin.so -DSIZE_OVERFLOW_PLUGIN
 +endif
 +ifdef CONFIG_PAX_LATENT_ENTROPY
-+LATENT_ENTROPY := -fplugin=$(objtree)/tools/gcc/latent_entropy_plugin.so
++LATENT_ENTROPY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/latent_entropy_plugin.so -DLATENT_ENTROPY_PLUGIN
 +endif
 +GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
-+GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY)
++GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
 +export PLUGINCC CONSTIFY_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
@@ -50469,7 +50542,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/shmem.
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c linux-2.6.32.59-pax/mm/slab.c
 --- linux-2.6.32.59/mm/slab.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/mm/slab.c	2012-07-21 11:26:45.465069812 +0200
++++ linux-2.6.32.59-pax/mm/slab.c	2012-07-27 21:50:49.218341383 +0200
 @@ -174,7 +174,7 @@
  
  /* Legal flag mask for kmem_cache_create(). */
@@ -50539,7 +50612,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c
  		return csizep->cs_dmacachep;
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	if (unlikely(gfpflags & GFP_USERCOPY))
 +		return csizep->cs_usercopycachep;
 +#endif
@@ -50579,7 +50652,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c
  					NULL);
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		sizes->cs_usercopycachep = kmem_cache_create(
 +					names->name_usercopy,
 +					sizes->cs_size,
@@ -50606,65 +50679,71 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c
  
  		seq_printf(m, " : cpustat %6lu %6lu %6lu %6lu",
  			   allochit, allocmiss, freehit, freemiss);
-@@ -4480,6 +4497,55 @@ static int __init slab_proc_init(void)
+@@ -4480,6 +4497,61 @@ static int __init slab_proc_init(void)
  module_init(slab_proc_init);
  #endif
  
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++bool is_usercopy_object(const void *ptr)
 +{
-+
-+#ifdef CONFIG_PAX_USERCOPY
 +	struct page *page;
-+	struct kmem_cache *cachep = NULL;
-+	struct slab *slabp;
-+	unsigned int objnr;
-+	unsigned long offset;
-+	const char *type;
++	struct kmem_cache *cachep;
 +
-+	if (!n)
-+		return;
-+
-+	type = "<null>";
 +	if (ZERO_OR_NULL_PTR(ptr))
-+		goto report;
++		return false;
 +
 +	if (!virt_addr_valid(ptr))
-+		return;
++		return false;
 +
 +	page = virt_to_head_page(ptr);
 +
-+	type = "<process stack>";
-+	if (!PageSlab(page)) {
-+		if (object_is_on_stack(ptr, n) == -1)
-+			goto report;
-+		return;
-+	}
++	if (!PageSlab(page))
++		return false;
 +
 +	cachep = page_get_cache(page);
-+	type = cachep->name;
++	return cachep->flags & SLAB_USERCOPY;
++}
++
++#ifdef CONFIG_PAX_USERCOPY
++const char *check_heap_object(const void *ptr, unsigned long n, bool to)
++{
++	struct page *page;
++	struct kmem_cache *cachep;
++	struct slab *slabp;
++	unsigned int objnr;
++	unsigned long offset;
++
++	if (ZERO_OR_NULL_PTR(ptr))
++		return "<null>";
++
++	if (!virt_addr_valid(ptr))
++		return NULL;
++
++	page = virt_to_head_page(ptr);
++
++	if (!PageSlab(page))
++		return NULL;
++
++	cachep = page_get_cache(page);
 +	if (!(cachep->flags & SLAB_USERCOPY))
-+		goto report;
++		return cachep->name;
 +
 +	slabp = page_get_slab(page);
 +	objnr = obj_to_index(cachep, slabp, ptr);
 +	BUG_ON(objnr >= cachep->num);
 +	offset = ptr - index_to_obj(cachep, slabp, objnr) - obj_offset(cachep);
 +	if (offset <= obj_size(cachep) && n <= obj_size(cachep) - offset)
-+		return;
++		return NULL;
 +
-+report:
-+	pax_report_usercopy(ptr, n, to, type);
-+#endif
-+
++	return cachep->name;
 +}
-+EXPORT_SYMBOL(check_object_size);
++#endif
 +
  /**
   * ksize - get the actual amount of memory allocated for a given object
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c linux-2.6.32.59-pax/mm/slob.c
 --- linux-2.6.32.59/mm/slob.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/mm/slob.c	2012-03-13 13:15:35.952097946 +0100
++++ linux-2.6.32.59-pax/mm/slob.c	2012-07-27 21:52:28.734344310 +0200
 @@ -29,7 +29,7 @@
   * If kmalloc is asked for objects of PAGE_SIZE or larger, it calls
   * alloc_pages() directly, allocating compound pages so the page order
@@ -50813,7 +50892,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  	return ret;
  }
  EXPORT_SYMBOL(__kmalloc_node);
-@@ -528,13 +542,92 @@ void kfree(const void *block)
+@@ -528,13 +542,83 @@ void kfree(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -50831,40 +50910,34 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  }
  EXPORT_SYMBOL(kfree);
  
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++bool is_usercopy_object(const void *ptr)
 +{
++	return false;
++}
 +
 +#ifdef CONFIG_PAX_USERCOPY
++const char *check_heap_object(const void *ptr, unsigned long n, bool to)
++{
 +	struct slob_page *sp;
 +	const slob_t *free;
 +	const void *base;
 +	unsigned long flags;
-+	const char *type;
 +
-+	if (!n)
-+		return;
-+
-+	type = "<null>";
 +	if (ZERO_OR_NULL_PTR(ptr))
-+		goto report;
++		return "<null>";
 +
 +	if (!virt_addr_valid(ptr))
-+		return;
++		return NULL;
 +
-+	type = "<process stack>";
 +	sp = slob_page(ptr);
-+	if (!PageSlab((struct page *)sp)) {
-+		if (object_is_on_stack(ptr, n) == -1)
-+			goto report;
-+		return;
-+	}
++	if (!PageSlab((struct page *)sp))
++		return NULL;
 +
-+	type = "<slob>";
 +	if (sp->size) {
 +		base = page_address(&sp->page);
 +		if (base <= ptr && n <= sp->size - (ptr - base))
-+			return;
-+		goto report;
++			return NULL;
++		return "<slob>";
 +	}
 +
 +	/* some tricky double walking to find the chunk */
@@ -50895,21 +50968,18 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
 +			break;
 +
 +		spin_unlock_irqrestore(&slob_lock, flags);
-+		return;
++		return NULL;
 +	}
 +
 +	spin_unlock_irqrestore(&slob_lock, flags);
-+report:
-+	pax_report_usercopy(ptr, n, to, type);
-+#endif
-+
++	return "<slob>";
 +}
-+EXPORT_SYMBOL(check_object_size);
++#endif
 +
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -547,10 +640,10 @@ size_t ksize(const void *block)
+@@ -547,10 +631,10 @@ size_t ksize(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -50923,11 +50993,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -566,8 +659,13 @@ struct kmem_cache *kmem_cache_create(con
+@@ -566,8 +650,13 @@ struct kmem_cache *kmem_cache_create(con
  {
  	struct kmem_cache *c;
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	c = __kmalloc_node_align(sizeof(struct kmem_cache),
 +		GFP_KERNEL, -1, ARCH_KMALLOC_MINALIGN);
 +#else
@@ -50937,11 +51007,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  
  	if (c) {
  		c->name = name;
-@@ -605,17 +703,25 @@ void *kmem_cache_alloc_node(struct kmem_
+@@ -605,17 +694,25 @@ void *kmem_cache_alloc_node(struct kmem_
  {
  	void *b;
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	b = __kmalloc_node_align(c->size, flags, node, c->align);
 +#else
  	if (c->size < PAGE_SIZE) {
@@ -50963,7 +51033,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -627,10 +733,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -627,10 +724,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -50982,13 +51052,13 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -643,18 +755,32 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -643,18 +746,32 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
 +	int size = c->size;
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	if (size + c->align < PAGE_SIZE) {
 +		size += c->align;
 +		b -= c->align;
@@ -51009,7 +51079,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
 +		__kmem_cache_free(b, size);
  	}
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	trace_kfree(_RET_IP_, b);
 +#else
  	trace_kmem_cache_free(_RET_IP_, b);
@@ -51020,7 +51090,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c linux-2.6.32.59-pax/mm/slub.c
 --- linux-2.6.32.59/mm/slub.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/mm/slub.c	2012-07-21 12:45:00.793207837 +0200
++++ linux-2.6.32.59-pax/mm/slub.c	2012-07-27 21:58:00.558354065 +0200
 @@ -1893,6 +1893,8 @@ void kmem_cache_free(struct kmem_cache *
  
  	page = virt_to_head_page(x);
@@ -51077,7 +51147,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  }
  #endif
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +static struct kmem_cache kmalloc_caches_usercopy[SLUB_PAGE_SHIFT];
 +#endif
 +
@@ -51089,7 +51159,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  
  #endif
 +
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	if (flags & SLAB_USERCOPY)
 +		return &kmalloc_caches_usercopy[index];
 +
@@ -51098,58 +51168,64 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  	return &kmalloc_caches[index];
  }
  
-@@ -2915,6 +2925,50 @@ void *__kmalloc_node(size_t size, gfp_t
+@@ -2915,6 +2925,56 @@ void *__kmalloc_node(size_t size, gfp_t
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++bool is_usercopy_object(const void *ptr)
 +{
-+
-+#ifdef CONFIG_PAX_USERCOPY
 +	struct page *page;
-+	struct kmem_cache *s = NULL;
-+	unsigned long offset;
-+	const char *type;
++	struct kmem_cache *s;
 +
-+	if (!n)
-+		return;
-+
-+	type = "<null>";
 +	if (ZERO_OR_NULL_PTR(ptr))
-+		goto report;
++		return false;
 +
 +	if (!virt_addr_valid(ptr))
-+		return;
++		return false;
++
++	page = virt_to_head_page(ptr);
++
++	if (!PageSlab(page))
++		return false;
++
++	s = page->slab;
++	return s->flags & SLAB_USERCOPY;
++}
++
++#ifdef CONFIG_PAX_USERCOPY
++const char *check_heap_object(const void *ptr, unsigned long n, bool to)
++{
++	struct page *page;
++	struct kmem_cache *s;
++	unsigned long offset;
++
++	if (ZERO_OR_NULL_PTR(ptr))
++		return "<null>";
++
++	if (!virt_addr_valid(ptr))
++		return NULL;
 +
 +	page = get_object_page(ptr);
 +
-+	type = "<process stack>";
-+	if (!page) {
-+		if (object_is_on_stack(ptr, n) == -1)
-+			goto report;
-+		return;
-+	}
++	if (!PageSlab(page))
++		return NULL;
 +
 +	s = page->slab;
-+	type = s->name;
 +	if (!(s->flags & SLAB_USERCOPY))
-+		goto report;
++		return s->name;
 +
 +	offset = (ptr - page_address(page)) % s->size;
 +	if (offset <= s->objsize && n <= s->objsize - offset)
-+		return;
++		return NULL;
 +
-+report:
-+	pax_report_usercopy(ptr, n, to, type);
-+#endif
-+
++	return s->name;
 +}
-+EXPORT_SYMBOL(check_object_size);
++#endif
 +
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3185,8 +3239,8 @@ void __init kmem_cache_init(void)
+@@ -3185,8 +3245,8 @@ void __init kmem_cache_init(void)
  	 * kmem_cache_open for slab_state == DOWN.
  	 */
  	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
@@ -51160,7 +51236,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  	caches++;
  
  	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
-@@ -3198,18 +3252,18 @@ void __init kmem_cache_init(void)
+@@ -3198,18 +3258,18 @@ void __init kmem_cache_init(void)
  	/* Caches that are not of the two-to-the-power-of size */
  	if (KMALLOC_MIN_SIZE <= 32) {
  		create_kmalloc_cache(&kmalloc_caches[1],
@@ -51182,11 +51258,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  		caches++;
  	}
  
-@@ -3267,6 +3321,20 @@ void __init kmem_cache_init(void)
+@@ -3267,6 +3327,20 @@ void __init kmem_cache_init(void)
  	kmem_size = sizeof(struct kmem_cache);
  #endif
  
-+#ifdef CONFIG_PAX_USERCOPY
++#ifdef CONFIG_PAX_USERCOPY_SLABS
 +	for (i = 0; i < SLUB_PAGE_SHIFT; i++) {
 +		struct kmem_cache *s = &kmalloc_caches[i];
 +
@@ -51203,7 +51279,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  	printk(KERN_INFO
  		"SLUB: Genslabs=%d, HWalign=%d, Order=%d-%d, MinObjects=%d,"
  		" CPUs=%d, Nodes=%d\n",
-@@ -3293,7 +3361,7 @@ static int slab_unmergeable(struct kmem_
+@@ -3293,7 +3367,7 @@ static int slab_unmergeable(struct kmem_
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -51212,7 +51288,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  		return 1;
  
  	return 0;
-@@ -3353,7 +3421,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3353,7 +3427,7 @@ struct kmem_cache *kmem_cache_create(con
  	if (s) {
  		int cpu;
  
@@ -51221,7 +51297,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3372,7 +3440,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3372,7 +3446,7 @@ struct kmem_cache *kmem_cache_create(con
  
  		if (sysfs_slab_alias(s, name)) {
  			down_write(&slub_lock);
@@ -51230,7 +51306,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  			up_write(&slub_lock);
  			goto err;
  		}
-@@ -4101,7 +4169,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4101,7 +4175,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -54240,8 +54316,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/security/
  	return 0;
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/security/Kconfig linux-2.6.32.59-pax/security/Kconfig
 --- linux-2.6.32.59/security/Kconfig	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/security/Kconfig	2012-07-21 11:33:16.801081965 +0200
-@@ -4,6 +4,643 @@
++++ linux-2.6.32.59-pax/security/Kconfig	2012-07-27 21:50:49.226341384 +0200
+@@ -4,6 +4,647 @@
  
  menu "Security options"
  
@@ -54261,6 +54337,9 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/security/
 +	depends on X86_64
 +	default 47 if !PAX_PER_CPU_PGD
 +	default 42 if PAX_PER_CPU_PGD
++
++	config PAX_USERCOPY_SLABS
++	bool
 +
 +config PAX
 +	bool "Enable various PaX features"
@@ -54814,6 +54893,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/security/
 +	bool "Harden heap object copies between kernel and userland"
 +	depends on ARM || PPC || SPARC || X86
 +	depends on SLAB || SLUB || SLOB
++	select PAX_USERCOPY_SLABS
 +	help
 +	  By saying Y here the kernel will enforce the size of heap objects
 +	  when they are copied in either direction between the kernel and
@@ -54885,7 +54965,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/security/
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -146,7 +783,7 @@ config INTEL_TXT
+@@ -146,7 +787,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -56949,8 +57029,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +}
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/latent_entropy_plugin.c linux-2.6.32.59-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-2.6.32.59/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/tools/gcc/latent_entropy_plugin.c	2012-07-21 12:26:59.165176053 +0200
-@@ -0,0 +1,291 @@
++++ linux-2.6.32.59-pax/tools/gcc/latent_entropy_plugin.c	2012-07-27 21:51:26.490342480 +0200
+@@ -0,0 +1,295 @@
 +/*
 + * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -56964,10 +57044,12 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 + * used during boot in the kernel
 + *
 + * TODO:
-+ * - quite a few, see the comments :)
++ * - add ipa pass to identify not explicitly marked candidate functions
++ * - mix in more program state (function arguments/return values, loop variables, etc)
++ * - more instrumentation control via attribute parameters
 + *
 + * BUGS:
-+ * - none known
++ * - LTO needs -flto-partition=none for now
 + */
 +#include "gcc-plugin.h"
 +#include "config.h"
@@ -56989,17 +57071,13 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
-+#include "cpplib.h"
-+#include "c-pragma.h"
-+
-+#include "linux/autoconf.h"
 +
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207202140",
++	.version	= "201207271820",
 +	.help		= NULL
 +};
 +
@@ -57024,54 +57102,39 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	}
 +};
 +
-+// for kernel use we just want to instrument some of the boot code
-+// for userland use this would need changes
++static tree handle_latent_entropy_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
++{
++	if (TREE_CODE(*node) != FUNCTION_DECL) {
++		*no_add_attrs = true;
++		error("%qE attribute only applies to functions", name);
++	}
++	return NULL_TREE;
++}
++
++static struct attribute_spec latent_entropy_attr = {
++	.name				= "latent_entropy",
++	.min_length			= 0,
++	.max_length			= 0,
++	.decl_required			= true,
++	.type_required			= false,
++	.function_type_required		= false,
++	.handler			= handle_latent_entropy_attribute,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity		= false
++#endif
++};
++
++static void register_attributes(void *event_data, void *data)
++{
++	register_attribute(&latent_entropy_attr);
++}
++
 +static bool gate_latent_entropy(void)
 +{
-+	tree section_attr;
-+	const char *section_name;
++	tree latent_entropy_attr;
 +
-+	// don't instrument modules
-+	if (cpp_defined(parse_in, (const unsigned char *)"MODULE", 6))
-+		return false;
-+
-+	// don't instrument normal code
-+	section_attr = lookup_attribute("section", DECL_ATTRIBUTES(current_function_decl));
-+	if (!section_attr || !TREE_VALUE(section_attr))
-+		return false;
-+
-+	section_name = TREE_STRING_POINTER(TREE_VALUE(TREE_VALUE(section_attr)));
-+
-+	// instrument code in boot related sections
-+	if (!strncmp(section_name, ".init.text", 10))
-+		return true;
-+
-+	if (!strncmp(section_name, ".initcall", 9))
-+		return true;
-+
-+	if (!strncmp(section_name, ".con_initcall", 13))
-+		return true;
-+
-+	if (!strncmp(section_name, ".security_initcall", 18))
-+		return true;
-+
-+#ifndef CONFIG_HOTPLUG
-+	if (!strncmp(section_name, ".devinit.text", 13))
-+		return true;
-+#endif
-+
-+#ifndef CONFIG_HOTPLUG_CPU
-+	if (!strncmp(section_name, ".cpuinit.text", 13))
-+		return true;
-+#endif
-+
-+#ifndef CONFIG_HOTPLUG_MEMORY
-+	if (!strncmp(section_name, ".meminit.text", 13))
-+		return true;
-+#endif
-+
-+	// TODO check whether cfun is static and all its callers meet the above criteria
-+	return false;
++	latent_entropy_attr = lookup_attribute("latent_entropy", DECL_ATTRIBUTES(current_function_decl));
++	return latent_entropy_attr != NULL_TREE;
 +}
 +
 +static unsigned HOST_WIDE_INT seed;
@@ -57157,8 +57220,6 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	find_referenced_vars_in(assign);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
-+
-+	// TODO we could mix in more local state such as function return values, etc
 +}
 +
 +static unsigned int execute_latent_entropy(void)
@@ -57167,6 +57228,23 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	gimple assign;
 +	gimple_stmt_iterator gsi;
 +	tree local_entropy;
++
++	if (!latent_entropy_decl) {
++		struct varpool_node *node;
++
++		for (node = varpool_nodes; node; node = node->next) {
++			tree var = node->decl;
++			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
++				continue;
++			latent_entropy_decl = var;
++//			debug_tree(var);
++			break;
++		}
++		if (!latent_entropy_decl) {
++//			debug_tree(current_function_decl);
++			return 0;
++		}
++	}
 +
 +//fprintf(stderr, "latent_entropy: %s\n", IDENTIFIER_POINTER(DECL_NAME(current_function_decl)));
 +
@@ -57201,24 +57279,29 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +
 +static void start_unit_callback(void *gcc_data, void *user_data)
 +{
-+	// extern u64 latent_entropy
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
-+
-+	TREE_STATIC(latent_entropy_decl) = 1;
-+	TREE_PUBLIC(latent_entropy_decl) = 1;
-+	DECL_EXTERNAL(latent_entropy_decl) = 1;
-+	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
-+	DECL_INITIAL(latent_entropy_decl) = NULL;
-+//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
-+//	varpool_finalize_decl(latent_entropy_decl);
-+//	varpool_mark_needed_node(latent_entropy_decl);
-+
 +#if BUILDING_GCC_VERSION >= 4007
 +	seed = get_random_seed(false);
 +#else
 +	sscanf(get_random_seed(false), "%" HOST_WIDE_INT_PRINT "x", &seed);
 +	seed *= seed;
 +#endif
++
++	if (in_lto_p)
++		return;
++
++	// extern u64 latent_entropy
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
++
++	TREE_STATIC(latent_entropy_decl) = 1;
++	TREE_PUBLIC(latent_entropy_decl) = 1;
++	TREE_USED(latent_entropy_decl) = 1;
++	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
++	DECL_EXTERNAL(latent_entropy_decl) = 1;
++	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
++	DECL_INITIAL(latent_entropy_decl) = NULL;
++//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
++//	varpool_finalize_decl(latent_entropy_decl);
++//	varpool_mark_needed_node(latent_entropy_decl);
 +}
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
@@ -57239,12 +57322,13 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &latent_entropy_plugin_info);
 +	register_callback ("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &latent_entropy_pass_info);
++	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
 +	return 0;
 +}
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/Makefile linux-2.6.32.59-pax/tools/gcc/Makefile
 --- linux-2.6.32.59/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/tools/gcc/Makefile	2012-07-21 11:35:21.633086002 +0200
++++ linux-2.6.32.59-pax/tools/gcc/Makefile	2012-07-27 21:50:49.230341385 +0200
 @@ -0,0 +1,43 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
@@ -57254,10 +57338,10 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +
 +ifeq ($(PLUGINCC),$(HOSTCC))
 +HOSTLIBS := hostlibs
-+HOST_EXTRACFLAGS += -Iinclude -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu99 -ggdb
++HOST_EXTRACFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu99 -ggdb
 +else
 +HOSTLIBS := hostcxxlibs
-+HOST_EXTRACXXFLAGS += -Iinclude -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu++98 -ggdb -Wno-unused-parameter
++HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(GCCPLUGINS_DIR)/include/c-family -std=gnu++98 -ggdb -Wno-unused-parameter
 +endif
 +
 +$(HOSTLIBS)-$(CONFIG_PAX_CONSTIFY_PLUGIN) := constify_plugin.so
