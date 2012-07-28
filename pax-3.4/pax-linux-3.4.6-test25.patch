@@ -1,5 +1,4 @@
-- fixed a recent REFCOUNT change that broke !X86
-- made the latent entropy plugin sort of LTO compatible
+- added emulation for new sparc plt stubs
 
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/alpha/include/asm/atomic.h linux-3.4.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.4.6/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -4870,7 +4869,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/lib/Ma
  lib-$(CONFIG_SPARC32) += memcpy.o memset.o
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fault_32.c linux-3.4.6-pax/arch/sparc/mm/fault_32.c
 --- linux-3.4.6/arch/sparc/mm/fault_32.c	2012-05-21 11:32:56.055927583 +0200
-+++ linux-3.4.6-pax/arch/sparc/mm/fault_32.c	2012-05-21 12:10:08.632048840 +0200
++++ linux-3.4.6-pax/arch/sparc/mm/fault_32.c	2012-07-29 00:55:28.094524819 +0200
 @@ -21,6 +21,9 @@
  #include <linux/perf_event.h>
  #include <linux/interrupt.h>
@@ -4881,7 +4880,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -207,6 +210,268 @@ static unsigned long compute_si_addr(str
+@@ -207,6 +210,277 @@ static unsigned long compute_si_addr(str
  	return safe_compute_effective_address(regs, insn);
  }
  
@@ -4972,40 +4971,49 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
 +		}
 +	} while (0);
 +
-+	{ /* PaX: patched PLT emulation #2 */
++	do { /* PaX: patched PLT emulation #2 */
 +		unsigned int ba;
 +
 +		err = get_user(ba, (unsigned int *)regs->pc);
 +
-+		if (!err && (ba & 0xFFC00000U) == 0x30800000U) {
++		if (err)
++			break;
++
++		if ((ba & 0xFFC00000U) == 0x30800000U || (ba & 0xFFF80000U) == 0x30480000U) {
 +			unsigned int addr;
 +
-+			addr = regs->pc + ((((ba | 0xFFC00000U) ^ 0x00200000U) + 0x00200000U) << 2);
++			if ((ba & 0xFFC00000U) == 0x30800000U)
++				addr = regs->pc + ((((ba | 0xFFC00000U) ^ 0x00200000U) + 0x00200000U) << 2);
++			else
++				addr = regs->pc + ((((ba | 0xFFF80000U) ^ 0x00040000U) + 0x00040000U) << 2);
 +			regs->pc = addr;
 +			regs->npc = addr+4;
 +			return 2;
 +		}
-+	}
++	} while (0);
 +
 +	do { /* PaX: patched PLT emulation #3 */
-+		unsigned int sethi, jmpl, nop;
++		unsigned int sethi, bajmpl, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->pc);
-+		err |= get_user(jmpl, (unsigned int *)(regs->pc+4));
++		err |= get_user(bajmpl, (unsigned int *)(regs->pc+4));
 +		err |= get_user(nop, (unsigned int *)(regs->pc+8));
 +
 +		if (err)
 +			break;
 +
 +		if ((sethi & 0xFFC00000U) == 0x03000000U &&
-+		    (jmpl & 0xFFFFE000U) == 0x81C06000U &&
++		    ((bajmpl & 0xFFFFE000U) == 0x81C06000U || (bajmpl & 0xFFF80000U) == 0x30480000U) &&
 +		    nop == 0x01000000U)
 +		{
 +			unsigned int addr;
 +
 +			addr = (sethi & 0x003FFFFFU) << 10;
 +			regs->u_regs[UREG_G1] = addr;
-+			addr += (((jmpl | 0xFFFFE000U) ^ 0x00001000U) + 0x00001000U);
++			if ((bajmpl & 0xFFFFE000U) == 0x81C06000U)
++				addr += (((jmpl | 0xFFFFE000U) ^ 0x00001000U) + 0x00001000U);
++			else
++				addr = regs->pc + ((((bajmpl | 0xFFF80000U) ^ 0x00040000U) + 0x00040000U) << 2);
 +			regs->pc = addr;
 +			regs->npc = addr+4;
 +			return 2;
@@ -5150,7 +5158,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
  static noinline void do_fault_siginfo(int code, int sig, struct pt_regs *regs,
  				      int text_fault)
  {
-@@ -282,6 +547,24 @@ good_area:
+@@ -282,6 +556,24 @@ good_area:
  		if(!(vma->vm_flags & VM_WRITE))
  			goto bad_area;
  	} else {
@@ -5177,7 +5185,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
  			goto bad_area;
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fault_64.c linux-3.4.6-pax/arch/sparc/mm/fault_64.c
 --- linux-3.4.6/arch/sparc/mm/fault_64.c	2012-05-21 11:32:56.059927583 +0200
-+++ linux-3.4.6-pax/arch/sparc/mm/fault_64.c	2012-05-21 12:10:08.632048840 +0200
++++ linux-3.4.6-pax/arch/sparc/mm/fault_64.c	2012-07-29 00:55:21.002524611 +0200
 @@ -21,6 +21,9 @@
  #include <linux/kprobes.h>
  #include <linux/kdebug.h>
@@ -5188,7 +5196,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
  
  #include <asm/page.h>
  #include <asm/pgtable.h>
-@@ -272,6 +275,457 @@ static void noinline __kprobes bogus_32b
+@@ -272,6 +275,466 @@ static void noinline __kprobes bogus_32b
  	show_regs(regs);
  }
  
@@ -5283,15 +5291,21 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
 +		}
 +	} while (0);
 +
-+	{ /* PaX: patched PLT emulation #2 */
++	do { /* PaX: patched PLT emulation #2 */
 +		unsigned int ba;
 +
 +		err = get_user(ba, (unsigned int *)regs->tpc);
 +
-+		if (!err && (ba & 0xFFC00000U) == 0x30800000U) {
++		if (err)
++			break;
++
++		if ((ba & 0xFFC00000U) == 0x30800000U || (ba & 0xFFF80000U) == 0x30480000U) {
 +			unsigned long addr;
 +
-+			addr = regs->tpc + ((((ba | 0xFFFFFFFFFFC00000UL) ^ 0x00200000UL) + 0x00200000UL) << 2);
++			if ((ba & 0xFFC00000U) == 0x30800000U)
++				addr = regs->tpc + ((((ba | 0xFFFFFFFFFFC00000UL) ^ 0x00200000UL) + 0x00200000UL) << 2);
++			else
++				addr = regs->tpc + ((((ba | 0xFFFFFFFFFFF80000UL) ^ 0x00040000UL) + 0x00040000UL) << 2);
 +
 +			if (test_thread_flag(TIF_32BIT))
 +				addr &= 0xFFFFFFFFUL;
@@ -5300,27 +5314,30 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
 +			regs->tnpc = addr+4;
 +			return 2;
 +		}
-+	}
++	} while (0);
 +
 +	do { /* PaX: patched PLT emulation #3 */
-+		unsigned int sethi, jmpl, nop;
++		unsigned int sethi, bajmpl, nop;
 +
 +		err = get_user(sethi, (unsigned int *)regs->tpc);
-+		err |= get_user(jmpl, (unsigned int *)(regs->tpc+4));
++		err |= get_user(bajmpl, (unsigned int *)(regs->tpc+4));
 +		err |= get_user(nop, (unsigned int *)(regs->tpc+8));
 +
 +		if (err)
 +			break;
 +
 +		if ((sethi & 0xFFC00000U) == 0x03000000U &&
-+		    (jmpl & 0xFFFFE000U) == 0x81C06000U &&
++		    ((bajmpl & 0xFFFFE000U) == 0x81C06000U || (bajmpl & 0xFFF80000U) == 0x30480000U) &&
 +		    nop == 0x01000000U)
 +		{
 +			unsigned long addr;
 +
 +			addr = (sethi & 0x003FFFFFU) << 10;
 +			regs->u_regs[UREG_G1] = addr;
-+			addr += (((jmpl | 0xFFFFFFFFFFFFE000UL) ^ 0x00001000UL) + 0x00001000UL);
++			if ((bajmpl & 0xFFFFE000U) == 0x81C06000U)
++				addr += (((bajmpl | 0xFFFFFFFFFFFFE000UL) ^ 0x00001000UL) + 0x00001000UL);
++			else
++				addr = regs->tpc + ((((bajmpl | 0xFFFFFFFFFFF80000UL) ^ 0x00040000UL) + 0x00040000UL) << 2);
 +
 +			if (test_thread_flag(TIF_32BIT))
 +				addr &= 0xFFFFFFFFUL;
@@ -5646,7 +5663,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/arch/sparc/mm/fau
  asmlinkage void __kprobes do_sparc64_fault(struct pt_regs *regs)
  {
  	struct mm_struct *mm = current->mm;
-@@ -343,6 +797,29 @@ retry:
+@@ -343,6 +806,29 @@ retry:
  	if (!vma)
  		goto bad_area;
  
@@ -57150,6 +57167,7 @@ diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/sound/usb/card.h 
  	int last_frame_number;          /* stored frame number */
  	int last_delay;                 /* stored delay */
  };
+Binary files linux-3.4.6/sshd and linux-3.4.6-pax/sshd differ
 diff -NurpX linux-3.4.6-pax/Documentation/dontdiff linux-3.4.6/tools/gcc/checker_plugin.c linux-3.4.6-pax/tools/gcc/checker_plugin.c
 --- linux-3.4.6/tools/gcc/checker_plugin.c	1970-01-01 01:00:00.000000000 +0100
 +++ linux-3.4.6-pax/tools/gcc/checker_plugin.c	2012-05-21 12:10:12.484049049 +0200
