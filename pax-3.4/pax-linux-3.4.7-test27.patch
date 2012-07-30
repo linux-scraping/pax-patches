@@ -1,4 +1,6 @@
-- forward port to 3.4.7
+- fixed two bugs reported by Maxim Kammerer in https://bugs.gentoo.org/show_bug.cgi?id=428576
+  - i386 percpu data has to be relocated even for !KERNEXEC, a regression after 2.6.32
+  - work around some ld 'smartness' that merges empty sections with symbols, fixes relocatable !MODULES i386 builds
 
 diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/alpha/include/asm/atomic.h linux-3.4.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.4.7/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -17929,7 +17931,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  	if ((segoffs >> 16) == BIOSSEG)
 diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/vmlinux.lds.S linux-3.4.7-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-3.4.7/arch/x86/kernel/vmlinux.lds.S	2011-10-24 12:48:26.291091771 +0200
-+++ linux-3.4.7-pax/arch/x86/kernel/vmlinux.lds.S	2012-05-21 12:10:09.648048895 +0200
++++ linux-3.4.7-pax/arch/x86/kernel/vmlinux.lds.S	2012-07-30 23:51:13.168004501 +0200
 @@ -26,6 +26,13 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -17996,7 +17998,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  		HEAD_TEXT
  #ifdef CONFIG_X86_32
  		. = ALIGN(PAGE_SIZE);
-@@ -108,13 +128,47 @@ SECTIONS
+@@ -108,13 +128,48 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -18015,8 +18017,8 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
 +		MODULES_EXEC_VADDR = .;
 +		BYTE(0)
 +		. += (CONFIG_PAX_KERNEXEC_MODULE_TEXT * 1024 * 1024);
-+		. = ALIGN(HPAGE_SIZE);
-+		MODULES_EXEC_END = . - 1;
++		. = ALIGN(HPAGE_SIZE) - 1;
++		MODULES_EXEC_END = .;
 +#endif
 +
 +	} :module
@@ -18024,6 +18026,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
 +
 +	.text.end : AT(ADDR(.text.end) - LOAD_OFFSET) {
 +		/* End of text section */
++		BYTE(0)
 +		_etext = . - __KERNEL_TEXT_OFFSET;
 +	}
 +
@@ -18048,7 +18051,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  
  #if defined(CONFIG_DEBUG_RODATA)
  	/* .text should occupy whole number of pages */
-@@ -126,16 +180,20 @@ SECTIONS
+@@ -126,16 +181,20 @@ SECTIONS
  
  	/* Data */
  	.data : AT(ADDR(.data) - LOAD_OFFSET) {
@@ -18072,7 +18075,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  
-@@ -176,12 +234,19 @@ SECTIONS
+@@ -176,12 +235,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -18095,7 +18098,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -190,12 +255,27 @@ SECTIONS
+@@ -190,12 +256,27 @@ SECTIONS
  	PERCPU_VADDR(INTERNODE_CACHE_BYTES, 0, :percpu)
  #endif
  
@@ -18128,7 +18131,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  
  	/*
  	 * Code and data for a variety of lowlevel trampolines, to be
-@@ -269,19 +349,12 @@ SECTIONS
+@@ -269,19 +350,12 @@ SECTIONS
  	}
  
  	. = ALIGN(8);
@@ -18149,7 +18152,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  	PERCPU_SECTION(INTERNODE_CACHE_BYTES)
  #endif
  
-@@ -300,16 +373,10 @@ SECTIONS
+@@ -300,16 +374,10 @@ SECTIONS
  	.smp_locks : AT(ADDR(.smp_locks) - LOAD_OFFSET) {
  		__smp_locks = .;
  		*(.smp_locks)
@@ -18167,7 +18170,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -325,6 +392,7 @@ SECTIONS
+@@ -325,6 +393,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -18175,7 +18178,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/kernel/v
  		__brk_limit = .;
  	}
  
-@@ -351,13 +419,12 @@ SECTIONS
+@@ -351,13 +420,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = x + __per_cpu_load
@@ -22407,7 +22410,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/mm/huget
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
 diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/mm/init_32.c linux-3.4.7-pax/arch/x86/mm/init_32.c
 --- linux-3.4.7/arch/x86/mm/init_32.c	2012-05-21 11:32:57.859927681 +0200
-+++ linux-3.4.7-pax/arch/x86/mm/init_32.c	2012-05-21 12:10:09.752048901 +0200
++++ linux-3.4.7-pax/arch/x86/mm/init_32.c	2012-07-30 23:51:53.560005448 +0200
 @@ -73,36 +73,6 @@ static __init void *alloc_low_page(void)
  }
  
@@ -24509,7 +24512,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/power/cp
  #endif
 diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/tools/relocs.c linux-3.4.7-pax/arch/x86/tools/relocs.c
 --- linux-3.4.7/arch/x86/tools/relocs.c	2012-06-11 19:12:28.376366952 +0200
-+++ linux-3.4.7-pax/arch/x86/tools/relocs.c	2012-06-19 00:12:38.122537031 +0200
++++ linux-3.4.7-pax/arch/x86/tools/relocs.c	2012-07-30 23:49:39.324001863 +0200
 @@ -12,10 +12,13 @@
  #include <regex.h>
  #include <tools/le_byteshift.h>
@@ -24600,7 +24603,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/tools/re
  		}
 +		base = 0;
 +
-+#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
++#ifdef CONFIG_X86_32
 +		for (j = 0; j < ehdr.e_phnum; j++) {
 +			if (phdr[j].p_type != PT_LOAD )
 +				continue;
@@ -24677,7 +24680,7 @@ diff -NurpX linux-3.4.7-pax/Documentation/dontdiff linux-3.4.7/arch/x86/tools/re
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
 +			/* Don't relocate actual code, they are relocated implicitly by the base address of KERNEL_CS */
-+			if (!strcmp(sec_name(sym->st_shndx), ".module.text") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
++			if (!strcmp(sec_name(sym->st_shndx), ".text.end") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".init.text"))
 +				continue;
