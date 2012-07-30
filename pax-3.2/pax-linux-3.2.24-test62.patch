@@ -1,5 +1,6 @@
-- added emulation for new sparc plt stubs
-- fixed a false positive mlock/munlock failure under SEGMEXEC
+- fixed two bugs reported by Maxim Kammerer in https://bugs.gentoo.org/show_bug.cgi?id=428576
+  - i386 percpu data has to be relocated even for !KERNEXEC, a regression after 2.6.32
+  - work around some ld 'smartness' that merges empty sections with symbols, fixes relocatable !MODULES i386 builds
 
 diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/alpha/include/asm/atomic.h linux-3.2.24-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.24/arch/alpha/include/asm/atomic.h	2012-07-04 06:44:35.000000000 +0200
@@ -17846,7 +17847,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  	if ((segoffs >> 16) == BIOSSEG)
 diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel/vmlinux.lds.S linux-3.2.24-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-3.2.24/arch/x86/kernel/vmlinux.lds.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.24-pax/arch/x86/kernel/vmlinux.lds.S	2012-07-04 19:24:47.600063005 +0200
++++ linux-3.2.24-pax/arch/x86/kernel/vmlinux.lds.S	2012-07-31 00:31:08.996074902 +0200
 @@ -26,6 +26,13 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -17913,7 +17914,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  		HEAD_TEXT
  #ifdef CONFIG_X86_32
  		. = ALIGN(PAGE_SIZE);
-@@ -108,13 +128,47 @@ SECTIONS
+@@ -108,13 +128,48 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -17932,8 +17933,8 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
 +		MODULES_EXEC_VADDR = .;
 +		BYTE(0)
 +		. += (CONFIG_PAX_KERNEXEC_MODULE_TEXT * 1024 * 1024);
-+		. = ALIGN(HPAGE_SIZE);
-+		MODULES_EXEC_END = . - 1;
++		. = ALIGN(HPAGE_SIZE) - 1;
++		MODULES_EXEC_END = .;
 +#endif
 +
 +	} :module
@@ -17941,6 +17942,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
 +
 +	.text.end : AT(ADDR(.text.end) - LOAD_OFFSET) {
 +		/* End of text section */
++		BYTE(0)
 +		_etext = . - __KERNEL_TEXT_OFFSET;
 +	}
 +
@@ -17965,7 +17967,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  
  #if defined(CONFIG_DEBUG_RODATA)
  	/* .text should occupy whole number of pages */
-@@ -126,16 +180,20 @@ SECTIONS
+@@ -126,16 +181,20 @@ SECTIONS
  
  	/* Data */
  	.data : AT(ADDR(.data) - LOAD_OFFSET) {
@@ -17989,7 +17991,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  
-@@ -176,12 +234,19 @@ SECTIONS
+@@ -176,12 +235,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -18012,7 +18014,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -190,12 +255,27 @@ SECTIONS
+@@ -190,12 +256,27 @@ SECTIONS
  	PERCPU_VADDR(INTERNODE_CACHE_BYTES, 0, :percpu)
  #endif
  
@@ -18045,7 +18047,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  
  	/*
  	 * Code and data for a variety of lowlevel trampolines, to be
-@@ -269,19 +349,12 @@ SECTIONS
+@@ -269,19 +350,12 @@ SECTIONS
  	}
  
  	. = ALIGN(8);
@@ -18066,7 +18068,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  	PERCPU_SECTION(INTERNODE_CACHE_BYTES)
  #endif
  
-@@ -300,16 +373,10 @@ SECTIONS
+@@ -300,16 +374,10 @@ SECTIONS
  	.smp_locks : AT(ADDR(.smp_locks) - LOAD_OFFSET) {
  		__smp_locks = .;
  		*(.smp_locks)
@@ -18084,7 +18086,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -325,6 +392,7 @@ SECTIONS
+@@ -325,6 +393,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -18092,7 +18094,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/kernel
  		__brk_limit = .;
  	}
  
-@@ -351,13 +419,12 @@ SECTIONS
+@@ -351,13 +420,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = x + __per_cpu_load
@@ -24545,7 +24547,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/power/
  #endif
 diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/tools/relocs.c linux-3.2.24-pax/arch/x86/tools/relocs.c
 --- linux-3.2.24/arch/x86/tools/relocs.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.24-pax/arch/x86/tools/relocs.c	2012-07-04 19:24:47.656063004 +0200
++++ linux-3.2.24-pax/arch/x86/tools/relocs.c	2012-07-31 00:31:09.016074659 +0200
 @@ -11,10 +11,13 @@
  #include <endian.h>
  #include <regex.h>
@@ -24636,7 +24638,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/tools/
  		}
 +		base = 0;
 +
-+#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
++#ifdef CONFIG_X86_32
 +		for (j = 0; j < ehdr.e_phnum; j++) {
 +			if (phdr[j].p_type != PT_LOAD )
 +				continue;
@@ -24713,7 +24715,7 @@ diff -NurpX linux-3.2.24-pax/Documentation/dontdiff linux-3.2.24/arch/x86/tools/
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
 +			/* Don't relocate actual code, they are relocated implicitly by the base address of KERNEL_CS */
-+			if (!strcmp(sec_name(sym->st_shndx), ".module.text") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
++			if (!strcmp(sec_name(sym->st_shndx), ".text.end") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".init.text"))
 +				continue;
