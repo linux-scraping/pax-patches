@@ -1,5 +1,5 @@
-- added emulation for new sparc plt stubs
-- fixed a false positive mlock/munlock failure under SEGMEXEC
+- fixed a bug reported by Maxim Kammerer in https://bugs.gentoo.org/show_bug.cgi?id=428576
+  - work around some ld 'smartness' that merges empty sections with symbols, fixes relocatable !MODULES i386 builds
 
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/alpha/include/asm/atomic.h linux-2.6.32.59-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.59/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -5991,7 +5991,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	printf(".section \".rodata.compressed\",\"a\",@progbits\n");
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/boot/compressed/relocs.c linux-2.6.32.59-pax/arch/x86/boot/compressed/relocs.c
 --- linux-2.6.32.59/arch/x86/boot/compressed/relocs.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/x86/boot/compressed/relocs.c	2012-03-13 13:15:34.416098028 +0100
++++ linux-2.6.32.59-pax/arch/x86/boot/compressed/relocs.c	2012-07-31 00:33:20.948078635 +0200
 @@ -10,8 +10,11 @@
  #define USE_BSD
  #include <endian.h>
@@ -6163,7 +6163,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +
 +#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
 +			/* Don't relocate actual code, they are relocated implicitly by the base address of KERNEL_CS */
-+			if (!strcmp(sec_name(sym->st_shndx), ".module.text") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
++			if (!strcmp(sec_name(sym->st_shndx), ".text.end") && !strcmp(sym_name(sym_strtab, sym), "_etext"))
 +				continue;
 +			if (!strcmp(sec_name(sym->st_shndx), ".init.text"))
 +				continue;
@@ -18718,7 +18718,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	local_irq_save(flags);
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/kernel/vmlinux.lds.S linux-2.6.32.59-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-2.6.32.59/arch/x86/kernel/vmlinux.lds.S	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/x86/kernel/vmlinux.lds.S	2012-03-13 13:15:34.576098020 +0100
++++ linux-2.6.32.59-pax/arch/x86/kernel/vmlinux.lds.S	2012-07-31 00:31:25.424075303 +0200
 @@ -26,6 +26,13 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -18797,7 +18797,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  		HEAD_TEXT
  #ifdef CONFIG_X86_32
  		. = ALIGN(PAGE_SIZE);
-@@ -82,28 +102,71 @@ SECTIONS
+@@ -82,28 +102,72 @@ SECTIONS
  		IRQENTRY_TEXT
  		*(.fixup)
  		*(.gnu.warning)
@@ -18821,8 +18821,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 +		MODULES_EXEC_VADDR = .;
 +		BYTE(0)
 +		. += (CONFIG_PAX_KERNEXEC_MODULE_TEXT * 1024 * 1024);
-+		. = ALIGN(HPAGE_SIZE);
-+		MODULES_EXEC_END = . - 1;
++		. = ALIGN(HPAGE_SIZE) - 1;
++		MODULES_EXEC_END = .;
 +#endif
 +
 +	} :module
@@ -18831,6 +18831,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
 -	EXCEPTION_TABLE(16) :text = 0x9090
 +	.text.end : AT(ADDR(.text.end) - LOAD_OFFSET) {
 +		/* End of text section */
++		BYTE(0)
 +		_etext = . - __KERNEL_TEXT_OFFSET;
 +	}
 +
@@ -18876,7 +18877,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  
  		PAGE_ALIGNED_DATA(PAGE_SIZE)
  
-@@ -112,6 +175,8 @@ SECTIONS
+@@ -112,6 +176,8 @@ SECTIONS
  		DATA_DATA
  		CONSTRUCTORS
  
@@ -18885,7 +18886,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  		/* rarely changed data like cpu maps */
  		READ_MOSTLY_DATA(CONFIG_X86_INTERNODE_CACHE_BYTES)
  
-@@ -166,12 +231,6 @@ SECTIONS
+@@ -166,12 +232,6 @@ SECTIONS
  	}
  	vgetcpu_mode = VVIRT(.vgetcpu_mode);
  
@@ -18898,7 +18899,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	.vsyscall_3 ADDR(.vsyscall_0) + 3072: AT(VLOAD(.vsyscall_3)) {
  		*(.vsyscall_3)
  	}
-@@ -187,12 +246,19 @@ SECTIONS
+@@ -187,12 +247,19 @@ SECTIONS
  #endif /* CONFIG_X86_64 */
  
  	/* Init code and data - will be freed after init */
@@ -18921,7 +18922,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	/*
  	 * percpu offsets are zero-based on SMP.  PERCPU_VADDR() changes the
  	 * output PHDR, so the next output section - .init.text - should
-@@ -201,12 +267,27 @@ SECTIONS
+@@ -201,12 +268,27 @@ SECTIONS
  	PERCPU_VADDR(0, :percpu)
  #endif
  
@@ -18954,7 +18955,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  
  	.x86_cpu_dev.init : AT(ADDR(.x86_cpu_dev.init) - LOAD_OFFSET) {
  		__x86_cpu_dev_start = .;
-@@ -232,19 +313,11 @@ SECTIONS
+@@ -232,19 +314,11 @@ SECTIONS
  		*(.altinstr_replacement)
  	}
  
@@ -18975,7 +18976,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	PERCPU(PAGE_SIZE)
  #endif
  
-@@ -267,12 +340,6 @@ SECTIONS
+@@ -267,12 +341,6 @@ SECTIONS
  		. = ALIGN(PAGE_SIZE);
  	}
  
@@ -18988,7 +18989,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	/* BSS */
  	. = ALIGN(PAGE_SIZE);
  	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {
-@@ -288,6 +355,7 @@ SECTIONS
+@@ -288,6 +356,7 @@ SECTIONS
  		__brk_base = .;
  		. += 64 * 1024;		/* 64k alignment slop space */
  		*(.brk_reservation)	/* areas brk users have reserved */
@@ -18996,7 +18997,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  		__brk_limit = .;
  	}
  
-@@ -316,13 +384,12 @@ SECTIONS
+@@ -316,13 +385,12 @@ SECTIONS
   * for the boot processor.
   */
  #define INIT_PER_CPU(x) init_per_cpu__##x = per_cpu__##x + __per_cpu_load
