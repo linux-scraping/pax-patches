@@ -1,4 +1,4 @@
-- fixed amd64/RANDKSTACK compilation
+- fixed allmodconfig breakage
 
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/alpha/include/asm/atomic.h linux-3.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.5/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -11409,7 +11409,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/include/asm/
  #define WORD_AT_A_TIME_CONSTANTS { REPEAT_BYTE(0x01), REPEAT_BYTE(0x80) }
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/include/asm/x86_init.h linux-3.5-pax/arch/x86/include/asm/x86_init.h
 --- linux-3.5/arch/x86/include/asm/x86_init.h	2012-07-23 00:22:19.254342472 +0200
-+++ linux-3.5-pax/arch/x86/include/asm/x86_init.h	2012-07-23 00:23:10.542343980 +0200
++++ linux-3.5-pax/arch/x86/include/asm/x86_init.h	2012-07-31 21:40:23.722281234 +0200
 @@ -29,7 +29,7 @@ struct x86_init_mpparse {
  	void (*mpc_oem_bus_info)(struct mpc_bus *m, char *name);
  	void (*find_smp_config)(void);
@@ -11518,7 +11518,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/include/asm/
  
  struct pci_dev;
  
-@@ -186,7 +186,7 @@ struct x86_msi_ops {
+@@ -186,14 +186,14 @@ struct x86_msi_ops {
  	void (*teardown_msi_irq)(unsigned int irq);
  	void (*teardown_msi_irqs)(struct pci_dev *dev);
  	void (*restore_msi_irqs)(struct pci_dev *dev, int irq);
@@ -11527,6 +11527,14 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/include/asm/
  
  struct x86_io_apic_ops {
  	void		(*init)  (void);
+ 	unsigned int	(*read)  (unsigned int apic, unsigned int reg);
+ 	void		(*write) (unsigned int apic, unsigned int reg, unsigned int value);
+ 	void		(*modify)(unsigned int apic, unsigned int reg, unsigned int value);
+-};
++} __no_const;
+ 
+ extern struct x86_init_ops x86_init;
+ extern struct x86_cpuinit_ops x86_cpuinit;
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/include/asm/xsave.h linux-3.5-pax/arch/x86/include/asm/xsave.h
 --- linux-3.5/arch/x86/include/asm/xsave.h	2012-07-23 00:22:19.258342472 +0200
 +++ linux-3.5-pax/arch/x86/include/asm/xsave.h	2012-07-23 00:23:10.542343980 +0200
@@ -17599,6 +17607,18 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/kernel/traps
  	{
  		if (!fixup_exception(regs)) {
  			task->thread.error_code = error_code;
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/kernel/uprobes.c linux-3.5-pax/arch/x86/kernel/uprobes.c
+--- linux-3.5/arch/x86/kernel/uprobes.c	2012-07-23 00:22:19.330342474 +0200
++++ linux-3.5-pax/arch/x86/kernel/uprobes.c	2012-07-31 21:54:23.638303357 +0200
+@@ -606,7 +606,7 @@ int arch_uprobe_exception_notify(struct
+ 	int ret = NOTIFY_DONE;
+ 
+ 	/* We are only interested in userspace traps */
+-	if (regs && !user_mode_vm(regs))
++	if (regs && !user_mode(regs))
+ 		return NOTIFY_DONE;
+ 
+ 	switch (val) {
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/kernel/vm86_32.c linux-3.5-pax/arch/x86/kernel/vm86_32.c
 --- linux-3.5/arch/x86/kernel/vm86_32.c	2012-05-21 11:32:57.687927672 +0200
 +++ linux-3.5-pax/arch/x86/kernel/vm86_32.c	2012-07-23 00:23:10.754343987 +0200
@@ -27242,6 +27262,80 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/char/nvram.c 
  		return -EFAULT;
  
  	*ppos = i;
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/char/pcmcia/synclink_cs.c linux-3.5-pax/drivers/char/pcmcia/synclink_cs.c
+--- linux-3.5/drivers/char/pcmcia/synclink_cs.c	2012-05-21 11:32:59.751927783 +0200
++++ linux-3.5-pax/drivers/char/pcmcia/synclink_cs.c	2012-07-31 21:46:30.410295863 +0200
+@@ -2340,9 +2340,9 @@ static void mgslpc_close(struct tty_stru
+ 
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):mgslpc_close(%s) entry, count=%d\n",
+-			 __FILE__,__LINE__, info->device_name, port->count);
++			 __FILE__,__LINE__, info->device_name, atomic_read(&port->count));
+ 
+-	WARN_ON(!port->count);
++	WARN_ON(!atomic_read(&port->count));
+ 
+ 	if (tty_port_close_start(port, tty, filp) == 0)
+ 		goto cleanup;
+@@ -2360,7 +2360,7 @@ static void mgslpc_close(struct tty_stru
+ cleanup:
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):mgslpc_close(%s) exit, count=%d\n", __FILE__,__LINE__,
+-			tty->driver->name, port->count);
++			tty->driver->name, atomic_read(&port->count));
+ }
+ 
+ /* Wait until the transmitter is empty.
+@@ -2502,7 +2502,7 @@ static int mgslpc_open(struct tty_struct
+ 
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):mgslpc_open(%s), old ref count = %d\n",
+-			 __FILE__,__LINE__,tty->driver->name, port->count);
++			 __FILE__,__LINE__,tty->driver->name, atomic_read(&port->count));
+ 
+ 	/* If port is closing, signal caller to try again */
+ 	if (tty_hung_up_p(filp) || port->flags & ASYNC_CLOSING){
+@@ -2522,11 +2522,11 @@ static int mgslpc_open(struct tty_struct
+ 		goto cleanup;
+ 	}
+ 	spin_lock(&port->lock);
+-	port->count++;
++	atomic_inc(&port->count);
+ 	spin_unlock(&port->lock);
+ 	spin_unlock_irqrestore(&info->netlock, flags);
+ 
+-	if (port->count == 1) {
++	if (atomic_read(&port->count) == 1) {
+ 		/* 1st open on this device, init hardware */
+ 		retval = startup(info, tty);
+ 		if (retval < 0)
+@@ -3891,7 +3891,7 @@ static int hdlcdev_attach(struct net_dev
+ 	unsigned short new_crctype;
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	switch (encoding)
+@@ -3994,7 +3994,7 @@ static int hdlcdev_open(struct net_devic
+ 
+ 	/* arbitrate between network and tty opens */
+ 	spin_lock_irqsave(&info->netlock, flags);
+-	if (info->port.count != 0 || info->netcount != 0) {
++	if (atomic_read(&info->port.count) != 0 || info->netcount != 0) {
+ 		printk(KERN_WARNING "%s: hdlc_open returning busy\n", dev->name);
+ 		spin_unlock_irqrestore(&info->netlock, flags);
+ 		return -EBUSY;
+@@ -4083,7 +4083,7 @@ static int hdlcdev_ioctl(struct net_devi
+ 		printk("%s:hdlcdev_ioctl(%s)\n",__FILE__,dev->name);
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	if (cmd != SIOCWANDEV)
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/char/random.c linux-3.5-pax/drivers/char/random.c
 --- linux-3.5/drivers/char/random.c	2012-05-21 11:32:59.759927784 +0200
 +++ linux-3.5-pax/drivers/char/random.c	2012-07-23 00:23:10.886343990 +0200
@@ -30215,6 +30309,33 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/isdn/capi/cap
  		capimsg_setu32(skb->data, 8, mp->ncci);	/* NCCI */
  		capimsg_setu32(skb->data, 12, (u32)(long)skb->data);/* Data32 */
  		capimsg_setu16(skb->data, 16, len);	/* Data length */
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/isdn/gigaset/interface.c linux-3.5-pax/drivers/isdn/gigaset/interface.c
+--- linux-3.5/drivers/isdn/gigaset/interface.c	2012-05-21 11:33:04.691928052 +0200
++++ linux-3.5-pax/drivers/isdn/gigaset/interface.c	2012-07-31 22:28:14.630365571 +0200
+@@ -160,9 +160,9 @@ static int if_open(struct tty_struct *tt
+ 	}
+ 	tty->driver_data = cs;
+ 
+-	++cs->port.count;
++	atomic_inc(&cs->port.count);
+ 
+-	if (cs->port.count == 1) {
++	if (atomic_read(&cs->port.count) == 1) {
+ 		tty_port_tty_set(&cs->port, tty);
+ 		tty->low_latency = 1;
+ 	}
+@@ -186,9 +186,9 @@ static void if_close(struct tty_struct *
+ 
+ 	if (!cs->connected)
+ 		gig_dbg(DEBUG_IF, "not connected");	/* nothing to do */
+-	else if (!cs->port.count)
++	else if (!atomic_read(&cs->port.count))
+ 		dev_warn(cs->dev, "%s: device not opened\n", __func__);
+-	else if (!--cs->port.count)
++	else if (!atomic_dec_return(&cs->port.count))
+ 		tty_port_tty_set(&cs->port, NULL);
+ 
+ 	mutex_unlock(&cs->mutex);
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/isdn/hardware/avm/b1.c linux-3.5-pax/drivers/isdn/hardware/avm/b1.c
 --- linux-3.5/drivers/isdn/hardware/avm/b1.c	2012-05-21 11:33:04.707928053 +0200
 +++ linux-3.5-pax/drivers/isdn/hardware/avm/b1.c	2012-07-23 00:23:10.994343993 +0200
@@ -30260,6 +30381,70 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/isdn/hardware
  
  typedef struct _diva_os_xdi_adapter {
  	struct list_head link;
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/isdn/i4l/isdn_tty.c linux-3.5-pax/drivers/isdn/i4l/isdn_tty.c
+--- linux-3.5/drivers/isdn/i4l/isdn_tty.c	2012-07-23 00:22:21.438342536 +0200
++++ linux-3.5-pax/drivers/isdn/i4l/isdn_tty.c	2012-07-31 22:34:55.114379525 +0200
+@@ -1505,9 +1505,9 @@ isdn_tty_open(struct tty_struct *tty, st
+ 	port = &info->port;
+ #ifdef ISDN_DEBUG_MODEM_OPEN
+ 	printk(KERN_DEBUG "isdn_tty_open %s, count = %d\n", tty->name,
+-	       port->count);
++	       atomic_read(&port->count))
+ #endif
+-	port->count++;
++	atomic_inc(&port->count);
+ 	tty->driver_data = info;
+ 	port->tty = tty;
+ 	tty->port = port;
+@@ -1553,7 +1553,7 @@ isdn_tty_close(struct tty_struct *tty, s
+ #endif
+ 		return;
+ 	}
+-	if ((tty->count == 1) && (port->count != 1)) {
++	if ((tty->count == 1) && (atomic_read(&port->count) != 1)) {
+ 		/*
+ 		 * Uh, oh.  tty->count is 1, which means that the tty
+ 		 * structure will be freed.  Info->count should always
+@@ -1562,15 +1562,15 @@ isdn_tty_close(struct tty_struct *tty, s
+ 		 * serial port won't be shutdown.
+ 		 */
+ 		printk(KERN_ERR "isdn_tty_close: bad port count; tty->count is 1, "
+-		       "info->count is %d\n", port->count);
+-		port->count = 1;
++		       "info->count is %d\n", atomic_read(&port->count));
++		atomic_set(&port->count, 1);
+ 	}
+-	if (--port->count < 0) {
++	if (atomic_dec_return(&port->count) < 0) {
+ 		printk(KERN_ERR "isdn_tty_close: bad port count for ttyi%d: %d\n",
+-		       info->line, port->count);
+-		port->count = 0;
++		       info->line, atomic_read(&port->count));
++		atomic_set(&port->count, 0);
+ 	}
+-	if (port->count) {
++	if (atomic_read(&port->count)) {
+ #ifdef ISDN_DEBUG_MODEM_OPEN
+ 		printk(KERN_DEBUG "isdn_tty_close after info->count != 0\n");
+ #endif
+@@ -1624,7 +1624,7 @@ isdn_tty_hangup(struct tty_struct *tty)
+ 	if (isdn_tty_paranoia_check(info, tty->name, "isdn_tty_hangup"))
+ 		return;
+ 	isdn_tty_shutdown(info);
+-	port->count = 0;
++	atomic_set(&port->count, 0);
+ 	port->flags &= ~ASYNC_NORMAL_ACTIVE;
+ 	port->tty = NULL;
+ 	wake_up_interruptible(&port->open_wait);
+@@ -1964,7 +1964,7 @@ isdn_tty_find_icall(int di, int ch, setu
+ 	for (i = 0; i < ISDN_MAX_CHANNELS; i++) {
+ 		modem_info *info = &dev->mdm.info[i];
+ 
+-		if (info->port.count == 0)
++		if (atomic_read(&info->port.count) == 0)
+ 			continue;
+ 		if ((info->emu.mdmreg[REG_SI1] & si2bit[si1]) &&  /* SI1 is matching */
+ 		    (info->emu.mdmreg[REG_SI2] == si2))	{         /* SI2 is matching */
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/isdn/icn/icn.c linux-3.5-pax/drivers/isdn/icn/icn.c
 --- linux-3.5/drivers/isdn/icn/icn.c	2012-05-21 11:33:05.887928117 +0200
 +++ linux-3.5-pax/drivers/isdn/icn/icn.c	2012-07-23 00:23:10.994343993 +0200
@@ -31799,6 +31984,18 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/ethernet/
  	"21140 non-MII",
  	"21140 MII PHY",
  	"21142 Serial PHY",
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/ethernet/dec/tulip/uli526x.c linux-3.5-pax/drivers/net/ethernet/dec/tulip/uli526x.c
+--- linux-3.5/drivers/net/ethernet/dec/tulip/uli526x.c	2012-07-23 00:22:23.206342588 +0200
++++ linux-3.5-pax/drivers/net/ethernet/dec/tulip/uli526x.c	2012-07-31 22:45:59.814396542 +0200
+@@ -129,7 +129,7 @@ struct uli526x_board_info {
+ 	struct uli_phy_ops {
+ 		void (*write)(struct uli526x_board_info *, u8, u8, u16);
+ 		u16 (*read)(struct uli526x_board_info *, u8, u8);
+-	} phy;
++	} __no_const phy;
+ 	struct net_device *next_dev;	/* next device */
+ 	struct pci_dev *pdev;		/* PCI device */
+ 	spinlock_t lock;
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/ethernet/dec/tulip/winbond-840.c linux-3.5-pax/drivers/net/ethernet/dec/tulip/winbond-840.c
 --- linux-3.5/drivers/net/ethernet/dec/tulip/winbond-840.c	2012-07-23 00:22:23.206342588 +0200
 +++ linux-3.5-pax/drivers/net/ethernet/dec/tulip/winbond-840.c	2012-07-23 00:23:11.054343995 +0200
@@ -32023,6 +32220,18 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/ethernet/
  	struct e1000_mbx_stats stats;
  	u32 timeout;
  	u32 usec_delay;
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/ethernet/intel/ixgbe/ixgbe_ptp.c linux-3.5-pax/drivers/net/ethernet/intel/ixgbe/ixgbe_ptp.c
+--- linux-3.5/drivers/net/ethernet/intel/ixgbe/ixgbe_ptp.c	2012-07-23 00:22:23.462342601 +0200
++++ linux-3.5-pax/drivers/net/ethernet/intel/ixgbe/ixgbe_ptp.c	2012-07-31 23:23:02.866462210 +0200
+@@ -805,7 +805,7 @@ void ixgbe_ptp_start_cyclecounter(struct
+ 	/* store the new cycle speed */
+ 	adapter->cycle_speed = cycle_speed;
+ 
+-	ACCESS_ONCE(adapter->base_incval) = incval;
++	ACCESS_ONCE_RW(adapter->base_incval) = incval;
+ 	smp_mb();
+ 
+ 	/* grab the ptp lock */
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h linux-3.5-pax/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h
 --- linux-3.5/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h	2012-07-23 00:22:23.466342594 +0200
 +++ linux-3.5-pax/drivers/net/ethernet/intel/ixgbe/ixgbe_type.h	2012-07-23 00:23:11.066343995 +0200
@@ -32712,6 +32921,18 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/wireless/
  
  struct wl1251 {
  	struct ieee80211_hw *hw;
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/net/wireless/ti/wlcore/wlcore.h linux-3.5-pax/drivers/net/wireless/ti/wlcore/wlcore.h
+--- linux-3.5/drivers/net/wireless/ti/wlcore/wlcore.h	2012-07-23 00:22:24.942342639 +0200
++++ linux-3.5-pax/drivers/net/wireless/ti/wlcore/wlcore.h	2012-07-31 23:22:16.818459365 +0200
+@@ -61,7 +61,7 @@ struct wlcore_ops {
+ 				    struct wl12xx_vif *wlvif);
+ 	s8 (*get_pg_ver)(struct wl1271 *wl);
+ 	void (*get_mac)(struct wl1271 *wl);
+-};
++} __no_const;
+ 
+ enum wlcore_partitions {
+ 	PART_DOWN,
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/oprofile/buffer_sync.c linux-3.5-pax/drivers/oprofile/buffer_sync.c
 --- linux-3.5/drivers/oprofile/buffer_sync.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.5-pax/drivers/oprofile/buffer_sync.c	2012-07-23 00:23:11.094343996 +0200
@@ -33880,6 +34101,27 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/scsi/pmcraid.
  
  	/* To indicate add/delete/modify during CCN */
  	u8 change_detected;
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/scsi/qla2xxx/qla_attr.c linux-3.5-pax/drivers/scsi/qla2xxx/qla_attr.c
+--- linux-3.5/drivers/scsi/qla2xxx/qla_attr.c	2012-07-23 00:22:26.082342673 +0200
++++ linux-3.5-pax/drivers/scsi/qla2xxx/qla_attr.c	2012-07-31 22:44:46.526392464 +0200
+@@ -1855,7 +1855,7 @@ qla24xx_vport_disable(struct fc_vport *f
+ 	return 0;
+ }
+ 
+-struct fc_function_template qla2xxx_transport_functions = {
++fc_function_template_no_const qla2xxx_transport_functions = {
+ 
+ 	.show_host_node_name = 1,
+ 	.show_host_port_name = 1,
+@@ -1902,7 +1902,7 @@ struct fc_function_template qla2xxx_tran
+ 	.bsg_timeout = qla24xx_bsg_timeout,
+ };
+ 
+-struct fc_function_template qla2xxx_transport_vport_functions = {
++fc_function_template_no_const qla2xxx_transport_vport_functions = {
+ 
+ 	.show_host_node_name = 1,
+ 	.show_host_port_name = 1,
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/scsi/qla2xxx/qla_def.h linux-3.5-pax/drivers/scsi/qla2xxx/qla_def.h
 --- linux-3.5/drivers/scsi/qla2xxx/qla_def.h	2012-07-23 00:22:26.086342673 +0200
 +++ linux-3.5-pax/drivers/scsi/qla2xxx/qla_def.h	2012-07-23 00:23:11.134343997 +0200
@@ -33892,6 +34134,20 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/scsi/qla2xxx/
  
  /* MSI-X Support *************************************************************/
  
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/scsi/qla2xxx/qla_gbl.h linux-3.5-pax/drivers/scsi/qla2xxx/qla_gbl.h
+--- linux-3.5/drivers/scsi/qla2xxx/qla_gbl.h	2012-07-23 00:22:26.086342673 +0200
++++ linux-3.5-pax/drivers/scsi/qla2xxx/qla_gbl.h	2012-07-31 22:44:54.058394803 +0200
+@@ -484,8 +484,8 @@ extern void qla2x00_get_sym_node_name(sc
+ struct device_attribute;
+ extern struct device_attribute *qla2x00_host_attrs[];
+ struct fc_function_template;
+-extern struct fc_function_template qla2xxx_transport_functions;
+-extern struct fc_function_template qla2xxx_transport_vport_functions;
++extern fc_function_template_no_const qla2xxx_transport_functions;
++extern fc_function_template_no_const qla2xxx_transport_vport_functions;
+ extern void qla2x00_alloc_sysfs_attr(scsi_qla_host_t *);
+ extern void qla2x00_free_sysfs_attr(scsi_qla_host_t *);
+ extern void qla2x00_init_host_attr(scsi_qla_host_t *);
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/scsi/qla4xxx/ql4_def.h linux-3.5-pax/drivers/scsi/qla4xxx/ql4_def.h
 --- linux-3.5/drivers/scsi/qla4xxx/ql4_def.h	2012-07-23 00:22:26.118342674 +0200
 +++ linux-3.5-pax/drivers/scsi/qla4xxx/ql4_def.h	2012-07-23 00:23:11.134343997 +0200
@@ -34401,6 +34657,31 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/target/target
  	smp_mb__after_atomic_inc();
  	pr_debug("Allocated se_ordered_id: %u for Task Attr: 0x%02x on %s\n",
  			cmd->se_ordered_id, cmd->sam_task_attr,
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/cyclades.c linux-3.5-pax/drivers/tty/cyclades.c
+--- linux-3.5/drivers/tty/cyclades.c	2012-05-21 11:33:29.319929389 +0200
++++ linux-3.5-pax/drivers/tty/cyclades.c	2012-07-31 22:49:44.710402751 +0200
+@@ -1589,10 +1589,10 @@ static int cy_open(struct tty_struct *tt
+ 	printk(KERN_DEBUG "cyc:cy_open ttyC%d, count = %d\n", info->line,
+ 			info->port.count);
+ #endif
+-	info->port.count++;
++	atomic_inc(&info->port.count);
+ #ifdef CY_DEBUG_COUNT
+ 	printk(KERN_DEBUG "cyc:cy_open (%d): incrementing count to %d\n",
+-		current->pid, info->port.count);
++		current->pid, atomic_read(&info->port.count));
+ #endif
+ 
+ 	/*
+@@ -3987,7 +3987,7 @@ static int cyclades_proc_show(struct seq
+ 		for (j = 0; j < cy_card[i].nports; j++) {
+ 			info = &cy_card[i].ports[j];
+ 
+-			if (info->port.count) {
++			if (atomic_read(&info->port.count)) {
+ 				/* XXX is the ldisc num worth this? */
+ 				struct tty_struct *tty;
+ 				struct tty_ldisc *ld;
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/hvc/hvc_console.c linux-3.5-pax/drivers/tty/hvc/hvc_console.c
 --- linux-3.5/drivers/tty/hvc/hvc_console.c	2012-07-23 00:22:27.518342749 +0200
 +++ linux-3.5-pax/drivers/tty/hvc/hvc_console.c	2012-07-23 00:23:11.414344006 +0200
@@ -34672,9 +34953,21 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/ipwireles
  				do_ipw_close(ttyj);
  			ipwireless_disassociate_network_ttys(network,
  							     ttyj->channel_idx);
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/moxa.c linux-3.5-pax/drivers/tty/moxa.c
+--- linux-3.5/drivers/tty/moxa.c	2012-05-21 11:33:29.379929393 +0200
++++ linux-3.5-pax/drivers/tty/moxa.c	2012-07-31 23:02:47.778426676 +0200
+@@ -1172,7 +1172,7 @@ static int moxa_open(struct tty_struct *
+ 	}
+ 
+ 	ch = &brd->ports[port % MAX_PORTS_PER_BOARD];
+-	ch->port.count++;
++	atomic_inc(&ch->port.count);
+ 	tty->driver_data = ch;
+ 	tty_port_tty_set(&ch->port, tty);
+ 	mutex_lock(&ch->port.mutex);
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/n_gsm.c linux-3.5-pax/drivers/tty/n_gsm.c
 --- linux-3.5/drivers/tty/n_gsm.c	2012-05-21 11:33:29.387929393 +0200
-+++ linux-3.5-pax/drivers/tty/n_gsm.c	2012-07-23 00:23:11.418344006 +0200
++++ linux-3.5-pax/drivers/tty/n_gsm.c	2012-07-31 22:47:39.390399499 +0200
 @@ -1629,7 +1629,7 @@ static struct gsm_dlci *gsm_dlci_alloc(s
  	kref_init(&dlci->ref);
  	mutex_init(&dlci->mutex);
@@ -34684,6 +34977,15 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/n_gsm.c l
  		kfree(dlci);
  		return NULL;
  	}
+@@ -2895,7 +2895,7 @@ static int gsmtty_open(struct tty_struct
+ 	if (dlci == NULL)
+ 		return -ENOMEM;
+ 	port = &dlci->port;
+-	port->count++;
++	atomic_inc(&port->count);
+ 	tty->driver_data = dlci;
+ 	dlci_get(dlci);
+ 	dlci_get(dlci->gsm->dlci[0]);
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/n_tty.c linux-3.5-pax/drivers/tty/n_tty.c
 --- linux-3.5/drivers/tty/n_tty.c	2012-07-23 00:22:27.526342698 +0200
 +++ linux-3.5-pax/drivers/tty/n_tty.c	2012-07-23 00:23:11.418344006 +0200
@@ -34711,6 +35013,36 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/pty.c lin
  
  	cdev_init(&ptmx_cdev, &ptmx_fops);
  	if (cdev_add(&ptmx_cdev, MKDEV(TTYAUX_MAJOR, 2), 1) ||
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/rocket.c linux-3.5-pax/drivers/tty/rocket.c
+--- linux-3.5/drivers/tty/rocket.c	2012-05-21 11:33:29.419929395 +0200
++++ linux-3.5-pax/drivers/tty/rocket.c	2012-07-31 22:52:35.358409253 +0200
+@@ -924,7 +924,7 @@ static int rp_open(struct tty_struct *tt
+ 	tty->driver_data = info;
+ 	tty_port_tty_set(port, tty);
+ 
+-	if (port->count++ == 0) {
++	if (atomic_inc_return(&port->count) == 1) {
+ 		atomic_inc(&rp_num_ports_open);
+ 
+ #ifdef ROCKET_DEBUG_OPEN
+@@ -933,7 +933,7 @@ static int rp_open(struct tty_struct *tt
+ #endif
+ 	}
+ #ifdef ROCKET_DEBUG_OPEN
+-	printk(KERN_INFO "rp_open ttyR%d, count=%d\n", info->line, info->port.count);
++	printk(KERN_INFO "rp_open ttyR%d, count=%d\n", info->line, atomic-read(&info->port.count));
+ #endif
+ 
+ 	/*
+@@ -1528,7 +1528,7 @@ static void rp_hangup(struct tty_struct
+ 		spin_unlock_irqrestore(&info->port.lock, flags);
+ 		return;
+ 	}
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		atomic_dec(&rp_num_ports_open);
+ 	clear_bit((info->aiop * 8) + info->chan, (void *) &xmit_flags[info->board]);
+ 	spin_unlock_irqrestore(&info->port.lock, flags);
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/serial/kgdboc.c linux-3.5-pax/drivers/tty/serial/kgdboc.c
 --- linux-3.5/drivers/tty/serial/kgdboc.c	2012-01-08 19:48:20.619471324 +0100
 +++ linux-3.5-pax/drivers/tty/serial/kgdboc.c	2012-07-23 00:23:11.418344006 +0200
@@ -34851,6 +35183,392 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/serial/se
  	mutex_unlock(&port->mutex);
  	goto end;
  }
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/synclink.c linux-3.5-pax/drivers/tty/synclink.c
+--- linux-3.5/drivers/tty/synclink.c	2012-05-21 11:33:29.959929423 +0200
++++ linux-3.5-pax/drivers/tty/synclink.c	2012-07-31 23:16:42.542452131 +0200
+@@ -3095,7 +3095,7 @@ static void mgsl_close(struct tty_struct
+ 	
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):mgsl_close(%s) entry, count=%d\n",
+-			 __FILE__,__LINE__, info->device_name, info->port.count);
++			 __FILE__,__LINE__, info->device_name, atomic_read(&info->port.count));
+ 
+ 	if (tty_port_close_start(&info->port, tty, filp) == 0)			 
+ 		goto cleanup;
+@@ -3113,7 +3113,7 @@ static void mgsl_close(struct tty_struct
+ cleanup:			
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):mgsl_close(%s) exit, count=%d\n", __FILE__,__LINE__,
+-			tty->driver->name, info->port.count);
++			tty->driver->name, atomic_read(&info->port.count));
+ 			
+ }	/* end of mgsl_close() */
+ 
+@@ -3212,8 +3212,8 @@ static void mgsl_hangup(struct tty_struc
+ 
+ 	mgsl_flush_buffer(tty);
+ 	shutdown(info);
+-	
+-	info->port.count = 0;	
++
++	atomic_set(&info->port.count, 0);
+ 	info->port.flags &= ~ASYNC_NORMAL_ACTIVE;
+ 	info->port.tty = NULL;
+ 
+@@ -3302,12 +3302,12 @@ static int block_til_ready(struct tty_st
+ 	
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):block_til_ready before block on %s count=%d\n",
+-			 __FILE__,__LINE__, tty->driver->name, port->count );
++			 __FILE__,__LINE__, tty->driver->name, atomic_read(&port->count));
+ 
+ 	spin_lock_irqsave(&info->irq_spinlock, flags);
+ 	if (!tty_hung_up_p(filp)) {
+ 		extra_count = true;
+-		port->count--;
++		atomic_dec(&port->count);
+ 	}
+ 	spin_unlock_irqrestore(&info->irq_spinlock, flags);
+ 	port->blocked_open++;
+@@ -3336,7 +3336,7 @@ static int block_til_ready(struct tty_st
+ 		
+ 		if (debug_level >= DEBUG_LEVEL_INFO)
+ 			printk("%s(%d):block_til_ready blocking on %s count=%d\n",
+-				 __FILE__,__LINE__, tty->driver->name, port->count );
++				 __FILE__,__LINE__, tty->driver->name, atomic_read(&port->count));
+ 				 
+ 		tty_unlock();
+ 		schedule();
+@@ -3348,12 +3348,12 @@ static int block_til_ready(struct tty_st
+ 	
+ 	/* FIXME: Racy on hangup during close wait */
+ 	if (extra_count)
+-		port->count++;
++		atomic_inc(&port->count);
+ 	port->blocked_open--;
+ 	
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):block_til_ready after blocking on %s count=%d\n",
+-			 __FILE__,__LINE__, tty->driver->name, port->count );
++			 __FILE__,__LINE__, tty->driver->name, atomic_read(&port->count));
+ 			 
+ 	if (!retval)
+ 		port->flags |= ASYNC_NORMAL_ACTIVE;
+@@ -3398,7 +3398,7 @@ static int mgsl_open(struct tty_struct *
+ 		
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):mgsl_open(%s), old ref count = %d\n",
+-			 __FILE__,__LINE__,tty->driver->name, info->port.count);
++			 __FILE__,__LINE__,tty->driver->name, atomic_read(&info->port.count));
+ 
+ 	/* If port is closing, signal caller to try again */
+ 	if (tty_hung_up_p(filp) || info->port.flags & ASYNC_CLOSING){
+@@ -3417,10 +3417,10 @@ static int mgsl_open(struct tty_struct *
+ 		spin_unlock_irqrestore(&info->netlock, flags);
+ 		goto cleanup;
+ 	}
+-	info->port.count++;
++	atomic_inc(&info->port.count);
+ 	spin_unlock_irqrestore(&info->netlock, flags);
+ 
+-	if (info->port.count == 1) {
++	if (atomic_read(&info->port.count) == 1) {
+ 		/* 1st open on this device, init hardware */
+ 		retval = startup(info);
+ 		if (retval < 0)
+@@ -3444,8 +3444,8 @@ cleanup:
+ 	if (retval) {
+ 		if (tty->count == 1)
+ 			info->port.tty = NULL; /* tty layer will release tty struct */
+-		if(info->port.count)
+-			info->port.count--;
++		if (atomic_read(&info->port.count))
++			atomic_dec(&info->port.count);
+ 	}
+ 	
+ 	return retval;
+@@ -7653,7 +7653,7 @@ static int hdlcdev_attach(struct net_dev
+ 	unsigned short new_crctype;
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	switch (encoding)
+@@ -7748,7 +7748,7 @@ static int hdlcdev_open(struct net_devic
+ 
+ 	/* arbitrate between network and tty opens */
+ 	spin_lock_irqsave(&info->netlock, flags);
+-	if (info->port.count != 0 || info->netcount != 0) {
++	if (atomic_read(&info->port.count) != 0 || info->netcount != 0) {
+ 		printk(KERN_WARNING "%s: hdlc_open returning busy\n", dev->name);
+ 		spin_unlock_irqrestore(&info->netlock, flags);
+ 		return -EBUSY;
+@@ -7834,7 +7834,7 @@ static int hdlcdev_ioctl(struct net_devi
+ 		printk("%s:hdlcdev_ioctl(%s)\n",__FILE__,dev->name);
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	if (cmd != SIOCWANDEV)
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/synclink_gt.c linux-3.5-pax/drivers/tty/synclink_gt.c
+--- linux-3.5/drivers/tty/synclink_gt.c	2012-05-21 11:33:29.971929426 +0200
++++ linux-3.5-pax/drivers/tty/synclink_gt.c	2012-07-31 23:01:53.266427426 +0200
+@@ -671,7 +671,7 @@ static int open(struct tty_struct *tty,
+ 	tty->driver_data = info;
+ 	info->port.tty = tty;
+ 
+-	DBGINFO(("%s open, old ref count = %d\n", info->device_name, info->port.count));
++	DBGINFO(("%s open, old ref count = %d\n", info->device_name, atomic_read(&info->port.count)));
+ 
+ 	/* If port is closing, signal caller to try again */
+ 	if (tty_hung_up_p(filp) || info->port.flags & ASYNC_CLOSING){
+@@ -692,10 +692,10 @@ static int open(struct tty_struct *tty,
+ 		mutex_unlock(&info->port.mutex);
+ 		goto cleanup;
+ 	}
+-	info->port.count++;
++	atomic_inc(&info->port.count);
+ 	spin_unlock_irqrestore(&info->netlock, flags);
+ 
+-	if (info->port.count == 1) {
++	if (atomic_read(&info->port.count) == 1) {
+ 		/* 1st open on this device, init hardware */
+ 		retval = startup(info);
+ 		if (retval < 0) {
+@@ -716,8 +716,8 @@ cleanup:
+ 	if (retval) {
+ 		if (tty->count == 1)
+ 			info->port.tty = NULL; /* tty layer will release tty struct */
+-		if(info->port.count)
+-			info->port.count--;
++		if(atomic_read(&info->port.count))
++			atomic_dec(&info->port.count);
+ 	}
+ 
+ 	DBGINFO(("%s open rc=%d\n", info->device_name, retval));
+@@ -730,7 +730,7 @@ static void close(struct tty_struct *tty
+ 
+ 	if (sanity_check(info, tty->name, "close"))
+ 		return;
+-	DBGINFO(("%s close entry, count=%d\n", info->device_name, info->port.count));
++	DBGINFO(("%s close entry, count=%d\n", info->device_name, atomic_read(&info->port.count)));
+ 
+ 	if (tty_port_close_start(&info->port, tty, filp) == 0)
+ 		goto cleanup;
+@@ -747,7 +747,7 @@ static void close(struct tty_struct *tty
+ 	tty_port_close_end(&info->port, tty);
+ 	info->port.tty = NULL;
+ cleanup:
+-	DBGINFO(("%s close exit, count=%d\n", tty->driver->name, info->port.count));
++	DBGINFO(("%s close exit, count=%d\n", tty->driver->name, atomic_read(&info->port.count)));
+ }
+ 
+ static void hangup(struct tty_struct *tty)
+@@ -765,7 +765,7 @@ static void hangup(struct tty_struct *tt
+ 	shutdown(info);
+ 
+ 	spin_lock_irqsave(&info->port.lock, flags);
+-	info->port.count = 0;
++	atomic_set(&info->port.count, 0);
+ 	info->port.flags &= ~ASYNC_NORMAL_ACTIVE;
+ 	info->port.tty = NULL;
+ 	spin_unlock_irqrestore(&info->port.lock, flags);
+@@ -1450,7 +1450,7 @@ static int hdlcdev_attach(struct net_dev
+ 	unsigned short new_crctype;
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	DBGINFO(("%s hdlcdev_attach\n", info->device_name));
+@@ -1545,7 +1545,7 @@ static int hdlcdev_open(struct net_devic
+ 
+ 	/* arbitrate between network and tty opens */
+ 	spin_lock_irqsave(&info->netlock, flags);
+-	if (info->port.count != 0 || info->netcount != 0) {
++	if (atomic_read(&info->port.count) != 0 || info->netcount != 0) {
+ 		DBGINFO(("%s hdlc_open busy\n", dev->name));
+ 		spin_unlock_irqrestore(&info->netlock, flags);
+ 		return -EBUSY;
+@@ -1630,7 +1630,7 @@ static int hdlcdev_ioctl(struct net_devi
+ 	DBGINFO(("%s hdlcdev_ioctl\n", dev->name));
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	if (cmd != SIOCWANDEV)
+@@ -2419,7 +2419,7 @@ static irqreturn_t slgt_interrupt(int du
+ 		if (port == NULL)
+ 			continue;
+ 		spin_lock(&port->lock);
+-		if ((port->port.count || port->netcount) &&
++		if ((atomic_read(&port->port.count) || port->netcount) &&
+ 		    port->pending_bh && !port->bh_running &&
+ 		    !port->bh_requested) {
+ 			DBGISR(("%s bh queued\n", port->device_name));
+@@ -3308,7 +3308,7 @@ static int block_til_ready(struct tty_st
+ 	spin_lock_irqsave(&info->lock, flags);
+ 	if (!tty_hung_up_p(filp)) {
+ 		extra_count = true;
+-		port->count--;
++		atomic_dec(&port->count);
+ 	}
+ 	spin_unlock_irqrestore(&info->lock, flags);
+ 	port->blocked_open++;
+@@ -3345,7 +3345,7 @@ static int block_til_ready(struct tty_st
+ 	remove_wait_queue(&port->open_wait, &wait);
+ 
+ 	if (extra_count)
+-		port->count++;
++		atomic_inc(&port->count);
+ 	port->blocked_open--;
+ 
+ 	if (!retval)
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/synclinkmp.c linux-3.5-pax/drivers/tty/synclinkmp.c
+--- linux-3.5/drivers/tty/synclinkmp.c	2012-05-21 11:33:29.987929426 +0200
++++ linux-3.5-pax/drivers/tty/synclinkmp.c	2012-07-31 23:10:41.406440351 +0200
+@@ -742,7 +742,7 @@ static int open(struct tty_struct *tty,
+ 
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):%s open(), old ref count = %d\n",
+-			 __FILE__,__LINE__,tty->driver->name, info->port.count);
++			 __FILE__,__LINE__,tty->driver->name, atomic_read(&info->port.count));
+ 
+ 	/* If port is closing, signal caller to try again */
+ 	if (tty_hung_up_p(filp) || info->port.flags & ASYNC_CLOSING){
+@@ -761,10 +761,10 @@ static int open(struct tty_struct *tty,
+ 		spin_unlock_irqrestore(&info->netlock, flags);
+ 		goto cleanup;
+ 	}
+-	info->port.count++;
++	atomic_inc(&info->port.count);
+ 	spin_unlock_irqrestore(&info->netlock, flags);
+ 
+-	if (info->port.count == 1) {
++	if (atomic_read(&info->port.count) == 1) {
+ 		/* 1st open on this device, init hardware */
+ 		retval = startup(info);
+ 		if (retval < 0)
+@@ -788,8 +788,8 @@ cleanup:
+ 	if (retval) {
+ 		if (tty->count == 1)
+ 			info->port.tty = NULL; /* tty layer will release tty struct */
+-		if(info->port.count)
+-			info->port.count--;
++		if(atomic_read(&info->port.count))
++			atomic_dec(&info->port.count);
+ 	}
+ 
+ 	return retval;
+@@ -807,7 +807,7 @@ static void close(struct tty_struct *tty
+ 
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):%s close() entry, count=%d\n",
+-			 __FILE__,__LINE__, info->device_name, info->port.count);
++			 __FILE__,__LINE__, info->device_name, atomic_read(&info->port.count));
+ 
+ 	if (tty_port_close_start(&info->port, tty, filp) == 0)
+ 		goto cleanup;
+@@ -826,7 +826,7 @@ static void close(struct tty_struct *tty
+ cleanup:
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):%s close() exit, count=%d\n", __FILE__,__LINE__,
+-			tty->driver->name, info->port.count);
++			tty->driver->name, atomic_read(&info->port.count));
+ }
+ 
+ /* Called by tty_hangup() when a hangup is signaled.
+@@ -849,7 +849,7 @@ static void hangup(struct tty_struct *tt
+ 	shutdown(info);
+ 
+ 	spin_lock_irqsave(&info->port.lock, flags);
+-	info->port.count = 0;
++	atomic_set(&info->port.count, 0);
+ 	info->port.flags &= ~ASYNC_NORMAL_ACTIVE;
+ 	info->port.tty = NULL;
+ 	spin_unlock_irqrestore(&info->port.lock, flags);
+@@ -1557,7 +1557,7 @@ static int hdlcdev_attach(struct net_dev
+ 	unsigned short new_crctype;
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	switch (encoding)
+@@ -1652,7 +1652,7 @@ static int hdlcdev_open(struct net_devic
+ 
+ 	/* arbitrate between network and tty opens */
+ 	spin_lock_irqsave(&info->netlock, flags);
+-	if (info->port.count != 0 || info->netcount != 0) {
++	if (atomic_read(&info->port.count) != 0 || info->netcount != 0) {
+ 		printk(KERN_WARNING "%s: hdlc_open returning busy\n", dev->name);
+ 		spin_unlock_irqrestore(&info->netlock, flags);
+ 		return -EBUSY;
+@@ -1738,7 +1738,7 @@ static int hdlcdev_ioctl(struct net_devi
+ 		printk("%s:hdlcdev_ioctl(%s)\n",__FILE__,dev->name);
+ 
+ 	/* return error if TTY interface open */
+-	if (info->port.count)
++	if (atomic_read(&info->port.count))
+ 		return -EBUSY;
+ 
+ 	if (cmd != SIOCWANDEV)
+@@ -2623,7 +2623,7 @@ static irqreturn_t synclinkmp_interrupt(
+ 		 * do not request bottom half processing if the
+ 		 * device is not open in a normal mode.
+ 		 */
+-		if ( port && (port->port.count || port->netcount) &&
++		if ( port && (atomic_read(&port->port.count) || port->netcount) &&
+ 		     port->pending_bh && !port->bh_running &&
+ 		     !port->bh_requested ) {
+ 			if ( debug_level >= DEBUG_LEVEL_ISR )
+@@ -3321,12 +3321,12 @@ static int block_til_ready(struct tty_st
+ 
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):%s block_til_ready() before block, count=%d\n",
+-			 __FILE__,__LINE__, tty->driver->name, port->count );
++			 __FILE__,__LINE__, tty->driver->name, atomic_read(&port->count));
+ 
+ 	spin_lock_irqsave(&info->lock, flags);
+ 	if (!tty_hung_up_p(filp)) {
+ 		extra_count = true;
+-		port->count--;
++		atomic_dec(&port->count);
+ 	}
+ 	spin_unlock_irqrestore(&info->lock, flags);
+ 	port->blocked_open++;
+@@ -3355,7 +3355,7 @@ static int block_til_ready(struct tty_st
+ 
+ 		if (debug_level >= DEBUG_LEVEL_INFO)
+ 			printk("%s(%d):%s block_til_ready() count=%d\n",
+-				 __FILE__,__LINE__, tty->driver->name, port->count );
++				 __FILE__,__LINE__, tty->driver->name, atomic_read(&port->count));
+ 
+ 		tty_unlock();
+ 		schedule();
+@@ -3366,12 +3366,12 @@ static int block_til_ready(struct tty_st
+ 	remove_wait_queue(&port->open_wait, &wait);
+ 
+ 	if (extra_count)
+-		port->count++;
++		atomic_inc(&port->count);
+ 	port->blocked_open--;
+ 
+ 	if (debug_level >= DEBUG_LEVEL_INFO)
+ 		printk("%s(%d):%s block_til_ready() after, count=%d\n",
+-			 __FILE__,__LINE__, tty->driver->name, port->count );
++			 __FILE__,__LINE__, tty->driver->name, atomic_read(&port->count));
+ 
+ 	if (!retval)
+ 		port->flags |= ASYNC_NORMAL_ACTIVE;
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/tty/tty_io.c linux-3.5-pax/drivers/tty/tty_io.c
 --- linux-3.5/drivers/tty/tty_io.c	2012-07-23 00:22:27.558342717 +0200
 +++ linux-3.5-pax/drivers/tty/tty_io.c	2012-07-23 00:23:11.422344006 +0200
@@ -35235,6 +35953,90 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/usb/early/ehc
  
  	return 0;
  }
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/usb/gadget/u_serial.c linux-3.5-pax/drivers/usb/gadget/u_serial.c
+--- linux-3.5/drivers/usb/gadget/u_serial.c	2012-07-23 00:22:27.806342728 +0200
++++ linux-3.5-pax/drivers/usb/gadget/u_serial.c	2012-07-31 23:27:11.638470424 +0200
+@@ -731,9 +731,9 @@ static int gs_open(struct tty_struct *tt
+ 			spin_lock_irq(&port->port_lock);
+ 
+ 			/* already open?  Great. */
+-			if (port->port.count) {
++			if (atomic_read(&port->port.count)) {
+ 				status = 0;
+-				port->port.count++;
++				atomic_inc(&port->port.count);
+ 
+ 			/* currently opening/closing? wait ... */
+ 			} else if (port->openclose) {
+@@ -792,7 +792,7 @@ static int gs_open(struct tty_struct *tt
+ 	tty->driver_data = port;
+ 	port->port.tty = tty;
+ 
+-	port->port.count = 1;
++	atomic_set(&port->port.count, 1);
+ 	port->openclose = false;
+ 
+ 	/* if connected, start the I/O stream */
+@@ -834,11 +834,11 @@ static void gs_close(struct tty_struct *
+ 
+ 	spin_lock_irq(&port->port_lock);
+ 
+-	if (port->port.count != 1) {
+-		if (port->port.count == 0)
++	if (atomic_read(&port->port.count) != 1) {
++		if (atomic_read(&port->port.count) == 0)
+ 			WARN_ON(1);
+ 		else
+-			--port->port.count;
++			atomic_dec(&port->port.count);
+ 		goto exit;
+ 	}
+ 
+@@ -848,7 +848,7 @@ static void gs_close(struct tty_struct *
+ 	 * and sleep if necessary
+ 	 */
+ 	port->openclose = true;
+-	port->port.count = 0;
++	atomic_set(&port->port.count, 0);
+ 
+ 	gser = port->port_usb;
+ 	if (gser && gser->disconnect)
+@@ -1152,7 +1152,7 @@ static int gs_closed(struct gs_port *por
+ 	int cond;
+ 
+ 	spin_lock_irq(&port->port_lock);
+-	cond = (port->port.count == 0) && !port->openclose;
++	cond = (atomic_read(&port->port.count) == 0) && !port->openclose;
+ 	spin_unlock_irq(&port->port_lock);
+ 	return cond;
+ }
+@@ -1265,7 +1265,7 @@ int gserial_connect(struct gserial *gser
+ 	/* if it's already open, start I/O ... and notify the serial
+ 	 * protocol about open/close status (connect/disconnect).
+ 	 */
+-	if (port->port.count) {
++	if (atomic_read(&port->port.count)) {
+ 		pr_debug("gserial_connect: start ttyGS%d\n", port->port_num);
+ 		gs_start_io(port);
+ 		if (gser->connect)
+@@ -1312,7 +1312,7 @@ void gserial_disconnect(struct gserial *
+ 
+ 	port->port_usb = NULL;
+ 	gser->ioport = NULL;
+-	if (port->port.count > 0 || port->openclose) {
++	if (atomic_read(&port->port.count) > 0 || port->openclose) {
+ 		wake_up_interruptible(&port->drain_wait);
+ 		if (port->port.tty)
+ 			tty_hangup(port->port.tty);
+@@ -1328,7 +1328,7 @@ void gserial_disconnect(struct gserial *
+ 
+ 	/* finally, free any unused/unusable I/O buffers */
+ 	spin_lock_irqsave(&port->port_lock, flags);
+-	if (port->port.count == 0 && !port->openclose)
++	if (atomic_read(&port->port.count) == 0 && !port->openclose)
+ 		gs_buf_free(&port->port_write_buf);
+ 	gs_free_requests(gser->out, &port->read_pool, NULL);
+ 	gs_free_requests(gser->out, &port->read_queue, NULL);
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/usb/wusbcore/wa-hc.h linux-3.5-pax/drivers/usb/wusbcore/wa-hc.h
 --- linux-3.5/drivers/usb/wusbcore/wa-hc.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.5-pax/drivers/usb/wusbcore/wa-hc.h	2012-07-23 00:23:11.430344006 +0200
@@ -43887,20 +44689,13 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/media/saa7146
  
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/media/v4l2-dev.h linux-3.5-pax/include/media/v4l2-dev.h
 --- linux-3.5/include/media/v4l2-dev.h	2012-07-23 00:22:31.034342818 +0200
-+++ linux-3.5-pax/include/media/v4l2-dev.h	2012-07-23 00:23:11.606344011 +0200
-@@ -59,7 +59,7 @@ int v4l2_prio_check(struct v4l2_prio_sta
- 
- 
- struct v4l2_file_operations {
--	struct module *owner;
-+	struct module * const owner;
- 	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
- 	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
- 	unsigned int (*poll) (struct file *, struct poll_table_struct *);
-@@ -74,6 +74,7 @@ struct v4l2_file_operations {
++++ linux-3.5-pax/include/media/v4l2-dev.h	2012-07-31 22:10:56.118335060 +0200
+@@ -73,7 +73,8 @@ struct v4l2_file_operations {
+ 	int (*mmap) (struct file *, struct vm_area_struct *);
  	int (*open) (struct file *);
  	int (*release) (struct file *);
- };
+-};
++} __do_const;
 +typedef struct v4l2_file_operations __no_const v4l2_file_operations_no_const;
  
  /*
@@ -44231,13 +45026,14 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/scsi/scsi_dev
  				sdev_dev;
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/scsi/scsi_transport_fc.h linux-3.5-pax/include/scsi/scsi_transport_fc.h
 --- linux-3.5/include/scsi/scsi_transport_fc.h	2012-05-21 11:33:39.123929922 +0200
-+++ linux-3.5-pax/include/scsi/scsi_transport_fc.h	2012-07-23 00:23:11.622344012 +0200
-@@ -739,7 +739,7 @@ struct fc_function_template {
++++ linux-3.5-pax/include/scsi/scsi_transport_fc.h	2012-07-31 22:42:25.362390545 +0200
+@@ -739,7 +739,8 @@ struct fc_function_template {
  	unsigned long	show_host_system_hostname:1;
  
  	unsigned long	disable_target_scan:1;
 -};
 +} __do_const;
++typedef struct fc_function_template __no_const fc_function_template_no_const;
  
  
  /**
@@ -44321,6 +45117,18 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/sound/soc.h l
  
  	unsigned int dev_registered:1;
  
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/sound/tea575x-tuner.h linux-3.5-pax/include/sound/tea575x-tuner.h
+--- linux-3.5/include/sound/tea575x-tuner.h	2012-07-23 00:22:31.154342822 +0200
++++ linux-3.5-pax/include/sound/tea575x-tuner.h	2012-07-31 21:40:58.110281796 +0200
+@@ -44,7 +44,7 @@ struct snd_tea575x_ops {
+ 
+ struct snd_tea575x {
+ 	struct v4l2_device *v4l2_dev;
+-	struct v4l2_file_operations fops;
++	v4l2_file_operations_no_const fops;
+ 	struct video_device vd;		/* video device */
+ 	int radio_nr;			/* radio_nr */
+ 	bool tea5759;			/* 5759 chip is present */
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/sound/ymfpci.h linux-3.5-pax/include/sound/ymfpci.h
 --- linux-3.5/include/sound/ymfpci.h	2012-05-21 11:33:39.203929926 +0200
 +++ linux-3.5-pax/include/sound/ymfpci.h	2012-07-23 00:23:11.626344012 +0200
@@ -52549,7 +53357,16 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/net/atm/resources.c l
  }
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/net/batman-adv/bat_iv_ogm.c linux-3.5-pax/net/batman-adv/bat_iv_ogm.c
 --- linux-3.5/net/batman-adv/bat_iv_ogm.c	2012-07-23 00:22:31.890342843 +0200
-+++ linux-3.5-pax/net/batman-adv/bat_iv_ogm.c	2012-07-23 00:23:11.762344016 +0200
++++ linux-3.5-pax/net/batman-adv/bat_iv_ogm.c	2012-07-31 22:12:31.814337526 +0200
+@@ -63,7 +63,7 @@ static int bat_iv_ogm_iface_enable(struc
+ 
+ 	/* randomize initial seqno to avoid collision */
+ 	get_random_bytes(&random_seqno, sizeof(random_seqno));
+-	atomic_set(&hard_iface->seqno, random_seqno);
++	atomic_set_unchecked(&hard_iface->seqno, random_seqno);
+ 
+ 	hard_iface->packet_len = BATMAN_OGM_HLEN;
+ 	hard_iface->packet_buff = kmalloc(hard_iface->packet_len, GFP_ATOMIC);
 @@ -572,7 +572,7 @@ static void bat_iv_ogm_schedule(struct h
  
  	/* change sequence number to network order */
