@@ -1,4 +1,4 @@
-- fixed allmodconfig breakage
+- fixed module exception table sorting under KERNEXEC
 
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/alpha/include/asm/atomic.h linux-3.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.5/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -21153,7 +21153,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/Makefile lin
 +	$(if $(LDFLAGS_BUILD_ID),,$(error $(OLD_LD)))
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/x86/mm/extable.c linux-3.5-pax/arch/x86/mm/extable.c
 --- linux-3.5/arch/x86/mm/extable.c	2012-07-23 00:22:19.398342476 +0200
-+++ linux-3.5-pax/arch/x86/mm/extable.c	2012-07-30 02:25:32.793736222 +0200
++++ linux-3.5-pax/arch/x86/mm/extable.c	2012-08-02 12:23:04.992208546 +0200
 @@ -6,12 +6,25 @@
  static inline unsigned long
  ex_insn_addr(const struct exception_table_entry *x)
@@ -36037,6 +36037,36 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/usb/gadget/u_
  		gs_buf_free(&port->port_write_buf);
  	gs_free_requests(gser->out, &port->read_pool, NULL);
  	gs_free_requests(gser->out, &port->read_queue, NULL);
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/usb/serial/console.c linux-3.5-pax/drivers/usb/serial/console.c
+--- linux-3.5/drivers/usb/serial/console.c	2012-07-23 00:22:27.890342726 +0200
++++ linux-3.5-pax/drivers/usb/serial/console.c	2012-07-31 23:59:20.218527921 +0200
+@@ -127,7 +127,7 @@ static int usb_console_setup(struct cons
+ 
+ 	info->port = port;
+ 
+-	++port->port.count;
++	atomic_inc(&port->port.count);
+ 	if (!test_bit(ASYNCB_INITIALIZED, &port->port.flags)) {
+ 		if (serial->type->set_termios) {
+ 			/*
+@@ -177,7 +177,7 @@ static int usb_console_setup(struct cons
+ 	}
+ 	/* Now that any required fake tty operations are completed restore
+ 	 * the tty port count */
+-	--port->port.count;
++	atomic_dec(&port->port.count);
+ 	/* The console is special in terms of closing the device so
+ 	 * indicate this port is now acting as a system console. */
+ 	port->port.console = 1;
+@@ -190,7 +190,7 @@ static int usb_console_setup(struct cons
+  free_tty:
+ 	kfree(tty);
+  reset_open_count:
+-	port->port.count = 0;
++	atomic_set(&port->port.count, 0);
+ 	usb_autopm_put_interface(serial->interface);
+  error_get_interface:
+ 	usb_serial_put(serial);
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/drivers/usb/wusbcore/wa-hc.h linux-3.5-pax/drivers/usb/wusbcore/wa-hc.h
 --- linux-3.5/drivers/usb/wusbcore/wa-hc.h	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.5-pax/drivers/usb/wusbcore/wa-hc.h	2012-07-23 00:23:11.430344006 +0200
@@ -46751,7 +46781,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/lockdep_proc.c
  	if (!name) {
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux-3.5-pax/kernel/module.c
 --- linux-3.5/kernel/module.c	2012-07-23 00:22:31.270342825 +0200
-+++ linux-3.5-pax/kernel/module.c	2012-07-23 00:23:11.658344013 +0200
++++ linux-3.5-pax/kernel/module.c	2012-08-02 12:20:54.404204944 +0200
 @@ -114,7 +114,8 @@ static BLOCKING_NOTIFIER_HEAD(module_not
  
  /* Bounds of module allocation, for speeding __module_address.
@@ -47247,7 +47277,17 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux
  }
  
  int __weak module_finalize(const Elf_Ehdr *hdr,
-@@ -3026,16 +3098,16 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -2848,7 +2920,9 @@ int __weak module_finalize(const Elf_Ehd
+ static int post_relocation(struct module *mod, const struct load_info *info)
+ {
+ 	/* Sort exception table now relocations are done. */
++	pax_open_kernel();
+ 	sort_extable(mod->extable, mod->extable + mod->num_exentries);
++	pax_close_kernel();
+ 
+ 	/* Copy relocated percpu area over. */
+ 	percpu_modcopy(mod, (void *)info->sechdrs[info->index.pcpu].sh_addr,
+@@ -3026,16 +3100,16 @@ SYSCALL_DEFINE3(init_module, void __user
  			MODULE_STATE_COMING, mod);
  
  	/* Set RO and NX regions for core */
@@ -47272,7 +47312,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux
  
  	do_mod_ctors(mod);
  	/* Start the module */
-@@ -3081,11 +3153,12 @@ SYSCALL_DEFINE3(init_module, void __user
+@@ -3081,11 +3155,12 @@ SYSCALL_DEFINE3(init_module, void __user
  	mod->strtab = mod->core_strtab;
  #endif
  	unset_module_init_ro_nx(mod);
@@ -47290,7 +47330,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux
  	mutex_unlock(&module_mutex);
  
  	return 0;
-@@ -3116,10 +3189,16 @@ static const char *get_ksymbol(struct mo
+@@ -3116,10 +3191,16 @@ static const char *get_ksymbol(struct mo
  	unsigned long nextval;
  
  	/* At worse, next value is at end of module */
@@ -47310,7 +47350,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux
  
  	/* Scan for closest preceding symbol, and next symbol. (ELF
  	   starts real symbols at 1). */
-@@ -3354,7 +3433,7 @@ static int m_show(struct seq_file *m, vo
+@@ -3354,7 +3435,7 @@ static int m_show(struct seq_file *m, vo
  	char buf[8];
  
  	seq_printf(m, "%s %u",
@@ -47319,7 +47359,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux
  	print_unload_info(m, mod);
  
  	/* Informative for users. */
-@@ -3363,7 +3442,7 @@ static int m_show(struct seq_file *m, vo
+@@ -3363,7 +3444,7 @@ static int m_show(struct seq_file *m, vo
  		   mod->state == MODULE_STATE_COMING ? "Loading":
  		   "Live");
  	/* Used by oprofile and other similar tools. */
@@ -47328,7 +47368,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux
  
  	/* Taints info */
  	if (mod->taints)
-@@ -3458,12 +3537,12 @@ struct module *__module_address(unsigned
+@@ -3458,12 +3539,12 @@ struct module *__module_address(unsigned
  {
  	struct module *mod;
  
@@ -47344,7 +47384,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/kernel/module.c linux
  			return mod;
  	return NULL;
  }
-@@ -3497,11 +3576,20 @@ bool is_module_text_address(unsigned lon
+@@ -3497,11 +3578,20 @@ bool is_module_text_address(unsigned lon
   */
  struct module *__module_text_address(unsigned long addr)
  {
@@ -48960,7 +49000,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/lib/dma-debug.c linux
  }
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/lib/extable.c linux-3.5-pax/lib/extable.c
 --- linux-3.5/lib/extable.c	2011-07-22 04:17:23.000000000 +0200
-+++ linux-3.5-pax/lib/extable.c	2012-07-23 00:23:11.702344014 +0200
++++ linux-3.5-pax/lib/extable.c	2012-08-02 12:22:53.644208781 +0200
 @@ -13,6 +13,7 @@
  #include <linux/init.h>
  #include <linux/sort.h>
@@ -48969,17 +49009,6 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/lib/extable.c linux-3
  
  #ifndef ARCH_HAS_SORT_EXTABLE
  /*
-@@ -36,8 +37,10 @@ static int cmp_ex(const void *a, const v
- void sort_extable(struct exception_table_entry *start,
- 		  struct exception_table_entry *finish)
- {
-+	pax_open_kernel();
- 	sort(start, finish - start, sizeof(struct exception_table_entry),
- 	     cmp_ex, NULL);
-+	pax_close_kernel();
- }
- 
- #ifdef CONFIG_MODULES
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/lib/inflate.c linux-3.5-pax/lib/inflate.c
 --- linux-3.5/lib/inflate.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.5-pax/lib/inflate.c	2012-07-23 00:23:11.702344014 +0200
