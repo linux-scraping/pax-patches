@@ -1,4 +1,5 @@
-- fixed KERNEXEC/FTRACE incompatibility problem reported in http://forums.grsecurity.net/viewtopic.php?f=3&t=3009
+- fixed a non-constifyable ops structure, reported by Michael Tremer
+- fixed building init/ with gcc plugins
 
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/alpha/include/asm/atomic.h linux-3.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.5/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -1234,6 +1235,18 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/arm/lib/uaccess_
  {
  	/*
  	 * This test is stubbed out of the main function above to keep
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/arm/mach-kirkwood/common.c linux-3.5-pax/arch/arm/mach-kirkwood/common.c
+--- linux-3.5/arch/arm/mach-kirkwood/common.c	2012-07-23 00:22:16.054342378 +0200
++++ linux-3.5-pax/arch/arm/mach-kirkwood/common.c	2012-08-08 19:56:02.089350552 +0200
+@@ -128,7 +128,7 @@ static void clk_gate_fn_disable(struct c
+ 	clk_gate_ops.disable(hw);
+ }
+ 
+-static struct clk_ops clk_gate_fn_ops;
++static clk_ops_no_const clk_gate_fn_ops;
+ 
+ static struct clk __init *clk_register_gate_fn(struct device *dev,
+ 		const char *name,
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/arch/arm/mach-omap2/board-n8x0.c linux-3.5-pax/arch/arm/mach-omap2/board-n8x0.c
 --- linux-3.5/arch/arm/mach-omap2/board-n8x0.c	2012-07-23 00:22:16.174342381 +0200
 +++ linux-3.5-pax/arch/arm/mach-omap2/board-n8x0.c	2012-07-23 00:23:10.422345255 +0200
@@ -42428,6 +42441,17 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/linux/cleanca
  
  extern struct cleancache_ops
  	cleancache_register_ops(struct cleancache_ops *ops);
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/linux/clk-provider.h linux-3.5-pax/include/linux/clk-provider.h
+--- linux-3.5/include/linux/clk-provider.h	2012-07-23 00:22:29.538342774 +0200
++++ linux-3.5-pax/include/linux/clk-provider.h	2012-08-08 19:55:29.149351581 +0200
+@@ -110,6 +110,7 @@ struct clk_ops {
+ 				    unsigned long);
+ 	void		(*init)(struct clk_hw *hw);
+ };
++typedef struct clk_ops __no_const clk_ops_no_const;
+ 
+ /**
+  * struct clk_init_data - holds init data that's common to all clocks and is
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/include/linux/compiler-gcc4.h linux-3.5-pax/include/linux/compiler-gcc4.h
 --- linux-3.5/include/linux/compiler-gcc4.h	2012-03-19 10:39:10.852049231 +0100
 +++ linux-3.5-pax/include/linux/compiler-gcc4.h	2012-07-28 02:08:24.174795774 +0200
@@ -45740,6 +45764,19 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/init/main.c linux-3.5
  		ramdisk_execute_command = NULL;
  		prepare_namespace();
  	}
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/init/Makefile linux-3.5-pax/init/Makefile
+--- linux-3.5/init/Makefile	2012-07-23 00:22:31.190342823 +0200
++++ linux-3.5-pax/init/Makefile	2012-08-09 00:24:53.656491377 +0200
+@@ -2,6 +2,9 @@
+ # Makefile for the linux kernel.
+ #
+ 
++ccflags-y := $(GCC_PLUGINS_CFLAGS)
++asflags-y := $(GCC_PLUGINS_AFLAGS)
++
+ obj-y                          := main.o version.o mounts.o
+ ifneq ($(CONFIG_BLK_DEV_INITRD),y)
+ obj-y                          += noinitramfs.o
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/ipc/msg.c linux-3.5-pax/ipc/msg.c
 --- linux-3.5/ipc/msg.c	2011-07-22 04:17:23.000000000 +0200
 +++ linux-3.5-pax/ipc/msg.c	2012-07-23 00:23:11.634344012 +0200
@@ -49154,7 +49191,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/lib/vsprintf.c linux-
  
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/Makefile linux-3.5-pax/Makefile
 --- linux-3.5/Makefile	2012-07-23 00:22:15.406342359 +0200
-+++ linux-3.5-pax/Makefile	2012-07-28 02:08:24.186795790 +0200
++++ linux-3.5-pax/Makefile	2012-08-09 00:24:53.652491728 +0200
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -49215,7 +49252,7 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/Makefile linux-3.5-pa
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
-+export PLUGINCC CONSTIFY_PLUGIN
++export PLUGINCC GCC_PLUGINS_CFLAGS GCC_PLUGINS_AFLAGS CONSTIFY_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
 +gcc-plugins:
 +	$(Q)$(MAKE) $(build)=tools/gcc
@@ -49239,8 +49276,8 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/Makefile linux-3.5-pa
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
-+$(sort $(vmlinux-deps)): KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
-+$(sort $(vmlinux-deps)): KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
++$(filter-out $(init-y),$(vmlinux-deps)): KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++$(filter-out $(init-y),$(vmlinux-deps)): KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
  $(sort $(vmlinux-deps)): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
@@ -56112,6 +56149,18 @@ diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/scripts/gcc-plugin.sh
 +	[[ "$plugincc" =~ "$1" ]] && echo "$1"
 +	[[ "$plugincc" =~ "$2" ]] && echo "$2"
 +fi
+diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/scripts/link-vmlinux.sh linux-3.5-pax/scripts/link-vmlinux.sh
+--- linux-3.5/scripts/link-vmlinux.sh	2012-07-23 00:22:33.346342886 +0200
++++ linux-3.5-pax/scripts/link-vmlinux.sh	2012-08-09 00:24:53.656491377 +0200
+@@ -147,7 +147,7 @@ else
+ fi;
+ 
+ # final build of init/
+-${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init
++${MAKE} -f "${srctree}/scripts/Makefile.build" obj=init GCC_PLUGINS_CFLAGS="${GCC_PLUGINS_CFLAGS}" GCC_PLUGINS_AFLAGS="${GCC_PLUGINS_AFLAGS}"
+ 
+ kallsymso=""
+ kallsyms_vmlinux=""
 diff -NurpX linux-3.5-pax/Documentation/dontdiff linux-3.5/scripts/Makefile.build linux-3.5-pax/scripts/Makefile.build
 --- linux-3.5/scripts/Makefile.build	2012-05-21 11:33:42.259930092 +0200
 +++ linux-3.5-pax/scripts/Makefile.build	2012-07-23 00:23:11.870344019 +0200
