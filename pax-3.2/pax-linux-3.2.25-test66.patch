@@ -1,4 +1,8 @@
-- fixed mm.pax_flags configuration dependency
+- new size overflow plugin from Emese that hopefully fixes most of the false positives and also adds more instrumentation (e.g., type casts)
+- size overflow plugin update from Emese that fixes a false positive
+- a USERCOPY false positive fix reported by Christian Lamparter
+- fixed REFCOUNT on arm
+- fixed size overflow attr placement on alloc_vmap_area
 
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/alpha/include/asm/atomic.h linux-3.2.25-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.25/arch/alpha/include/asm/atomic.h	2012-07-04 06:44:35.000000000 +0200
@@ -281,7 +285,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/arm/include/asm/atomic.h linux-3.2.25-pax/arch/arm/include/asm/atomic.h
 --- linux-3.2.25/arch/arm/include/asm/atomic.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.25-pax/arch/arm/include/asm/atomic.h	2012-07-04 19:24:47.360062862 +0200
++++ linux-3.2.25-pax/arch/arm/include/asm/atomic.h	2012-08-12 10:44:56.717212413 +0200
 @@ -15,6 +15,10 @@
  #include <linux/types.h>
  #include <asm/system.h>
@@ -431,7 +435,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/arm/includ
 -"1:	ldrex	%0, [%3]\n"
 -"	sub	%0, %0, %4\n"
 +"1:	ldrex	%1, [%3]\n"
-+"	sub	%0, %1, %4\n"
++"	subs	%0, %1, %4\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
@@ -760,7 +764,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/arm/includ
 +	__asm__ __volatile__("@ atomic64_sub_return\n"
 +"1:	ldrexd	%1, %H1, [%3]\n"
 +"	subs	%0, %1, %4\n"
-+"	sbc	%H0, %H1, %H4\n"
++"	sbcs	%H0, %H1, %H4\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
@@ -832,7 +836,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/arm/includ
 -"	sbc	%H0, %H0, #0\n"
 +"1:	ldrexd	%1, %H1, [%3]\n"
 +"	subs	%0, %1, #1\n"
-+"	sbc	%H0, %H1, #0\n"
++"	sbcs	%H0, %H1, #0\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
@@ -865,7 +869,8 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/arm/includ
 -"	beq	2f\n"
 +"	beq	4f\n"
  "	adds	%0, %0, %6\n"
- "	adc	%H0, %H0, %H6\n"
+-"	adc	%H0, %H0, %H6\n"
++"	adcs	%H0, %H0, %H6\n"
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
@@ -15703,13 +15708,13 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/kernel
  }
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/kernel/kdebugfs.c linux-3.2.25-pax/arch/x86/kernel/kdebugfs.c
 --- linux-3.2.25/arch/x86/kernel/kdebugfs.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.25-pax/arch/x86/kernel/kdebugfs.c	2012-07-04 19:24:47.576063004 +0200
-@@ -28,6 +28,8 @@ struct setup_data_node {
++++ linux-3.2.25-pax/arch/x86/kernel/kdebugfs.c	2012-08-12 10:45:43.245212333 +0200
+@@ -27,7 +27,7 @@ struct setup_data_node {
+ 	u32 len;
  };
  
- static ssize_t setup_data_read(struct file *file, char __user *user_buf,
-+			       size_t count, loff_t *ppos) __size_overflow(3);
-+static ssize_t setup_data_read(struct file *file, char __user *user_buf,
+-static ssize_t setup_data_read(struct file *file, char __user *user_buf,
++static ssize_t __size_overflow(3) setup_data_read(struct file *file, char __user *user_buf,
  			       size_t count, loff_t *ppos)
  {
  	struct setup_data_node *node = file->private_data;
@@ -20734,7 +20739,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/th
  	CFI_ENDPROC
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/usercopy_32.c linux-3.2.25-pax/arch/x86/lib/usercopy_32.c
 --- linux-3.2.25/arch/x86/lib/usercopy_32.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.25-pax/arch/x86/lib/usercopy_32.c	2012-07-04 19:24:47.632063005 +0200
++++ linux-3.2.25-pax/arch/x86/lib/usercopy_32.c	2012-08-12 10:46:31.317212728 +0200
 @@ -43,7 +43,7 @@ do {									   \
  	__asm__ __volatile__(						   \
  		"	testl %1,%1\n"					   \
@@ -20835,7 +20840,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  		       "       addl $-64, %0\n"
  		       "       addl $64, %4\n"
  		       "       addl $64, %3\n"
-@@ -278,10 +282,119 @@ __copy_user_intel(void __user *to, const
+@@ -278,10 +282,12 @@ __copy_user_intel(void __user *to, const
  		       "       shrl  $2, %0\n"
  		       "       andl  $3, %%eax\n"
  		       "       cld\n"
@@ -20845,58 +20850,13 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  		       "37:    rep; movsb\n"
  		       "100:\n"
 +		       __COPYUSER_RESTORE_ES
-+		       ".section .fixup,\"ax\"\n"
-+		       "101:   lea 0(%%eax,%0,4),%0\n"
-+		       "       jmp 100b\n"
-+		       ".previous\n"
-+		       ".section __ex_table,\"a\"\n"
-+		       "       .align 4\n"
-+		       "       .long 1b,100b\n"
-+		       "       .long 2b,100b\n"
-+		       "       .long 3b,100b\n"
-+		       "       .long 4b,100b\n"
-+		       "       .long 5b,100b\n"
-+		       "       .long 6b,100b\n"
-+		       "       .long 7b,100b\n"
-+		       "       .long 8b,100b\n"
-+		       "       .long 9b,100b\n"
-+		       "       .long 10b,100b\n"
-+		       "       .long 11b,100b\n"
-+		       "       .long 12b,100b\n"
-+		       "       .long 13b,100b\n"
-+		       "       .long 14b,100b\n"
-+		       "       .long 15b,100b\n"
-+		       "       .long 16b,100b\n"
-+		       "       .long 17b,100b\n"
-+		       "       .long 18b,100b\n"
-+		       "       .long 19b,100b\n"
-+		       "       .long 20b,100b\n"
-+		       "       .long 21b,100b\n"
-+		       "       .long 22b,100b\n"
-+		       "       .long 23b,100b\n"
-+		       "       .long 24b,100b\n"
-+		       "       .long 25b,100b\n"
-+		       "       .long 26b,100b\n"
-+		       "       .long 27b,100b\n"
-+		       "       .long 28b,100b\n"
-+		       "       .long 29b,100b\n"
-+		       "       .long 30b,100b\n"
-+		       "       .long 31b,100b\n"
-+		       "       .long 32b,100b\n"
-+		       "       .long 33b,100b\n"
-+		       "       .long 34b,100b\n"
-+		       "       .long 35b,100b\n"
-+		       "       .long 36b,100b\n"
-+		       "       .long 37b,100b\n"
-+		       "       .long 99b,101b\n"
-+		       ".previous"
-+		       : "=&c"(size), "=&D" (d0), "=&S" (d1)
-+		       :  "1"(to), "2"(from), "0"(size)
-+		       : "eax", "edx", "memory");
-+	return size;
-+}
-+
-+static unsigned long
+ 		       ".section .fixup,\"ax\"\n"
+ 		       "101:   lea 0(%%eax,%0,4),%0\n"
+ 		       "       jmp 100b\n"
+@@ -334,46 +340,153 @@ __copy_user_intel(void __user *to, const
+ }
+ 
+ static unsigned long
 +__generic_copy_from_user_intel(void *to, const void __user *from, unsigned long size)
 +{
 +	int d0, d1;
@@ -20952,15 +20912,58 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
 +		       "36:    movl %%eax, %0\n"
 +		       "37:    rep; "__copyuser_seg" movsb\n"
 +		       "100:\n"
- 		       ".section .fixup,\"ax\"\n"
- 		       "101:   lea 0(%%eax,%0,4),%0\n"
- 		       "       jmp 100b\n"
-@@ -334,46 +447,48 @@ __copy_user_intel(void __user *to, const
- }
- 
- static unsigned long
-+__copy_user_zeroing_intel(void *to, const void __user *from, unsigned long size) __size_overflow(3);
-+static unsigned long
++		       ".section .fixup,\"ax\"\n"
++		       "101:   lea 0(%%eax,%0,4),%0\n"
++		       "       jmp 100b\n"
++		       ".previous\n"
++		       ".section __ex_table,\"a\"\n"
++		       "       .align 4\n"
++		       "       .long 1b,100b\n"
++		       "       .long 2b,100b\n"
++		       "       .long 3b,100b\n"
++		       "       .long 4b,100b\n"
++		       "       .long 5b,100b\n"
++		       "       .long 6b,100b\n"
++		       "       .long 7b,100b\n"
++		       "       .long 8b,100b\n"
++		       "       .long 9b,100b\n"
++		       "       .long 10b,100b\n"
++		       "       .long 11b,100b\n"
++		       "       .long 12b,100b\n"
++		       "       .long 13b,100b\n"
++		       "       .long 14b,100b\n"
++		       "       .long 15b,100b\n"
++		       "       .long 16b,100b\n"
++		       "       .long 17b,100b\n"
++		       "       .long 18b,100b\n"
++		       "       .long 19b,100b\n"
++		       "       .long 20b,100b\n"
++		       "       .long 21b,100b\n"
++		       "       .long 22b,100b\n"
++		       "       .long 23b,100b\n"
++		       "       .long 24b,100b\n"
++		       "       .long 25b,100b\n"
++		       "       .long 26b,100b\n"
++		       "       .long 27b,100b\n"
++		       "       .long 28b,100b\n"
++		       "       .long 29b,100b\n"
++		       "       .long 30b,100b\n"
++		       "       .long 31b,100b\n"
++		       "       .long 32b,100b\n"
++		       "       .long 33b,100b\n"
++		       "       .long 34b,100b\n"
++		       "       .long 35b,100b\n"
++		       "       .long 36b,100b\n"
++		       "       .long 37b,100b\n"
++		       "       .long 99b,101b\n"
++		       ".previous"
++		       : "=&c"(size), "=&D" (d0), "=&S" (d1)
++		       :  "1"(to), "2"(from), "0"(size)
++		       : "eax", "edx", "memory");
++	return size;
++}
++
++static unsigned long __size_overflow(3)
  __copy_user_zeroing_intel(void *to, const void __user *from, unsigned long size)
  {
  	int d0, d1;
@@ -21022,7 +21025,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  		       "        movl %%eax, 56(%3)\n"
  		       "        movl %%edx, 60(%3)\n"
  		       "        addl $-64, %0\n"
-@@ -385,9 +500,9 @@ __copy_user_zeroing_intel(void *to, cons
+@@ -385,9 +498,9 @@ __copy_user_zeroing_intel(void *to, cons
  		       "        shrl  $2, %0\n"
  		       "        andl $3, %%eax\n"
  		       "        cld\n"
@@ -21034,12 +21037,12 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  		       "8:\n"
  		       ".section .fixup,\"ax\"\n"
  		       "9:      lea 0(%%eax,%0,4),%0\n"
-@@ -434,47 +549,49 @@ __copy_user_zeroing_intel(void *to, cons
+@@ -433,48 +546,48 @@ __copy_user_zeroing_intel(void *to, cons
+  * hyoshiok@miraclelinux.com
   */
  
- static unsigned long __copy_user_zeroing_intel_nocache(void *to,
-+				const void __user *from, unsigned long size) __size_overflow(3);
-+static unsigned long __copy_user_zeroing_intel_nocache(void *to,
+-static unsigned long __copy_user_zeroing_intel_nocache(void *to,
++static unsigned long __size_overflow(3) __copy_user_zeroing_intel_nocache(void *to,
  				const void __user *from, unsigned long size)
  {
  	int d0, d1;
@@ -21102,7 +21105,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  	       "        movnti %%eax, 56(%3)\n"
  	       "        movnti %%edx, 60(%3)\n"
  	       "        addl $-64, %0\n"
-@@ -487,9 +604,9 @@ static unsigned long __copy_user_zeroing
+@@ -487,9 +600,9 @@ static unsigned long __copy_user_zeroing
  	       "        shrl  $2, %0\n"
  	       "        andl $3, %%eax\n"
  	       "        cld\n"
@@ -21114,12 +21117,12 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  	       "8:\n"
  	       ".section .fixup,\"ax\"\n"
  	       "9:      lea 0(%%eax,%0,4),%0\n"
-@@ -531,47 +648,49 @@ static unsigned long __copy_user_zeroing
+@@ -530,48 +643,48 @@ static unsigned long __copy_user_zeroing
+ 	return size;
  }
  
- static unsigned long __copy_user_intel_nocache(void *to,
-+				const void __user *from, unsigned long size) __size_overflow(3);
-+static unsigned long __copy_user_intel_nocache(void *to,
+-static unsigned long __copy_user_intel_nocache(void *to,
++static unsigned long __size_overflow(3) __copy_user_intel_nocache(void *to,
  				const void __user *from, unsigned long size)
  {
  	int d0, d1;
@@ -21182,7 +21185,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  	       "        movnti %%eax, 56(%3)\n"
  	       "        movnti %%edx, 60(%3)\n"
  	       "        addl $-64, %0\n"
-@@ -584,9 +703,9 @@ static unsigned long __copy_user_intel_n
+@@ -584,9 +697,9 @@ static unsigned long __copy_user_intel_n
  	       "        shrl  $2, %0\n"
  	       "        andl $3, %%eax\n"
  	       "        cld\n"
@@ -21194,7 +21197,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  	       "8:\n"
  	       ".section .fixup,\"ax\"\n"
  	       "9:      lea 0(%%eax,%0,4),%0\n"
-@@ -629,32 +748,36 @@ static unsigned long __copy_user_intel_n
+@@ -629,32 +742,36 @@ static unsigned long __copy_user_intel_n
   */
  unsigned long __copy_user_zeroing_intel(void *to, const void __user *from,
  					unsigned long size);
@@ -21236,7 +21239,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  		".section .fixup,\"ax\"\n"				\
  		"5:	addl %3,%0\n"					\
  		"	jmp 2b\n"					\
-@@ -682,14 +805,14 @@ do {									\
+@@ -682,14 +799,14 @@ do {									\
  		"	negl %0\n"					\
  		"	andl $7,%0\n"					\
  		"	subl %0,%3\n"					\
@@ -21254,7 +21257,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  		"2:\n"							\
  		".section .fixup,\"ax\"\n"				\
  		"5:	addl %3,%0\n"					\
-@@ -775,9 +898,9 @@ survive:
+@@ -775,9 +892,9 @@ survive:
  	}
  #endif
  	if (movsl_is_ok(to, from, n))
@@ -21266,7 +21269,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  	return n;
  }
  EXPORT_SYMBOL(__copy_to_user_ll);
-@@ -797,10 +920,9 @@ unsigned long __copy_from_user_ll_nozero
+@@ -797,10 +914,9 @@ unsigned long __copy_from_user_ll_nozero
  					 unsigned long n)
  {
  	if (movsl_is_ok(to, from, n))
@@ -21279,7 +21282,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/arch/x86/lib/us
  	return n;
  }
  EXPORT_SYMBOL(__copy_from_user_ll_nozero);
-@@ -827,65 +949,50 @@ unsigned long __copy_from_user_ll_nocach
+@@ -827,65 +943,50 @@ unsigned long __copy_from_user_ll_nocach
  	if (n > 64 && cpu_has_xmm2)
  		n = __copy_user_intel_nocache(to, from, n);
  	else
@@ -44366,35 +44369,28 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/include/linux/s
  			_RET_IP_)
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/include/linux/slob_def.h linux-3.2.25-pax/include/linux/slob_def.h
 --- linux-3.2.25/include/linux/slob_def.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.25-pax/include/linux/slob_def.h	2012-07-04 19:24:48.796063008 +0200
-@@ -9,8 +9,9 @@ static __always_inline void *kmem_cache_
++++ linux-3.2.25-pax/include/linux/slob_def.h	2012-08-12 10:48:29.885215027 +0200
+@@ -9,7 +9,7 @@ static __always_inline void *kmem_cache_
  	return kmem_cache_alloc_node(cachep, flags, -1);
  }
  
 -void *__kmalloc_node(size_t size, gfp_t flags, int node);
 +void *__kmalloc_node(size_t size, gfp_t flags, int node) __size_overflow(1);
  
-+static __always_inline void *kmalloc_node(size_t size, gfp_t flags, int node) __size_overflow(1);
  static __always_inline void *kmalloc_node(size_t size, gfp_t flags, int node)
  {
- 	return __kmalloc_node(size, flags, node);
-@@ -24,11 +25,13 @@ static __always_inline void *kmalloc_nod
-  * kmalloc is the normal method of allocating memory
-  * in the kernel.
-  */
-+static __always_inline void *kmalloc(size_t size, gfp_t flags) __size_overflow(1);
- static __always_inline void *kmalloc(size_t size, gfp_t flags)
- {
+@@ -29,7 +29,7 @@ static __always_inline void *kmalloc(siz
  	return __kmalloc_node(size, flags, -1);
  }
  
-+static __always_inline void *__kmalloc(size_t size, gfp_t flags) __size_overflow(1);
- static __always_inline void *__kmalloc(size_t size, gfp_t flags)
+-static __always_inline void *__kmalloc(size_t size, gfp_t flags)
++static __always_inline __size_overflow(1) void *__kmalloc(size_t size, gfp_t flags)
  {
  	return kmalloc(size, flags);
+ }
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/include/linux/slub_def.h linux-3.2.25-pax/include/linux/slub_def.h
 --- linux-3.2.25/include/linux/slub_def.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.25-pax/include/linux/slub_def.h	2012-07-04 19:24:48.796063008 +0200
++++ linux-3.2.25-pax/include/linux/slub_def.h	2012-08-12 10:50:32.941213844 +0200
 @@ -89,7 +89,7 @@ struct kmem_cache {
  	struct kmem_cache_order_objects max;
  	struct kmem_cache_order_objects min;
@@ -44404,41 +44400,33 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/include/linux/s
  	void (*ctor)(void *);
  	int inuse;		/* Offset to metadata */
  	int align;		/* Alignment */
-@@ -150,6 +150,7 @@ extern struct kmem_cache *kmalloc_caches
+@@ -150,7 +150,7 @@ extern struct kmem_cache *kmalloc_caches
   * Sorry that the following has to be that ugly but some versions of GCC
   * have trouble with constant propagation and loops.
   */
-+static __always_inline int kmalloc_index(size_t size) __size_overflow(1);
- static __always_inline int kmalloc_index(size_t size)
+-static __always_inline int kmalloc_index(size_t size)
++static __always_inline __size_overflow(1) int kmalloc_index(size_t size)
  {
  	if (!size)
-@@ -204,6 +205,7 @@ static __always_inline int kmalloc_index
-  * This ought to end up with a global pointer to the right cache
-  * in kmalloc_caches.
-  */
-+static __always_inline struct kmem_cache *kmalloc_slab(size_t size) __size_overflow(1);
- static __always_inline struct kmem_cache *kmalloc_slab(size_t size)
- {
- 	int index = kmalloc_index(size);
-@@ -215,9 +217,11 @@ static __always_inline struct kmem_cache
+ 		return 0;
+@@ -215,9 +215,9 @@ static __always_inline struct kmem_cache
  }
  
  void *kmem_cache_alloc(struct kmem_cache *, gfp_t);
 -void *__kmalloc(size_t size, gfp_t flags);
 +void *__kmalloc(size_t size, gfp_t flags) __alloc_size(1) __size_overflow(1);
  
- static __always_inline void *
-+kmalloc_order(size_t size, gfp_t flags, unsigned int order) __size_overflow(1);
-+static __always_inline void *
+-static __always_inline void *
++static __always_inline __size_overflow(1) void *
  kmalloc_order(size_t size, gfp_t flags, unsigned int order)
  {
  	void *ret = (void *) __get_free_pages(flags | __GFP_COMP, order);
-@@ -256,12 +260,14 @@ kmalloc_order_trace(size_t size, gfp_t f
+@@ -256,12 +256,13 @@ kmalloc_order_trace(size_t size, gfp_t f
  }
  #endif
  
-+static __always_inline void *kmalloc_large(size_t size, gfp_t flags) __size_overflow(1);
- static __always_inline void *kmalloc_large(size_t size, gfp_t flags)
+-static __always_inline void *kmalloc_large(size_t size, gfp_t flags)
++static __always_inline __size_overflow(1) void *kmalloc_large(size_t size, gfp_t flags)
  {
  	unsigned int order = get_order(size);
  	return kmalloc_order_trace(size, flags, order);
@@ -44448,7 +44436,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/include/linux/s
  static __always_inline void *kmalloc(size_t size, gfp_t flags)
  {
  	if (__builtin_constant_p(size)) {
-@@ -281,7 +287,7 @@ static __always_inline void *kmalloc(siz
+@@ -281,7 +282,7 @@ static __always_inline void *kmalloc(siz
  }
  
  #ifdef CONFIG_NUMA
@@ -44457,7 +44445,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/include/linux/s
  void *kmem_cache_alloc_node(struct kmem_cache *, gfp_t flags, int node);
  
  #ifdef CONFIG_TRACING
-@@ -298,6 +304,7 @@ kmem_cache_alloc_node_trace(struct kmem_
+@@ -298,6 +299,7 @@ kmem_cache_alloc_node_trace(struct kmem_
  }
  #endif
  
@@ -53323,7 +53311,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/mm/util.c linux
  }
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/mm/vmalloc.c linux-3.2.25-pax/mm/vmalloc.c
 --- linux-3.2.25/mm/vmalloc.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.25-pax/mm/vmalloc.c	2012-07-04 19:24:48.952063009 +0200
++++ linux-3.2.25-pax/mm/vmalloc.c	2012-08-12 10:51:28.977213212 +0200
 @@ -39,8 +39,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -53445,6 +53433,15 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/mm/vmalloc.c li
  			if (!pmd_none(*pmd)) {
  				pte_t *ptep, pte;
  
+@@ -329,7 +369,7 @@ static void purge_vmap_area_lazy(void);
+  * Allocate a region of KVA of the specified size and alignment, within the
+  * vstart and vend.
+  */
+-static struct vmap_area *alloc_vmap_area(unsigned long size,
++static __size_overflow(1) struct vmap_area *alloc_vmap_area(unsigned long size,
+ 				unsigned long align,
+ 				unsigned long vstart, unsigned long vend,
+ 				int node, gfp_t gfp_mask)
 @@ -1295,6 +1335,16 @@ static struct vm_struct *__get_vm_area_n
  	struct vm_struct *area;
  
@@ -55390,7 +55387,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/net/netlink/af_
  
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/net/packet/af_packet.c linux-3.2.25-pax/net/packet/af_packet.c
 --- linux-3.2.25/net/packet/af_packet.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.25-pax/net/packet/af_packet.c	2012-07-04 19:24:49.004063008 +0200
++++ linux-3.2.25-pax/net/packet/af_packet.c	2012-08-12 10:54:32.305214431 +0200
 @@ -1675,7 +1675,7 @@ static int packet_rcv(struct sk_buff *sk
  
  	spin_lock(&sk->sk_receive_queue.lock);
@@ -55409,7 +55406,26 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/net/packet/af_p
  	spin_unlock(&sk->sk_receive_queue.lock);
  
  drop_n_restore:
-@@ -3266,7 +3266,7 @@ static int packet_getsockopt(struct sock
+@@ -2613,6 +2613,7 @@ out:
+ 
+ static int packet_recv_error(struct sock *sk, struct msghdr *msg, int len)
+ {
++	struct sock_extended_err ee;
+ 	struct sock_exterr_skb *serr;
+ 	struct sk_buff *skb, *skb2;
+ 	int copied, err;
+@@ -2634,8 +2635,9 @@ static int packet_recv_error(struct sock
+ 	sock_recv_timestamp(msg, sk, skb);
+ 
+ 	serr = SKB_EXT_ERR(skb);
++	ee = serr->ee;
+ 	put_cmsg(msg, SOL_PACKET, PACKET_TX_TIMESTAMP,
+-		 sizeof(serr->ee), &serr->ee);
++		 sizeof ee, &ee);
+ 
+ 	msg->msg_flags |= MSG_ERRQUEUE;
+ 	err = copied;
+@@ -3266,7 +3268,7 @@ static int packet_getsockopt(struct sock
  	case PACKET_HDRLEN:
  		if (len > sizeof(int))
  			len = sizeof(int);
@@ -55418,7 +55434,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/net/packet/af_p
  			return -EFAULT;
  		switch (val) {
  		case TPACKET_V1:
-@@ -3316,7 +3316,7 @@ static int packet_getsockopt(struct sock
+@@ -3316,7 +3318,7 @@ static int packet_getsockopt(struct sock
  
  	if (put_user(len, optlen))
  		return -EFAULT;
@@ -59950,8 +59966,8 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/Makef
 +targets += size_overflow_hash.h
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_overflow_hash.data linux-3.2.25-pax/tools/gcc/size_overflow_hash.data
 --- linux-3.2.25/tools/gcc/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.25-pax/tools/gcc/size_overflow_hash.data	2012-07-04 19:24:49.080063009 +0200
-@@ -0,0 +1,2388 @@
++++ linux-3.2.25-pax/tools/gcc/size_overflow_hash.data	2012-08-12 12:17:54.657229743 +0200
+@@ -0,0 +1,2932 @@
 +_000001_hash alloc_dr 2 65495 _000001_hash NULL
 +_000002_hash __copy_from_user 3 10918 _000002_hash NULL
 +_000003_hash __copy_from_user_inatomic 3 4365 _000003_hash NULL
@@ -59959,7 +59975,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000005_hash __copy_to_user_inatomic 3 19214 _000005_hash NULL
 +_000006_hash kcalloc 1-2 27770 _000006_hash NULL
 +_000008_hash kmalloc 1 60432 _002505_hash NULL nohasharray
-+_000009_hash kmalloc_node 1 50163 _000009_hash NULL
++_000009_hash kmalloc_node 1 50163 _002930_hash NULL nohasharray
 +_000010_hash kmalloc_slab 1 11917 _000010_hash NULL
 +_000011_hash kmemdup 2 64015 _000011_hash NULL
 +_000012_hash __krealloc 2 14857 _001118_hash NULL nohasharray
@@ -60124,7 +60140,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000180_hash i2o_parm_table_get 6 61635 _000180_hash NULL
 +_000181_hash ib_ucm_alloc_data 3 36885 _000181_hash NULL
 +_000182_hash ib_uverbs_unmarshall_recv 5 12251 _000182_hash NULL
-+_000183_hash ieee80211_build_probe_req 7 27660 _000183_hash NULL
++_000183_hash ieee80211_build_probe_req 7-5 27660 _000183_hash NULL
 +_000184_hash ieee80211_if_write 3 34894 _000184_hash NULL
 +_000185_hash if_write 3 51756 _000185_hash NULL
 +_000186_hash ima_write_policy 3 40548 _000186_hash NULL
@@ -60142,7 +60158,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000198_hash ip_vs_conn_fill_param_sync 6 29771 _001499_hash NULL nohasharray
 +_000199_hash ip_vs_create_timeout_table 2 64478 _000199_hash NULL
 +_000200_hash ipw_queue_tx_init 3 49161 _000200_hash NULL
-+_000201_hash irias_new_octseq_value 2 13596 _000201_hash NULL
++_000201_hash irias_new_octseq_value 2 13596 _002933_hash NULL nohasharray
 +_000202_hash ir_lirc_transmit_ir 3 64403 _000202_hash NULL
 +_000203_hash isdn_add_channels 3 40905 _000203_hash NULL
 +_000204_hash isdn_ppp_fill_rq 2 41428 _000204_hash NULL
@@ -60176,7 +60192,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000234_hash lbs_debugfs_write 3 48413 _000234_hash NULL
 +_000235_hash lc_create 3 48662 _000235_hash NULL
 +_000236_hash ldm_frag_add 2 5611 _000236_hash NULL
-+_000237_hash libipw_alloc_txb 1 27579 _000237_hash NULL
++_000237_hash libipw_alloc_txb 1-3-2 27579 _000237_hash NULL
 +_000238_hash listxattr 3 12769 _000238_hash NULL
 +_000239_hash load_msg 2 95 _000239_hash NULL
 +_000240_hash mb_cache_create 2 17307 _000240_hash NULL
@@ -60274,7 +60290,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000336_hash restore_i387_fxsave 2 17528 _000336_hash NULL
 +_000337_hash rndis_add_response 2 58544 _000337_hash NULL
 +_000338_hash rndis_set_oid 4 6547 _000338_hash NULL
-+_000339_hash rngapi_reset 3 34366 _000339_hash NULL
++_000339_hash rngapi_reset 3 34366 _002740_hash NULL nohasharray
 +_000340_hash roccat_common_receive 4 53407 _000340_hash NULL
 +_000341_hash roccat_common_send 4 12284 _000341_hash NULL
 +_000342_hash rpc_malloc 2 43573 _000342_hash NULL
@@ -60385,7 +60401,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000451_hash zd_usb_iowrite16v_async 3 23984 _000451_hash NULL
 +_000452_hash zd_usb_read_fw 4 22049 _000452_hash NULL
 +_000453_hash aa_simple_write_to_buffer 3-4 49683 _000453_hash NULL
-+_000454_hash acpi_ex_allocate_name_string 2 7685 _000454_hash NULL
++_000454_hash acpi_ex_allocate_name_string 2 7685 _002692_hash NULL nohasharray
 +_000455_hash acpi_os_allocate_zeroed 1 37422 _000455_hash NULL
 +_000456_hash acpi_ut_initialize_buffer 2 47143 _002270_hash NULL nohasharray
 +_000457_hash ad7879_spi_xfer 3 36311 _000457_hash NULL
@@ -60544,7 +60560,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000628_hash ib_send_cm_rtu 3 63138 _000628_hash NULL
 +_000629_hash ieee80211_key_alloc 3 19065 _000629_hash NULL
 +_000630_hash ieee80211_mgmt_tx 9 59699 _000630_hash NULL
-+_000631_hash ieee80211_send_probe_req 6 6924 _000631_hash NULL
++_000631_hash ieee80211_send_probe_req 6-4 6924 _000631_hash NULL
 +_000632_hash init_bch 1-2 64130 _000632_hash NULL
 +_000634_hash init_ipath 1 48187 _000634_hash NULL
 +_000635_hash init_list_set 2-3 39188 _000635_hash NULL
@@ -60588,7 +60604,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000675_hash kvm_write_guest_page 5 63555 _000675_hash NULL
 +_000676_hash l2tp_session_create 1 25286 _000676_hash NULL
 +_000677_hash leaf_dealloc 3 29566 _000677_hash NULL
-+_000678_hash linear_conf 2 23485 _000678_hash NULL
++_000678_hash linear_conf 2 23485 _003035_hash NULL nohasharray
 +_000679_hash lirc_buffer_init 2-3 53282 _000679_hash NULL
 +_000681_hash lpfc_sli4_queue_alloc 3 62646 _000681_hash NULL
 +_000682_hash mce_request_packet 3 1073 _000682_hash NULL
@@ -60663,7 +60679,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000760_hash sctp_setsockopt_connectx_old 3 22631 _000760_hash NULL
 +_000761_hash sctp_tsnmap_init 2 36446 _000761_hash NULL
 +_000762_hash security_context_to_sid 2 19839 _000762_hash NULL
-+_000763_hash security_context_to_sid_default 2 3492 _000763_hash NULL
++_000763_hash security_context_to_sid_default 2 3492 _002996_hash NULL nohasharray
 +_000764_hash security_context_to_sid_force 2 20724 _000764_hash NULL
 +_000765_hash sel_write_access 3 51704 _000765_hash NULL
 +_000766_hash sel_write_create 3 11353 _000766_hash NULL
@@ -60717,7 +60733,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000817_hash tcf_hash_create 4 54360 _000817_hash NULL
 +_000818_hash test_unaligned_bulk 3 52333 _000818_hash NULL
 +_000819_hash tifm_alloc_adapter 1 10903 _000819_hash NULL
-+_000820_hash tm6000_read_write_usb 7 50774 _000820_hash NULL
++_000820_hash tm6000_read_write_usb 7 50774 _002745_hash NULL nohasharray
 +_000821_hash tnode_alloc 1 49407 _000821_hash NULL
 +_000822_hash tomoyo_commit_ok 2 20167 _000822_hash NULL
 +_000823_hash tomoyo_scan_bprm 2-4 15642 _000823_hash NULL
@@ -60731,7 +60747,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000832_hash usblp_write 3 23178 _000832_hash NULL
 +_000833_hash user_confirm_reply 4 43708 _000833_hash NULL
 +_000834_hash uvc_alloc_buffers 2 9656 _000834_hash NULL
-+_000835_hash uvc_alloc_entity 3 20836 _000835_hash NULL
++_000835_hash uvc_alloc_entity 3-4 20836 _000835_hash NULL
 +_000836_hash v4l2_ctrl_new 7 38725 _000836_hash NULL
 +_000837_hash v4l2_event_subscribe 3 19510 _000837_hash NULL
 +_000838_hash vc_resize 2-3 3585 _000838_hash NULL
@@ -60860,12 +60876,12 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_000968_hash copy_entries_to_user 1 52367 _000968_hash NULL
 +_000969_hash copy_from_buf 4 27308 _000969_hash NULL
 +_000970_hash copy_from_user_toio 3 31966 _000970_hash NULL
-+_000971_hash copy_oldmem_page 3 26164 _000971_hash NULL
++_000971_hash copy_oldmem_page 3-1 26164 _000971_hash NULL
 +_000972_hash copy_to_user_fromio 3 57432 _000972_hash NULL
 +_000973_hash copy_vm86_regs_from_user 3 45340 _000973_hash NULL
 +_000974_hash cryptd_hash_setkey 3 42781 _000974_hash NULL
 +_000975_hash crypto_authenc_esn_setkey 3 6985 _000975_hash NULL
-+_000976_hash crypto_authenc_setkey 3 80 _000976_hash NULL
++_000976_hash crypto_authenc_setkey 3 80 _002947_hash NULL nohasharray
 +_000977_hash csum_partial_copy_fromiovecend 3-4 9957 _000977_hash NULL
 +_000979_hash cx18_copy_buf_to_user 4 22735 _000979_hash NULL
 +_000981_hash cxgbi_ddp_reserve 4 30091 _000981_hash NULL
@@ -60904,7 +60920,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001015_hash dvb_dmxdev_set_buffer_size 2 55643 _001015_hash NULL
 +_001016_hash dvb_dvr_set_buffer_size 2 9840 _001016_hash NULL
 +_001017_hash dvb_play 3 50814 _001017_hash NULL
-+_001018_hash dvb_ringbuffer_pkt_read_user 3-5 4303 _001018_hash NULL
++_001018_hash dvb_ringbuffer_pkt_read_user 3-5-2 4303 _001018_hash NULL
 +_001020_hash dvb_ringbuffer_read_user 3 56702 _001020_hash NULL
 +_001021_hash econet_sendmsg 4 51430 _001021_hash NULL
 +_001022_hash ecryptfs_filldir 3 6622 _001022_hash NULL
@@ -61233,7 +61249,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001364_hash unlink1 3 63059 _001364_hash NULL
 +_001366_hash usb_allocate_stream_buffers 3 8964 _001366_hash NULL
 +_001367_hash usbdev_read 3 45114 _001367_hash NULL
-+_001368_hash usblp_read 3 57342 _001368_hash NULL
++_001368_hash usblp_read 3 57342 _002942_hash NULL nohasharray
 +_001369_hash usbtmc_read 3 32377 _001369_hash NULL
 +_001370_hash usbtmc_write 3 64340 _001370_hash NULL
 +_001371_hash usbvision_v4l2_read 3 34386 _001371_hash NULL
@@ -61283,7 +61299,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001418_hash xfs_iext_realloc_indirect 2 59211 _001418_hash NULL
 +_001419_hash xfs_inumbers_fmt 3 12817 _001419_hash NULL
 +_001420_hash xlog_recover_add_to_cont_trans 4 44102 _001420_hash NULL
-+_001421_hash xz_dec_lzma2_create 2 36353 _001421_hash NULL
++_001421_hash xz_dec_lzma2_create 2 36353 _002638_hash NULL nohasharray
 +_001422_hash _zd_iowrite32v_locked 3 44725 _001422_hash NULL
 +_001423_hash zerocopy_sg_from_iovec 3 11828 _001423_hash NULL
 +_001424_hash zoran_write 3 22404 _001424_hash NULL
@@ -61415,10 +61431,10 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001557_hash generic_readlink 3 32654 _001557_hash NULL
 +_001558_hash gpio_power_read 3 36059 _001558_hash NULL
 +_001559_hash hash_recvmsg 4 50924 _001559_hash NULL
-+_001560_hash ht40allow_map_read 3 55209 _001560_hash NULL
++_001560_hash ht40allow_map_read 3 55209 _002670_hash NULL nohasharray
 +_001561_hash hugetlbfs_read 3 11268 _001561_hash NULL
 +_001562_hash hwflags_read 3 52318 _001562_hash NULL
-+_001563_hash hysdn_conf_read 3 42324 _001563_hash NULL
++_001563_hash hysdn_conf_read 3 42324 _003094_hash NULL nohasharray
 +_001564_hash i2400m_rx_stats_read 3 57706 _001564_hash NULL
 +_001565_hash i2400m_tx_stats_read 3 28527 _001565_hash NULL
 +_001566_hash i2o_pool_alloc 4 55485 _001566_hash NULL
@@ -61491,7 +61507,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001635_hash iwl_dbgfs_rxon_flags_read 3 20795 _001635_hash NULL
 +_001636_hash iwl_dbgfs_rx_queue_read 3 19943 _001636_hash NULL
 +_001637_hash iwl_dbgfs_rx_statistics_read 3 62687 _001637_hash &_000308_hash
-+_001638_hash iwl_dbgfs_sensitivity_read 3 63116 _001638_hash NULL
++_001638_hash iwl_dbgfs_sensitivity_read 3 63116 _002844_hash NULL nohasharray
 +_001639_hash iwl_dbgfs_sleep_level_override_read 3 3038 _001639_hash NULL
 +_001640_hash iwl_dbgfs_sram_read 3 44505 _001640_hash NULL
 +_001641_hash iwl_dbgfs_stations_read 3 9309 _001641_hash NULL
@@ -61524,7 +61540,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001668_hash iwl_legacy_dbgfs_sensitivity_read 3 55816 _001668_hash NULL
 +_001669_hash iwl_legacy_dbgfs_sram_read 3 26419 _001669_hash NULL
 +_001670_hash iwl_legacy_dbgfs_stations_read 3 24121 _001670_hash NULL
-+_001671_hash iwl_legacy_dbgfs_status_read 3 48508 _001671_hash NULL
++_001671_hash iwl_legacy_dbgfs_status_read 3 48508 _003033_hash NULL nohasharray
 +_001672_hash iwl_legacy_dbgfs_traffic_log_read 3 31625 _001672_hash NULL
 +_001673_hash iwl_legacy_dbgfs_tx_queue_read 3 34192 _001673_hash NULL
 +_001674_hash iwl_legacy_dbgfs_tx_statistics_read 3 63987 _001674_hash NULL
@@ -61584,7 +61600,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001730_hash mwifiex_regrdwr_read 3 34472 _001730_hash NULL
 +_001731_hash netlink_sendmsg 4 33708 _001731_hash &_000809_hash
 +_001732_hash nfsctl_transaction_write 3 64800 _001732_hash NULL
-+_001733_hash nfsd_vfs_read 6 62605 _001733_hash NULL
++_001733_hash nfsd_vfs_read 6 62605 _002821_hash NULL nohasharray
 +_001734_hash nfsd_vfs_write 6 54577 _001734_hash NULL
 +_001735_hash nfs_map_group_to_gid 3 15892 _001735_hash NULL
 +_001736_hash nfs_map_name_to_uid 3 51132 _001736_hash NULL
@@ -61657,7 +61673,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001806_hash queues_read 3 24877 _001806_hash NULL
 +_001807_hash raw_recvmsg 4 17277 _001807_hash NULL
 +_001808_hash raw_send_hdrinc 4 58803 _001808_hash NULL
-+_001809_hash raw_sendmsg 4 23078 _001809_hash NULL
++_001809_hash raw_sendmsg 4 23078 _002900_hash NULL nohasharray
 +_001810_hash rawsock_sendmsg 4 60010 _001810_hash NULL
 +_001811_hash rawv6_send_hdrinc 3 35425 _001811_hash NULL
 +_001812_hash rcname_read 3 25919 _001812_hash NULL
@@ -61799,7 +61815,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_001955_hash st_write 3 16874 _001955_hash NULL
 +_001956_hash supply_map_read_file 3 10608 _001956_hash NULL
 +_001957_hash sys_bind 3 10799 _001957_hash NULL
-+_001958_hash sys_connect 3 15291 _001958_hash NULL
++_001958_hash sys_connect 3 15291 _002928_hash NULL nohasharray
 +_001959_hash sysfs_acpi_set 3 625 _001959_hash NULL
 +_001960_hash sysfs_read_file 3 42113 _001960_hash NULL
 +_001961_hash sysfs_write_file 3 57116 _001961_hash NULL
@@ -61881,7 +61897,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_002045_hash enable_read 3 2117 _002045_hash NULL
 +_002046_hash exofs_read_kern 6 39921 _002046_hash &_001745_hash
 +_002047_hash fc_change_queue_depth 2 36841 _002047_hash NULL
-+_002048_hash frequency_read 3 64031 _002048_hash NULL
++_002048_hash frequency_read 3 64031 _003133_hash NULL nohasharray
 +_002049_hash get_alua_req 3 4166 _002049_hash NULL
 +_002050_hash get_rdac_req 3 45882 _002050_hash NULL
 +_002051_hash hci_sock_recvmsg 4 7072 _002051_hash NULL
@@ -61918,7 +61934,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_002082_hash ieee80211_if_read_flags 3 57470 _002082_hash NULL
 +_002083_hash ieee80211_if_read_fwded_frames 3 36520 _002083_hash NULL
 +_002084_hash ieee80211_if_read_fwded_mcast 3 39571 _002084_hash &_000104_hash
-+_002085_hash ieee80211_if_read_fwded_unicast 3 59740 _002085_hash NULL
++_002085_hash ieee80211_if_read_fwded_unicast 3 59740 _002696_hash NULL nohasharray
 +_002086_hash ieee80211_if_read_last_beacon 3 31257 _002086_hash NULL
 +_002087_hash ieee80211_if_read_min_discovery_timeout 3 13946 _002087_hash NULL
 +_002088_hash ieee80211_if_read_num_buffered_multicast 3 12716 _002088_hash NULL
@@ -62099,7 +62115,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_002270_hash ses_recv_diag 4 47143 _002270_hash &_000456_hash
 +_002271_hash ses_send_diag 4 64527 _002271_hash NULL
 +_002272_hash spi_dv_device_echo_buffer 2-3 39846 _002272_hash NULL
-+_002274_hash ubifs_leb_change 4 22399 _002274_hash NULL
++_002274_hash ubifs_leb_change 4 22399 _003009_hash NULL nohasharray
 +_002275_hash ubifs_leb_write 4-5 61226 _002275_hash NULL
 +_002277_hash ubi_write 4-5 30809 _002277_hash NULL
 +_002278_hash fixup_leb 3 43256 _002278_hash NULL
@@ -62174,7 +62190,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_002347_hash sys32_ipc 3 7238 _002347_hash NULL
 +_002348_hash sys32_rt_sigpending 2 25814 _002348_hash NULL
 +_002349_hash compat_do_readv_writev 4 49102 _002349_hash NULL
-+_002350_hash compat_keyctl_instantiate_key_iov 3 57431 _002350_hash NULL
++_002350_hash compat_keyctl_instantiate_key_iov 3 57431 _003006_hash NULL nohasharray
 +_002351_hash compat_process_vm_rw 3-5 22254 _002351_hash NULL
 +_002353_hash compat_sys_setsockopt 5 3326 _002353_hash NULL
 +_002354_hash ipath_cdev_init 1 37752 _002354_hash NULL
@@ -62340,10 +62356,554 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +_002534_hash vmw_cursor_update_dmabuf 3-4 32045 _002534_hash NULL
 +_002536_hash vmw_gmr_bind 3 44130 _002536_hash NULL
 +_002537_hash vmw_du_crtc_cursor_set 4-5 28479 _002537_hash NULL
++_002538_hash alloc_fdtable 1 17389 _002538_hash NULL
++_002539_hash alloc_ldt 2 21972 _002539_hash NULL
++_002540_hash __alloc_skb 1 23940 _002540_hash NULL
++_002541_hash __ata_change_queue_depth 3 23484 _002541_hash NULL
++_002542_hash ccid3_hc_rx_getsockopt 3 62331 _002542_hash NULL
++_002543_hash ccid3_hc_tx_getsockopt 3 16314 _002543_hash NULL
++_002544_hash cistpl_vers_1 4 15023 _002544_hash NULL
++_002545_hash cmm_read 3 57520 _002545_hash NULL
++_002546_hash cosa_read 3 25966 _002546_hash NULL
++_002547_hash dm_table_create 3 35687 _002547_hash NULL
++_002548_hash do_write_orph_node 2 64343 _002548_hash NULL
++_002550_hash ep0_read 3 38095 _002550_hash NULL
++_002551_hash event_buffer_read 3 48772 _002551_hash NULL
++_002552_hash extract_entropy_user 3 26952 _002552_hash NULL
++_002553_hash ffs_ep0_read 3 2672 _002553_hash NULL
++_002554_hash fill_readbuf 3 32464 _002554_hash NULL
++_002555_hash get_fd_set 1 3866 _002555_hash NULL
++_002556_hash joydev_handle_JSIOCSAXMAP 3 48898 _002675_hash NULL nohasharray
++_002557_hash joydev_handle_JSIOCSBTNMAP 3 15643 _002557_hash NULL
++_002558_hash __kfifo_from_user_r 3 60345 _002558_hash NULL
++_002559_hash kstrtoint_from_user 2 8778 _002559_hash NULL
++_002560_hash kstrtol_from_user 2 10168 _002560_hash NULL
++_002561_hash kstrtoll_from_user 2 19500 _002561_hash NULL
++_002562_hash kstrtos16_from_user 2 28300 _002562_hash NULL
++_002563_hash kstrtos8_from_user 2 58268 _002563_hash NULL
++_002564_hash kstrtou16_from_user 2 54274 _002564_hash NULL
++_002565_hash kstrtou8_from_user 2 55599 _002565_hash NULL
++_002566_hash kstrtouint_from_user 2 10536 _002566_hash NULL
++_002567_hash kstrtoul_from_user 2 64569 _002567_hash NULL
++_002568_hash kstrtoull_from_user 2 63026 _002568_hash NULL
++_002569_hash ntfs_rl_realloc 3 56831 _002569_hash NULL
++_002570_hash ntfs_rl_realloc_nofail 3 32173 _002570_hash NULL
++_002571_hash port_fops_write 3 54627 _002571_hash NULL
++_002572_hash ptp_read 4 63251 _002572_hash NULL
++_002573_hash reqsk_queue_alloc 2 40272 _002573_hash NULL
++_002574_hash resize_info_buffer 2 62889 _002574_hash NULL
++_002575_hash rfkill_fop_write 3 64808 _002575_hash NULL
++_002576_hash rvmalloc 1 46873 _002576_hash NULL
++_002577_hash sctp_getsockopt_active_key 2 45483 _002577_hash NULL
++_002578_hash sctp_getsockopt_adaptation_layer 2 45375 _002578_hash NULL
++_002579_hash sctp_getsockopt_assoc_ids 2 9043 _002579_hash NULL
++_002580_hash sctp_getsockopt_associnfo 2 58169 _002580_hash NULL
++_002581_hash sctp_getsockopt_assoc_number 2 6384 _002581_hash NULL
++_002582_hash sctp_getsockopt_auto_asconf 2 46584 _002582_hash NULL
++_002583_hash sctp_getsockopt_context 2 52490 _002583_hash NULL
++_002584_hash sctp_getsockopt_default_send_param 2 63056 _002584_hash NULL
++_002585_hash sctp_getsockopt_disable_fragments 2 12330 _002585_hash NULL
++_002586_hash sctp_getsockopt_fragment_interleave 2 51215 _002586_hash NULL
++_002587_hash sctp_getsockopt_initmsg 2 26042 _002587_hash NULL
++_002588_hash sctp_getsockopt_mappedv4 2 20044 _002588_hash NULL
++_002589_hash sctp_getsockopt_nodelay 2 9560 _002589_hash NULL
++_002590_hash sctp_getsockopt_partial_delivery_point 2 60952 _002590_hash NULL
++_002591_hash sctp_getsockopt_peeloff 2 59190 _002591_hash NULL
++_002592_hash sctp_getsockopt_peer_addr_info 2 6024 _002592_hash NULL
++_002593_hash sctp_getsockopt_peer_addr_params 2 53645 _002593_hash NULL
++_002594_hash sctp_getsockopt_primary_addr 2 24639 _002594_hash NULL
++_002595_hash sctp_getsockopt_rtoinfo 2 62027 _002595_hash NULL
++_002596_hash sctp_getsockopt_sctp_status 2 56540 _002596_hash NULL
++_002597_hash snd_mixart_BA0_read 5 45069 _002597_hash NULL
++_002598_hash snd_mixart_BA1_read 5 5082 _002598_hash NULL
++_002599_hash snd_pcm_oss_read2 3 54387 _002599_hash NULL
++_002600_hash tomoyo_init_log 2 61526 _002600_hash NULL
++_002601_hash unix_bind 3 15668 _002601_hash NULL
++_002602_hash usbvision_rvmalloc 1 19655 _002602_hash NULL
++_002604_hash v9fs_fid_readn 4 60544 _002604_hash NULL
++_002605_hash v9fs_file_read 3 40858 _002605_hash NULL
++_002606_hash yurex_write 3 8761 _002606_hash NULL
++_002607_hash ab8500_address_write 3 4099 _002607_hash NULL
++_002608_hash ab8500_bank_write 3 51960 _002608_hash NULL
++_002609_hash ab8500_val_write 3 16473 _002609_hash NULL
++_002610_hash alloc_skb 1 55439 _002610_hash NULL
++_002611_hash alloc_skb_fclone 1 3467 _002611_hash NULL
++_002612_hash ata_scsi_change_queue_depth 2 23126 _002612_hash NULL
++_002613_hash beacon_interval_write 3 17952 _002613_hash NULL
++_002614_hash core_sys_select 1 47494 _002614_hash NULL
++_002615_hash dtim_interval_write 3 30489 _002615_hash NULL
++_002616_hash expand_fdtable 2 39273 _002616_hash NULL
++_002617_hash get_chars 3 40373 _002617_hash NULL
++_002618_hash gpio_power_write 3 1991 _002618_hash NULL
++_002619_hash inet_csk_listen_start 2 38233 _002619_hash NULL
++_002620_hash kstrtou32_from_user 2 30361 _002620_hash NULL
++_002621_hash __netdev_alloc_skb 2 18595 _002621_hash NULL
++_002622_hash ntfs_rl_append 2-4 6037 _002622_hash NULL
++_002624_hash ntfs_rl_insert 2-4 4931 _002624_hash NULL
++_002626_hash ntfs_rl_replace 2-4 14136 _002626_hash NULL
++_002628_hash ntfs_rl_split 2-4 52328 _002628_hash NULL
++_002630_hash port_fops_read 3 49626 _002630_hash NULL
++_002631_hash random_read 3 13815 _002631_hash NULL
++_002632_hash rx_streaming_always_write 3 32357 _002632_hash NULL
++_002633_hash rx_streaming_interval_write 3 50120 _002633_hash NULL
++_002634_hash tomoyo_write_log2 2 34318 _002634_hash NULL
++_002635_hash uapsd_queues_write 3 43040 _002635_hash NULL
++_002636_hash urandom_read 3 30462 _002636_hash NULL
++_002637_hash v9fs_direct_read 3 45546 _002637_hash NULL
++_002638_hash v9fs_file_readn 4 36353 _002638_hash &_001421_hash
++_002639_hash alloc_tx 2 32143 _002639_hash NULL
++_002640_hash alloc_wr 1-2 24635 _002640_hash NULL
++_002642_hash ath6kl_fwlog_mask_write 3 24810 _002642_hash NULL
++_002643_hash ath9k_wmi_cmd 4 327 _002643_hash NULL
++_002644_hash atm_alloc_charge 2 19517 _002713_hash NULL nohasharray
++_002645_hash ax25_output 2 22736 _002645_hash NULL
++_002646_hash bcsp_prepare_pkt 3 12961 _002646_hash NULL
++_002647_hash bt_skb_alloc 1 6404 _002647_hash NULL
++_002648_hash cfpkt_create_pfx 1-2 23594 _002648_hash NULL
++_002650_hash cmd_complete 5 14502 _002650_hash NULL
++_002651_hash cxgb3_get_cpl_reply_skb 2 10620 _002651_hash NULL
++_002652_hash dccp_listen_start 2 35918 _002652_hash NULL
++_002653_hash __dev_alloc_skb 1 28681 _002653_hash NULL
++_002654_hash dn_alloc_skb 2 6631 _002654_hash NULL
++_002655_hash do_pselect 1 62061 _002655_hash NULL
++_002656_hash expand_files 2 17080 _002656_hash NULL
++_002657_hash _fc_frame_alloc 1 43568 _002657_hash NULL
++_002658_hash find_skb 2 20431 _002658_hash NULL
++_002659_hash fm_send_cmd 5 39639 _002659_hash NULL
++_002660_hash gem_alloc_skb 2 51715 _002660_hash NULL
++_002661_hash get_packet 3 41914 _002661_hash NULL
++_002662_hash get_packet 3 5747 _002662_hash NULL
++_002663_hash get_packet_pg 4 28023 _002663_hash NULL
++_002664_hash get_skb 2 63008 _002664_hash NULL
++_002665_hash hidp_queue_report 3 1881 _002665_hash NULL
++_002666_hash __hidp_send_ctrl_message 4 28303 _002666_hash NULL
++_002667_hash i2400m_net_rx 5 27170 _002667_hash NULL
++_002668_hash igmpv3_newpack 2 35912 _002668_hash NULL
++_002669_hash inet_listen 2 14723 _002669_hash NULL
++_002670_hash isdn_net_ciscohdlck_alloc_skb 2 55209 _002670_hash &_001560_hash
++_002671_hash isdn_ppp_ccp_xmit_reset 6 63297 _002671_hash NULL
++_002672_hash _l2_alloc_skb 1 11883 _002672_hash NULL
++_002673_hash l3_alloc_skb 1 32289 _002673_hash NULL
++_002674_hash llc_alloc_frame 4 64366 _002674_hash NULL
++_002675_hash mac_drv_rx_init 2 48898 _002675_hash &_002556_hash
++_002676_hash mgmt_event 4 46069 _002676_hash NULL
++_002677_hash mI_alloc_skb 1 24770 _002677_hash NULL
++_002678_hash nci_skb_alloc 2 49757 _002678_hash NULL
++_002679_hash netdev_alloc_skb 2 62437 _002679_hash NULL
++_002680_hash __netdev_alloc_skb_ip_align 2 55067 _002680_hash NULL
++_002681_hash new_skb 1 21148 _002681_hash NULL
++_002682_hash nfc_alloc_skb 1 6216 _002682_hash NULL
++_002683_hash nfulnl_alloc_skb 2 65207 _002683_hash NULL
++_002684_hash ni65_alloc_mem 3 10664 _002684_hash NULL
++_002685_hash pep_alloc_skb 3 46303 _002685_hash NULL
++_002686_hash pn_raw_send 2 54330 _002686_hash NULL
++_002687_hash refill_pool 2 19477 _002687_hash NULL
++_002688_hash rfcomm_wmalloc 2 58090 _002688_hash NULL
++_002689_hash rx 4 57944 _002689_hash NULL
++_002690_hash sctp_ulpevent_new 1 33377 _002690_hash NULL
++_002691_hash send_command 4 10832 _002691_hash NULL
++_002692_hash skb_copy_expand 2-3 7685 _002692_hash &_000454_hash
++_002694_hash sk_stream_alloc_skb 2 57622 _002694_hash NULL
++_002695_hash sock_alloc_send_pskb 2 21246 _002695_hash NULL
++_002696_hash sock_rmalloc 2 59740 _002696_hash &_002085_hash
++_002697_hash sock_wmalloc 2 16472 _002697_hash NULL
++_002698_hash solos_param_store 4 34755 _002698_hash NULL
++_002699_hash sys_select 1 38827 _002699_hash NULL
++_002700_hash t4vf_pktgl_to_skb 2 39005 _002700_hash NULL
++_002701_hash tcp_collapse 5-6 63294 _002701_hash NULL
++_002703_hash tipc_cfg_reply_alloc 1 27606 _002703_hash NULL
++_002704_hash ulog_alloc_skb 1 23427 _002704_hash NULL
++_002705_hash v9fs_cached_file_read 3 2514 _002705_hash NULL
++_002706_hash alloc_fd 1 37637 _002706_hash NULL
++_002707_hash _alloc_mISDN_skb 3 52232 _002707_hash NULL
++_002708_hash ath9k_multi_regread 4 65056 _002708_hash NULL
++_002709_hash ath_rxbuf_alloc 2 24745 _002709_hash NULL
++_002710_hash ax25_send_frame 2 19964 _002710_hash NULL
++_002711_hash cfpkt_create 1 18197 _002711_hash NULL
++_002712_hash console_store 4 36007 _002712_hash NULL
++_002713_hash dev_alloc_skb 1 19517 _002713_hash &_002644_hash
++_002714_hash dn_nsp_do_disc 2-6 49474 _002714_hash NULL
++_002716_hash dsp_cmx_send_member 2 15625 _002716_hash NULL
++_002717_hash fc_frame_alloc 2 1596 _002717_hash NULL
++_002718_hash fc_frame_alloc_fill 2 59394 _002718_hash NULL
++_002719_hash fmc_send_cmd 5 20435 _002719_hash NULL
++_002720_hash hci_send_cmd 3 43810 _002720_hash NULL
++_002721_hash hci_si_event 3 1404 _002721_hash NULL
++_002722_hash hfcpci_empty_bfifo 4 62323 _002722_hash NULL
++_002723_hash hidp_send_ctrl_message 4 43702 _002723_hash NULL
++_002724_hash inet_dccp_listen 2 28565 _002724_hash NULL
++_002725_hash ip6_append_data 4-5 36490 _002725_hash NULL
++_002726_hash __ip_append_data 7-8 36191 _002726_hash NULL
++_002727_hash l1oip_socket_recv 6 56537 _002727_hash NULL
++_002728_hash l2cap_build_cmd 4 48676 _002728_hash NULL
++_002729_hash l2down_create 4 21755 _002729_hash NULL
++_002730_hash l2up_create 3 6430 _002730_hash NULL
++_002731_hash ldisc_receive 4 41516 _002731_hash NULL
++_002734_hash lro_gen_skb 6 2644 _002734_hash NULL
++_002735_hash macvtap_alloc_skb 2-4-3 50629 _002735_hash NULL
++_002737_hash nci_send_cmd 3 58206 _002737_hash NULL
++_002738_hash netdev_alloc_skb_ip_align 2 40811 _002738_hash NULL
++_002739_hash nfqnl_mangle 2 14583 _002739_hash NULL
++_002740_hash p54_alloc_skb 3 34366 _002740_hash &_000339_hash
++_002741_hash packet_alloc_skb 2-5-4 62602 _002741_hash NULL
++_002743_hash pep_indicate 5 38611 _002743_hash NULL
++_002744_hash pep_reply 5 50582 _002744_hash NULL
++_002745_hash pipe_handler_request 5 50774 _002745_hash &_000820_hash
++_002746_hash ql_process_mac_rx_page 4 15543 _002746_hash NULL
++_002747_hash ql_process_mac_rx_skb 4 6689 _002747_hash NULL
++_002748_hash rfcomm_tty_write 3 51603 _002748_hash NULL
++_002749_hash send_mpa_reject 3 7135 _002749_hash NULL
++_002750_hash send_mpa_reply 3 32372 _002750_hash NULL
++_002751_hash sge_rx 3 50594 _002751_hash NULL
++_002752_hash skb_cow_data 2 11565 _002752_hash NULL
++_002753_hash smp_build_cmd 3 45853 _002753_hash NULL
++_002754_hash sock_alloc_send_skb 2 23720 _002754_hash NULL
++_002755_hash sys_dup3 2 33421 _002755_hash NULL
++_002756_hash sys_pselect6 1 57449 _002756_hash NULL
++_002757_hash tcp_fragment 3 20436 _002757_hash NULL
++_002758_hash teiup_create 3 43201 _002758_hash NULL
++_002759_hash tg3_run_loopback 2 30093 _002759_hash NULL
++_002760_hash tun_alloc_skb 2-4-3 41216 _002760_hash NULL
++_002762_hash use_pool 2 64607 _002762_hash NULL
++_002763_hash vxge_rx_alloc 3 52024 _002763_hash NULL
++_002764_hash wl1271_rx_handle_data 3 1714 _002764_hash NULL
++_002765_hash add_packet 3 54433 _002765_hash NULL
++_002766_hash add_rx_skb 3 8257 _002766_hash NULL
++_002767_hash ath6kl_buf_alloc 1 57304 _002767_hash NULL
++_002768_hash bat_ogm_aggregate_new 2 13813 _002768_hash NULL
++_002769_hash bnx2fc_process_l2_frame_compl 3 65072 _002769_hash NULL
++_002770_hash brcmu_pkt_buf_get_skb 1 5556 _002770_hash NULL
++_002771_hash br_send_bpdu 3 29669 _002771_hash NULL
++_002772_hash bt_skb_send_alloc 2 6581 _002772_hash NULL
++_002773_hash c4iw_reject_cr 3 28174 _002773_hash NULL
++_002774_hash carl9170_rx_copy_data 2 21656 _002774_hash NULL
++_002775_hash cfpkt_add_body 3 44630 _002775_hash NULL
++_002776_hash cfpkt_append 3 61206 _002776_hash NULL
++_002777_hash cosa_net_setup_rx 2 38594 _002777_hash NULL
++_002778_hash cxgb4_pktgl_to_skb 2 61899 _002778_hash NULL
++_002779_hash dn_alloc_send_pskb 2 4465 _002779_hash NULL
++_002780_hash dn_nsp_return_disc 2 60296 _002780_hash NULL
++_002781_hash dn_nsp_send_disc 2 23469 _002781_hash NULL
++_002782_hash do_fcntl 3 31468 _002782_hash NULL
++_002783_hash dsp_tone_hw_message 3 17678 _002783_hash NULL
++_002784_hash dvb_net_sec 3 37884 _002784_hash NULL
++_002785_hash e1000_check_copybreak 3 62448 _002785_hash NULL
++_002786_hash fast_rx_path 3 59214 _002786_hash NULL
++_002787_hash fc_fcp_frame_alloc 2 12624 _002787_hash NULL
++_002788_hash fcoe_ctlr_send_keep_alive 3 15308 _002788_hash NULL
++_002789_hash fwnet_incoming_packet 3 40380 _002789_hash NULL
++_002790_hash fwnet_pd_new 4 39947 _002790_hash NULL
++_002791_hash got_frame 2 16028 _002791_hash NULL
++_002792_hash gsm_mux_rx_netchar 3 33336 _002792_hash NULL
++_002793_hash hdlcdev_rx 3 997 _002793_hash NULL
++_002794_hash hfc_empty_fifo 2 57972 _002794_hash NULL
++_002795_hash hfcpci_empty_fifo 4 2427 _002795_hash NULL
++_002796_hash hidp_output_raw_report 3 5629 _002796_hash NULL
++_002797_hash hysdn_rx_netpkt 3 16136 _002797_hash NULL
++_002798_hash ieee80211_fragment 4 33112 _002798_hash NULL
++_002799_hash ieee80211_probereq_get 4-6 29069 _002799_hash NULL
++_002801_hash ieee80211_send_auth 5 60865 _002801_hash NULL
++_002802_hash ieee80211_tdls_mgmt 8 9581 _002802_hash NULL
++_002803_hash ip6_ufo_append_data 5-7-6 4780 _002803_hash NULL
++_002806_hash ip_ufo_append_data 6-8-7 12775 _002806_hash NULL
++_002809_hash ipw_packet_received_skb 2 1230 _002809_hash NULL
++_002810_hash iwch_reject_cr 3 23901 _002810_hash NULL
++_002811_hash iwm_rx_packet_alloc 3 9898 _002811_hash NULL
++_002812_hash ixgb_check_copybreak 3 5847 _002812_hash NULL
++_002813_hash l1oip_socket_parse 4 4507 _002813_hash NULL
++_002814_hash l2cap_send_cmd 4 14548 _002814_hash NULL
++_002816_hash mcs_unwrap_fir 3 25733 _002816_hash NULL
++_002817_hash mcs_unwrap_mir 3 9455 _002817_hash NULL
++_002818_hash mld_newpack 2 50950 _002818_hash NULL
++_002819_hash p54_download_eeprom 4 43842 _002819_hash NULL
++_002820_hash ppp_tx_cp 5 62044 _002820_hash NULL
++_002821_hash prism2_send_mgmt 4 62605 _002821_hash &_001733_hash
++_002822_hash prism2_sta_send_mgmt 5 43916 _002822_hash NULL
++_002823_hash _queue_data 4 54983 _002823_hash NULL
++_002824_hash read_fifo 3 826 _002824_hash NULL
++_002825_hash receive_copy 3 12216 _002825_hash NULL
++_002826_hash rtl8169_try_rx_copy 3 705 _002826_hash NULL
++_002827_hash _rtl92s_firmware_downloadcode 3 14021 _002827_hash NULL
++_002828_hash rx_data 4 60442 _002828_hash NULL
++_002829_hash set_rxd_buffer_pointer 8 9950 _002829_hash NULL
++_002830_hash sis190_try_rx_copy 3 57069 _002830_hash NULL
++_002831_hash skge_rx_get 3 40598 _002831_hash NULL
++_002832_hash smctr_process_rx_packet 2 13270 _002832_hash NULL
++_002833_hash sys_dup2 2 25284 _002833_hash NULL
++_002834_hash tcp_mark_head_lost 2 35895 _002834_hash NULL
++_002835_hash tcp_match_skb_to_sack 3-4 23568 _002835_hash NULL
++_002837_hash tso_fragment 3 29050 _002837_hash NULL
++_002838_hash tt_response_fill_table 1 57902 _002838_hash NULL
++_002839_hash udpv6_sendmsg 4 22316 _002839_hash NULL
++_002840_hash velocity_rx_copy 2 34583 _002840_hash NULL
++_002841_hash zd_mac_rx 3 38296 _002841_hash NULL
++_002842_hash ath6kl_wmi_get_new_buf 1 52304 _002842_hash NULL
++_002843_hash bat_ogm_queue_add 3 40337 _002843_hash NULL
++_002844_hash brcmf_alloc_pkt_and_read 2 63116 _002844_hash &_001638_hash
++_002845_hash brcmf_sdioh_request_buffer 7 40239 _002845_hash NULL
++_002846_hash carl9170_handle_mpdu 3 11056 _002846_hash NULL
++_002847_hash cfpkt_add_trail 3 27260 _002847_hash NULL
++_002848_hash cfpkt_pad_trail 2 55511 _002848_hash NULL
++_002849_hash dvb_net_sec_callback 2 28786 _002849_hash NULL
++_002850_hash fwnet_receive_packet 9 50537 _002850_hash NULL
++_002851_hash handle_rx_packet 3 58993 _002851_hash NULL
++_002852_hash hysdn_sched_rx 3 60533 _002852_hash NULL
++_002858_hash ipwireless_network_packet_received 4 51277 _002858_hash NULL
++_002859_hash l2cap_bredr_sig_cmd 3 49065 _002859_hash NULL
++_002860_hash ppp_cp_event 6 2965 _002860_hash NULL
++_002861_hash receive_client_update_packet 3 49104 _002861_hash NULL
++_002862_hash receive_server_sync_packet 3 59021 _002862_hash NULL
++_002863_hash sky2_receive 2 13407 _002863_hash NULL
++_002864_hash sys_fcntl 3 19267 _002864_hash NULL
++_002865_hash sys_fcntl64 3 29031 _002865_hash NULL
++_002866_hash tcp_sacktag_walk 5-6 26339 _002866_hash NULL
++_002868_hash tcp_write_xmit 2 39755 _002868_hash NULL
++_002869_hash wl1271_cmd_build_probe_req 3-5 51141 _002869_hash NULL
++_002870_hash ath6kl_wmi_send_probe_response_cmd 5 45422 _002870_hash NULL
++_002871_hash ath6kl_wmi_set_appie_cmd 4 47855 _002871_hash NULL
++_002872_hash ath6kl_wmi_startscan_cmd 7 24580 _002872_hash NULL
++_002873_hash ath6kl_wmi_test_cmd 3 27312 _002873_hash NULL
++_002874_hash brcmf_sdcard_recv_buf 6 24006 _002874_hash NULL
++_002875_hash brcmf_sdcard_rwdata 5 65041 _002875_hash NULL
++_002876_hash brcmf_sdcard_send_buf 6 54980 _002876_hash NULL
++_002877_hash __carl9170_rx 3 56784 _002877_hash NULL
++_002878_hash cfpkt_setlen 2 49343 _002878_hash NULL
++_002880_hash tcp_push_one 2 48816 _002880_hash NULL
++_002881_hash __tcp_push_pending_frames 2 48148 _002881_hash NULL
++_002882_hash ath6kl_tm_rx_report 3 44494 _002882_hash NULL
++_002883_hash brcmf_sdbrcm_membytes 3-5 37324 _002883_hash NULL
++_002885_hash brcmf_sdbrcm_read_control 3 22721 _002885_hash NULL
++_002886_hash brcmf_sdbrcm_send_buf 6 9129 _002886_hash NULL
++_002887_hash carl9170_rx 3 13272 _002887_hash NULL
++_002888_hash carl9170_rx_stream 3 1334 _002888_hash NULL
++_002889_hash tcp_push 3 10680 _002889_hash NULL
++_002890_hash compat_sys_fcntl64 3 60256 _002890_hash NULL
++_002891_hash snd_nm256_capture_copy 5 28622 _002891_hash NULL
++_002892_hash snd_nm256_playback_copy 5 38567 _002892_hash NULL
++_002893_hash tomoyo_init_log 2 14806 _002893_hash NULL
++_002894_hash compat_sys_fcntl 3 15654 _002894_hash NULL
++_002895_hash tomoyo_write_log2 2 11732 _002895_hash NULL
++_002896_hash OS_mem_token_alloc 1 14276 _002896_hash NULL
++_002897_hash packet_came 3 18072 _002897_hash NULL
++_002898_hash softsynth_write 3 3455 _002898_hash NULL
++_002899_hash __get_vm_area_node 1 55305 _002899_hash NULL
++_002900_hash vm_map_ram 2 23078 _002900_hash &_001809_hash
++_002901_hash get_vm_area 1 18080 _002901_hash NULL
++_002902_hash __get_vm_area 1 61599 _002902_hash NULL
++_002903_hash get_vm_area_caller 1 10527 _002903_hash NULL
++_002904_hash __get_vm_area_caller 1 56416 _002938_hash NULL nohasharray
++_002905_hash alloc_vm_area 1 36149 _002905_hash NULL
++_002906_hash __ioremap_caller 1-2 21800 _002906_hash NULL
++_002908_hash vmap 2 15025 _002908_hash NULL
++_002909_hash ioremap_cache 1-2 47189 _002909_hash NULL
++_002911_hash ioremap_nocache 1-2 2439 _002911_hash NULL
++_002913_hash ioremap_prot 1-2 51764 _002913_hash NULL
++_002915_hash ioremap_wc 1-2 62695 _002915_hash NULL
++_002916_hash acpi_os_ioremap 1-2 49523 _002916_hash NULL
++_002918_hash devm_ioremap_nocache 2-3 2036 _002918_hash NULL
++_002920_hash __einj_error_trigger 1 12304 _002920_hash NULL
++_002921_hash io_mapping_map_wc 2 19284 _002921_hash NULL
++_002922_hash ioremap 1-2 23172 _002922_hash NULL
++_002924_hash msix_map_region 3 3411 _002924_hash NULL
++_002925_hash pci_iomap 3 47575 _002925_hash NULL
++_002926_hash sfi_map_memory 1-2 5183 _002926_hash NULL
++_002928_hash xlate_dev_mem_ptr 1 15291 _002928_hash &_001958_hash
++_002929_hash a4t_cs_init 3 27734 _002929_hash NULL
++_002930_hash aac_nark_ioremap 2 50163 _002930_hash &_000009_hash
++_002931_hash aac_rkt_ioremap 2 3333 _002931_hash NULL
++_002932_hash aac_rx_ioremap 2 52410 _002932_hash NULL
++_002933_hash aac_sa_ioremap 2 13596 _002933_hash &_000201_hash
++_002934_hash aac_src_ioremap 2 41688 _002934_hash NULL
++_002935_hash acpi_os_map_memory 1-2 11161 _002935_hash NULL
++_002937_hash acpi_os_read_memory 1-3 54186 _002937_hash NULL
++_002938_hash acpi_os_write_memory 1-3 56416 _002938_hash &_002904_hash
++_002939_hash acpi_pre_map 1 51532 _002939_hash NULL
++_002940_hash c101_run 2 37279 _002940_hash NULL
++_002941_hash check586 2 29914 _002941_hash NULL
++_002942_hash check_mirror 1-2 57342 _002942_hash &_001368_hash
++_002944_hash cru_detect 1 11272 _002944_hash NULL
++_002945_hash cs553x_init_one 3 58886 _002945_hash NULL
++_002946_hash cycx_setup 4 47562 _002946_hash NULL
++_002947_hash DepcaSignature 2 80 _002947_hash &_000976_hash
++_002948_hash devm_ioremap 2-3 29235 _002948_hash NULL
++_002950_hash dma_declare_coherent_memory 2-4 14244 _002950_hash NULL
++_002952_hash doc_probe 1 23285 _002952_hash NULL
++_002953_hash DoC_Probe 1 57534 _002953_hash NULL
++_002954_hash ems_pcmcia_add_card 2 62627 _002954_hash NULL
++_002955_hash gdth_init_isa 1 28091 _002955_hash NULL
++_002956_hash gdth_search_isa 1 58595 _002956_hash NULL
++_002957_hash isp1760_register 1-2 628 _002957_hash NULL
++_002959_hash mthca_map_reg 2-3 5664 _002959_hash NULL
++_002961_hash n2_run 3 53459 _002961_hash NULL
++_002962_hash pcim_iomap 3 58334 _002962_hash NULL
++_002963_hash probe_bios 1 17467 _002963_hash NULL
++_002964_hash register_device 2-3 60015 _002964_hash NULL
++_002966_hash remap_pci_mem 1-2 15966 _002966_hash NULL
++_002968_hash rtl_port_map 1-2 2385 _002968_hash NULL
++_002970_hash sfi_map_table 1 5462 _002970_hash NULL
++_002971_hash sriov_enable_migration 2 14889 _002971_hash NULL
++_002972_hash ssb_bus_scan 2 36578 _002972_hash NULL
++_002973_hash ssb_ioremap 2 5228 _002973_hash NULL
++_002974_hash tpm_tis_init 2-3 15304 _002974_hash NULL
++_002975_hash acpi_ex_system_memory_space_handler 2 31192 _002975_hash NULL
++_002976_hash acpi_tb_check_xsdt 1 21862 _002976_hash NULL
++_002977_hash acpi_tb_install_table 1 12988 _002977_hash NULL
++_002978_hash acpi_tb_parse_root_table 1 53455 _002978_hash NULL
++_002979_hash com90xx_found 3 13974 _002979_hash NULL
++_002980_hash dmam_declare_coherent_memory 2-4 43679 _002980_hash NULL
++_002982_hash gdth_isa_probe_one 1 48925 _002982_hash NULL
++_002983_hash sfi_check_table 1 6772 _002983_hash NULL
++_002984_hash sfi_sysfs_install_table 1 51688 _002984_hash NULL
++_002985_hash sriov_enable 2 59689 _002985_hash NULL
++_002986_hash ssb_bus_register 3 65183 _002986_hash NULL
++_002987_hash pci_enable_sriov 2 35745 _002987_hash NULL
++_002988_hash ssb_bus_pcmciabus_register 3 56020 _002988_hash NULL
++_002989_hash ssb_bus_ssbbus_register 2 2217 _002989_hash NULL
++_002990_hash lpfc_sli_probe_sriov_nr_virtfn 2 26004 _002990_hash NULL
++_002991_hash lguest_map 1-2 42008 _002991_hash NULL
++_002994_hash alloc_vm_area 1 15989 _002994_hash NULL
++_002996_hash efi_ioremap 1-2 3492 _002996_hash &_000763_hash
++_002998_hash init_chip_wc_pat 2 62768 _002998_hash NULL
++_002999_hash io_mapping_create_wc 1-2 1354 _002999_hash NULL
++_003001_hash iommu_map_mmio_space 1 30919 _003001_hash NULL
++_003002_hash ca91cx42_alloc_resource 2 10502 _003002_hash NULL
++_003003_hash tsi148_alloc_resource 2 24563 _003003_hash NULL
++_003004_hash ca91cx42_master_set 4 23146 _003004_hash NULL
++_003005_hash tsi148_master_set 4 14685 _003005_hash NULL
++_003006_hash alloc_ftrace_hash 1 57431 _003006_hash &_002350_hash
++_003007_hash alloc_ieee80211 1 20063 _003007_hash NULL
++_003008_hash alloc_ieee80211_rsl 1 34564 _003008_hash NULL
++_003009_hash alloc_private 2 22399 _003009_hash &_002274_hash
++_003010_hash alloc_rtllib 1 51136 _003010_hash NULL
++_003011_hash alloc_rx_desc_ring 2 18016 _003011_hash NULL
++_003012_hash alloc_sched_domains 1 47756 _003012_hash NULL
++_003013_hash alloc_subdevices 2 43300 _003013_hash NULL
++_003014_hash arcfb_write 3 8702 _003014_hash NULL
++_003015_hash arch_gnttab_map_shared 3 7970 _003015_hash NULL
++_003016_hash atyfb_setup_generic 3 49151 _003016_hash NULL
++_003017_hash b1_alloc_card 1 36155 _003017_hash NULL
++_003018_hash broadsheetfb_write 3 39976 _003018_hash NULL
++_003019_hash broadsheet_spiflash_rewrite_sector 2 54864 _003019_hash NULL
++_003020_hash capabilities_read 3 58457 _003020_hash NULL
++_003021_hash capinc_tty_write 3 28539 _003021_hash NULL
++_003022_hash capi_write 3 35104 _003022_hash NULL
++_003023_hash cmpk_message_handle_tx 4 54024 _003023_hash NULL
++_003024_hash cmtp_add_msgpart 4 9252 _003024_hash NULL
++_003025_hash cmtp_send_interopmsg 7 376 _003025_hash NULL
++_003026_hash comedi_buf_alloc 3 24822 _003026_hash NULL
++_003027_hash comedi_read 3 13199 _003027_hash NULL
++_003028_hash comedi_write 3 47926 _003028_hash NULL
++_003029_hash dccpprobe_read 3 52549 _003029_hash NULL
++_003030_hash __devres_alloc 2 25598 _003030_hash NULL
++_003031_hash diva_os_alloc_message_buffer 1 64568 _003031_hash NULL
++_003032_hash diva_os_copy_from_user 4 7792 _003032_hash NULL
++_003033_hash diva_os_copy_to_user 4 48508 _003033_hash &_001671_hash
++_003034_hash diva_os_malloc 2 16406 _003034_hash NULL
++_003035_hash divasa_remap_pci_bar 3-4 23485 _003035_hash &_000678_hash
++_003037_hash do_test 1 15766 _003037_hash NULL
++_003038_hash event_enable_write 3 45238 _003038_hash NULL
++_003039_hash evtchn_read 3 3569 _003039_hash NULL
++_003040_hash evtchn_write 3 43278 _003040_hash NULL
++_003041_hash ext_sd_execute_read_data 9 48589 _003041_hash NULL
++_003042_hash ext_sd_execute_write_data 9 8175 _003042_hash NULL
++_003043_hash fb_sys_read 3 13778 _003043_hash NULL
++_003044_hash fb_sys_write 3 33130 _003044_hash NULL
++_003045_hash firmwareUpload 3 32794 _003045_hash NULL
++_003046_hash ftrace_profile_write 3 53327 _003046_hash NULL
++_003047_hash fw_download_code 3 13249 _003047_hash NULL
++_003048_hash fwSendNullPacket 2 54618 _003048_hash NULL
++_003049_hash gather_array 3 56641 _003049_hash NULL
++_003050_hash gntdev_alloc_map 2 35145 _003050_hash NULL
++_003051_hash gnttab_map 2 56439 _003051_hash NULL
++_003052_hash gru_alloc_gts 2-3 60056 _003052_hash NULL
++_003054_hash hecubafb_write 3 26942 _003054_hash NULL
++_003055_hash hycapi_rx_capipkt 3 11602 _003055_hash NULL
++_003056_hash ieee80211_alloc_txb 1-2 52477 _003056_hash NULL
++_003058_hash ieee80211_authentication_req 3 63973 _003058_hash NULL
++_003059_hash ieee80211_wx_set_gen_ie 3 51399 _003059_hash NULL
++_003060_hash ieee80211_wx_set_gen_ie_rsl 3 3521 _003060_hash NULL
++_003061_hash init_per_cpu 1 17880 _003061_hash NULL
++_003062_hash ivtvfb_write 3 40023 _003062_hash NULL
++_003063_hash metronomefb_write 3 8823 _003063_hash NULL
++_003064_hash mga_ioremap 1-2 8571 _003064_hash NULL
++_003066_hash netfs_trans_alloc 2-4 6136 _003066_hash NULL
++_003068_hash ni_gpct_device_construct 5 610 _003068_hash NULL
++_003069_hash odev_update 2 50169 _003069_hash NULL
++_003070_hash options_write 3 47243 _003070_hash NULL
++_003071_hash pmcraid_copy_sglist 3 38431 _003071_hash NULL
++_003072_hash pohmelfs_name_alloc 1 1036 _003072_hash NULL
++_003073_hash pohmelfs_readpages_trans_complete 2 63912 _003073_hash NULL
++_003074_hash proc_fault_inject_read 3 36802 _003074_hash NULL
++_003075_hash proc_fault_inject_write 3 21058 _003075_hash NULL
++_003076_hash ptc_proc_write 3 12076 _003076_hash NULL
++_003077_hash queue_reply 3 22416 _003077_hash NULL
++_003078_hash rb_simple_write 3 20890 _003078_hash NULL
++_003079_hash Realloc 2 34961 _003079_hash NULL
++_003080_hash reportdesc_callback 3 38603 _003080_hash NULL
++_003081_hash rtllib_alloc_txb 1-2 21687 _003081_hash NULL
++_003083_hash rtllib_authentication_req 3 26713 _003083_hash NULL
++_003084_hash rtllib_wx_set_gen_ie 3 59808 _003084_hash NULL
++_003085_hash rts51x_transfer_data_partial 6 5735 _003085_hash NULL
++_003086_hash SendTxCommandPacket 3 42901 _003086_hash NULL
++_003087_hash slow_kernel_write 2 19764 _003087_hash NULL
++_003088_hash split 2 11691 _003088_hash NULL
++_003089_hash stack_max_size_write 3 36068 _003089_hash NULL
++_003090_hash store_debug_level 3 35652 _003090_hash NULL
++_003091_hash system_enable_write 3 61396 _003091_hash NULL
++_003092_hash trace_options_core_write 3 61551 _003092_hash NULL
++_003093_hash trace_options_write 3 48275 _003093_hash NULL
++_003094_hash tracing_ctrl_write 3 42324 _003094_hash &_001563_hash
++_003095_hash tracing_entries_write 3 60563 _003095_hash NULL
++_003096_hash tracing_max_lat_write 3 8728 _003096_hash NULL
++_003097_hash tracing_read_dyn_info 3 45468 _003097_hash NULL
++_003098_hash ttm_bo_ioremap 2-3 31082 _003098_hash NULL
++_003100_hash ttm_bo_kmap_ttm 3 5922 _003100_hash NULL
++_003101_hash ttm_put_pages 2 38411 _003101_hash NULL
++_003102_hash tunables_read 3 36385 _003102_hash NULL
++_003103_hash tunables_write 3 59563 _003103_hash NULL
++_003104_hash u32_array_read 3 2219 _003104_hash NULL
++_003105_hash ufx_alloc_urb_list 3 10349 _003105_hash NULL
++_003106_hash um_idi_write 3 18293 _003106_hash NULL
++_003107_hash usb_buffer_alloc 2 36276 _003107_hash NULL
++_003108_hash viafb_dfph_proc_write 3 49288 _003108_hash NULL
++_003109_hash viafb_dfpl_proc_write 3 627 _003109_hash NULL
++_003110_hash viafb_dvp0_proc_write 3 23023 _003110_hash NULL
++_003111_hash viafb_dvp1_proc_write 3 48864 _003111_hash NULL
++_003112_hash viafb_vt1636_proc_write 3 16018 _003112_hash NULL
++_003113_hash vivi_read 3 23073 _003113_hash NULL
++_003114_hash xdi_copy_from_user 4 8395 _003114_hash NULL
++_003115_hash xdi_copy_to_user 4 48900 _003115_hash NULL
++_003116_hash xenbus_file_write 3 6282 _003116_hash NULL
++_003117_hash xpc_kmalloc_cacheline_aligned 1 42895 _003117_hash NULL
++_003118_hash xpc_kzalloc_cacheline_aligned 1 65433 _003118_hash NULL
++_003119_hash xsd_read 3 15653 _003119_hash NULL
++_003120_hash alloc_and_copy_ftrace_hash 1 29368 _003120_hash NULL
++_003121_hash c4_add_card 3 54968 _003121_hash NULL
++_003122_hash picolcd_fb_write 3 2318 _003122_hash NULL
++_003123_hash ttm_bo_kmap 2-3 60118 _003123_hash NULL
++_003124_hash dlfb_ops_write 3 64150 _003124_hash NULL
++_003125_hash ieee80211_auth_challenge 3 18810 _003125_hash NULL
++_003126_hash ieee80211_rtl_auth_challenge 3 61897 _003126_hash NULL
++_003127_hash ms_read_multiple_pages 4-5 8052 _003127_hash NULL
++_003129_hash ms_write_multiple_pages 5-6 10362 _003129_hash NULL
++_003131_hash pohmelfs_send_readpages 3 9537 _003131_hash NULL
++_003132_hash pohmelfs_send_xattr_req 6 49783 _003132_hash NULL
++_003133_hash resize_async_buffer 4 64031 _003133_hash &_002048_hash
++_003134_hash rtllib_auth_challenge 3 12493 _003134_hash NULL
++_003135_hash ufx_ops_write 3 54848 _003135_hash NULL
++_003136_hash viafb_iga1_odev_proc_write 3 36241 _003136_hash NULL
++_003137_hash viafb_iga2_odev_proc_write 3 2363 _003137_hash NULL
++_003138_hash xd_read_multiple_pages 4-5 11422 _003138_hash NULL
++_003140_hash xd_write_multiple_pages 5-6 53633 _003140_hash NULL
++_003142_hash xenfb_write 3 43412 _003142_hash NULL
++_003143_hash ms_rw_multi_sector 4 7459 _003143_hash NULL
++_003144_hash pohmelfs_setxattr 4 39281 _003144_hash NULL
++_003145_hash xd_rw 4 49020 _003145_hash NULL
++_003146_hash ms_rw 4 17220 _003146_hash NULL
 diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_overflow_plugin.c linux-3.2.25-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.2.25/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.25-pax/tools/gcc/size_overflow_plugin.c	2012-07-04 19:24:49.080063009 +0200
-@@ -0,0 +1,1204 @@
++++ linux-3.2.25-pax/tools/gcc/size_overflow_plugin.c	2012-08-11 13:49:00.000000000 +0200
+@@ -0,0 +1,1558 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -62394,6 +62954,8 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +#define CREATE_NEW_VAR NULL_TREE
 +#define CODES_LIMIT 32
 +#define MAX_PARAM 10
++#define MY_STMT GF_PLF_1
++#define NO_CAST_CHECK GF_PLF_2
 +
 +#if BUILDING_GCC_VERSION == 4005
 +#define DECL_CHAIN(NODE) (TREE_CHAIN(DECL_MINIMAL_CHECK(NODE)))
@@ -62403,20 +62965,30 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +void debug_gimple_stmt(gimple gs);
 +
 +static tree expand(struct pointer_set_t *visited, bool *potentionally_overflowed, tree var);
-+static tree signed_size_overflow_type;
-+static tree unsigned_size_overflow_type;
 +static tree report_size_overflow_decl;
 +static tree const_char_ptr_type_node;
 +static unsigned int handle_function(void);
++static void check_size_overflow(gimple stmt, tree size_overflow_type, tree cast_rhs, tree rhs, bool *potentionally_overflowed, bool before);
++static tree get_size_overflow_type(gimple stmt, tree node);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20120618beta",
++	.version	= "20120811beta",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
 +static tree handle_size_overflow_attribute(tree *node, tree __unused name, tree args, int __unused flags, bool *no_add_attrs)
 +{
-+	unsigned int arg_count = type_num_arguments(*node);
++	unsigned int arg_count;
++
++	if (TREE_CODE(*node) == FUNCTION_DECL)
++		arg_count = type_num_arguments(TREE_TYPE(*node));
++	else if (TREE_CODE(*node) == FUNCTION_TYPE || TREE_CODE(*node) == METHOD_TYPE)
++		arg_count = type_num_arguments(*node);
++	else {
++		*no_add_attrs = true;
++		error("%qE attribute only applies to functions", name);
++		return NULL_TREE;
++	}
 +
 +	for (; args; args = TREE_CHAIN(args)) {
 +		tree position = TREE_VALUE(args);
@@ -62428,13 +63000,13 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	return NULL_TREE;
 +}
 +
-+static struct attribute_spec no_size_overflow_attr = {
++static struct attribute_spec size_overflow_attr = {
 +	.name				= "size_overflow",
 +	.min_length			= 1,
 +	.max_length			= -1,
-+	.decl_required			= false,
-+	.type_required			= true,
-+	.function_type_required		= true,
++	.decl_required			= true,
++	.type_required			= false,
++	.function_type_required		= false,
 +	.handler			= handle_size_overflow_attribute,
 +#if BUILDING_GCC_VERSION >= 4007
 +	.affects_type_identity		= false
@@ -62443,7 +63015,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +static void register_attributes(void __unused *event_data, void __unused *data)
 +{
-+	register_attribute(&no_size_overflow_attr);
++	register_attribute(&size_overflow_attr);
 +}
 +
 +// http://www.team5150.com/~andrew/noncryptohashzoo2~/CrapWow.html
@@ -62494,6 +63066,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +static inline gimple get_def_stmt(tree node)
 +{
++	gcc_assert(node != NULL_TREE);
 +	gcc_assert(TREE_CODE(node) == SSA_NAME);
 +	return SSA_NAME_DEF_STMT(node);
 +}
@@ -62656,11 +63229,11 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	gcc_assert(TREE_CODE(arg) != COMPONENT_REF);
 +
 +	type = TREE_TYPE(arg);
-+	// skip function pointers
-+	if (TREE_CODE(type) == POINTER_TYPE && TREE_CODE(TREE_TYPE(type)) == FUNCTION_TYPE)
++
++	if (TREE_CODE(type) == POINTER_TYPE)
 +		return;
 +
-+	if (lookup_attribute("size_overflow", TYPE_ATTRIBUTES(TREE_TYPE(func))))
++	if (lookup_attribute("size_overflow", DECL_ATTRIBUTES(func)))
 +		return;
 +
 +	argnum = find_arg_number(arg, func);
@@ -62679,6 +63252,22 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	add_referenced_var(new_var);
 +	mark_sym_for_renaming(new_var);
 +	return new_var;
++}
++
++static gimple create_binary_assign(enum tree_code code, gimple stmt, tree rhs1, tree rhs2)
++{
++	gimple assign;
++	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
++	tree type = TREE_TYPE(rhs1);
++	tree lhs = create_new_var(type);
++
++	assign = gimple_build_assign_with_ops(code, lhs, rhs1, rhs2);
++	gimple_set_lhs(assign, make_ssa_name(lhs, assign));
++
++	gsi_insert_before(&gsi, assign, GSI_NEW_STMT);
++	update_stmt(assign);
++	gimple_set_plf(assign, MY_STMT, true);
++	return assign;
 +}
 +
 +static bool is_bool(tree node)
@@ -62700,34 +63289,63 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +static tree cast_a_tree(tree type, tree var)
 +{
-+	gcc_assert(type != NULL_TREE && var != NULL_TREE);
++	gcc_assert(type != NULL_TREE);
++	gcc_assert(var != NULL_TREE);
 +	gcc_assert(fold_convertible_p(type, var));
 +
 +	return fold_convert(type, var);
 +}
 +
-+static tree signed_cast(tree var)
-+{
-+	return cast_a_tree(signed_size_overflow_type, var);
-+}
-+
-+static gimple build_cast_stmt(tree type, tree var, tree new_var, location_t loc)
++static gimple build_cast_stmt(tree type, tree var, tree new_var, gimple_stmt_iterator *gsi, bool before)
 +{
 +	gimple assign;
++	location_t loc;
++
++	gcc_assert(type != NULL_TREE && var != NULL_TREE);
++	if (gsi_end_p(*gsi) && before == BEFORE_STMT)
++		gcc_unreachable();
 +
 +	if (new_var == CREATE_NEW_VAR)
 +		new_var = create_new_var(type);
 +
 +	assign = gimple_build_assign(new_var, cast_a_tree(type, var));
-+	gimple_set_location(assign, loc);
++
++	if (!gsi_end_p(*gsi)) {
++		loc = gimple_location(gsi_stmt(*gsi));
++		gimple_set_location(assign, loc);
++	}
++
 +	gimple_set_lhs(assign, make_ssa_name(new_var, assign));
++
++	if (before)
++		gsi_insert_before(gsi, assign, GSI_NEW_STMT);
++	else
++		gsi_insert_after(gsi, assign, GSI_NEW_STMT);
++	update_stmt(assign);
++	gimple_set_plf(assign, MY_STMT, true);
 +
 +	return assign;
 +}
 +
++static tree cast_to_new_size_overflow_type(gimple stmt, tree new_rhs1, tree size_overflow_type, bool before)
++{
++	gimple assign;
++	gimple_stmt_iterator gsi;
++
++	if (new_rhs1 == NULL_TREE)
++		return NULL_TREE;
++
++	if (!useless_type_conversion_p(TREE_TYPE(new_rhs1), size_overflow_type)) {
++		gsi = gsi_for_stmt(stmt);
++		assign = build_cast_stmt(size_overflow_type, new_rhs1, CREATE_NEW_VAR, &gsi, before);
++		return gimple_get_lhs(assign);
++	}
++	return new_rhs1;
++}
++
 +static tree create_assign(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple oldstmt, tree rhs1, bool before)
 +{
-+	tree oldstmt_rhs1;
++	tree oldstmt_rhs1, size_overflow_type, lhs;
 +	enum tree_code code;
 +	gimple stmt;
 +	gimple_stmt_iterator gsi;
@@ -62741,13 +63359,18 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +		gcc_unreachable();
 +	}
 +
++	if (gimple_code(oldstmt) == GIMPLE_ASM)
++		lhs = rhs1;
++	else
++		lhs = gimple_get_lhs(oldstmt);
++
 +	oldstmt_rhs1 = gimple_assign_rhs1(oldstmt);
 +	code = TREE_CODE(oldstmt_rhs1);
 +	if (code == PARM_DECL || (code == SSA_NAME && gimple_code(get_def_stmt(oldstmt_rhs1)) == GIMPLE_NOP))
 +		check_missing_attribute(oldstmt_rhs1);
 +
-+	stmt = build_cast_stmt(signed_size_overflow_type, rhs1, CREATE_NEW_VAR, gimple_location(oldstmt));
 +	gsi = gsi_for_stmt(oldstmt);
++	pointer_set_insert(visited, oldstmt);
 +	if (lookup_stmt_eh_lp(oldstmt) != 0) {
 +		basic_block next_bb, cur_bb;
 +		edge e;
@@ -62765,18 +63388,20 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +		gsi = gsi_after_labels(next_bb);
 +		gcc_assert(!gsi_end_p(gsi));
++
 +		before = true;
++		oldstmt = gsi_stmt(gsi);
++		pointer_set_insert(visited, oldstmt);
 +	}
-+	if (before)
-+		gsi_insert_before(&gsi, stmt, GSI_NEW_STMT);
-+	else
-+		gsi_insert_after(&gsi, stmt, GSI_NEW_STMT);
-+	update_stmt(stmt);
-+	pointer_set_insert(visited, oldstmt);
++
++	size_overflow_type = get_size_overflow_type(oldstmt, lhs);
++
++	stmt = build_cast_stmt(size_overflow_type, rhs1, CREATE_NEW_VAR, &gsi, before);
++	gimple_set_plf(stmt, MY_STMT, true);
 +	return gimple_get_lhs(stmt);
 +}
 +
-+static tree dup_assign(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple oldstmt, tree rhs1, tree rhs2, tree __unused rhs3)
++static tree dup_assign(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple oldstmt, tree size_overflow_type, tree rhs1, tree rhs2, tree __unused rhs3)
 +{
 +	tree new_var, lhs = gimple_get_lhs(oldstmt);
 +	gimple stmt;
@@ -62784,6 +63409,9 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	if (!*potentionally_overflowed)
 +		return NULL_TREE;
++
++	if (gimple_plf(oldstmt, MY_STMT))
++		return lhs;
 +
 +	if (gimple_num_ops(oldstmt) != 4 && rhs1 == NULL_TREE) {
 +		rhs1 = gimple_assign_rhs1(oldstmt);
@@ -62796,6 +63424,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	stmt = gimple_copy(oldstmt);
 +	gimple_set_location(stmt, gimple_location(oldstmt));
++	gimple_set_plf(stmt, MY_STMT, true);
 +
 +	if (gimple_assign_rhs_code(oldstmt) == WIDEN_MULT_EXPR)
 +		gimple_assign_set_rhs_code(stmt, MULT_EXPR);
@@ -62803,13 +63432,13 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	if (is_bool(lhs))
 +		new_var = SSA_NAME_VAR(lhs);
 +	else
-+		new_var = create_new_var(signed_size_overflow_type);
++		new_var = create_new_var(size_overflow_type);
 +	new_var = make_ssa_name(new_var, stmt);
 +	gimple_set_lhs(stmt, new_var);
 +
 +	if (rhs1 != NULL_TREE) {
 +		if (!gimple_assign_cast_p(oldstmt))
-+			rhs1 = signed_cast(rhs1);
++			rhs1 = cast_a_tree(size_overflow_type, rhs1);
 +		gimple_assign_set_rhs1(stmt, rhs1);
 +	}
 +
@@ -62844,6 +63473,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	gsi = gsi_for_stmt(oldstmt);
 +	gsi_insert_after(&gsi, phi, GSI_NEW_STMT);
 +	gimple_set_bb(phi, bb);
++	gimple_set_plf(phi, MY_STMT, true);
 +	return phi;
 +}
 +
@@ -62857,28 +63487,29 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	return first_bb;
 +}
 +
-+static gimple cast_old_phi_arg(gimple oldstmt, tree arg, tree new_var, unsigned int i)
++static tree cast_old_phi_arg(gimple oldstmt, tree size_overflow_type, tree arg, tree new_var, unsigned int i)
 +{
 +	basic_block bb;
-+	gimple newstmt, def_stmt;
++	gimple newstmt;
 +	gimple_stmt_iterator gsi;
++	bool before = BEFORE_STMT;
 +
-+	newstmt = build_cast_stmt(signed_size_overflow_type, arg, new_var, gimple_location(oldstmt));
-+	if (TREE_CODE(arg) == SSA_NAME) {
-+		def_stmt = get_def_stmt(arg);
-+		if (gimple_code(def_stmt) != GIMPLE_NOP) {
-+			gsi = gsi_for_stmt(def_stmt);
-+			gsi_insert_after(&gsi, newstmt, GSI_NEW_STMT);
-+			return newstmt;
-+		}
++	if (TREE_CODE(arg) == SSA_NAME && gimple_code(get_def_stmt(arg)) != GIMPLE_NOP) {
++		gsi = gsi_for_stmt(get_def_stmt(arg));
++		newstmt = build_cast_stmt(size_overflow_type, arg, new_var, &gsi, AFTER_STMT);
++		return gimple_get_lhs(newstmt);
 +	}
 +
 +	bb = gimple_phi_arg_edge(oldstmt, i)->src;
-+	if (bb->index == 0)
-+		bb = create_a_first_bb();
 +	gsi = gsi_after_labels(bb);
-+	gsi_insert_before(&gsi, newstmt, GSI_NEW_STMT);
-+	return newstmt;
++	if (bb->index == 0) {
++		bb = create_a_first_bb();
++		gsi = gsi_start_bb(bb);
++	}
++	if (gsi_end_p(gsi))
++		before = AFTER_STMT;
++	newstmt = build_cast_stmt(size_overflow_type, arg, new_var, &gsi, before);
++	return gimple_get_lhs(newstmt);
 +}
 +
 +static gimple handle_new_phi_arg(tree arg, tree new_var, tree new_rhs)
@@ -62911,29 +63542,35 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	gimple_set_lhs(newstmt, make_ssa_name(new_var, newstmt));
 +	gsi_insert(&gsi, newstmt, GSI_NEW_STMT);
++	gimple_set_plf(newstmt, MY_STMT, true);
 +	update_stmt(newstmt);
 +	return newstmt;
 +}
 +
-+static tree build_new_phi_arg(struct pointer_set_t *visited, bool *potentionally_overflowed, tree arg, tree new_var)
++static tree build_new_phi_arg(struct pointer_set_t *visited, bool *potentionally_overflowed, tree size_overflow_type, tree arg, tree new_var)
 +{
 +	gimple newstmt;
 +	tree new_rhs;
 +
 +	new_rhs = expand(visited, potentionally_overflowed, arg);
-+
 +	if (new_rhs == NULL_TREE)
 +		return NULL_TREE;
++
++	new_rhs = cast_to_new_size_overflow_type(get_def_stmt(new_rhs), new_rhs, size_overflow_type, AFTER_STMT);
 +
 +	newstmt = handle_new_phi_arg(arg, new_var, new_rhs);
 +	return gimple_get_lhs(newstmt);
 +}
 +
-+static tree build_new_phi(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple oldstmt)
++static tree build_new_phi(struct pointer_set_t *visited, bool *potentionally_overflowed, tree var)
 +{
-+	gimple phi;
-+	tree new_var = create_new_var(signed_size_overflow_type);
++	gimple phi, oldstmt = get_def_stmt(var);
++	tree new_var, size_overflow_type;
 +	unsigned int i, n = gimple_phi_num_args(oldstmt);
++
++	size_overflow_type = get_size_overflow_type(oldstmt, var);
++
++	new_var = create_new_var(size_overflow_type);
 +
 +	pointer_set_insert(visited, oldstmt);
 +	phi = overflow_create_phi_node(oldstmt, new_var);
@@ -62942,10 +63579,10 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +		arg = gimple_phi_arg_def(oldstmt, i);
 +		if (is_gimple_constant(arg))
-+			arg = signed_cast(arg);
-+		lhs = build_new_phi_arg(visited, potentionally_overflowed, arg, new_var);
++			arg = cast_a_tree(size_overflow_type, arg);
++		lhs = build_new_phi_arg(visited, potentionally_overflowed, size_overflow_type, arg, new_var);
 +		if (lhs == NULL_TREE)
-+			lhs = gimple_get_lhs(cast_old_phi_arg(oldstmt, arg, new_var, i));
++			lhs = cast_old_phi_arg(oldstmt, size_overflow_type, arg, new_var, i);
 +		add_phi_arg(phi, lhs, gimple_phi_arg_edge(oldstmt, i), gimple_location(oldstmt));
 +	}
 +
@@ -62953,35 +63590,132 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	return gimple_phi_result(phi);
 +}
 +
-+static tree handle_unary_rhs(struct pointer_set_t *visited, bool *potentionally_overflowed, tree var)
++static tree change_assign_rhs(gimple stmt, tree orig_rhs, tree new_rhs)
 +{
-+	gimple def_stmt = get_def_stmt(var);
-+	tree new_rhs1, rhs1 = gimple_assign_rhs1(def_stmt);
++	gimple assign;
++	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
++	tree origtype = TREE_TYPE(orig_rhs);
 +
-+	*potentionally_overflowed = true;
-+	new_rhs1 = expand(visited, potentionally_overflowed, rhs1);
-+	if (new_rhs1 == NULL_TREE) {
-+		if (TREE_CODE(TREE_TYPE(rhs1)) == POINTER_TYPE)
-+			return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
-+		else
-+			return create_assign(visited, potentionally_overflowed, def_stmt, rhs1, AFTER_STMT);
-+	}
-+	return dup_assign(visited, potentionally_overflowed, def_stmt, new_rhs1, NULL_TREE, NULL_TREE);
++	gcc_assert(gimple_code(stmt) == GIMPLE_ASSIGN);
++
++	assign = build_cast_stmt(origtype, new_rhs, CREATE_NEW_VAR, &gsi, BEFORE_STMT);
++	return gimple_get_lhs(assign);
 +}
 +
-+static tree handle_unary_ops(struct pointer_set_t *visited, bool *potentionally_overflowed, tree var)
++static void change_rhs1(gimple stmt, tree new_rhs1)
 +{
-+	gimple def_stmt = get_def_stmt(var);
++	tree assign_rhs;
++	tree rhs = gimple_assign_rhs1(stmt);
++
++	assign_rhs = change_assign_rhs(stmt, rhs, new_rhs1);
++	gimple_assign_set_rhs1(stmt, assign_rhs);
++	update_stmt(stmt);
++}
++
++static bool check_mode_type(gimple stmt)
++{
++	tree lhs = gimple_get_lhs(stmt);
++	tree lhs_type = TREE_TYPE(lhs);
++	tree rhs_type = TREE_TYPE(gimple_assign_rhs1(stmt));
++	enum machine_mode lhs_mode = TYPE_MODE(lhs_type);
++	enum machine_mode rhs_mode = TYPE_MODE(rhs_type);
++
++	if (rhs_mode == lhs_mode && TYPE_UNSIGNED(rhs_type) == TYPE_UNSIGNED(lhs_type))
++		return false;
++
++	if (rhs_mode == SImode && lhs_mode == DImode && (TYPE_UNSIGNED(rhs_type) || !TYPE_UNSIGNED(lhs_type)))
++		return false;
++
++	return true;
++}
++
++static bool check_undefined_integer_operation(gimple stmt)
++{
++	gimple def_stmt;
++	tree lhs = gimple_get_lhs(stmt);
++	tree rhs1 = gimple_assign_rhs1(stmt);
++	tree rhs1_type = TREE_TYPE(rhs1);
++	tree lhs_type = TREE_TYPE(lhs);
++
++	if (TYPE_MODE(rhs1_type) != TYPE_MODE(lhs_type) || TYPE_UNSIGNED(rhs1_type) == TYPE_UNSIGNED(lhs_type))
++		return false;
++
++	def_stmt = get_def_stmt(rhs1);
++	if (gimple_code(def_stmt) != GIMPLE_ASSIGN)
++		return false;
++
++	if (gimple_assign_rhs_code(def_stmt) != MINUS_EXPR)
++		return false;
++	return true;
++}
++
++static tree handle_unary_rhs(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple stmt)
++{
++	tree size_overflow_type, lhs = gimple_get_lhs(stmt);
++	tree new_rhs1, rhs1 = gimple_assign_rhs1(stmt);
++	tree rhs1_type = TREE_TYPE(rhs1);
++	tree lhs_type = TREE_TYPE(lhs);
++
++	*potentionally_overflowed = true;
++
++	new_rhs1 = expand(visited, potentionally_overflowed, rhs1);
++
++	if (new_rhs1 == NULL_TREE || TREE_CODE(rhs1_type) == POINTER_TYPE)
++		return create_assign(visited, potentionally_overflowed, stmt, lhs, AFTER_STMT);
++
++	if (gimple_plf(stmt, MY_STMT))
++		return lhs;
++
++	if (gimple_plf(stmt, NO_CAST_CHECK)) {
++		size_overflow_type = get_size_overflow_type(stmt, rhs1);
++		new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++		return dup_assign(visited, potentionally_overflowed, stmt, size_overflow_type, new_rhs1, NULL_TREE, NULL_TREE);
++	}
++
++	if (!gimple_assign_cast_p(stmt)) {
++		size_overflow_type = get_size_overflow_type(stmt, lhs);
++		new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++		return dup_assign(visited, potentionally_overflowed, stmt, size_overflow_type, new_rhs1, NULL_TREE, NULL_TREE);
++	}
++
++	if (check_undefined_integer_operation(stmt)) {
++		size_overflow_type = get_size_overflow_type(stmt, lhs);
++		new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++		return dup_assign(visited, potentionally_overflowed, stmt, size_overflow_type, new_rhs1, NULL_TREE, NULL_TREE);
++	}
++
++	size_overflow_type = get_size_overflow_type(stmt, rhs1);
++	new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++
++	change_rhs1(stmt, new_rhs1);
++	check_size_overflow(stmt, size_overflow_type, new_rhs1, rhs1, potentionally_overflowed, BEFORE_STMT);
++
++	if (TYPE_UNSIGNED(rhs1_type) != TYPE_UNSIGNED(lhs_type))
++		return create_assign(visited, potentionally_overflowed, stmt, lhs, AFTER_STMT);
++
++	if (!check_mode_type(stmt))
++		return create_assign(visited, potentionally_overflowed, stmt, lhs, AFTER_STMT);
++
++	size_overflow_type = get_size_overflow_type(stmt, lhs);
++	new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++
++	check_size_overflow(stmt, size_overflow_type, new_rhs1, lhs, potentionally_overflowed, BEFORE_STMT);
++
++	return create_assign(visited, potentionally_overflowed, stmt, lhs, AFTER_STMT);
++}
++
++static tree handle_unary_ops(struct pointer_set_t *visited, bool *potentionally_overflowed, tree lhs)
++{
++	gimple def_stmt = get_def_stmt(lhs);
 +	tree rhs1 = gimple_assign_rhs1(def_stmt);
 +
 +	if (is_gimple_constant(rhs1))
-+		return dup_assign(visited, potentionally_overflowed, def_stmt, signed_cast(rhs1), NULL_TREE, NULL_TREE);
++		return create_assign(visited, potentionally_overflowed, def_stmt, lhs, AFTER_STMT);
 +
 +	gcc_assert(TREE_CODE(rhs1) != COND_EXPR);
 +	switch (TREE_CODE(rhs1)) {
 +	case SSA_NAME:
-+		return handle_unary_rhs(visited, potentionally_overflowed, var);
-+
++		return handle_unary_rhs(visited, potentionally_overflowed, def_stmt);
 +	case ARRAY_REF:
 +	case BIT_FIELD_REF:
 +	case ADDR_EXPR:
@@ -62993,7 +63727,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	case PARM_DECL:
 +	case TARGET_MEM_REF:
 +	case VAR_DECL:
-+		return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
++		return create_assign(visited, potentionally_overflowed, def_stmt, lhs, AFTER_STMT);
 +
 +	default:
 +		debug_gimple_stmt(def_stmt);
@@ -63029,11 +63763,12 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	return build1(ADDR_EXPR, ptr_type_node, string);
 +}
 +
-+static void insert_cond_result(basic_block bb_true, gimple stmt, tree arg)
++static void insert_cond_result(basic_block bb_true, gimple stmt, tree arg, bool min)
 +{
 +	gimple func_stmt, def_stmt;
-+	tree current_func, loc_file, loc_line;
++	tree current_func, loc_file, loc_line, ssa_name;
 +	expanded_location xloc;
++	char ssa_name_buf[100];
 +	gimple_stmt_iterator gsi = gsi_start_bb(bb_true);
 +
 +	def_stmt = get_def_stmt(arg);
@@ -63053,8 +63788,15 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	current_func = build_string(NAME_LEN(current_function_decl) + 1, NAME(current_function_decl));
 +	current_func = create_string_param(current_func);
 +
-+	// void report_size_overflow(const char *file, unsigned int line, const char *func)
-+	func_stmt = gimple_build_call(report_size_overflow_decl, 3, loc_file, loc_line, current_func);
++	if (min)
++		snprintf(ssa_name_buf, 100, "%s_%u (min)\n", NAME(SSA_NAME_VAR(arg)), SSA_NAME_VERSION(arg));
++	else
++		snprintf(ssa_name_buf, 100, "%s_%u (max)\n", NAME(SSA_NAME_VAR(arg)), SSA_NAME_VERSION(arg));
++	ssa_name = build_string(100, ssa_name_buf);
++	ssa_name = create_string_param(ssa_name);
++
++	// void report_size_overflow(const char *file, unsigned int line, const char *func, const char *ssa_name)
++	func_stmt = gimple_build_call(report_size_overflow_decl, 4, loc_file, loc_line, current_func, ssa_name);
 +
 +	gsi_insert_after(&gsi, func_stmt, GSI_CONTINUE_LINKING);
 +}
@@ -63066,14 +63808,15 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	inform(loc, "Integer size_overflow check applied here.");
 +}
 +
-+static void insert_check_size_overflow(gimple stmt, enum tree_code cond_code, tree arg, tree type_value)
++static void insert_check_size_overflow(gimple stmt, enum tree_code cond_code, tree arg, tree type_value, bool before, bool min)
 +{
 +	basic_block cond_bb, join_bb, bb_true;
 +	edge e;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
 +
 +	cond_bb = gimple_bb(stmt);
-+	gsi_prev(&gsi);
++	if (before)
++		gsi_prev(&gsi);
 +	if (gsi_end_p(gsi))
 +		e = split_block_after_labels(cond_bb);
 +	else
@@ -63099,80 +63842,218 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	}
 +
 +	insert_cond(cond_bb, arg, cond_code, type_value);
-+	insert_cond_result(bb_true, stmt, arg);
++	insert_cond_result(bb_true, stmt, arg, min);
 +
 +//	print_the_code_insertions(stmt);
 +}
 +
-+static gimple cast_to_unsigned_size_overflow_type(gimple stmt, tree cast_rhs)
++static void check_size_overflow(gimple stmt, tree size_overflow_type, tree cast_rhs, tree rhs, bool *potentionally_overflowed, bool before)
 +{
-+	gimple ucast_stmt;
-+	gimple_stmt_iterator gsi;
-+	location_t loc = gimple_location(stmt);
-+
-+	ucast_stmt = build_cast_stmt(unsigned_size_overflow_type, cast_rhs, CREATE_NEW_VAR, loc);
-+	gsi = gsi_for_stmt(stmt);
-+	gsi_insert_before(&gsi, ucast_stmt, GSI_SAME_STMT);
-+	return ucast_stmt;
-+}
-+
-+static void check_size_overflow(gimple stmt, tree cast_rhs, tree rhs, bool *potentionally_overflowed)
-+{
-+	tree type_max, type_min, rhs_type = TREE_TYPE(rhs);
-+	gimple ucast_stmt;
++	tree cast_rhs_type, type_max_type, type_min_type, type_max, type_min, rhs_type = TREE_TYPE(rhs);
++	gcc_assert(rhs_type != NULL_TREE);
++	gcc_assert(TREE_CODE(rhs_type) == INTEGER_TYPE || TREE_CODE(rhs_type) == BOOLEAN_TYPE || TREE_CODE(rhs_type) == ENUMERAL_TYPE);
 +
 +	if (!*potentionally_overflowed)
 +		return;
 +
-+	if (TYPE_UNSIGNED(rhs_type)) {
-+		ucast_stmt = cast_to_unsigned_size_overflow_type(stmt, cast_rhs);
-+		type_max = cast_a_tree(unsigned_size_overflow_type, TYPE_MAX_VALUE(rhs_type));
-+		insert_check_size_overflow(stmt, GT_EXPR, gimple_get_lhs(ucast_stmt), type_max);
-+	} else {
-+		type_max = signed_cast(TYPE_MAX_VALUE(rhs_type));
-+		insert_check_size_overflow(stmt, GT_EXPR, cast_rhs, type_max);
++	type_max = cast_a_tree(size_overflow_type, TYPE_MAX_VALUE(rhs_type));
++	type_min = cast_a_tree(size_overflow_type, TYPE_MIN_VALUE(rhs_type));
 +
-+		type_min = signed_cast(TYPE_MIN_VALUE(rhs_type));
-+		insert_check_size_overflow(stmt, LT_EXPR, cast_rhs, type_min);
-+	}
++	gcc_assert(!TREE_OVERFLOW(type_max));
++
++	cast_rhs_type = TREE_TYPE(cast_rhs);
++	type_max_type = TREE_TYPE(type_max);
++	type_min_type = TREE_TYPE(type_min);
++	gcc_assert(useless_type_conversion_p(cast_rhs_type, type_max_type));
++	gcc_assert(useless_type_conversion_p(type_max_type, type_min_type));
++
++	insert_check_size_overflow(stmt, GT_EXPR, cast_rhs, type_max, before, false);
++	insert_check_size_overflow(stmt, LT_EXPR, cast_rhs, type_min, before, true);
 +}
 +
-+static tree change_assign_rhs(gimple stmt, tree orig_rhs, tree new_rhs)
++static tree get_handle_const_assign_size_overflow_type(gimple def_stmt, tree var_rhs)
 +{
-+	gimple assign;
-+	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
-+	tree origtype = TREE_TYPE(orig_rhs);
-+
-+	gcc_assert(gimple_code(stmt) == GIMPLE_ASSIGN);
-+
-+	assign = build_cast_stmt(origtype, new_rhs, CREATE_NEW_VAR, gimple_location(stmt));
-+	gsi_insert_before(&gsi, assign, GSI_SAME_STMT);
-+	update_stmt(assign);
-+	return gimple_get_lhs(assign);
-+}
-+
-+static tree handle_const_assign(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple def_stmt, tree var, tree orig_rhs, tree var_rhs, tree new_rhs1, tree new_rhs2, void (*gimple_assign_set_rhs)(gimple, tree))
-+{
-+	tree new_rhs;
-+
-+	if (gimple_assign_rhs_code(def_stmt) == MIN_EXPR)
-+		return dup_assign(visited, potentionally_overflowed, def_stmt, new_rhs1, new_rhs2, NULL_TREE);
++	gimple var_rhs_def_stmt;
++	tree lhs = gimple_get_lhs(def_stmt);
++	tree lhs_type = TREE_TYPE(lhs);
++	tree rhs1_type = TREE_TYPE(gimple_assign_rhs1(def_stmt));
++	tree rhs2_type = TREE_TYPE(gimple_assign_rhs2(def_stmt));
 +
 +	if (var_rhs == NULL_TREE)
-+		return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
++		return get_size_overflow_type(def_stmt, lhs);
++
++	var_rhs_def_stmt = get_def_stmt(var_rhs);
++
++	if (TREE_CODE_CLASS(gimple_assign_rhs_code(def_stmt)) == tcc_comparison)
++		return get_size_overflow_type(var_rhs_def_stmt, var_rhs);
++
++	if (gimple_assign_rhs_code(def_stmt) == LSHIFT_EXPR)
++		return get_size_overflow_type(var_rhs_def_stmt, var_rhs);
++
++	if (gimple_assign_rhs_code(def_stmt) == RSHIFT_EXPR)
++		return get_size_overflow_type(var_rhs_def_stmt, var_rhs);
++
++	if (!useless_type_conversion_p(lhs_type, rhs1_type) || !useless_type_conversion_p(rhs1_type, rhs2_type)) {
++		debug_gimple_stmt(def_stmt);
++		gcc_unreachable();
++	}
++
++	return get_size_overflow_type(def_stmt, lhs);
++}
++
++static tree handle_const_assign(struct pointer_set_t *visited, bool *potentionally_overflowed, gimple def_stmt, tree var_rhs, tree new_rhs1, tree new_rhs2)
++{
++	tree new_rhs, size_overflow_type, orig_rhs;
++	void (*gimple_assign_set_rhs)(gimple, tree);
++	tree rhs1 = gimple_assign_rhs1(def_stmt);
++	tree rhs2 = gimple_assign_rhs2(def_stmt);
++	tree lhs = gimple_get_lhs(def_stmt);
++
++	if (var_rhs == NULL_TREE)
++		return create_assign(visited, potentionally_overflowed, def_stmt, lhs, AFTER_STMT);
++
++	if (new_rhs2 == NULL_TREE) {
++		size_overflow_type = get_handle_const_assign_size_overflow_type(def_stmt, new_rhs1);
++		new_rhs2 = cast_a_tree(size_overflow_type, rhs2);
++		orig_rhs = rhs1;
++		gimple_assign_set_rhs = &gimple_assign_set_rhs1;
++	} else {
++		size_overflow_type = get_handle_const_assign_size_overflow_type(def_stmt, new_rhs2);
++		new_rhs1 = cast_a_tree(size_overflow_type, rhs1);
++		orig_rhs = rhs2;
++		gimple_assign_set_rhs = &gimple_assign_set_rhs2;
++	}
++
++	var_rhs = cast_to_new_size_overflow_type(def_stmt, var_rhs, size_overflow_type, BEFORE_STMT);
++
++	if (gimple_assign_rhs_code(def_stmt) == MIN_EXPR)
++		return dup_assign(visited, potentionally_overflowed, def_stmt, size_overflow_type, new_rhs1, new_rhs2, NULL_TREE);
++
++	check_size_overflow(def_stmt, size_overflow_type, var_rhs, orig_rhs, potentionally_overflowed, BEFORE_STMT);
 +
 +	new_rhs = change_assign_rhs(def_stmt, orig_rhs, var_rhs);
 +	gimple_assign_set_rhs(def_stmt, new_rhs);
 +	update_stmt(def_stmt);
 +
-+	check_size_overflow(def_stmt, var_rhs, orig_rhs, potentionally_overflowed);
-+	return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
++	return create_assign(visited, potentionally_overflowed, def_stmt, lhs, AFTER_STMT);
 +}
 +
-+static tree handle_binary_ops(struct pointer_set_t *visited, bool *potentionally_overflowed, tree var)
++static tree get_cast_def_stmt_rhs(tree new_rhs)
 +{
-+	tree rhs1, rhs2;
-+	gimple def_stmt = get_def_stmt(var);
++	gimple def_stmt;
++
++	def_stmt = get_def_stmt(new_rhs);
++	// get_size_overflow_type
++	if (LONG_TYPE_SIZE != GET_MODE_BITSIZE(SImode))
++		gcc_assert(gimple_assign_cast_p(def_stmt));
++	return gimple_assign_rhs1(def_stmt);
++}
++
++static tree cast_to_int_TI_type_and_check(bool *potentionally_overflowed, gimple stmt, tree new_rhs)
++{
++	gimple_stmt_iterator gsi;
++	gimple cast_stmt, def_stmt;
++	enum machine_mode mode = TYPE_MODE(TREE_TYPE(new_rhs));
++
++	if (mode != TImode && mode != DImode) {
++		def_stmt = get_def_stmt(new_rhs);
++		gcc_assert(gimple_assign_cast_p(def_stmt));
++		new_rhs = gimple_assign_rhs1(def_stmt);
++		mode = TYPE_MODE(TREE_TYPE(new_rhs));
++	}
++
++	gcc_assert(mode == TImode || mode == DImode);
++
++	if (mode == TYPE_MODE(intTI_type_node) && useless_type_conversion_p(TREE_TYPE(new_rhs), intTI_type_node))
++		return new_rhs;
++
++	gsi = gsi_for_stmt(stmt);
++	cast_stmt = build_cast_stmt(intTI_type_node, new_rhs, CREATE_NEW_VAR, &gsi, BEFORE_STMT);
++	new_rhs = gimple_get_lhs(cast_stmt);
++
++	if (mode == DImode)
++		return new_rhs;
++
++	check_size_overflow(stmt, intTI_type_node, new_rhs, new_rhs, potentionally_overflowed, BEFORE_STMT);
++
++	return new_rhs;
++}
++
++static bool is_an_integer_trunction(gimple stmt)
++{
++	gimple rhs1_def_stmt, rhs2_def_stmt;
++	tree rhs1_def_stmt_rhs1, rhs2_def_stmt_rhs1;
++	enum machine_mode rhs1_def_stmt_rhs1_mode, rhs2_def_stmt_rhs1_mode;
++	tree rhs1 = gimple_assign_rhs1(stmt);
++	tree rhs2 = gimple_assign_rhs2(stmt);
++	enum machine_mode rhs1_mode = TYPE_MODE(TREE_TYPE(rhs1));
++	enum machine_mode rhs2_mode = TYPE_MODE(TREE_TYPE(rhs2));
++
++	if (is_gimple_constant(rhs1) || is_gimple_constant(rhs2))
++		return false;
++
++	gcc_assert(TREE_CODE(rhs1) == SSA_NAME && TREE_CODE(rhs2) == SSA_NAME);
++
++	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR || rhs1_mode != SImode || rhs2_mode != SImode)
++		return false;
++
++	rhs1_def_stmt = get_def_stmt(rhs1);
++	rhs2_def_stmt = get_def_stmt(rhs2);
++	if (!gimple_assign_cast_p(rhs1_def_stmt) || !gimple_assign_cast_p(rhs2_def_stmt))
++		return false;
++
++	rhs1_def_stmt_rhs1 = gimple_assign_rhs1(rhs1_def_stmt);
++	rhs2_def_stmt_rhs1 = gimple_assign_rhs1(rhs2_def_stmt);
++	rhs1_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs1_def_stmt_rhs1));
++	rhs2_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs2_def_stmt_rhs1));
++	if (rhs1_def_stmt_rhs1_mode != DImode || rhs2_def_stmt_rhs1_mode != DImode)
++		return false;
++
++	gimple_set_plf(rhs1_def_stmt, NO_CAST_CHECK, true);
++	gimple_set_plf(rhs2_def_stmt, NO_CAST_CHECK, true);
++	return true;
++}
++
++static tree handle_integer_truncation(struct pointer_set_t *visited, bool *potentionally_overflowed, tree lhs)
++{
++	tree new_rhs1, new_rhs2, size_overflow_type;
++	tree new_rhs1_def_stmt_rhs1, new_rhs2_def_stmt_rhs1, new_lhs;
++	tree new_rhs1_def_stmt_rhs1_type, new_rhs2_def_stmt_rhs1_type;
++	gimple assign, stmt = get_def_stmt(lhs);
++	tree rhs1 = gimple_assign_rhs1(stmt);
++	tree rhs2 = gimple_assign_rhs2(stmt);
++
++	if (!is_an_integer_trunction(stmt))
++		return NULL_TREE;
++
++	new_rhs1 = expand(visited, potentionally_overflowed, rhs1);
++	new_rhs2 = expand(visited, potentionally_overflowed, rhs2);
++
++	new_rhs1_def_stmt_rhs1 = get_cast_def_stmt_rhs(new_rhs1);
++	new_rhs2_def_stmt_rhs1 = get_cast_def_stmt_rhs(new_rhs2);
++
++	new_rhs1_def_stmt_rhs1_type = TREE_TYPE(new_rhs1_def_stmt_rhs1);
++	new_rhs2_def_stmt_rhs1_type = TREE_TYPE(new_rhs2_def_stmt_rhs1);
++
++	if (!useless_type_conversion_p(new_rhs1_def_stmt_rhs1_type, new_rhs2_def_stmt_rhs1_type)) {
++		new_rhs1_def_stmt_rhs1 = cast_to_int_TI_type_and_check(potentionally_overflowed, stmt, new_rhs1_def_stmt_rhs1);
++		new_rhs2_def_stmt_rhs1 = cast_to_int_TI_type_and_check(potentionally_overflowed, stmt, new_rhs2_def_stmt_rhs1);
++	}
++
++	assign = create_binary_assign(MINUS_EXPR, stmt, new_rhs1_def_stmt_rhs1, new_rhs2_def_stmt_rhs1);
++	new_lhs = gimple_get_lhs(assign);
++	check_size_overflow(assign, TREE_TYPE(new_lhs), new_lhs, rhs1, potentionally_overflowed, AFTER_STMT);
++
++	size_overflow_type = get_size_overflow_type(stmt, lhs);
++	new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++	new_rhs2 = cast_to_new_size_overflow_type(stmt, new_rhs2, size_overflow_type, BEFORE_STMT);
++	return dup_assign(visited, potentionally_overflowed, stmt, size_overflow_type, new_rhs1, new_rhs2, NULL_TREE);
++}
++
++static tree handle_binary_ops(struct pointer_set_t *visited, bool *potentionally_overflowed, tree lhs)
++{
++	tree rhs1, rhs2, size_overflow_type, new_lhs;
++	gimple def_stmt = get_def_stmt(lhs);
 +	tree new_rhs1 = NULL_TREE;
 +	tree new_rhs2 = NULL_TREE;
 +
@@ -63193,12 +64074,16 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	case EXACT_DIV_EXPR:
 +	case POINTER_PLUS_EXPR:
 +	case BIT_AND_EXPR:
-+		return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
++		return create_assign(visited, potentionally_overflowed, def_stmt, lhs, AFTER_STMT);
 +	default:
 +		break;
 +	}
 +
 +	*potentionally_overflowed = true;
++
++	new_lhs = handle_integer_truncation(visited, potentionally_overflowed, lhs);
++	if (new_lhs != NULL_TREE)
++		return new_lhs;
 +
 +	if (TREE_CODE(rhs1) == SSA_NAME)
 +		new_rhs1 = expand(visited, potentionally_overflowed, rhs1);
@@ -63206,19 +64091,24 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +		new_rhs2 = expand(visited, potentionally_overflowed, rhs2);
 +
 +	if (is_gimple_constant(rhs2))
-+		return handle_const_assign(visited, potentionally_overflowed, def_stmt, var, rhs1, new_rhs1, new_rhs1, signed_cast(rhs2), &gimple_assign_set_rhs1);
++		return handle_const_assign(visited, potentionally_overflowed, def_stmt, new_rhs1, new_rhs1, NULL_TREE);
 +
 +	if (is_gimple_constant(rhs1))
-+		return handle_const_assign(visited, potentionally_overflowed, def_stmt, var, rhs2, new_rhs2, signed_cast(rhs1), new_rhs2, &gimple_assign_set_rhs2);
++		return handle_const_assign(visited, potentionally_overflowed, def_stmt, new_rhs2, NULL_TREE, new_rhs2);
 +
-+	return dup_assign(visited, potentionally_overflowed, def_stmt, new_rhs1, new_rhs2, NULL_TREE);
++	size_overflow_type = get_size_overflow_type(def_stmt, lhs);
++
++	new_rhs1 = cast_to_new_size_overflow_type(def_stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++	new_rhs2 = cast_to_new_size_overflow_type(def_stmt, new_rhs2, size_overflow_type, BEFORE_STMT);
++
++	return dup_assign(visited, potentionally_overflowed, def_stmt, size_overflow_type, new_rhs1, new_rhs2, NULL_TREE);
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4007
-+static tree get_new_rhs(struct pointer_set_t *visited, bool *potentionally_overflowed, tree rhs)
++static tree get_new_rhs(struct pointer_set_t *visited, bool *potentionally_overflowed, tree size_overflow_type, tree rhs)
 +{
 +	if (is_gimple_constant(rhs))
-+		return signed_cast(rhs);
++		return cast_a_tree(size_overflow_type, rhs);
 +	if (TREE_CODE(rhs) != SSA_NAME)
 +		return NULL_TREE;
 +	return expand(visited, potentionally_overflowed, rhs);
@@ -63226,61 +64116,72 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +static tree handle_ternary_ops(struct pointer_set_t *visited, bool *potentionally_overflowed, tree var)
 +{
-+	tree rhs1, rhs2, rhs3, new_rhs1, new_rhs2, new_rhs3;
++	tree rhs1, rhs2, rhs3, new_rhs1, new_rhs2, new_rhs3, size_overflow_type;
 +	gimple def_stmt = get_def_stmt(var);
 +
 +	*potentionally_overflowed = true;
 +
++	size_overflow_type = get_size_overflow_type(def_stmt, var);
++
 +	rhs1 = gimple_assign_rhs1(def_stmt);
 +	rhs2 = gimple_assign_rhs2(def_stmt);
 +	rhs3 = gimple_assign_rhs3(def_stmt);
-+	new_rhs1 = get_new_rhs(visited, potentionally_overflowed, rhs1);
-+	new_rhs2 = get_new_rhs(visited, potentionally_overflowed, rhs2);
-+	new_rhs3 = get_new_rhs(visited, potentionally_overflowed, rhs3);
++	new_rhs1 = get_new_rhs(visited, potentionally_overflowed, size_overflow_type, rhs1);
++	new_rhs2 = get_new_rhs(visited, potentionally_overflowed, size_overflow_type, rhs2);
++	new_rhs3 = get_new_rhs(visited, potentionally_overflowed, size_overflow_type, rhs3);
 +
-+	if (new_rhs1 == NULL_TREE && new_rhs2 != NULL_TREE && new_rhs3 != NULL_TREE)
-+		return dup_assign(visited, potentionally_overflowed, def_stmt, new_rhs1, new_rhs2, new_rhs3);
-+	error("handle_ternary_ops: unknown rhs");
-+	gcc_unreachable();
++	new_rhs1 = cast_to_new_size_overflow_type(def_stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++	new_rhs2 = cast_to_new_size_overflow_type(def_stmt, new_rhs2, size_overflow_type, BEFORE_STMT);
++	new_rhs3 = cast_to_new_size_overflow_type(def_stmt, new_rhs3, size_overflow_type, BEFORE_STMT);
++
++	return dup_assign(visited, potentionally_overflowed, def_stmt, size_overflow_type, new_rhs1, new_rhs2, new_rhs3);
 +}
 +#endif
 +
-+static void set_size_overflow_type(tree node)
++static tree get_size_overflow_type(gimple stmt, tree node)
 +{
-+	switch (TYPE_MODE(TREE_TYPE(node))) {
++	tree type;
++
++	gcc_assert(node != NULL_TREE);
++
++	type = TREE_TYPE(node);
++
++	if (gimple_plf(stmt, MY_STMT))
++		return TREE_TYPE(node);
++
++	switch (TYPE_MODE(type)) {
++	case QImode:
++		return (TYPE_UNSIGNED(type)) ? unsigned_intHI_type_node : intHI_type_node;
++	case HImode:
++		return (TYPE_UNSIGNED(type)) ? unsigned_intSI_type_node : intSI_type_node;
 +	case SImode:
-+		signed_size_overflow_type = intDI_type_node;
-+		unsigned_size_overflow_type = unsigned_intDI_type_node;
-+		break;
++		return (TYPE_UNSIGNED(type)) ? unsigned_intDI_type_node : intDI_type_node;
 +	case DImode:
-+		if (LONG_TYPE_SIZE == GET_MODE_BITSIZE(SImode)) {
-+			signed_size_overflow_type = intDI_type_node;
-+			unsigned_size_overflow_type = unsigned_intDI_type_node;
-+		} else {
-+			signed_size_overflow_type = intTI_type_node;
-+			unsigned_size_overflow_type = unsigned_intTI_type_node;
-+		}
-+		break;
++		if (LONG_TYPE_SIZE == GET_MODE_BITSIZE(SImode))
++			return (TYPE_UNSIGNED(type)) ? unsigned_intDI_type_node : intDI_type_node;
++		return (TYPE_UNSIGNED(type)) ? unsigned_intTI_type_node : intTI_type_node;
 +	default:
-+		error("set_size_overflow_type: unsupported gcc configuration.");
++		debug_tree(node);
++		error("get_size_overflow_type: unsupported gcc configuration.");
 +		gcc_unreachable();
 +	}
 +}
 +
 +static tree expand_visited(gimple def_stmt)
 +{
-+	gimple tmp;
++	gimple next_stmt;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(def_stmt);
 +
 +	gsi_next(&gsi);
-+	tmp = gsi_stmt(gsi);
-+	switch (gimple_code(tmp)) {
++	next_stmt = gsi_stmt(gsi);
++
++	switch (gimple_code(next_stmt)) {
 +	case GIMPLE_ASSIGN:
-+		return gimple_get_lhs(tmp);
++		return gimple_get_lhs(next_stmt);
 +	case GIMPLE_PHI:
-+		return gimple_phi_result(tmp);
++		return gimple_phi_result(next_stmt);
 +	case GIMPLE_CALL:
-+		return gimple_call_lhs(tmp);
++		return gimple_call_lhs(next_stmt);
 +	default:
 +		return NULL_TREE;
 +	}
@@ -63298,18 +64199,17 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +		return NULL_TREE;
 +
 +	gcc_assert(code == INTEGER_TYPE || code == POINTER_TYPE || code == BOOLEAN_TYPE || code == ENUMERAL_TYPE);
-+	if (code != INTEGER_TYPE)
-+		return NULL_TREE;
 +
-+	if (SSA_NAME_IS_DEFAULT_DEF(var)) {
++	if (TREE_CODE(SSA_NAME_VAR(var)) == PARM_DECL)
 +		check_missing_attribute(var);
-+		return NULL_TREE;
-+	}
 +
 +	def_stmt = get_def_stmt(var);
 +
 +	if (!def_stmt)
 +		return NULL_TREE;
++
++	if (gimple_plf(def_stmt, MY_STMT))
++		return var;
 +
 +	if (pointer_set_contains(visited, def_stmt))
 +		return expand_visited(def_stmt);
@@ -63319,7 +64219,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +		check_missing_attribute(var);
 +		return NULL_TREE;
 +	case GIMPLE_PHI:
-+		return build_new_phi(visited, potentionally_overflowed, def_stmt);
++		return build_new_phi(visited, potentionally_overflowed, var);
 +	case GIMPLE_CALL:
 +	case GIMPLE_ASM:
 +		return create_assign(visited, potentionally_overflowed, def_stmt, var, AFTER_STMT);
@@ -63349,9 +64249,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	gcc_assert(gimple_code(stmt) == GIMPLE_CALL);
 +
-+	assign = build_cast_stmt(origtype, newarg, CREATE_NEW_VAR, gimple_location(stmt));
-+	gsi_insert_before(&gsi, assign, GSI_SAME_STMT);
-+	update_stmt(assign);
++	assign = build_cast_stmt(origtype, newarg, CREATE_NEW_VAR, &gsi, BEFORE_STMT);
 +
 +	gimple_call_set_arg(stmt, argnum, gimple_get_lhs(assign));
 +	update_stmt(stmt);
@@ -63401,8 +64299,6 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	check_arg_type(arg);
 +
-+	set_size_overflow_type(arg);
-+
 +	visited = pointer_set_create();
 +	potentionally_overflowed = false;
 +	newarg = expand(visited, &potentionally_overflowed, arg);
@@ -63413,7 +64309,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	change_function_arg(stmt, arg, argnum, newarg);
 +
-+	check_size_overflow(stmt, newarg, arg, &potentionally_overflowed);
++	check_size_overflow(stmt, TREE_TYPE(newarg), newarg, arg, &potentionally_overflowed, BEFORE_STMT);
 +}
 +
 +static void handle_function_by_attribute(gimple stmt, tree attr, tree fndecl)
@@ -63441,14 +64337,29 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +			handle_function_arg(stmt, fndecl, num - 1);
 +}
 +
++static void set_plf_false(void)
++{
++	basic_block bb;
++
++	FOR_ALL_BB(bb) {
++		gimple_stmt_iterator si;
++
++		for (si = gsi_start_bb(bb); !gsi_end_p(si); gsi_next(&si))
++			gimple_set_plf(gsi_stmt(si), MY_STMT, false);
++		for (si = gsi_start_phis(bb); !gsi_end_p(si); gsi_next(&si))
++			gimple_set_plf(gsi_stmt(si), MY_STMT, false);
++	}
++}
++
 +static unsigned int handle_function(void)
 +{
-+	basic_block bb = ENTRY_BLOCK_PTR->next_bb;
-+	int saved_last_basic_block = last_basic_block;
++	basic_block next, bb = ENTRY_BLOCK_PTR->next_bb;
++
++	set_plf_false();
 +
 +	do {
 +		gimple_stmt_iterator gsi;
-+		basic_block next = bb->next_bb;
++		next = bb->next_bb;
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +			tree fndecl, attr;
@@ -63461,15 +64372,16 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +				continue;
 +			if (gimple_call_num_args(stmt) == 0)
 +				continue;
-+			attr = lookup_attribute("size_overflow", TYPE_ATTRIBUTES(TREE_TYPE(fndecl)));
++			attr = lookup_attribute("size_overflow", DECL_ATTRIBUTES(fndecl));
 +			if (!attr || !TREE_VALUE(attr))
 +				handle_function_by_hash(stmt, fndecl);
 +			else
 +				handle_function_by_attribute(stmt, attr, fndecl);
 +			gsi = gsi_for_stmt(stmt);
++			next = gimple_bb(stmt)->next_bb;
 +		}
 +		bb = next;
-+	} while (bb && bb->index <= saved_last_basic_block);
++	} while (bb);
 +	return 0;
 +}
 +
@@ -63497,10 +64409,11 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	const_char_ptr_type_node = build_pointer_type(build_type_variant(char_type_node, 1, 0));
 +
-+	// void report_size_overflow(const char *loc_file, unsigned int loc_line, const char *current_func)
++	// void report_size_overflow(const char *loc_file, unsigned int loc_line, const char *current_func, const char *ssa_var)
 +	fntype = build_function_type_list(void_type_node,
 +					  const_char_ptr_type_node,
 +					  unsigned_type_node,
++					  const_char_ptr_type_node,
 +					  const_char_ptr_type_node,
 +					  NULL_TREE);
 +	report_size_overflow_decl = build_fn_decl("report_size_overflow", fntype);
@@ -63509,6 +64422,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +	TREE_PUBLIC(report_size_overflow_decl) = 1;
 +	DECL_EXTERNAL(report_size_overflow_decl) = 1;
 +	DECL_ARTIFICIAL(report_size_overflow_decl) = 1;
++	TREE_THIS_VOLATILE(report_size_overflow_decl) = 1;
 +}
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
@@ -63541,7 +64455,7 @@ diff -NurpX linux-3.2.25-pax/Documentation/dontdiff linux-3.2.25/tools/gcc/size_
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &size_overflow_plugin_info);
 +	if (enable) {
-+		register_callback ("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
++		register_callback("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &size_overflow_pass_info);
 +	}
 +	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
