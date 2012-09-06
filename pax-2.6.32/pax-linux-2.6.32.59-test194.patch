@@ -1,5 +1,6 @@
-- fixed interaction between RANDKSTACK and STACKLEAK, reported by Mathias Krause
-- clarified config help language for options that rely on a gcc plugin
+- updated size overflow hashtable from Emese
+- hopefully fixed the problem reported by jorgus in http://forums.grsecurity.net/viewtopic.php?f=3&t=3044
+- fixed arm compilation reported by Larry H. from subreption.com
 
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/alpha/include/asm/atomic.h linux-2.6.32.59-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.59/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -40537,6 +40538,20 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/a
  
  #define ACPI_DRIVER_ALL_NOTIFY_EVENTS	0x1	/* system AND device events */
  
+diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/asm-generic/4level-fixup.h linux-2.6.32.59-pax/include/asm-generic/4level-fixup.h
+--- linux-2.6.32.59/include/asm-generic/4level-fixup.h	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.59-pax/include/asm-generic/4level-fixup.h	2012-09-04 14:07:43.394752297 +0200
+@@ -13,8 +13,10 @@
+ #define pmd_alloc(mm, pud, address) \
+ 	((unlikely(pgd_none(*(pud))) && __pmd_alloc(mm, pud, address))? \
+  		NULL: pmd_offset(pud, address))
++#define pmd_alloc_kernel(mm, pud, address) pmd_alloc((mm), (pud), (address))
+ 
+ #define pud_alloc(mm, pgd, address)	(pgd)
++#define pud_alloc_kernel(mm, pgd, address)	pud_alloc((mm), (pgd), (address))
+ #define pud_offset(pgd, start)		(pgd)
+ #define pud_none(pud)			0
+ #define pud_bad(pud)			0
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/include/asm-generic/atomic64.h linux-2.6.32.59-pax/include/asm-generic/atomic64.h
 --- linux-2.6.32.59/include/asm-generic/atomic64.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.59-pax/include/asm-generic/atomic64.h	2012-03-13 13:15:35.464097972 +0100
@@ -50635,7 +50650,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/shmem.
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c linux-2.6.32.59-pax/mm/slab.c
 --- linux-2.6.32.59/mm/slab.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/mm/slab.c	2012-07-27 21:50:49.218341383 +0200
++++ linux-2.6.32.59-pax/mm/slab.c	2012-09-06 11:20:41.494708127 +0200
 @@ -174,7 +174,7 @@
  
  /* Legal flag mask for kmem_cache_create(). */
@@ -50772,7 +50787,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c
  
  		seq_printf(m, " : cpustat %6lu %6lu %6lu %6lu",
  			   allochit, allocmiss, freehit, freemiss);
-@@ -4480,6 +4497,61 @@ static int __init slab_proc_init(void)
+@@ -4480,6 +4497,64 @@ static int __init slab_proc_init(void)
  module_init(slab_proc_init);
  #endif
  
@@ -50782,6 +50797,9 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c
 +	struct kmem_cache *cachep;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
++		return false;
++
++	if (!slab_is_available())
 +		return false;
 +
 +	if (!virt_addr_valid(ptr))
@@ -50836,7 +50854,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slab.c
   * @objp: Pointer to the object
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c linux-2.6.32.59-pax/mm/slob.c
 --- linux-2.6.32.59/mm/slob.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/mm/slob.c	2012-07-27 21:52:28.734344310 +0200
++++ linux-2.6.32.59-pax/mm/slob.c	2012-09-06 11:22:58.014708554 +0200
 @@ -29,7 +29,7 @@
   * If kmalloc is asked for objects of PAGE_SIZE or larger, it calls
   * alloc_pages() directly, allocating compound pages so the page order
@@ -50985,7 +51003,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  	return ret;
  }
  EXPORT_SYMBOL(__kmalloc_node);
-@@ -528,13 +542,83 @@ void kfree(const void *block)
+@@ -528,13 +542,88 @@ void kfree(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -51005,6 +51023,11 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  
 +bool is_usercopy_object(const void *ptr)
 +{
++	if (!slab_is_available())
++		return false;
++
++	// PAX: TODO
++
 +	return false;
 +}
 +
@@ -51072,7 +51095,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  /* can't use ksize for kmem_cache_alloc memory, only kmalloc */
  size_t ksize(const void *block)
  {
-@@ -547,10 +631,10 @@ size_t ksize(const void *block)
+@@ -547,10 +636,10 @@ size_t ksize(const void *block)
  	sp = slob_page(block);
  	if (is_slob_page(sp)) {
  		int align = max(ARCH_KMALLOC_MINALIGN, ARCH_SLAB_MINALIGN);
@@ -51086,7 +51109,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -566,8 +650,13 @@ struct kmem_cache *kmem_cache_create(con
+@@ -566,8 +655,13 @@ struct kmem_cache *kmem_cache_create(con
  {
  	struct kmem_cache *c;
  
@@ -51100,7 +51123,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  
  	if (c) {
  		c->name = name;
-@@ -605,17 +694,25 @@ void *kmem_cache_alloc_node(struct kmem_
+@@ -605,17 +699,25 @@ void *kmem_cache_alloc_node(struct kmem_
  {
  	void *b;
  
@@ -51126,7 +51149,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -627,10 +724,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -627,10 +729,16 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -51145,7 +51168,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -643,18 +746,32 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -643,18 +751,32 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
@@ -51183,7 +51206,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slob.c
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c linux-2.6.32.59-pax/mm/slub.c
 --- linux-2.6.32.59/mm/slub.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/mm/slub.c	2012-07-28 22:30:11.490268535 +0200
++++ linux-2.6.32.59-pax/mm/slub.c	2012-09-06 11:21:03.706708174 +0200
 @@ -1893,6 +1893,8 @@ void kmem_cache_free(struct kmem_cache *
  
  	page = virt_to_head_page(x);
@@ -51261,7 +51284,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  	return &kmalloc_caches[index];
  }
  
-@@ -2915,6 +2925,56 @@ void *__kmalloc_node(size_t size, gfp_t
+@@ -2915,6 +2925,59 @@ void *__kmalloc_node(size_t size, gfp_t
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -51271,6 +51294,9 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
 +	struct kmem_cache *s;
 +
 +	if (ZERO_OR_NULL_PTR(ptr))
++		return false;
++
++	if (!slab_is_available())
 +		return false;
 +
 +	if (!virt_addr_valid(ptr))
@@ -51318,7 +51344,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3185,8 +3245,8 @@ void __init kmem_cache_init(void)
+@@ -3185,8 +3248,8 @@ void __init kmem_cache_init(void)
  	 * kmem_cache_open for slab_state == DOWN.
  	 */
  	create_kmalloc_cache(&kmalloc_caches[0], "kmem_cache_node",
@@ -51329,7 +51355,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  	caches++;
  
  	hotplug_memory_notifier(slab_memory_callback, SLAB_CALLBACK_PRI);
-@@ -3198,18 +3258,18 @@ void __init kmem_cache_init(void)
+@@ -3198,18 +3261,18 @@ void __init kmem_cache_init(void)
  	/* Caches that are not of the two-to-the-power-of size */
  	if (KMALLOC_MIN_SIZE <= 32) {
  		create_kmalloc_cache(&kmalloc_caches[1],
@@ -51351,7 +51377,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  		caches++;
  	}
  
-@@ -3267,6 +3327,20 @@ void __init kmem_cache_init(void)
+@@ -3267,6 +3330,20 @@ void __init kmem_cache_init(void)
  	kmem_size = sizeof(struct kmem_cache);
  #endif
  
@@ -51372,7 +51398,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  	printk(KERN_INFO
  		"SLUB: Genslabs=%d, HWalign=%d, Order=%d-%d, MinObjects=%d,"
  		" CPUs=%d, Nodes=%d\n",
-@@ -3293,7 +3367,7 @@ static int slab_unmergeable(struct kmem_
+@@ -3293,7 +3370,7 @@ static int slab_unmergeable(struct kmem_
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -51381,7 +51407,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  		return 1;
  
  	return 0;
-@@ -3353,7 +3427,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3353,7 +3430,7 @@ struct kmem_cache *kmem_cache_create(con
  	if (s) {
  		int cpu;
  
@@ -51390,7 +51416,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3372,7 +3446,7 @@ struct kmem_cache *kmem_cache_create(con
+@@ -3372,7 +3449,7 @@ struct kmem_cache *kmem_cache_create(con
  
  		if (sysfs_slab_alias(s, name)) {
  			down_write(&slub_lock);
@@ -51399,7 +51425,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/mm/slub.c
  			up_write(&slub_lock);
  			goto err;
  		}
-@@ -4101,7 +4175,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4101,7 +4178,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -54326,8 +54352,16 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/security/
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/security/commoncap.c linux-2.6.32.59-pax/security/commoncap.c
 --- linux-2.6.32.59/security/commoncap.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/security/commoncap.c	2012-04-23 14:16:10.267256335 +0200
-@@ -511,6 +511,11 @@ int cap_bprm_set_creds(struct linux_binp
++++ linux-2.6.32.59-pax/security/commoncap.c	2012-09-04 14:44:12.566759186 +0200
+@@ -27,6 +27,7 @@
+ #include <linux/sched.h>
+ #include <linux/prctl.h>
+ #include <linux/securebits.h>
++#include <linux/personality.h>
+ 
+ /*
+  * If a non-root user executes a setuid-root binary in
+@@ -511,6 +512,11 @@ int cap_bprm_set_creds(struct linux_binp
  	}
  skip:
  
@@ -57468,8 +57502,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +targets += size_overflow_hash.h
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/size_overflow_hash.data linux-2.6.32.59-pax/tools/gcc/size_overflow_hash.data
 --- linux-2.6.32.59/tools/gcc/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/tools/gcc/size_overflow_hash.data	2012-08-12 14:37:02.657256011 +0200
-@@ -0,0 +1,2266 @@
++++ linux-2.6.32.59-pax/tools/gcc/size_overflow_hash.data	2012-09-05 08:04:52.000000000 +0200
+@@ -0,0 +1,2275 @@
 +_000001_hash alloc_dr 2 65495 _000001_hash NULL
 +_000002_hash __copy_from_user 3 10918 _000002_hash NULL
 +_000003_hash __copy_from_user_inatomic 3 4365 _000003_hash NULL
@@ -57856,7 +57890,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +_000400_hash zd_usb_rfwrite 3 42300 _000400_hash NULL
 +_000401_hash zoran_write 3 22404 _000401_hash NULL
 +_000402_hash acpi_battery_write_alarm 3 1240 _000402_hash NULL
-+_000403_hash acpi_ex_allocate_name_string 2 7685 _002079_hash NULL nohasharray
++_000403_hash acpi_ex_allocate_name_string 2-1 7685 _002079_hash NULL nohasharray
 +_000404_hash acpi_fan_write_state 3 39818 _000404_hash NULL
 +_000405_hash acpi_os_allocate_zeroed 1 37422 _000405_hash NULL
 +_000406_hash acpi_processor_write_limit 3 23201 _000406_hash NULL
@@ -58960,7 +58994,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +_001567_hash sel_read_mls 3 25369 _001567_hash NULL
 +_001568_hash sel_read_perm 3 42302 _001568_hash NULL
 +_001569_hash sel_read_policycap 3 28544 _001569_hash NULL
-+_001570_hash sel_read_policyvers 3 55 _001570_hash NULL
++_001570_hash sel_read_policyvers 3 55 _002421_hash NULL nohasharray
 +_001571_hash short_retry_limit_read 3 4687 _001571_hash NULL
 +_001572_hash simple_attr_read 3 24738 _001572_hash NULL
 +_001573_hash simple_transaction_read 3 17076 _001573_hash NULL
@@ -59736,6 +59770,15 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +_002409_hash tracing_read_pipe 3 35312 _002409_hash NULL
 +_002410_hash v9fs_file_read 3 40858 _002410_hash NULL
 +_002411_hash v9fs_file_readn 4 36353 _002411_hash NULL
++_002412_hash create_table 2 16213 _002412_hash NULL
++_002413_hash acl_alloc 1 35979 _002413_hash NULL
++_002414_hash acl_alloc_stack_init 1 60630 _002414_hash NULL
++_002415_hash acl_alloc_num 1-2 60778 _002415_hash NULL
++_002416_hash alloc_etherdev_mq_compat 1 2247 _002416_hash NULL
++_002417_hash __netdev_alloc_skb_ip_align 2 55067 _002417_hash NULL
++_002418_hash sysctl_string_modpriv 5 32895 _002418_hash NULL
++_002419_hash netdev_alloc_skb_ip_align 2 40811 _002419_hash NULL
++_002421_hash padzero 1 55 _002421_hash &_001570_hash
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/size_overflow_plugin.c linux-2.6.32.59-pax/tools/gcc/size_overflow_plugin.c
 --- linux-2.6.32.59/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
 +++ linux-2.6.32.59-pax/tools/gcc/size_overflow_plugin.c	2012-08-20 18:51:08.465105039 +0200
