@@ -1,6 +1,4 @@
-- updated size oveflow hashtable from Emese
-- hopefully fixed problem reported by jorgus in http://forums.grsecurity.net/viewtopic.php?f=3&t=3044
-- fixed arm compilation reported by Larry H. from subreption.com
+- fixed interference between i386/KERNEXEC and the new __ex_table mechanism for modules
 
 diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/alpha/include/asm/atomic.h linux-3.5.3-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.5.3/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -21234,7 +21232,7 @@ diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/Makefile
 +	$(if $(LDFLAGS_BUILD_ID),,$(error $(OLD_LD)))
 diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/mm/extable.c linux-3.5.3-pax/arch/x86/mm/extable.c
 --- linux-3.5.3/arch/x86/mm/extable.c	2012-07-23 00:22:19.398342476 +0200
-+++ linux-3.5.3-pax/arch/x86/mm/extable.c	2012-08-30 16:47:28.621841023 +0200
++++ linux-3.5.3-pax/arch/x86/mm/extable.c	2012-09-07 19:43:20.611972292 +0200
 @@ -6,12 +6,24 @@
  static inline unsigned long
  ex_insn_addr(const struct exception_table_entry *x)
@@ -21242,7 +21240,7 @@ diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/mm/extab
 -	return (unsigned long)&x->insn + x->insn;
 +	unsigned long reloc = 0;
 +
-+#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +	reloc = ____LOAD_PHYSICAL_ADDR - LOAD_PHYSICAL_ADDR;
 +#endif
 +
@@ -21254,7 +21252,7 @@ diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/mm/extab
 -	return (unsigned long)&x->fixup + x->fixup;
 +	unsigned long reloc = 0;
 +
-+#if defined(CONFIG_PAX_KERNEXEC) && defined(CONFIG_X86_32)
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +	reloc = ____LOAD_PHYSICAL_ADDR - LOAD_PHYSICAL_ADDR;
 +#endif
 +
@@ -21271,6 +21269,20 @@ diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/mm/extab
  		extern u32 pnp_bios_fault_eip, pnp_bios_fault_esp;
  		extern u32 pnp_bios_is_utter_crap;
  		pnp_bios_is_utter_crap = 1;
+@@ -145,6 +157,13 @@ void sort_extable(struct exception_table
+ 		i += 4;
+ 		p->fixup -= i;
+ 		i += 4;
++
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++		BUILD_BUG_ON(!IS_ENABLED(CONFIG_BUILDTIME_EXTABLE_SORT));
++		p->insn -= ____LOAD_PHYSICAL_ADDR - LOAD_PHYSICAL_ADDR;
++		p->fixup -= ____LOAD_PHYSICAL_ADDR - LOAD_PHYSICAL_ADDR;
++#endif
++
+ 	}
+ }
+ 
 diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/mm/fault.c linux-3.5.3-pax/arch/x86/mm/fault.c
 --- linux-3.5.3/arch/x86/mm/fault.c	2012-07-23 00:22:19.398342476 +0200
 +++ linux-3.5.3-pax/arch/x86/mm/fault.c	2012-07-30 01:42:42.801660660 +0200
@@ -24425,7 +24437,7 @@ diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/realmode
  	/*
 diff -NurpX linux-3.5.3-pax/Documentation/dontdiff linux-3.5.3/arch/x86/tools/relocs.c linux-3.5.3-pax/arch/x86/tools/relocs.c
 --- linux-3.5.3/arch/x86/tools/relocs.c	2012-07-23 00:22:19.430342477 +0200
-+++ linux-3.5.3-pax/arch/x86/tools/relocs.c	2012-07-31 00:34:30.852082848 +0200
++++ linux-3.5.3-pax/arch/x86/tools/relocs.c	2012-09-07 15:05:04.575919540 +0200
 @@ -12,10 +12,13 @@
  #include <regex.h>
  #include <tools/le_byteshift.h>
