@@ -1,4 +1,4 @@
-- fixed USERCOPY/SLOB false positive bug
+- fixed longstanding problem with the per-cpu pgd and kvm
 
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/alpha/include/asm/atomic.h linux-2.6.32.59-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.59/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -19228,7 +19228,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/kvm/vmx.c linux-2.6.32.59-pax/arch/x86/kvm/vmx.c
 --- linux-2.6.32.59/arch/x86/kvm/vmx.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.59-pax/arch/x86/kvm/vmx.c	2012-04-13 21:25:51.944693567 +0200
++++ linux-2.6.32.59-pax/arch/x86/kvm/vmx.c	2012-09-17 23:35:31.133743609 +0200
 @@ -570,7 +570,11 @@ static void reload_tss(void)
  
  	kvm_get_gdt(&gdt);
@@ -19241,7 +19241,18 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	load_TR_desc();
  }
  
-@@ -1410,8 +1414,11 @@ static __init int hardware_setup(void)
+@@ -746,6 +750,10 @@ static void vmx_vcpu_load(struct kvm_vcp
+ 		kvm_get_gdt(&dt);
+ 		vmcs_writel(HOST_GDTR_BASE, dt.base);   /* 22.2.4 */
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++		vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
++
+ 		rdmsrl(MSR_IA32_SYSENTER_ESP, sysenter_esp);
+ 		vmcs_writel(HOST_IA32_SYSENTER_ESP, sysenter_esp); /* 22.2.3 */
+ 
+@@ -1410,8 +1418,11 @@ static __init int hardware_setup(void)
  	if (!cpu_has_vmx_flexpriority())
  		flexpriority_enabled = 0;
  
@@ -19255,7 +19266,18 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  
  	if (enable_ept && !cpu_has_vmx_ept_2m_page())
  		kvm_disable_largepages();
-@@ -2362,7 +2369,7 @@ static int vmx_vcpu_setup(struct vcpu_vm
+@@ -2338,7 +2349,10 @@ static int vmx_vcpu_setup(struct vcpu_vm
+ 
+ 	vmcs_writel(HOST_CR0, read_cr0());  /* 22.2.3 */
+ 	vmcs_writel(HOST_CR4, read_cr4());  /* 22.2.3, 22.2.5 */
++
++#ifndef CONFIG_PAX_PER_CPU_PGD
+ 	vmcs_writel(HOST_CR3, read_cr3());  /* 22.2.3  FIXME: shadow tables */
++#endif
+ 
+ 	vmcs_write16(HOST_CS_SELECTOR, __KERNEL_CS);  /* 22.2.4 */
+ 	vmcs_write16(HOST_DS_SELECTOR, __KERNEL_DS);  /* 22.2.4 */
+@@ -2362,7 +2376,7 @@ static int vmx_vcpu_setup(struct vcpu_vm
  	vmcs_writel(HOST_IDTR_BASE, dt.base);   /* 22.2.4 */
  
  	asm("mov $.Lkvm_vmx_return, %0" : "=r"(kvm_vmx_return));
@@ -19264,7 +19286,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  	vmcs_write32(VM_EXIT_MSR_STORE_COUNT, 0);
  	vmcs_write32(VM_EXIT_MSR_LOAD_COUNT, 0);
  	vmcs_write32(VM_ENTRY_MSR_LOAD_COUNT, 0);
-@@ -3718,6 +3725,12 @@ static void vmx_vcpu_run(struct kvm_vcpu
+@@ -3718,6 +3732,12 @@ static void vmx_vcpu_run(struct kvm_vcpu
  		"jmp .Lkvm_vmx_return \n\t"
  		".Llaunched: " __ex(ASM_VMX_VMRESUME) "\n\t"
  		".Lkvm_vmx_return: "
@@ -19277,7 +19299,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  		/* Save guest registers, load host registers, keep flags */
  		"xchg %0,     (%%"R"sp) \n\t"
  		"mov %%"R"ax, %c[rax](%0) \n\t"
-@@ -3764,8 +3777,13 @@ static void vmx_vcpu_run(struct kvm_vcpu
+@@ -3764,8 +3784,13 @@ static void vmx_vcpu_run(struct kvm_vcpu
  		[r15]"i"(offsetof(struct vcpu_vmx, vcpu.arch.regs[VCPU_REGS_R15])),
  #endif
  		[cr2]"i"(offsetof(struct vcpu_vmx, vcpu.arch.cr2))
@@ -19292,7 +19314,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/x86/
  #ifdef CONFIG_X86_64
  		, "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
  #endif
-@@ -3782,7 +3800,16 @@ static void vmx_vcpu_run(struct kvm_vcpu
+@@ -3782,7 +3807,16 @@ static void vmx_vcpu_run(struct kvm_vcpu
  	if (vmx->rmode.irq.pending)
  		fixup_rmode_irq(vmx);
  
