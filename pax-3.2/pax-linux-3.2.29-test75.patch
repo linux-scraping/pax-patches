@@ -1,4 +1,6 @@
-- fixed longstanding problem with the per-cpu pgd and kvm
+- fixed several copy_*_user_overflow induced warnings
+- fixed fallout of struct apic constification in xen
+- fixed kvm guest memory instantiation problem, https://bugs.gentoo.org/show_bug.cgi?id=425714
 
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/alpha/include/asm/atomic.h linux-3.2.29-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.29/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -17681,7 +17683,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/x86/kernel
  }
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/x86/kernel/tls.c linux-3.2.29-pax/arch/x86/kernel/tls.c
 --- linux-3.2.29/arch/x86/kernel/tls.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.29-pax/arch/x86/kernel/tls.c	2012-07-04 19:24:47.600063005 +0200
++++ linux-3.2.29-pax/arch/x86/kernel/tls.c	2012-09-20 00:32:35.602659615 +0200
 @@ -85,6 +85,11 @@ int do_set_thread_area(struct task_struc
  	if (idx < GDT_ENTRY_TLS_MIN || idx > GDT_ENTRY_TLS_MAX)
  		return -EINVAL;
@@ -17694,6 +17696,15 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/x86/kernel
  	set_tls_desc(p, idx, &info, 1);
  
  	return 0;
+@@ -205,7 +210,7 @@ int regset_tls_set(struct task_struct *t
+ 
+ 	if (kbuf)
+ 		info = kbuf;
+-	else if (__copy_from_user(infobuf, ubuf, count))
++	else if (count > sizeof infobuf || __copy_from_user(infobuf, ubuf, count))
+ 		return -EFAULT;
+ 	else
+ 		info = infobuf;
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/x86/kernel/trampoline_32.S linux-3.2.29-pax/arch/x86/kernel/trampoline_32.S
 --- linux-3.2.29/arch/x86/kernel/trampoline_32.S	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/arch/x86/kernel/trampoline_32.S	2012-07-04 19:24:47.600063005 +0200
@@ -25034,7 +25045,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/x86/vdso/v
 -__setup("vdso=", vdso_setup);
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/x86/xen/enlighten.c linux-3.2.29-pax/arch/x86/xen/enlighten.c
 --- linux-3.2.29/arch/x86/xen/enlighten.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.29-pax/arch/x86/xen/enlighten.c	2012-07-04 19:24:47.660063005 +0200
++++ linux-3.2.29-pax/arch/x86/xen/enlighten.c	2012-09-20 00:33:24.018659768 +0200
 @@ -86,8 +86,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -25044,6 +25055,25 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/arch/x86/xen/en
  RESERVE_BRK(shared_info_page_brk, PAGE_SIZE);
  __read_mostly int xen_have_vector_callback;
  EXPORT_SYMBOL_GPL(xen_have_vector_callback);
+@@ -761,12 +759,12 @@ static u32 xen_safe_apic_wait_icr_idle(v
+ 
+ static void set_xen_basic_apic_ops(void)
+ {
+-	apic->read = xen_apic_read;
+-	apic->write = xen_apic_write;
+-	apic->icr_read = xen_apic_icr_read;
+-	apic->icr_write = xen_apic_icr_write;
+-	apic->wait_icr_idle = xen_apic_wait_icr_idle;
+-	apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
++	*(void **)&apic->read = xen_apic_read;
++	*(void **)&apic->write = xen_apic_write;
++	*(void **)&apic->icr_read = xen_apic_icr_read;
++	*(void **)&apic->icr_write = xen_apic_icr_write;
++	*(void **)&apic->wait_icr_idle = xen_apic_wait_icr_idle;
++	*(void **)&apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
+ }
+ 
+ #endif
 @@ -1041,7 +1039,7 @@ static const struct pv_apic_ops xen_apic
  #endif
  };
@@ -33141,6 +33171,28 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/tok
  
  	err = platform_driver_register(&sk_isa_driver);
  	if (err)
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/tun.c linux-3.2.29-pax/drivers/net/tun.c
+--- linux-3.2.29/drivers/net/tun.c	2012-08-22 14:04:05.125098685 +0200
++++ linux-3.2.29-pax/drivers/net/tun.c	2012-09-20 00:32:35.622659615 +0200
+@@ -1232,7 +1232,7 @@ static int set_offload(struct tun_struct
+ }
+ 
+ static long __tun_chr_ioctl(struct file *file, unsigned int cmd,
+-			    unsigned long arg, int ifreq_len)
++			    unsigned long arg, size_t ifreq_len)
+ {
+ 	struct tun_file *tfile = file->private_data;
+ 	struct tun_struct *tun;
+@@ -1243,6 +1243,9 @@ static long __tun_chr_ioctl(struct file
+ 	int vnet_hdr_sz;
+ 	int ret;
+ 
++	if (ifreq_len > sizeof ifr)
++		return -EFAULT;
++
+ 	if (cmd == TUNSETIFF || _IOC_TYPE(cmd) == 0x89) {
+ 		if (copy_from_user(&ifr, argp, ifreq_len))
+ 			return -EFAULT;
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/usb/hso.c linux-3.2.29-pax/drivers/net/usb/hso.c
 --- linux-3.2.29/drivers/net/usb/hso.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/drivers/net/usb/hso.c	2012-07-04 19:24:48.564063008 +0200
@@ -33523,6 +33575,144 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/wir
  	}
  
  	IWL_DEBUG_INFO(priv, "*** LOAD DRIVER ***\n");
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/wireless/iwlwifi/iwl-debugfs.c linux-3.2.29-pax/drivers/net/wireless/iwlwifi/iwl-debugfs.c
+--- linux-3.2.29/drivers/net/wireless/iwlwifi/iwl-debugfs.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/drivers/net/wireless/iwlwifi/iwl-debugfs.c	2012-09-20 00:36:21.922660327 +0200
+@@ -163,7 +163,7 @@ static ssize_t iwl_dbgfs_clear_traffic_s
+ 	struct iwl_priv *priv = file->private_data;
+ 	u32 clear_flag;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 
+ 	memset(buf, 0, sizeof(buf));
+ 	buf_size = min(count, sizeof(buf) -  1);
+@@ -308,7 +308,7 @@ static ssize_t iwl_dbgfs_sram_write(stru
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[64];
+-	int buf_size;
++	size_t buf_size;
+ 	u32 offset, len;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -598,7 +598,7 @@ static ssize_t iwl_dbgfs_rx_handlers_wri
+ 	struct iwl_priv *priv = file->private_data;
+ 
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	u32 reset_flag;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -679,7 +679,7 @@ static ssize_t iwl_dbgfs_disable_ht40_wr
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int ht40;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -734,7 +734,7 @@ static ssize_t iwl_dbgfs_sleep_level_ove
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int value;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -894,7 +894,7 @@ static ssize_t iwl_dbgfs_traffic_log_wri
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int traffic_log;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2075,7 +2075,7 @@ static ssize_t iwl_dbgfs_clear_ucode_sta
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int clear;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2120,7 +2120,7 @@ static ssize_t iwl_dbgfs_ucode_tracing_w
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int trace;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2190,7 +2190,7 @@ static ssize_t iwl_dbgfs_missed_beacon_w
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int missed;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2231,7 +2231,7 @@ static ssize_t iwl_dbgfs_plcp_delta_writ
+ 
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int plcp;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2285,7 +2285,7 @@ static ssize_t iwl_dbgfs_force_reset_wri
+ 
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int reset, ret;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2311,7 +2311,7 @@ static ssize_t iwl_dbgfs_txfifo_flush_wr
+ 
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int flush;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2335,7 +2335,7 @@ static ssize_t iwl_dbgfs_wd_timeout_writ
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int timeout;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -2424,7 +2424,7 @@ static ssize_t iwl_dbgfs_protection_mode
+ 
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int rts;
+ 
+ 	if (!priv->cfg->ht_params)
+@@ -2449,7 +2449,7 @@ static ssize_t iwl_dbgfs_echo_test_write
+ {
+ 	struct iwl_priv *priv = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 
+ 	memset(buf, 0, sizeof(buf));
+ 	buf_size = min(count, sizeof(buf) -  1);
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/wireless/iwlwifi/iwl-debug.h linux-3.2.29-pax/drivers/net/wireless/iwlwifi/iwl-debug.h
 --- linux-3.2.29/drivers/net/wireless/iwlwifi/iwl-debug.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/drivers/net/wireless/iwlwifi/iwl-debug.h	2012-07-04 19:24:48.568063008 +0200
@@ -33537,6 +33727,27 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/wir
  #define iwl_print_hex_dump(m, level, p, len)
  #endif				/* CONFIG_IWLWIFI_DEBUG */
  
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c linux-3.2.29-pax/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c
+--- linux-3.2.29/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/drivers/net/wireless/iwlwifi/iwl-trans-pcie.c	2012-09-20 00:32:35.626659615 +0200
+@@ -1888,7 +1888,7 @@ static ssize_t iwl_dbgfs_interrupt_write
+ 	struct isr_statistics *isr_stats = &trans_pcie->isr_stats;
+ 
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	u32 reset_flag;
+ 
+ 	memset(buf, 0, sizeof(buf));
+@@ -1909,7 +1909,7 @@ static ssize_t iwl_dbgfs_csr_write(struc
+ {
+ 	struct iwl_trans *trans = file->private_data;
+ 	char buf[8];
+-	int buf_size;
++	size_t buf_size;
+ 	int csr;
+ 
+ 	memset(buf, 0, sizeof(buf));
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/drivers/net/wireless/mac80211_hwsim.c linux-3.2.29-pax/drivers/net/wireless/mac80211_hwsim.c
 --- linux-3.2.29/drivers/net/wireless/mac80211_hwsim.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/drivers/net/wireless/mac80211_hwsim.c	2012-07-04 19:24:48.572063007 +0200
@@ -47030,7 +47241,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/kernel/kmod.c l
  		 * If ret is 0, either ____call_usermodehelper failed and the
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/kernel/kprobes.c linux-3.2.29-pax/kernel/kprobes.c
 --- linux-3.2.29/kernel/kprobes.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.29-pax/kernel/kprobes.c	2012-07-04 19:24:48.848063008 +0200
++++ linux-3.2.29-pax/kernel/kprobes.c	2012-09-20 01:26:06.746669719 +0200
 @@ -185,7 +185,7 @@ static kprobe_opcode_t __kprobes *__get_
  	 * kernel image and loaded module images reside. This is required
  	 * so x86_64 can correctly handle the %rip-relative fixups.
@@ -47067,6 +47278,15 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/kernel/kprobes.
  
  	head = &kprobe_table[i];
  	preempt_disable();
+@@ -2204,7 +2204,7 @@ static ssize_t write_enabled_file_bool(s
+ 	       const char __user *user_buf, size_t count, loff_t *ppos)
+ {
+ 	char buf[32];
+-	int buf_size;
++	size_t buf_size;
+ 
+ 	buf_size = min(count, (sizeof(buf)-1));
+ 	if (copy_from_user(buf, user_buf, buf_size))
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/kernel/lockdep.c linux-3.2.29-pax/kernel/lockdep.c
 --- linux-3.2.29/kernel/lockdep.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/kernel/lockdep.c	2012-07-04 19:24:48.856063008 +0200
@@ -53988,6 +54208,18 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bluetooth/h
  
  	hci_send_cmd(hdev, HCI_OP_LE_LTK_REPLY, sizeof(cp), &cp);
  }
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bluetooth/hci_sock.c linux-3.2.29-pax/net/bluetooth/hci_sock.c
+--- linux-3.2.29/net/bluetooth/hci_sock.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/net/bluetooth/hci_sock.c	2012-09-20 00:32:35.626659615 +0200
+@@ -606,7 +606,7 @@ static int hci_sock_setsockopt(struct so
+ 			uf.event_mask[1] = *((u32 *) f->event_mask + 1);
+ 		}
+ 
+-		len = min_t(unsigned int, len, sizeof(uf));
++		len = min((size_t)len, sizeof(uf));
+ 		if (copy_from_user(&uf, optval, len)) {
+ 			err = -EFAULT;
+ 			break;
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bluetooth/l2cap_core.c linux-3.2.29-pax/net/bluetooth/l2cap_core.c
 --- linux-3.2.29/net/bluetooth/l2cap_core.c	2012-09-12 12:17:18.947311268 +0200
 +++ linux-3.2.29-pax/net/bluetooth/l2cap_core.c	2012-09-12 12:18:59.635311681 +0200
@@ -54004,6 +54236,77 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bluetooth/l
  
  			if (test_bit(CONF_STATE2_DEVICE, &chan->conf_state) &&
  							rfc.mode != chan->mode)
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bluetooth/l2cap_sock.c linux-3.2.29-pax/net/bluetooth/l2cap_sock.c
+--- linux-3.2.29/net/bluetooth/l2cap_sock.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/net/bluetooth/l2cap_sock.c	2012-09-20 00:34:33.190659985 +0200
+@@ -483,7 +483,8 @@ static int l2cap_sock_setsockopt_old(str
+ 	struct sock *sk = sock->sk;
+ 	struct l2cap_chan *chan = l2cap_pi(sk)->chan;
+ 	struct l2cap_options opts;
+-	int len, err = 0;
++	int err = 0;
++	size_t len = optlen;
+ 	u32 opt;
+ 
+ 	BT_DBG("sk %p", sk);
+@@ -505,7 +506,7 @@ static int l2cap_sock_setsockopt_old(str
+ 		opts.max_tx   = chan->max_tx;
+ 		opts.txwin_size = (__u16)chan->tx_win;
+ 
+-		len = min_t(unsigned int, sizeof(opts), optlen);
++		len = min(sizeof(opts), len);
+ 		if (copy_from_user((char *) &opts, optval, len)) {
+ 			err = -EFAULT;
+ 			break;
+@@ -571,7 +572,8 @@ static int l2cap_sock_setsockopt(struct
+ 	struct bt_security sec;
+ 	struct bt_power pwr;
+ 	struct l2cap_conn *conn;
+-	int len, err = 0;
++	int err = 0;
++	size_t len = optlen;
+ 	u32 opt;
+ 
+ 	BT_DBG("sk %p", sk);
+@@ -594,7 +596,7 @@ static int l2cap_sock_setsockopt(struct
+ 
+ 		sec.level = BT_SECURITY_LOW;
+ 
+-		len = min_t(unsigned int, sizeof(sec), optlen);
++		len = min(sizeof(sec), len);
+ 		if (copy_from_user((char *) &sec, optval, len)) {
+ 			err = -EFAULT;
+ 			break;
+@@ -670,7 +672,7 @@ static int l2cap_sock_setsockopt(struct
+ 
+ 		pwr.force_active = BT_POWER_FORCE_ACTIVE_ON;
+ 
+-		len = min_t(unsigned int, sizeof(pwr), optlen);
++		len = min(sizeof(pwr), len);
+ 		if (copy_from_user((char *) &pwr, optval, len)) {
+ 			err = -EFAULT;
+ 			break;
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bluetooth/rfcomm/sock.c linux-3.2.29-pax/net/bluetooth/rfcomm/sock.c
+--- linux-3.2.29/net/bluetooth/rfcomm/sock.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/net/bluetooth/rfcomm/sock.c	2012-09-20 00:32:35.630659616 +0200
+@@ -683,7 +683,7 @@ static int rfcomm_sock_setsockopt(struct
+ 	struct sock *sk = sock->sk;
+ 	struct bt_security sec;
+ 	int err = 0;
+-	size_t len;
++	size_t len = optlen;
+ 	u32 opt;
+ 
+ 	BT_DBG("sk %p", sk);
+@@ -705,7 +705,7 @@ static int rfcomm_sock_setsockopt(struct
+ 
+ 		sec.level = BT_SECURITY_LOW;
+ 
+-		len = min_t(unsigned int, sizeof(sec), optlen);
++		len = min(sizeof(sec), len);
+ 		if (copy_from_user((char *) &sec, optval, len)) {
+ 			err = -EFAULT;
+ 			break;
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bridge/br_multicast.c linux-3.2.29-pax/net/bridge/br_multicast.c
 --- linux-3.2.29/net/bridge/br_multicast.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/net/bridge/br_multicast.c	2012-07-04 19:24:48.964063009 +0200
@@ -54018,7 +54321,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bridge/br_m
  	/* Okay, we found ICMPv6 header */
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bridge/netfilter/ebtables.c linux-3.2.29-pax/net/bridge/netfilter/ebtables.c
 --- linux-3.2.29/net/bridge/netfilter/ebtables.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.29-pax/net/bridge/netfilter/ebtables.c	2012-07-04 19:24:48.964063009 +0200
++++ linux-3.2.29-pax/net/bridge/netfilter/ebtables.c	2012-09-20 00:32:35.606659615 +0200
 @@ -1513,7 +1513,7 @@ static int do_ebt_get_ctl(struct sock *s
  			tmp.valid_hooks = t->table->valid_hooks;
  		}
@@ -54028,6 +54331,24 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/bridge/netf
  			BUGPRINT("c2u Didn't work\n");
  			ret = -EFAULT;
  			break;
+@@ -2323,7 +2323,7 @@ static int compat_do_ebt_get_ctl(struct
+ 			goto out;
+ 		tmp.valid_hooks = t->valid_hooks;
+ 
+-		if (copy_to_user(user, &tmp, *len) != 0) {
++		if (*len > sizeof(tmp) || copy_to_user(user, &tmp, *len) != 0) {
+ 			ret = -EFAULT;
+ 			break;
+ 		}
+@@ -2334,7 +2334,7 @@ static int compat_do_ebt_get_ctl(struct
+ 		tmp.entries_size = t->table->entries_size;
+ 		tmp.valid_hooks = t->table->valid_hooks;
+ 
+-		if (copy_to_user(user, &tmp, *len) != 0) {
++		if (*len > sizeof(tmp) || copy_to_user(user, &tmp, *len) != 0) {
+ 			ret = -EFAULT;
+ 			break;
+ 		}
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/caif/caif_socket.c linux-3.2.29-pax/net/caif/caif_socket.c
 --- linux-3.2.29/net/caif/caif_socket.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/net/caif/caif_socket.c	2012-07-04 19:24:48.964063009 +0200
@@ -54216,7 +54537,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/can/gw.c li
  
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/compat.c linux-3.2.29-pax/net/compat.c
 --- linux-3.2.29/net/compat.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.29-pax/net/compat.c	2012-07-04 19:24:48.968063009 +0200
++++ linux-3.2.29-pax/net/compat.c	2012-09-20 00:32:35.606659615 +0200
 @@ -71,9 +71,9 @@ int get_compat_msghdr(struct msghdr *kms
  	    __get_user(kmsg->msg_controllen, &umsg->msg_controllen) ||
  	    __get_user(kmsg->msg_flags, &umsg->msg_flags))
@@ -54344,6 +54665,15 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/compat.c li
  	struct group_filter __user *kgf;
  	int __user	*koptlen;
  	u32 interface, fmode, numsrc;
+@@ -790,7 +790,7 @@ asmlinkage long compat_sys_socketcall(in
+ 
+ 	if (call < SYS_SOCKET || call > SYS_SENDMMSG)
+ 		return -EINVAL;
+-	if (copy_from_user(a, args, nas[call]))
++	if (nas[call] > sizeof a || copy_from_user(a, args, nas[call]))
+ 		return -EFAULT;
+ 	a0 = a[0];
+ 	a1 = a[1];
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/core/datagram.c linux-3.2.29-pax/net/core/datagram.c
 --- linux-3.2.29/net/core/datagram.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/net/core/datagram.c	2012-07-04 19:24:48.968063009 +0200
@@ -54544,7 +54874,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/core/scm.c 
  		int new_fd;
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/core/sock.c linux-3.2.29-pax/net/core/sock.c
 --- linux-3.2.29/net/core/sock.c	2012-07-12 18:23:34.933071954 +0200
-+++ linux-3.2.29-pax/net/core/sock.c	2012-07-12 18:23:40.325071656 +0200
++++ linux-3.2.29-pax/net/core/sock.c	2012-09-20 00:32:35.606659615 +0200
 @@ -289,7 +289,7 @@ int sock_queue_rcv_skb(struct sock *sk,
  	struct sk_buff_head *list = &sk->sk_receive_queue;
  
@@ -54590,15 +54920,36 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/core/sock.c
  		goto discard_and_relse;
  	}
  
-@@ -930,7 +930,7 @@ int sock_getsockopt(struct socket *sock,
+@@ -771,12 +771,12 @@ int sock_getsockopt(struct socket *sock,
+ 		struct timeval tm;
+ 	} v;
+ 
+-	int lv = sizeof(int);
+-	int len;
++	unsigned int lv = sizeof(int);
++	unsigned int len;
+ 
+ 	if (get_user(len, optlen))
+ 		return -EFAULT;
+-	if (len < 0)
++	if (len > INT_MAX)
+ 		return -EINVAL;
+ 
+ 	memset(&v, 0, sizeof(v));
+@@ -924,11 +924,11 @@ int sock_getsockopt(struct socket *sock,
+ 
+ 	case SO_PEERNAME:
+ 	{
+-		char address[128];
++		char address[_K_SS_MAXSIZE];
+ 
+ 		if (sock->ops->getname(sock, (struct sockaddr *)address, &lv, 2))
  			return -ENOTCONN;
- 		if (lv < len)
+-		if (lv < len)
++		if (lv < len || sizeof address < len)
  			return -EINVAL;
--		if (copy_to_user(optval, address, len))
-+		if (len > sizeof(address) || copy_to_user(optval, address, len))
+ 		if (copy_to_user(optval, address, len))
  			return -EFAULT;
- 		goto lenout;
- 	}
 @@ -963,7 +963,7 @@ int sock_getsockopt(struct socket *sock,
  
  	if (len > lv)
@@ -54745,6 +55096,102 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/ipv4/ip_soc
  		msg.msg_controllen = len;
  		msg.msg_flags = flags;
  
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/ipv4/netfilter/arp_tables.c linux-3.2.29-pax/net/ipv4/netfilter/arp_tables.c
+--- linux-3.2.29/net/ipv4/netfilter/arp_tables.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/net/ipv4/netfilter/arp_tables.c	2012-09-20 00:32:35.630659616 +0200
+@@ -880,14 +880,14 @@ static int compat_table_info(const struc
+ #endif
+ 
+ static int get_info(struct net *net, void __user *user,
+-                    const int *len, int compat)
++                    int len, int compat)
+ {
+ 	char name[XT_TABLE_MAXNAMELEN];
+ 	struct xt_table *t;
+ 	int ret;
+ 
+-	if (*len != sizeof(struct arpt_getinfo)) {
+-		duprintf("length %u != %Zu\n", *len,
++	if (len != sizeof(struct arpt_getinfo)) {
++		duprintf("length %u != %Zu\n", len,
+ 			 sizeof(struct arpt_getinfo));
+ 		return -EINVAL;
+ 	}
+@@ -924,7 +924,7 @@ static int get_info(struct net *net, voi
+ 		info.size = private->size;
+ 		strcpy(info.name, name);
+ 
+-		if (copy_to_user(user, &info, *len) != 0)
++		if (copy_to_user(user, &info, len) != 0)
+ 			ret = -EFAULT;
+ 		else
+ 			ret = 0;
+@@ -1683,7 +1683,7 @@ static int compat_do_arpt_get_ctl(struct
+ 
+ 	switch (cmd) {
+ 	case ARPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 1);
++		ret = get_info(sock_net(sk), user, *len, 1);
+ 		break;
+ 	case ARPT_SO_GET_ENTRIES:
+ 		ret = compat_get_entries(sock_net(sk), user, len);
+@@ -1728,7 +1728,7 @@ static int do_arpt_get_ctl(struct sock *
+ 
+ 	switch (cmd) {
+ 	case ARPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 0);
++		ret = get_info(sock_net(sk), user, *len, 0);
+ 		break;
+ 
+ 	case ARPT_SO_GET_ENTRIES:
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/ipv4/netfilter/ip_tables.c linux-3.2.29-pax/net/ipv4/netfilter/ip_tables.c
+--- linux-3.2.29/net/ipv4/netfilter/ip_tables.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/net/ipv4/netfilter/ip_tables.c	2012-09-20 00:32:35.630659616 +0200
+@@ -1069,14 +1069,14 @@ static int compat_table_info(const struc
+ #endif
+ 
+ static int get_info(struct net *net, void __user *user,
+-                    const int *len, int compat)
++                    int len, int compat)
+ {
+ 	char name[XT_TABLE_MAXNAMELEN];
+ 	struct xt_table *t;
+ 	int ret;
+ 
+-	if (*len != sizeof(struct ipt_getinfo)) {
+-		duprintf("length %u != %zu\n", *len,
++	if (len != sizeof(struct ipt_getinfo)) {
++		duprintf("length %u != %zu\n", len,
+ 			 sizeof(struct ipt_getinfo));
+ 		return -EINVAL;
+ 	}
+@@ -1113,7 +1113,7 @@ static int get_info(struct net *net, voi
+ 		info.size = private->size;
+ 		strcpy(info.name, name);
+ 
+-		if (copy_to_user(user, &info, *len) != 0)
++		if (copy_to_user(user, &info, len) != 0)
+ 			ret = -EFAULT;
+ 		else
+ 			ret = 0;
+@@ -1967,7 +1967,7 @@ compat_do_ipt_get_ctl(struct sock *sk, i
+ 
+ 	switch (cmd) {
+ 	case IPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 1);
++		ret = get_info(sock_net(sk), user, *len, 1);
+ 		break;
+ 	case IPT_SO_GET_ENTRIES:
+ 		ret = compat_get_entries(sock_net(sk), user, len);
+@@ -2014,7 +2014,7 @@ do_ipt_get_ctl(struct sock *sk, int cmd,
+ 
+ 	switch (cmd) {
+ 	case IPT_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 0);
++		ret = get_info(sock_net(sk), user, *len, 0);
+ 		break;
+ 
+ 	case IPT_SO_GET_ENTRIES:
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/ipv4/ping.c linux-3.2.29-pax/net/ipv4/ping.c
 --- linux-3.2.29/net/ipv4/ping.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/net/ipv4/ping.c	2012-07-04 19:24:48.980063009 +0200
@@ -54949,6 +55396,54 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/ipv6/ipv6_s
  		msg.msg_controllen = len;
  		msg.msg_flags = flags;
  
+diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/ipv6/netfilter/ip6_tables.c linux-3.2.29-pax/net/ipv6/netfilter/ip6_tables.c
+--- linux-3.2.29/net/ipv6/netfilter/ip6_tables.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.29-pax/net/ipv6/netfilter/ip6_tables.c	2012-09-20 00:32:35.634659616 +0200
+@@ -1091,14 +1091,14 @@ static int compat_table_info(const struc
+ #endif
+ 
+ static int get_info(struct net *net, void __user *user,
+-                    const int *len, int compat)
++                    int len, int compat)
+ {
+ 	char name[XT_TABLE_MAXNAMELEN];
+ 	struct xt_table *t;
+ 	int ret;
+ 
+-	if (*len != sizeof(struct ip6t_getinfo)) {
+-		duprintf("length %u != %zu\n", *len,
++	if (len != sizeof(struct ip6t_getinfo)) {
++		duprintf("length %u != %zu\n", len,
+ 			 sizeof(struct ip6t_getinfo));
+ 		return -EINVAL;
+ 	}
+@@ -1135,7 +1135,7 @@ static int get_info(struct net *net, voi
+ 		info.size = private->size;
+ 		strcpy(info.name, name);
+ 
+-		if (copy_to_user(user, &info, *len) != 0)
++		if (copy_to_user(user, &info, len) != 0)
+ 			ret = -EFAULT;
+ 		else
+ 			ret = 0;
+@@ -1989,7 +1989,7 @@ compat_do_ip6t_get_ctl(struct sock *sk,
+ 
+ 	switch (cmd) {
+ 	case IP6T_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 1);
++		ret = get_info(sock_net(sk), user, *len, 1);
+ 		break;
+ 	case IP6T_SO_GET_ENTRIES:
+ 		ret = compat_get_entries(sock_net(sk), user, len);
+@@ -2036,7 +2036,7 @@ do_ip6t_get_ctl(struct sock *sk, int cmd
+ 
+ 	switch (cmd) {
+ 	case IP6T_SO_GET_INFO:
+-		ret = get_info(sock_net(sk), user, len, 0);
++		ret = get_info(sock_net(sk), user, *len, 0);
+ 		break;
+ 
+ 	case IP6T_SO_GET_ENTRIES:
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/ipv6/raw.c linux-3.2.29-pax/net/ipv6/raw.c
 --- linux-3.2.29/net/ipv6/raw.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/net/ipv6/raw.c	2012-07-04 19:24:48.988063008 +0200
@@ -56092,16 +56587,16 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/rxrpc/rxkad
  	ret = kernel_sendmsg(conn->trans->local->socket, &msg, iov, 3, len);
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/sctp/socket.c linux-3.2.29-pax/net/sctp/socket.c
 --- linux-3.2.29/net/sctp/socket.c	2012-08-22 14:04:04.973098688 +0200
-+++ linux-3.2.29-pax/net/sctp/socket.c	2012-08-22 14:04:09.625098406 +0200
-@@ -4583,7 +4583,7 @@ static int sctp_getsockopt_peer_addrs(st
++++ linux-3.2.29-pax/net/sctp/socket.c	2012-09-20 00:32:35.610659615 +0200
+@@ -4583,6 +4583,8 @@ static int sctp_getsockopt_peer_addrs(st
  		addrlen = sctp_get_af_specific(temp.sa.sa_family)->sockaddr_len;
  		if (space_left < addrlen)
  			return -ENOMEM;
--		if (copy_to_user(to, &temp, addrlen))
-+		if (addrlen > sizeof(temp) || copy_to_user(to, &temp, addrlen))
++		if (addrlen > sizeof(temp) || addrlen < 0)
++			return -EFAULT;
+ 		if (copy_to_user(to, &temp, addrlen))
  			return -EFAULT;
  		to += addrlen;
- 		cnt++;
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/net/socket.c linux-3.2.29-pax/net/socket.c
 --- linux-3.2.29/net/socket.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.29-pax/net/socket.c	2012-07-04 19:24:49.028063009 +0200
@@ -57098,8 +57593,8 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/security/integr
  	return 0;
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/security/Kconfig linux-3.2.29-pax/security/Kconfig
 --- linux-3.2.29/security/Kconfig	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.29-pax/security/Kconfig	2012-08-25 11:10:02.945937618 +0200
-@@ -4,6 +4,661 @@
++++ linux-3.2.29-pax/security/Kconfig	2012-09-20 00:32:35.610659615 +0200
+@@ -4,6 +4,658 @@
  
  menu "Security options"
  
@@ -57452,9 +57947,6 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/security/Kconfi
 +	  that is, enabling this option will make it harder to inject
 +	  and execute 'foreign' code in kernel memory itself.
 +
-+	  Note that on x86_64 kernels there is a known regression when
-+	  this feature and KVM/VMX are both enabled in the host kernel.
-+
 +choice
 +	prompt "Return Address Instrumentation Method"
 +	default PAX_KERNEXEC_PLUGIN_METHOD_BTS
@@ -57761,7 +58253,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/security/Kconfi
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +824,7 @@ config INTEL_TXT
+@@ -169,7 +821,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -65240,7 +65732,7 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/usr/gen_init_cp
         }
 diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/virt/kvm/kvm_main.c linux-3.2.29-pax/virt/kvm/kvm_main.c
 --- linux-3.2.29/virt/kvm/kvm_main.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.29-pax/virt/kvm/kvm_main.c	2012-07-04 19:24:49.084063009 +0200
++++ linux-3.2.29-pax/virt/kvm/kvm_main.c	2012-09-20 00:32:35.622659615 +0200
 @@ -75,7 +75,7 @@ LIST_HEAD(vm_list);
  
  static cpumask_var_t cpus_hardware_enabled;
@@ -65250,6 +65742,15 @@ diff -NurpX linux-3.2.29-pax/Documentation/dontdiff linux-3.2.29/virt/kvm/kvm_ma
  
  struct kmem_cache *kvm_vcpu_cache;
  EXPORT_SYMBOL_GPL(kvm_vcpu_cache);
+@@ -659,7 +659,7 @@ int __kvm_set_memory_region(struct kvm *
+ 	/* We can read the guest memory with __xxx_user() later on. */
+ 	if (user_alloc &&
+ 	    ((mem->userspace_addr & (PAGE_SIZE - 1)) ||
+-	     !access_ok(VERIFY_WRITE,
++	     !__access_ok(VERIFY_WRITE,
+ 			(void __user *)(unsigned long)mem->userspace_addr,
+ 			mem->memory_size)))
+ 		goto out;
 @@ -2274,7 +2274,7 @@ static void hardware_enable_nolock(void
  
  	if (r) {
