@@ -1,4 +1,6 @@
-- fixed compilation error
+- made the constify plugin more robust based on results from the gcc test suite
+- fixed softmode/EMUTRAMP regression (executables produced by the patched binutils would not run)
+- fixed kernel stack disclosure in sys_newuname affecting linux 3.x
 
 diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/arch/alpha/include/asm/atomic.h linux-3.2.30-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.30/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -36990,7 +36992,7 @@ diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/fs/binfmt_elf.c linux-3.2.30-pax/fs/binfmt_elf.c
 --- linux-3.2.30/fs/binfmt_elf.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.30-pax/fs/binfmt_elf.c	2012-07-21 10:46:40.580999079 +0200
++++ linux-3.2.30-pax/fs/binfmt_elf.c	2012-09-23 02:08:09.761868350 +0200
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -37140,7 +37142,7 @@ diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/fs/binfmt_elf.c
 +#endif
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
-+	if (elf_phdata->p_flags & PF_EMUTRAMP)
++	if ((elf_phdata->p_flags & PF_EMUTRAMP) && (pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)))
 +		pax_flags |= MF_PAX_EMUTRAMP;
 +#endif
 +
@@ -48939,8 +48941,36 @@ diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/kernel/softirq.
  
 diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/kernel/sys.c linux-3.2.30-pax/kernel/sys.c
 --- linux-3.2.30/kernel/sys.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.30-pax/kernel/sys.c	2012-07-04 19:24:48.884063009 +0200
-@@ -1243,19 +1243,19 @@ SYSCALL_DEFINE1(olduname, struct oldold_
++++ linux-3.2.30-pax/kernel/sys.c	2012-09-23 02:08:09.765868104 +0200
+@@ -1170,13 +1170,13 @@ DECLARE_RWSEM(uts_sem);
+  * Work around broken programs that cannot handle "Linux 3.0".
+  * Instead we map 3.x to 2.6.40+x, so e.g. 3.0 would be 2.6.40
+  */
+-static int override_release(char __user *release, int len)
++static int override_release(char __user *release, size_t len)
+ {
+ 	int ret = 0;
+-	char buf[65];
+ 
+ 	if (current->personality & UNAME26) {
+-		char *rest = UTS_RELEASE;
++		char buf[65] = { 0 };
++		const char *rest = UTS_RELEASE;
+ 		int ndots = 0;
+ 		unsigned v;
+ 
+@@ -1188,7 +1188,10 @@ static int override_release(char __user
+ 			rest++;
+ 		}
+ 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
++		if (sizeof buf < len)
++			len = sizeof buf;
+ 		snprintf(buf, len, "2.6.%u%s", v, rest);
++		buf[len - 1] = 0;
+ 		ret = copy_to_user(release, buf, len);
+ 	}
+ 	return ret;
+@@ -1243,19 +1246,19 @@ SYSCALL_DEFINE1(olduname, struct oldold_
  		return -EFAULT;
  
  	down_read(&uts_sem);
@@ -48965,7 +48995,7 @@ diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/kernel/sys.c li
  				__OLD_UTS_LEN);
  	error |= __put_user(0, name->machine + __OLD_UTS_LEN);
  	up_read(&uts_sem);
-@@ -1720,7 +1720,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsi
+@@ -1720,7 +1723,7 @@ SYSCALL_DEFINE5(prctl, int, option, unsi
  			error = get_dumpable(me->mm);
  			break;
  		case PR_SET_DUMPABLE:
@@ -59284,8 +59314,8 @@ diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/tools/gcc/color
 +}
 diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/tools/gcc/constify_plugin.c linux-3.2.30-pax/tools/gcc/constify_plugin.c
 --- linux-3.2.30/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.30-pax/tools/gcc/constify_plugin.c	2012-07-21 10:46:40.668999081 +0200
-@@ -0,0 +1,328 @@
++++ linux-3.2.30-pax/tools/gcc/constify_plugin.c	2012-09-23 02:08:09.769867854 +0200
+@@ -0,0 +1,331 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011 by PaX Team <pageexec@freemail.hu>
@@ -59499,6 +59529,9 @@ diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/tools/gcc/const
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
 +		tree type = TREE_TYPE(field);
 +		enum tree_code code = TREE_CODE(type);
++
++		if (node == type)
++			return false;
 +		if (code == RECORD_TYPE || code == UNION_TYPE) {
 +			if (!(walk_struct(type)))
 +				return false;
@@ -59512,7 +59545,7 @@ diff -NurpX linux-3.2.30-pax/Documentation/dontdiff linux-3.2.30/tools/gcc/const
 +{
 +	tree type = (tree)event_data;
 +
-+	if (type == NULL_TREE)
++	if (type == NULL_TREE || type == error_mark_node)
 +		return;
 +
 +	if (TYPE_READONLY(type))
