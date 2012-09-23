@@ -1,4 +1,5 @@
-- fixed stupid backport mistake, thanks kaloz&minipli on irc
+- made the constify plugin more robust based on results from the gcc test suite
+- fixed softmode/EMUTRAMP regression (executables produced by the patched binutils would not run)
 
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/arch/alpha/include/asm/atomic.h linux-2.6.32.59-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.59/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -35668,7 +35669,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt_elf.c linux-2.6.32.59-pax/fs/binfmt_elf.c
 --- linux-2.6.32.59/fs/binfmt_elf.c	2012-03-18 17:44:12.476058731 +0100
-+++ linux-2.6.32.59-pax/fs/binfmt_elf.c	2012-07-21 11:20:33.917058863 +0200
++++ linux-2.6.32.59-pax/fs/binfmt_elf.c	2012-09-23 02:09:40.989862317 +0200
 @@ -31,6 +31,7 @@
  #include <linux/random.h>
  #include <linux/elf.h>
@@ -35818,7 +35819,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/fs/binfmt
 +#endif
 +
 +#ifdef CONFIG_PAX_EMUTRAMP
-+	if (elf_phdata->p_flags & PF_EMUTRAMP)
++	if ((elf_phdata->p_flags & PF_EMUTRAMP) && (pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)))
 +		pax_flags |= MF_PAX_EMUTRAMP;
 +#endif
 +
@@ -56523,8 +56524,8 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +}
 diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc/constify_plugin.c linux-2.6.32.59-pax/tools/gcc/constify_plugin.c
 --- linux-2.6.32.59/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.59-pax/tools/gcc/constify_plugin.c	2012-07-21 11:34:03.333082840 +0200
-@@ -0,0 +1,328 @@
++++ linux-2.6.32.59-pax/tools/gcc/constify_plugin.c	2012-09-23 02:10:27.861859813 +0200
+@@ -0,0 +1,331 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011 by PaX Team <pageexec@freemail.hu>
@@ -56738,6 +56739,9 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +	for (field = TYPE_FIELDS(node); field; field = TREE_CHAIN(field)) {
 +		tree type = TREE_TYPE(field);
 +		enum tree_code code = TREE_CODE(type);
++
++		if (node == type)
++			return false;
 +		if (code == RECORD_TYPE || code == UNION_TYPE) {
 +			if (!(walk_struct(type)))
 +				return false;
@@ -56751,7 +56755,7 @@ diff -NurpX linux-2.6.32.59-pax/Documentation/dontdiff linux-2.6.32.59/tools/gcc
 +{
 +	tree type = (tree)event_data;
 +
-+	if (type == NULL_TREE)
++	if (type == NULL_TREE || type == error_mark_node)
 +		return;
 +
 +	if (TYPE_READONLY(type))
