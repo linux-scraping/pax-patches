@@ -1,6 +1,5 @@
-- made the constify plugin more robust based on results from the gcc test suite
-- fixed softmode/EMUTRAMP regression (executables produced by the patched binutils would not run)
-- fixed kernel stack disclosure in sys_newuname affecting linux 3.x
+- fixed more struct apic constification fallout in lguest
+- cleaned up CONSTIFY_PLUGIN use
 
 diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/alpha/include/asm/atomic.h linux-3.5.4-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.5.4/arch/alpha/include/asm/atomic.h	2012-05-21 11:32:30.591926200 +0200
@@ -5802,13 +5801,13 @@ diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/um/kernel/pr
  	unsigned long stack_page, sp, ip;
 diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/um/Makefile linux-3.5.4-pax/arch/um/Makefile
 --- linux-3.5.4/arch/um/Makefile	2012-07-23 00:22:19.178342470 +0200
-+++ linux-3.5.4-pax/arch/um/Makefile	2012-07-23 00:23:10.490343979 +0200
++++ linux-3.5.4-pax/arch/um/Makefile	2012-09-24 23:01:38.020030253 +0200
 @@ -62,6 +62,10 @@ USER_CFLAGS = $(patsubst $(KERNEL_DEFINE
  	$(patsubst -I%,,$(KBUILD_CFLAGS)))) $(ARCH_INCLUDE) $(MODE_INCLUDE) \
  	$(filter -I%,$(CFLAGS)) -D_FILE_OFFSET_BITS=64 -idirafter include
  
 +ifdef CONSTIFY_PLUGIN
-+USER_CFLAGS	+= $(CONSTIFY_PLUGIN) -fplugin-arg-constify_plugin-no-constify
++USER_CFLAGS	+= -fplugin-arg-constify_plugin-no-constify
 +endif
 +
  #This will adjust *FLAGS accordingly to the platform.
@@ -5929,13 +5928,13 @@ diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/boot/com
  	/* Target address to relocate to for decompression */
 diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/boot/compressed/Makefile linux-3.5.4-pax/arch/x86/boot/compressed/Makefile
 --- linux-3.5.4/arch/x86/boot/compressed/Makefile	2012-05-21 11:32:56.723927619 +0200
-+++ linux-3.5.4-pax/arch/x86/boot/compressed/Makefile	2012-07-23 00:23:10.490343979 +0200
++++ linux-3.5.4-pax/arch/x86/boot/compressed/Makefile	2012-09-24 22:24:25.668023137 +0200
 @@ -14,6 +14,9 @@ cflags-$(CONFIG_X86_64) := -mcmodel=smal
  KBUILD_CFLAGS += $(cflags-y)
  KBUILD_CFLAGS += $(call cc-option,-ffreestanding)
  KBUILD_CFLAGS += $(call cc-option,-fno-stack-protector)
 +ifdef CONSTIFY_PLUGIN
-+KBUILD_CFLAGS += $(CONSTIFY_PLUGIN) -fplugin-arg-constify_plugin-no-constify
++KBUILD_CFLAGS += -fplugin-arg-constify_plugin-no-constify
 +endif
  
  KBUILD_AFLAGS  := $(KBUILD_CFLAGS) -D__ASSEMBLY__
@@ -6080,13 +6079,13 @@ diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/boot/hea
  #else
 diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/boot/Makefile linux-3.5.4-pax/arch/x86/boot/Makefile
 --- linux-3.5.4/arch/x86/boot/Makefile	2012-05-21 11:32:56.723927619 +0200
-+++ linux-3.5.4-pax/arch/x86/boot/Makefile	2012-07-23 00:23:10.494343979 +0200
++++ linux-3.5.4-pax/arch/x86/boot/Makefile	2012-09-24 22:24:16.580022706 +0200
 @@ -64,6 +64,9 @@ KBUILD_CFLAGS	:= $(LINUXINCLUDE) -g -Os
  		   $(call cc-option, -fno-stack-protector) \
  		   $(call cc-option, -mpreferred-stack-boundary=2)
  KBUILD_CFLAGS	+= $(call cc-option, -m32)
 +ifdef CONSTIFY_PLUGIN
-+KBUILD_CFLAGS	+= $(CONSTIFY_PLUGIN) -fplugin-arg-constify_plugin-no-constify
++KBUILD_CFLAGS	+= -fplugin-arg-constify_plugin-no-constify
 +endif
  KBUILD_AFLAGS	:= $(KBUILD_CFLAGS) -D__ASSEMBLY__
  GCOV_PROFILE := n
@@ -18436,7 +18435,26 @@ diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/kvm/x86.
  	struct kvm_x86_ops *ops = (struct kvm_x86_ops *)opaque;
 diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/lguest/boot.c linux-3.5.4-pax/arch/x86/lguest/boot.c
 --- linux-3.5.4/arch/x86/lguest/boot.c	2012-03-19 10:38:56.640049994 +0100
-+++ linux-3.5.4-pax/arch/x86/lguest/boot.c	2012-07-23 00:23:10.770343987 +0200
++++ linux-3.5.4-pax/arch/x86/lguest/boot.c	2012-09-26 10:56:00.656298506 +0200
+@@ -1116,12 +1116,12 @@ static u32 lguest_apic_safe_wait_icr_idl
+ 
+ static void set_lguest_basic_apic_ops(void)
+ {
+-	apic->read = lguest_apic_read;
+-	apic->write = lguest_apic_write;
+-	apic->icr_read = lguest_apic_icr_read;
+-	apic->icr_write = lguest_apic_icr_write;
+-	apic->wait_icr_idle = lguest_apic_wait_icr_idle;
+-	apic->safe_wait_icr_idle = lguest_apic_safe_wait_icr_idle;
++	*(void **)&apic->read = lguest_apic_read;
++	*(void **)&apic->write = lguest_apic_write;
++	*(void **)&apic->icr_read = lguest_apic_icr_read;
++	*(void **)&apic->icr_write = lguest_apic_icr_write;
++	*(void **)&apic->wait_icr_idle = lguest_apic_wait_icr_idle;
++	*(void **)&apic->safe_wait_icr_idle = lguest_apic_safe_wait_icr_idle;
+ };
+ #endif
+ 
 @@ -1200,9 +1200,10 @@ static __init int early_put_chars(u32 vt
   * Rebooting also tells the Host we're finished, but the RESTART flag tells the
   * Launcher to reboot us.
@@ -24466,13 +24484,13 @@ diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/realmode
  #else
 diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/arch/x86/realmode/rm/Makefile linux-3.5.4-pax/arch/x86/realmode/rm/Makefile
 --- linux-3.5.4/arch/x86/realmode/rm/Makefile	2012-07-23 00:22:19.422342477 +0200
-+++ linux-3.5.4-pax/arch/x86/realmode/rm/Makefile	2012-07-23 00:23:10.806343988 +0200
++++ linux-3.5.4-pax/arch/x86/realmode/rm/Makefile	2012-09-24 23:37:01.304036934 +0200
 @@ -78,5 +78,8 @@ KBUILD_CFLAGS	:= $(LINUXINCLUDE) -m32 -g
  			$(call cc-option, -fno-unit-at-a-time)) \
  		   $(call cc-option, -fno-stack-protector) \
  		   $(call cc-option, -mpreferred-stack-boundary=2)
 +ifdef CONSTIFY_PLUGIN
-+KBUILD_CFLAGS	+= $(CONSTIFY_PLUGIN) -fplugin-arg-constify_plugin-no-constify
++KBUILD_CFLAGS	+= -fplugin-arg-constify_plugin-no-constify
 +endif
  KBUILD_AFLAGS	:= $(KBUILD_CFLAGS) -D__ASSEMBLY__
  GCOV_PROFILE := n
@@ -57306,7 +57324,7 @@ diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/security/integrit
  	return 0;
 diff -NurpX linux-3.5.4-pax/Documentation/dontdiff linux-3.5.4/security/Kconfig linux-3.5.4-pax/security/Kconfig
 --- linux-3.5.4/security/Kconfig	2012-07-23 00:22:33.350342886 +0200
-+++ linux-3.5.4-pax/security/Kconfig	2012-09-19 01:30:17.501891789 +0200
++++ linux-3.5.4-pax/security/Kconfig	2012-09-26 11:06:19.168300451 +0200
 @@ -4,6 +4,658 @@
  
  menu "Security options"
