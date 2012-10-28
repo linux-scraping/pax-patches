@@ -1,4 +1,4 @@
-- forward port to 3.6.3
+- changed the limit of KERNEXEC's alternative code segment, thanks to 'rbrk ss' for asking about it :)
 
 diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/alpha/include/asm/atomic.h linux-3.6.3-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.6.3/arch/alpha/include/asm/atomic.h	2012-10-01 02:49:04.300114340 +0200
@@ -14880,7 +14880,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  	/* Reserve INITRD */
 diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/head_32.S linux-3.6.3-pax/arch/x86/kernel/head_32.S
 --- linux-3.6.3/arch/x86/kernel/head_32.S	2012-07-23 00:22:19.306342473 +0200
-+++ linux-3.6.3-pax/arch/x86/kernel/head_32.S	2012-10-24 01:05:36.936816897 +0200
++++ linux-3.6.3-pax/arch/x86/kernel/head_32.S	2012-10-28 01:30:21.744062375 +0200
 @@ -26,6 +26,12 @@
  /* Physical address */
  #define pa(X) ((X) - __PAGE_OFFSET)
@@ -14934,20 +14934,20 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  ENTRY(startup_32)
  	movl pa(stack_start),%ecx
  	
-@@ -106,6 +121,57 @@ ENTRY(startup_32)
+@@ -106,6 +121,59 @@ ENTRY(startup_32)
  2:
  	leal -__PAGE_OFFSET(%ecx),%esp
  
 +#ifdef CONFIG_SMP
 +	movl $pa(cpu_gdt_table),%edi
 +	movl $__per_cpu_load,%eax
-+	movw %ax,__KERNEL_PERCPU + 2(%edi)
++	movw %ax,GDT_ENTRY_PERCPU * 8 + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,__KERNEL_PERCPU + 4(%edi)
-+	movb %ah,__KERNEL_PERCPU + 7(%edi)
++	movb %al,GDT_ENTRY_PERCPU * 8 + 4(%edi)
++	movb %ah,GDT_ENTRY_PERCPU * 8 + 7(%edi)
 +	movl $__per_cpu_end - 1,%eax
 +	subl $__per_cpu_start,%eax
-+	movw %ax,__KERNEL_PERCPU + 0(%edi)
++	movw %ax,GDT_ENTRY_PERCPU * 8 + 0(%edi)
 +#endif
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -14964,10 +14964,10 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
 +#ifdef CONFIG_PAX_KERNEXEC
 +	movl $pa(boot_gdt),%edi
 +	movl $__LOAD_PHYSICAL_ADDR,%eax
-+	movw %ax,__BOOT_CS + 2(%edi)
++	movw %ax,GDT_ENTRY_BOOT_CS * 8 + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,__BOOT_CS + 4(%edi)
-+	movb %ah,__BOOT_CS + 7(%edi)
++	movb %al,GDT_ENTRY_BOOT_CS * 8 + 4(%edi)
++	movb %ah,GDT_ENTRY_BOOT_CS * 8 + 7(%edi)
 +	rorl $16,%eax
 +
 +	ljmp $(__BOOT_CS),$1f
@@ -14977,13 +14977,15 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
 +	movl $pa(cpu_gdt_table),%edi
 +	addl $__PAGE_OFFSET,%eax
 +1:
-+	movw %ax,__KERNEL_CS + 2(%edi)
-+	movw %ax,__KERNEXEC_KERNEL_CS + 2(%edi)
++	movb $0xc0,GDT_ENTRY_KERNEL_CS * 8 + 6(%edi)
++	movb $0xc0,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 6(%edi)
++	movw %ax,GDT_ENTRY_KERNEL_CS * 8 + 2(%edi)
++	movw %ax,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,__KERNEL_CS + 4(%edi)
-+	movb %al,__KERNEXEC_KERNEL_CS + 4(%edi)
-+	movb %ah,__KERNEL_CS + 7(%edi)
-+	movb %ah,__KERNEXEC_KERNEL_CS + 7(%edi)
++	movb %al,GDT_ENTRY_KERNEL_CS * 8 + 4(%edi)
++	movb %al,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 4(%edi)
++	movb %ah,GDT_ENTRY_KERNEL_CS * 8 + 7(%edi)
++	movb %ah,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 7(%edi)
 +	rorl $16,%eax
 +	addl $PAGE_SIZE_asm,%edi
 +	loop 1b
@@ -14992,7 +14994,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  /*
   * Clear BSS first so that there are no surprises...
   */
-@@ -196,8 +262,11 @@ ENTRY(startup_32)
+@@ -196,8 +264,11 @@ ENTRY(startup_32)
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -15006,7 +15008,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -227,8 +296,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -227,8 +298,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -15020,7 +15022,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  #endif
  
  #ifdef CONFIG_PARAVIRT
-@@ -242,9 +314,7 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -242,9 +316,7 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -15031,7 +15033,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -256,10 +326,10 @@ WEAK(xen_entry)
+@@ -256,10 +328,10 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
@@ -15046,7 +15048,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #else
-@@ -310,6 +380,7 @@ default_entry:
+@@ -310,6 +382,7 @@ default_entry:
  	orl %edx,%eax
  	movl %eax,%cr4
  
@@ -15054,7 +15056,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  	testb $X86_CR4_PAE, %al		# check if PAE is enabled
  	jz 6f
  
-@@ -338,6 +409,9 @@ default_entry:
+@@ -338,6 +411,9 @@ default_entry:
  	/* Make changes effective */
  	wrmsr
  
@@ -15064,7 +15066,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  6:
  
  /*
-@@ -436,14 +510,20 @@ is386:	movl $2,%ecx		# set MP
+@@ -436,14 +512,20 @@ is386:	movl $2,%ecx		# set MP
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
  
@@ -15086,7 +15088,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  	movl %eax,%gs
  
  	xorl %eax,%eax			# Clear LDT
-@@ -520,8 +600,11 @@ setup_once:
+@@ -520,8 +602,11 @@ setup_once:
  	 * relocation.  Manually set base address in stack canary
  	 * segment descriptor.
  	 */
@@ -15099,7 +15101,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  	movw %cx, 8 * GDT_ENTRY_STACK_CANARY + 2(%eax)
  	shrl $16, %ecx
  	movb %cl, 8 * GDT_ENTRY_STACK_CANARY + 4(%eax)
-@@ -552,7 +635,7 @@ ENDPROC(early_idt_handlers)
+@@ -552,7 +637,7 @@ ENDPROC(early_idt_handlers)
  	/* This is global to keep gas from relaxing the jumps */
  ENTRY(early_idt_handler)
  	cld
@@ -15108,7 +15110,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  	je hlt_loop
  	incl %ss:early_recursion_flag
  
-@@ -590,8 +673,8 @@ ENTRY(early_idt_handler)
+@@ -590,8 +675,8 @@ ENTRY(early_idt_handler)
  	pushl (20+6*4)(%esp)	/* trapno */
  	pushl $fault_msg
  	call printk
@@ -15118,7 +15120,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -610,8 +693,11 @@ ENDPROC(early_idt_handler)
+@@ -610,8 +695,11 @@ ENDPROC(early_idt_handler)
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -15131,7 +15133,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -620,9 +706,6 @@ ignore_int:
+@@ -620,9 +708,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -15141,7 +15143,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -656,29 +739,43 @@ ENTRY(setup_once_ref)
+@@ -656,29 +741,43 @@ ENTRY(setup_once_ref)
  /*
   * BSS section
   */
@@ -15190,7 +15192,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  ENTRY(initial_page_table)
  	.long	pa(initial_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -697,12 +794,20 @@ ENTRY(initial_page_table)
+@@ -697,12 +796,20 @@ ENTRY(initial_page_table)
  #  error "Kernel PMDs should be 1, 2 or 3"
  # endif
  	.align PAGE_SIZE		/* needs to be page-sized too */
@@ -15212,7 +15214,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  
  __INITRODATA
  int_msg:
-@@ -730,7 +835,7 @@ fault_msg:
+@@ -730,7 +837,7 @@ fault_msg:
   * segment size, and 32-bit linear address value:
   */
  
@@ -15221,7 +15223,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  .globl boot_gdt_descr
  .globl idt_descr
  
-@@ -739,7 +844,7 @@ fault_msg:
+@@ -739,7 +846,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -15230,7 +15232,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -750,7 +855,7 @@ idt_descr:
+@@ -750,7 +857,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -15239,7 +15241,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/kernel/h
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -759,5 +864,65 @@ ENTRY(early_gdt_descr)
+@@ -759,5 +866,65 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -22881,7 +22883,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/mm/init_
  		return "[vsyscall]";
 diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/mm/init.c linux-3.6.3-pax/arch/x86/mm/init.c
 --- linux-3.6.3/arch/x86/mm/init.c	2012-10-01 02:49:14.840114373 +0200
-+++ linux-3.6.3-pax/arch/x86/mm/init.c	2012-10-24 01:05:36.936816897 +0200
++++ linux-3.6.3-pax/arch/x86/mm/init.c	2012-10-28 01:30:36.428063980 +0200
 @@ -16,6 +16,7 @@
  #include <asm/tlb.h>
  #include <asm/proto.h>
@@ -22914,7 +22916,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/mm/init.
  		return 1;
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
-@@ -379,6 +386,86 @@ void free_init_pages(char *what, unsigne
+@@ -379,6 +386,87 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -22933,6 +22935,7 @@ diff -NurpX linux-3.6.3-pax/Documentation/dontdiff linux-3.6.3/arch/x86/mm/init.
 +	for (cpu = 0; cpu < nr_cpu_ids; cpu++) {
 +		pack_descriptor(&d, get_desc_base(&get_cpu_gdt_table(cpu)[GDT_ENTRY_KERNEL_CS]), limit, 0x9B, 0xC);
 +		write_gdt_entry(get_cpu_gdt_table(cpu), GDT_ENTRY_KERNEL_CS, &d, DESCTYPE_S);
++		write_gdt_entry(get_cpu_gdt_table(cpu), GDT_ENTRY_KERNEXEC_KERNEL_CS, &d, DESCTYPE_S);
 +	}
 +
 +	/* PaX: make KERNEL_CS read-only */
