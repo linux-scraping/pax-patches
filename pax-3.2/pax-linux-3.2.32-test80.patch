@@ -1,4 +1,5 @@
-- forward port to 3.2.32
+- got rid of useless parameter in load_elf_interp
+- changed the limit of KERNEXEC's alternative code segment, thanks to 'rbrk ss' for asking about it :)
 
 diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/alpha/include/asm/atomic.h linux-3.2.32-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.32/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -14788,7 +14789,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  	/* Reserve INITRD */
 diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel/head_32.S linux-3.2.32-pax/arch/x86/kernel/head_32.S
 --- linux-3.2.32/arch/x86/kernel/head_32.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.32-pax/arch/x86/kernel/head_32.S	2012-07-04 19:24:47.572063003 +0200
++++ linux-3.2.32-pax/arch/x86/kernel/head_32.S	2012-10-28 23:25:09.730330493 +0100
 @@ -25,6 +25,12 @@
  /* Physical address */
  #define pa(X) ((X) - __PAGE_OFFSET)
@@ -14842,20 +14843,20 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  ENTRY(startup_32)
  	movl pa(stack_start),%ecx
  	
-@@ -105,6 +120,57 @@ ENTRY(startup_32)
+@@ -105,6 +120,59 @@ ENTRY(startup_32)
  2:
  	leal -__PAGE_OFFSET(%ecx),%esp
  
 +#ifdef CONFIG_SMP
 +	movl $pa(cpu_gdt_table),%edi
 +	movl $__per_cpu_load,%eax
-+	movw %ax,__KERNEL_PERCPU + 2(%edi)
++	movw %ax,GDT_ENTRY_PERCPU * 8 + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,__KERNEL_PERCPU + 4(%edi)
-+	movb %ah,__KERNEL_PERCPU + 7(%edi)
++	movb %al,GDT_ENTRY_PERCPU * 8 + 4(%edi)
++	movb %ah,GDT_ENTRY_PERCPU * 8 + 7(%edi)
 +	movl $__per_cpu_end - 1,%eax
 +	subl $__per_cpu_start,%eax
-+	movw %ax,__KERNEL_PERCPU + 0(%edi)
++	movw %ax,GDT_ENTRY_PERCPU * 8 + 0(%edi)
 +#endif
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
@@ -14872,10 +14873,10 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
 +#ifdef CONFIG_PAX_KERNEXEC
 +	movl $pa(boot_gdt),%edi
 +	movl $__LOAD_PHYSICAL_ADDR,%eax
-+	movw %ax,__BOOT_CS + 2(%edi)
++	movw %ax,GDT_ENTRY_BOOT_CS * 8 + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,__BOOT_CS + 4(%edi)
-+	movb %ah,__BOOT_CS + 7(%edi)
++	movb %al,GDT_ENTRY_BOOT_CS * 8 + 4(%edi)
++	movb %ah,GDT_ENTRY_BOOT_CS * 8 + 7(%edi)
 +	rorl $16,%eax
 +
 +	ljmp $(__BOOT_CS),$1f
@@ -14885,13 +14886,15 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
 +	movl $pa(cpu_gdt_table),%edi
 +	addl $__PAGE_OFFSET,%eax
 +1:
-+	movw %ax,__KERNEL_CS + 2(%edi)
-+	movw %ax,__KERNEXEC_KERNEL_CS + 2(%edi)
++	movb $0xc0,GDT_ENTRY_KERNEL_CS * 8 + 6(%edi)
++	movb $0xc0,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 6(%edi)
++	movw %ax,GDT_ENTRY_KERNEL_CS * 8 + 2(%edi)
++	movw %ax,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 2(%edi)
 +	rorl $16,%eax
-+	movb %al,__KERNEL_CS + 4(%edi)
-+	movb %al,__KERNEXEC_KERNEL_CS + 4(%edi)
-+	movb %ah,__KERNEL_CS + 7(%edi)
-+	movb %ah,__KERNEXEC_KERNEL_CS + 7(%edi)
++	movb %al,GDT_ENTRY_KERNEL_CS * 8 + 4(%edi)
++	movb %al,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 4(%edi)
++	movb %ah,GDT_ENTRY_KERNEL_CS * 8 + 7(%edi)
++	movb %ah,GDT_ENTRY_KERNEXEC_KERNEL_CS * 8 + 7(%edi)
 +	rorl $16,%eax
 +	addl $PAGE_SIZE_asm,%edi
 +	loop 1b
@@ -14900,7 +14903,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  /*
   * Clear BSS first so that there are no surprises...
   */
-@@ -195,8 +261,11 @@ ENTRY(startup_32)
+@@ -195,8 +263,11 @@ ENTRY(startup_32)
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -14914,7 +14917,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  #else	/* Not PAE */
  
  page_pde_offset = (__PAGE_OFFSET >> 20);
-@@ -226,8 +295,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -226,8 +297,11 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	movl %eax, pa(max_pfn_mapped)
  
  	/* Do early initialization of the fixmap area */
@@ -14928,7 +14931,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  #endif
  
  #ifdef CONFIG_PARAVIRT
-@@ -241,9 +313,7 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
+@@ -241,9 +315,7 @@ page_pde_offset = (__PAGE_OFFSET >> 20);
  	cmpl $num_subarch_entries, %eax
  	jae bad_subarch
  
@@ -14939,7 +14942,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  
  bad_subarch:
  WEAK(lguest_entry)
-@@ -255,10 +325,10 @@ WEAK(xen_entry)
+@@ -255,10 +327,10 @@ WEAK(xen_entry)
  	__INITDATA
  
  subarch_entries:
@@ -14954,7 +14957,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  num_subarch_entries = (. - subarch_entries) / 4
  .previous
  #else
-@@ -312,6 +382,7 @@ default_entry:
+@@ -312,6 +384,7 @@ default_entry:
  	orl %edx,%eax
  	movl %eax,%cr4
  
@@ -14962,7 +14965,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  	testb $X86_CR4_PAE, %al		# check if PAE is enabled
  	jz 6f
  
-@@ -340,6 +411,9 @@ default_entry:
+@@ -340,6 +413,9 @@ default_entry:
  	/* Make changes effective */
  	wrmsr
  
@@ -14972,7 +14975,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  6:
  
  /*
-@@ -443,7 +517,7 @@ is386:	movl $2,%ecx		# set MP
+@@ -443,7 +519,7 @@ is386:	movl $2,%ecx		# set MP
  1:	movl $(__KERNEL_DS),%eax	# reload all the segment registers
  	movl %eax,%ss			# after changing gdt.
  
@@ -14981,7 +14984,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  	movl %eax,%ds
  	movl %eax,%es
  
-@@ -457,15 +531,22 @@ is386:	movl $2,%ecx		# set MP
+@@ -457,15 +533,22 @@ is386:	movl $2,%ecx		# set MP
  	 */
  	cmpb $0,ready
  	jne 1f
@@ -15006,7 +15009,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  	movl %eax,%gs
  
  	xorl %eax,%eax			# Clear LDT
-@@ -558,22 +639,22 @@ early_page_fault:
+@@ -558,22 +641,22 @@ early_page_fault:
  	jmp early_fault
  
  early_fault:
@@ -15034,7 +15037,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  hlt_loop:
  	hlt
  	jmp hlt_loop
-@@ -581,8 +662,11 @@ hlt_loop:
+@@ -581,8 +664,11 @@ hlt_loop:
  /* This is the default interrupt "handler" :-) */
  	ALIGN
  ignore_int:
@@ -15047,7 +15050,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  	pushl %eax
  	pushl %ecx
  	pushl %edx
-@@ -591,9 +675,6 @@ ignore_int:
+@@ -591,9 +677,6 @@ ignore_int:
  	movl $(__KERNEL_DS),%eax
  	movl %eax,%ds
  	movl %eax,%es
@@ -15057,7 +15060,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  	pushl 16(%esp)
  	pushl 24(%esp)
  	pushl 32(%esp)
-@@ -622,29 +703,43 @@ ENTRY(initial_code)
+@@ -622,29 +705,43 @@ ENTRY(initial_code)
  /*
   * BSS section
   */
@@ -15106,7 +15109,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  ENTRY(initial_page_table)
  	.long	pa(initial_pg_pmd+PGD_IDENT_ATTR),0	/* low identity map */
  # if KPMDS == 3
-@@ -663,18 +758,27 @@ ENTRY(initial_page_table)
+@@ -663,18 +760,27 @@ ENTRY(initial_page_table)
  #  error "Kernel PMDs should be 1, 2 or 3"
  # endif
  	.align PAGE_SIZE		/* needs to be page-sized too */
@@ -15137,7 +15140,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  int_msg:
  	.asciz "Unknown interrupt or fault at: %p %p %p\n"
  
-@@ -707,7 +811,7 @@ fault_msg:
+@@ -707,7 +813,7 @@ fault_msg:
  	.word 0				# 32 bit align gdt_desc.address
  boot_gdt_descr:
  	.word __BOOT_DS+7
@@ -15146,7 +15149,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  
  	.word 0				# 32-bit align idt_desc.address
  idt_descr:
-@@ -718,7 +822,7 @@ idt_descr:
+@@ -718,7 +824,7 @@ idt_descr:
  	.word 0				# 32 bit align gdt_desc.address
  ENTRY(early_gdt_descr)
  	.word GDT_ENTRIES*8-1
@@ -15155,7 +15158,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/kernel
  
  /*
   * The boot_gdt must mirror the equivalent in setup.S and is
-@@ -727,5 +831,65 @@ ENTRY(early_gdt_descr)
+@@ -727,5 +833,65 @@ ENTRY(early_gdt_descr)
  	.align L1_CACHE_BYTES
  ENTRY(boot_gdt)
  	.fill GDT_ENTRY_BOOT_CS,8,0
@@ -23029,7 +23032,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/mm/ini
  		return "[vsyscall]";
 diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/mm/init.c linux-3.2.32-pax/arch/x86/mm/init.c
 --- linux-3.2.32/arch/x86/mm/init.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.32-pax/arch/x86/mm/init.c	2012-07-04 19:24:47.640063004 +0200
++++ linux-3.2.32-pax/arch/x86/mm/init.c	2012-10-28 23:25:09.738330494 +0100
 @@ -15,6 +15,7 @@
  #include <asm/tlbflush.h>
  #include <asm/tlb.h>
@@ -23062,7 +23065,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/mm/ini
  		return 1;
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
-@@ -372,6 +379,86 @@ void free_init_pages(char *what, unsigne
+@@ -372,6 +379,87 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -23081,6 +23084,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/arch/x86/mm/ini
 +	for (cpu = 0; cpu < nr_cpu_ids; cpu++) {
 +		pack_descriptor(&d, get_desc_base(&get_cpu_gdt_table(cpu)[GDT_ENTRY_KERNEL_CS]), limit, 0x9B, 0xC);
 +		write_gdt_entry(get_cpu_gdt_table(cpu), GDT_ENTRY_KERNEL_CS, &d, DESCTYPE_S);
++		write_gdt_entry(get_cpu_gdt_table(cpu), GDT_ENTRY_KERNEXEC_KERNEL_CS, &d, DESCTYPE_S);
 +	}
 +
 +	/* PaX: make KERNEL_CS read-only */
@@ -37007,7 +37011,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c linux-3.2.32-pax/fs/binfmt_elf.c
 --- linux-3.2.32/fs/binfmt_elf.c	2012-10-24 01:05:57.304814639 +0200
-+++ linux-3.2.32-pax/fs/binfmt_elf.c	2012-10-24 01:06:03.092814892 +0200
++++ linux-3.2.32-pax/fs/binfmt_elf.c	2012-10-28 23:25:01.438329929 +0100
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -37100,7 +37104,13 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  		return -EFAULT;
  	return 0;
  }
-@@ -381,10 +400,10 @@ static unsigned long load_elf_interp(str
+@@ -376,15 +395,14 @@ static unsigned long total_mapping_size(
+    an ELF header */
+ 
+ static unsigned long load_elf_interp(struct elfhdr *interp_elf_ex,
+-		struct file *interpreter, unsigned long *interp_map_addr,
+-		unsigned long no_base)
++		struct file *interpreter, unsigned long no_base)
  {
  	struct elf_phdr *elf_phdata;
  	struct elf_phdr *eppnt;
@@ -37113,7 +37123,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	unsigned long total_size;
  	int retval, i, size;
  
-@@ -430,6 +449,11 @@ static unsigned long load_elf_interp(str
+@@ -430,6 +448,11 @@ static unsigned long load_elf_interp(str
  		goto out_close;
  	}
  
@@ -37125,7 +37135,16 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	eppnt = elf_phdata;
  	for (i = 0; i < interp_elf_ex->e_phnum; i++, eppnt++) {
  		if (eppnt->p_type == PT_LOAD) {
-@@ -473,8 +497,8 @@ static unsigned long load_elf_interp(str
+@@ -453,8 +476,6 @@ static unsigned long load_elf_interp(str
+ 			map_addr = elf_map(interpreter, load_addr + vaddr,
+ 					eppnt, elf_prot, elf_type, total_size);
+ 			total_size = 0;
+-			if (!*interp_map_addr)
+-				*interp_map_addr = map_addr;
+ 			error = map_addr;
+ 			if (BAD_ADDR(map_addr))
+ 				goto out_close;
+@@ -473,8 +494,8 @@ static unsigned long load_elf_interp(str
  			k = load_addr + eppnt->p_vaddr;
  			if (BAD_ADDR(k) ||
  			    eppnt->p_filesz > eppnt->p_memsz ||
@@ -37136,7 +37155,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -528,6 +552,311 @@ out:
+@@ -528,6 +549,311 @@ out:
  	return error;
  }
  
@@ -37448,7 +37467,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -544,6 +873,11 @@ static unsigned long randomize_stack_top
+@@ -544,6 +870,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -37460,7 +37479,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -562,7 +896,7 @@ static int load_elf_binary(struct linux_
+@@ -562,7 +893,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -37469,7 +37488,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -572,11 +906,11 @@ static int load_elf_binary(struct linux_
+@@ -572,11 +903,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -37482,7 +37501,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -713,11 +1047,81 @@ static int load_elf_binary(struct linux_
+@@ -713,11 +1044,81 @@ static int load_elf_binary(struct linux_
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -37565,7 +37584,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -808,6 +1212,20 @@ static int load_elf_binary(struct linux_
+@@ -808,6 +1209,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -37586,7 +37605,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -840,9 +1258,9 @@ static int load_elf_binary(struct linux_
+@@ -840,9 +1255,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -37599,7 +37618,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -881,10 +1299,39 @@ static int load_elf_binary(struct linux_
+@@ -881,17 +1296,43 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -37611,8 +37630,10 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
 +		 * file specifies odd protections. So
 +		 * we don't check the return value
 +		 */
-+	}
-+
+ 	}
+ 
+-	if (elf_interpreter) {
+-		unsigned long uninitialized_var(interp_map_addr);
 +#ifdef CONFIG_PAX_RANDMMAP
 +	if (current->mm->pax_flags & MF_PAX_RANDMMAP) {
 +		unsigned long start, size;
@@ -37637,12 +37658,17 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
 +			send_sig(SIGKILL, current, 0);
 +			goto out_free_dentry;
 +		}
- 	}
++	}
 +#endif
  
- 	if (elf_interpreter) {
- 		unsigned long uninitialized_var(interp_map_addr);
-@@ -1098,7 +1545,7 @@ out:
++	if (elf_interpreter) {
+ 		elf_entry = load_elf_interp(&loc->interp_elf_ex,
+ 					    interpreter,
+-					    &interp_map_addr,
+ 					    load_bias);
+ 		if (!IS_ERR((void *)elf_entry)) {
+ 			/*
+@@ -1098,7 +1539,7 @@ out:
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -37651,7 +37677,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1132,7 +1579,7 @@ static unsigned long vma_dump_size(struc
+@@ -1132,7 +1573,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -37660,7 +37686,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  		goto whole;
  
  	/*
-@@ -1354,9 +1801,9 @@ static void fill_auxv_note(struct memelf
+@@ -1354,9 +1795,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -37672,7 +37698,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1851,14 +2298,14 @@ static void fill_extnum_info(struct elfh
+@@ -1851,14 +2292,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -37689,7 +37715,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	return size;
  }
  
-@@ -1952,7 +2399,7 @@ static int elf_core_dump(struct coredump
+@@ -1952,7 +2393,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -37698,7 +37724,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -1983,7 +2430,7 @@ static int elf_core_dump(struct coredump
+@@ -1983,7 +2424,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -37707,7 +37733,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2018,7 +2465,7 @@ static int elf_core_dump(struct coredump
+@@ -2018,7 +2459,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -37716,7 +37742,7 @@ diff -NurpX linux-3.2.32-pax/Documentation/dontdiff linux-3.2.32/fs/binfmt_elf.c
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2064,6 +2511,96 @@ out:
+@@ -2064,6 +2505,96 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
