@@ -1,4 +1,7 @@
-- forward port to 3.6.6
+- updated size_overflow plugin from Emese, fixes another false positive reported by Szymon Juraszczyk
+- added user.pax.flags support to tmpfs based on discussions with Anthony Basile and other gentoo devs
+  - checks became more strict as well to prevent duplicate flags
+- some cleanups here and there
 
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/alpha/include/asm/atomic.h linux-3.6.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.6.6/arch/alpha/include/asm/atomic.h	2012-10-01 02:49:04.300114340 +0200
@@ -13835,7 +13838,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  /*
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/entry_64.S linux-3.6.6-pax/arch/x86/kernel/entry_64.S
 --- linux-3.6.6/arch/x86/kernel/entry_64.S	2012-10-28 21:30:17.529594535 +0100
-+++ linux-3.6.6-pax/arch/x86/kernel/entry_64.S	2012-10-28 21:30:26.825597365 +0100
++++ linux-3.6.6-pax/arch/x86/kernel/entry_64.S	2012-11-13 02:24:38.471763170 +0100
 @@ -57,6 +57,8 @@
  #include <asm/percpu.h>
  #include <asm/asm.h>
@@ -13909,7 +13912,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	jmp *%rdi
  #endif
  
-@@ -180,6 +188,280 @@ ENTRY(native_usergs_sysret64)
+@@ -180,6 +188,273 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -13995,13 +13998,6 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
 +	ljmpq __KERNEL_CS,3f
 +3:	SET_RDI_INTO_CR0
 +	jmp 1b
-+#ifdef CONFIG_PARAVIRT
-+	PV_RESTORE_REGS(CLBR_RDI);
-+#endif
-+
-+	popq %rdi
-+	pax_force_retaddr
-+	retq
 +ENDPROC(pax_exit_kernel)
 +#endif
 +
@@ -14190,7 +14186,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -271,8 +553,8 @@ ENDPROC(native_usergs_sysret64)
+@@ -271,8 +546,8 @@ ENDPROC(native_usergs_sysret64)
  	.endm
  
  	.macro UNFAKE_STACK_FRAME
@@ -14201,7 +14197,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	.endm
  
  /*
-@@ -359,7 +641,7 @@ ENDPROC(native_usergs_sysret64)
+@@ -359,7 +634,7 @@ ENDPROC(native_usergs_sysret64)
  	movq %rsp, %rsi
  
  	leaq -RBP(%rsp),%rdi	/* arg1 for handler */
@@ -14210,7 +14206,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	je 1f
  	SWAPGS
  	/*
-@@ -394,9 +676,10 @@ ENTRY(save_rest)
+@@ -394,9 +669,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
@@ -14222,7 +14218,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -425,9 +708,10 @@ ENTRY(save_paranoid)
+@@ -425,9 +701,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -14235,7 +14231,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	.popsection
  
  /*
-@@ -449,7 +733,7 @@ ENTRY(ret_from_fork)
+@@ -449,7 +726,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -14244,7 +14240,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	jz   retint_restore_args
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -459,7 +743,7 @@ ENTRY(ret_from_fork)
+@@ -459,7 +736,7 @@ ENTRY(ret_from_fork)
  	jmp ret_from_sys_call			# go to the SYSRET fastpath
  
  	CFI_ENDPROC
@@ -14253,7 +14249,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /*
   * System call entry. Up to 6 arguments in registers are supported.
-@@ -495,7 +779,7 @@ END(ret_from_fork)
+@@ -495,7 +772,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -14262,7 +14258,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -508,16 +792,23 @@ GLOBAL(system_call_after_swapgs)
+@@ -508,16 +785,23 @@ GLOBAL(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -14288,7 +14284,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	jnz tracesys
  system_call_fastpath:
  #if __SYSCALL_MASK == ~0
-@@ -527,7 +818,7 @@ system_call_fastpath:
+@@ -527,7 +811,7 @@ system_call_fastpath:
  	cmpl $__NR_syscall_max,%eax
  #endif
  	ja badsys
@@ -14297,7 +14293,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	call *sys_call_table(,%rax,8)  # XXX:	 rip relative
  	movq %rax,RAX-ARGOFFSET(%rsp)
  /*
-@@ -541,10 +832,13 @@ sysret_check:
+@@ -541,10 +825,13 @@ sysret_check:
  	LOCKDEP_SYS_EXIT
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -14312,7 +14308,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -596,14 +890,18 @@ badsys:
+@@ -596,14 +883,18 @@ badsys:
  	 * jump back to the normal fast path.
  	 */
  auditsys:
@@ -14332,7 +14328,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	jmp system_call_fastpath
  
  	/*
-@@ -624,7 +922,7 @@ sysret_audit:
+@@ -624,7 +915,7 @@ sysret_audit:
  	/* Do syscall tracing */
  tracesys:
  #ifdef CONFIG_AUDITSYSCALL
@@ -14341,7 +14337,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	jz auditsys
  #endif
  	SAVE_REST
-@@ -632,12 +930,16 @@ tracesys:
+@@ -632,12 +923,16 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -14358,7 +14354,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	RESTORE_REST
  #if __SYSCALL_MASK == ~0
  	cmpq $__NR_syscall_max,%rax
-@@ -646,7 +948,7 @@ tracesys:
+@@ -646,7 +941,7 @@ tracesys:
  	cmpl $__NR_syscall_max,%eax
  #endif
  	ja   int_ret_from_sys_call	/* RAX(%rsp) set to -ENOSYS above */
@@ -14367,7 +14363,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	call *sys_call_table(,%rax,8)
  	movq %rax,RAX-ARGOFFSET(%rsp)
  	/* Use IRET because user could have changed frame */
-@@ -667,7 +969,9 @@ GLOBAL(int_with_check)
+@@ -667,7 +962,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -14378,7 +14374,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -713,7 +1017,7 @@ int_restore_rest:
+@@ -713,7 +1010,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -14387,7 +14383,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /*
   * Certain special system calls that need to save a complete full stack frame.
-@@ -729,7 +1033,7 @@ ENTRY(\label)
+@@ -729,7 +1026,7 @@ ENTRY(\label)
  	call \func
  	jmp ptregscall_common
  	CFI_ENDPROC
@@ -14396,7 +14392,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	.endm
  
  	PTREGSCALL stub_clone, sys_clone, %r8
-@@ -747,9 +1051,10 @@ ENTRY(ptregscall_common)
+@@ -747,9 +1044,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
@@ -14408,7 +14404,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -764,7 +1069,7 @@ ENTRY(stub_execve)
+@@ -764,7 +1062,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -14417,7 +14413,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -782,7 +1087,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -782,7 +1080,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -14426,7 +14422,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  #ifdef CONFIG_X86_X32_ABI
  	PTREGSCALL stub_x32_sigaltstack, sys32_sigaltstack, %rdx
-@@ -851,7 +1156,7 @@ vector=vector+1
+@@ -851,7 +1149,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -14435,7 +14431,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  .previous
  END(interrupt)
-@@ -871,6 +1176,16 @@ END(interrupt)
+@@ -871,6 +1169,16 @@ END(interrupt)
  	subq $ORIG_RAX-RBP, %rsp
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-RBP
  	SAVE_ARGS_IRQ
@@ -14452,7 +14448,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	call \func
  	.endm
  
-@@ -902,7 +1217,7 @@ ret_from_intr:
+@@ -902,7 +1210,7 @@ ret_from_intr:
  
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -14461,7 +14457,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -924,12 +1239,16 @@ retint_swapgs:		/* return to user-space
+@@ -924,12 +1232,16 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -14478,7 +14474,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1012,7 +1331,7 @@ ENTRY(retint_kernel)
+@@ -1012,7 +1324,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -14487,7 +14483,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  /*
   * End of kprobes section
   */
-@@ -1029,7 +1348,7 @@ ENTRY(\sym)
+@@ -1029,7 +1341,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -14496,7 +14492,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1084,12 +1403,22 @@ ENTRY(\sym)
+@@ -1084,12 +1396,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -14520,7 +14516,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1101,15 +1430,25 @@ ENTRY(\sym)
+@@ -1101,15 +1423,25 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -14548,7 +14544,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1119,14 +1458,30 @@ ENTRY(\sym)
+@@ -1119,14 +1451,30 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF_DEBUG
@@ -14580,7 +14576,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  .endm
  
  .macro errorentry sym do_sym
-@@ -1137,13 +1492,23 @@ ENTRY(\sym)
+@@ -1137,13 +1485,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -14605,7 +14601,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  .endm
  
  	/* error code is on the stack already */
-@@ -1156,13 +1521,23 @@ ENTRY(\sym)
+@@ -1156,13 +1514,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -14630,7 +14626,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1192,9 +1567,10 @@ gs_change:
+@@ -1192,9 +1560,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -14642,7 +14638,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  	_ASM_EXTABLE(gs_change,bad_gs)
  	.section .fixup,"ax"
-@@ -1213,13 +1589,14 @@ ENTRY(kernel_thread_helper)
+@@ -1213,13 +1582,14 @@ ENTRY(kernel_thread_helper)
  	 * Here we are in the child and the registers are set as they were
  	 * at kernel_thread() invocation in the parent.
  	 */
@@ -14658,7 +14654,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1246,11 +1623,11 @@ ENTRY(kernel_execve)
+@@ -1246,11 +1616,11 @@ ENTRY(kernel_execve)
  	RESTORE_REST
  	testq %rax,%rax
  	je int_ret_from_sys_call
@@ -14672,7 +14668,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1268,9 +1645,10 @@ ENTRY(call_softirq)
+@@ -1268,9 +1638,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -14684,7 +14680,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1308,7 +1686,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1308,7 +1679,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -14693,7 +14689,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1367,7 +1745,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1367,7 +1738,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -14702,7 +14698,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  apicinterrupt XEN_HVM_EVTCHN_CALLBACK \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1416,16 +1794,31 @@ ENTRY(paranoid_exit)
+@@ -1416,16 +1787,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF_DEBUG
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -14735,7 +14731,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1454,7 +1847,7 @@ paranoid_schedule:
+@@ -1454,7 +1840,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -14744,7 +14740,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1481,12 +1874,13 @@ ENTRY(error_entry)
+@@ -1481,12 +1867,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -14759,7 +14755,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	ret
  
  /*
-@@ -1513,7 +1907,7 @@ bstep_iret:
+@@ -1513,7 +1900,7 @@ bstep_iret:
  	movq %rcx,RIP+8(%rsp)
  	jmp error_swapgs
  	CFI_ENDPROC
@@ -14768,7 +14764,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1533,7 +1927,7 @@ ENTRY(error_exit)
+@@ -1533,7 +1920,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -14777,7 +14773,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  
  /*
   * Test if a given stack is an NMI stack or not.
-@@ -1591,9 +1985,11 @@ ENTRY(nmi)
+@@ -1591,9 +1978,11 @@ ENTRY(nmi)
  	 * If %cs was not the kernel segment, then the NMI triggered in user
  	 * space, which means it is definitely not nested.
  	 */
@@ -14790,7 +14786,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	/*
  	 * Check the special variable on the stack to see if NMIs are
  	 * executing.
-@@ -1752,6 +2148,17 @@ end_repeat_nmi:
+@@ -1752,6 +2141,17 @@ end_repeat_nmi:
  	 */
  	movq %cr2, %r12
  
@@ -14808,7 +14804,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/arch/x86/kernel/e
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1767,21 +2174,32 @@ end_repeat_nmi:
+@@ -1767,21 +2167,32 @@ end_repeat_nmi:
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
  nmi_swapgs:
@@ -37278,7 +37274,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_aout.c 
  		if (error != N_DATADDR(ex)) {
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c linux-3.6.6-pax/fs/binfmt_elf.c
 --- linux-3.6.6/fs/binfmt_elf.c	2012-10-07 18:49:41.635544691 +0200
-+++ linux-3.6.6-pax/fs/binfmt_elf.c	2012-10-07 19:06:49.615651005 +0200
++++ linux-3.6.6-pax/fs/binfmt_elf.c	2012-11-16 13:21:32.527956593 +0100
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -37422,7 +37418,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -523,6 +544,311 @@ out:
+@@ -523,6 +544,315 @@ out:
  	return error;
  }
  
@@ -37656,7 +37652,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
 +	xattr_size = vfs_getxattr(file->f_path.dentry, XATTR_NAME_PAX_FLAGS, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0)
++	if (xattr_size <= 0 || xattr_size > 5)
 +		return ~0UL;
 +
 +	for (i = 0; i < xattr_size; i++)
@@ -37666,9 +37662,13 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
 +
 +#define parse_flag(option1, option2, flag)			\
 +		case option1:					\
++			if (pax_flags_hardmode & MF_PAX_##flag)	\
++				return ~0UL;			\
 +			pax_flags_hardmode |= MF_PAX_##flag;	\
 +			break;					\
 +		case option2:					\
++			if (pax_flags_softmode & MF_PAX_##flag)	\
++				return ~0UL;			\
 +			pax_flags_softmode |= MF_PAX_##flag;	\
 +			break;
 +
@@ -37734,7 +37734,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -539,6 +865,11 @@ static unsigned long randomize_stack_top
+@@ -539,6 +869,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -37746,7 +37746,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -557,7 +888,7 @@ static int load_elf_binary(struct linux_
+@@ -557,7 +892,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -37755,7 +37755,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -567,11 +898,11 @@ static int load_elf_binary(struct linux_
+@@ -567,11 +902,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -37768,7 +37768,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -707,11 +1038,81 @@ static int load_elf_binary(struct linux_
+@@ -707,11 +1042,81 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  
  	/* OK, This is the point of no return */
@@ -37851,7 +37851,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -802,6 +1203,20 @@ static int load_elf_binary(struct linux_
+@@ -802,6 +1207,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -37872,7 +37872,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -834,9 +1249,9 @@ static int load_elf_binary(struct linux_
+@@ -834,9 +1253,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -37885,7 +37885,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -875,17 +1290,44 @@ static int load_elf_binary(struct linux_
+@@ -875,17 +1294,44 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -37911,7 +37911,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
 +		retval = -ENOMEM;
 +		if (!find_vma_intersection(current->mm, start, start + size + PAGE_SIZE)) {
 +			unsigned long prot = PROT_NONE;
- 
++
 +			up_read(&current->mm->mmap_sem);
 +			current->mm->brk_gap = PAGE_ALIGN(size) >> PAGE_SHIFT;
 +//			if (current->personality & ADDR_NO_RANDOMIZE)
@@ -37928,7 +37928,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
 +		}
 +	}
 +#endif
-+
+ 
 +	if (elf_interpreter) {
  		elf_entry = load_elf_interp(&loc->interp_elf_ex,
  					    interpreter,
@@ -37936,7 +37936,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1107,7 +1549,7 @@ static bool always_dump_vma(struct vm_ar
+@@ -1107,7 +1553,7 @@ static bool always_dump_vma(struct vm_ar
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -37945,7 +37945,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1144,7 +1586,7 @@ static unsigned long vma_dump_size(struc
+@@ -1144,7 +1590,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -37954,7 +37954,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  		goto whole;
  
  	/*
-@@ -1366,9 +1808,9 @@ static void fill_auxv_note(struct memelf
+@@ -1366,9 +1812,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -37966,7 +37966,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1879,14 +2321,14 @@ static void fill_extnum_info(struct elfh
+@@ -1879,14 +2325,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -37983,7 +37983,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  	return size;
  }
  
-@@ -1980,7 +2422,7 @@ static int elf_core_dump(struct coredump
+@@ -1980,7 +2426,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -37992,7 +37992,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -2011,7 +2453,7 @@ static int elf_core_dump(struct coredump
+@@ -2011,7 +2457,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -38001,7 +38001,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2046,7 +2488,7 @@ static int elf_core_dump(struct coredump
+@@ -2046,7 +2492,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -38010,7 +38010,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/fs/binfmt_elf.c l
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2092,6 +2534,96 @@ out:
+@@ -2092,6 +2538,96 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -45502,7 +45502,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/include/linux/vms
  static inline void __dec_zone_page_state(struct page *page,
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/include/linux/xattr.h linux-3.6.6-pax/include/linux/xattr.h
 --- linux-3.6.6/include/linux/xattr.h	2012-01-08 19:48:27.851470938 +0100
-+++ linux-3.6.6-pax/include/linux/xattr.h	2012-10-01 02:50:45.936114659 +0200
++++ linux-3.6.6-pax/include/linux/xattr.h	2012-11-16 12:43:00.275944646 +0100
 @@ -57,6 +57,11 @@
  #define XATTR_POSIX_ACL_DEFAULT  "posix_acl_default"
  #define XATTR_NAME_POSIX_ACL_DEFAULT XATTR_SYSTEM_PREFIX XATTR_POSIX_ACL_DEFAULT
@@ -45745,7 +45745,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/include/net/netli
  /**
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/include/net/net_namespace.h linux-3.6.6-pax/include/net/net_namespace.h
 --- linux-3.6.6/include/net/net_namespace.h	2012-10-01 02:49:52.716114492 +0200
-+++ linux-3.6.6-pax/include/net/net_namespace.h	2012-10-01 02:50:46.008114660 +0200
++++ linux-3.6.6-pax/include/net/net_namespace.h	2012-11-09 21:13:03.654814064 +0100
 @@ -102,7 +102,7 @@ struct net {
  #endif
  	struct netns_ipvs	*ipvs;
@@ -49960,6 +49960,54 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/lib/ioremap.c lin
  	if (!pud)
  		return -ENOMEM;
  	do {
+diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/lib/list_debug.c linux-3.6.6-pax/lib/list_debug.c
+--- linux-3.6.6/lib/list_debug.c	2012-10-01 02:49:54.508114498 +0200
++++ linux-3.6.6-pax/lib/list_debug.c	2012-11-09 21:23:06.598793411 +0100
+@@ -23,17 +23,19 @@ void __list_add(struct list_head *new,
+ 			      struct list_head *prev,
+ 			      struct list_head *next)
+ {
+-	WARN(next->prev != prev,
++	if (WARN(next->prev != prev,
+ 		"list_add corruption. next->prev should be "
+ 		"prev (%p), but was %p. (next=%p).\n",
+-		prev, next->prev, next);
+-	WARN(prev->next != next,
++		prev, next->prev, next) ||
++	    WARN(prev->next != next,
+ 		"list_add corruption. prev->next should be "
+ 		"next (%p), but was %p. (prev=%p).\n",
+-		next, prev->next, prev);
+-	WARN(new == prev || new == next,
++		next, prev->next, prev) ||
++	    WARN(new == prev || new == next,
+ 	     "list_add double add: new=%p, prev=%p, next=%p.\n",
+-	     new, prev, next);
++	     new, prev, next))
++		return;
++
+ 	next->prev = new;
+ 	new->next = next;
+ 	new->prev = prev;
+@@ -86,12 +88,14 @@ EXPORT_SYMBOL(list_del);
+ void __list_add_rcu(struct list_head *new,
+ 		    struct list_head *prev, struct list_head *next)
+ {
+-	WARN(next->prev != prev,
++	if (WARN(next->prev != prev,
+ 		"list_add_rcu corruption. next->prev should be prev (%p), but was %p. (next=%p).\n",
+-		prev, next->prev, next);
+-	WARN(prev->next != next,
++		prev, next->prev, next) ||
++	    WARN(prev->next != next,
+ 		"list_add_rcu corruption. prev->next should be next (%p), but was %p. (prev=%p).\n",
+-		next, prev->next, prev);
++		next, prev->next, prev))
++		return;
++
+ 	new->next = next;
+ 	new->prev = prev;
+ 	rcu_assign_pointer(list_next_rcu(prev), new);
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/lib/radix-tree.c linux-3.6.6-pax/lib/radix-tree.c
 --- linux-3.6.6/lib/radix-tree.c	2012-07-23 00:22:31.786342841 +0200
 +++ linux-3.6.6-pax/lib/radix-tree.c	2012-10-01 02:50:47.088114663 +0200
@@ -53098,7 +53146,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/rmap.c linux-3
  	struct anon_vma *anon_vma;
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/shmem.c linux-3.6.6-pax/mm/shmem.c
 --- linux-3.6.6/mm/shmem.c	2012-10-24 16:16:01.403043291 +0200
-+++ linux-3.6.6-pax/mm/shmem.c	2012-10-24 16:19:23.783048951 +0200
++++ linux-3.6.6-pax/mm/shmem.c	2012-11-16 17:15:53.927357413 +0100
 @@ -75,7 +75,7 @@ static struct vfsmount *shm_mnt;
  #define BOGO_DIRENT_SIZE 20
  
@@ -53108,7 +53156,35 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/shmem.c linux-
  
  struct shmem_xattr {
  	struct list_head list;	/* anchored by shmem_inode_info->xattr_list */
-@@ -2594,8 +2594,7 @@ int shmem_fill_super(struct super_block
+@@ -2207,6 +2207,11 @@ static const struct xattr_handler *shmem
+ static int shmem_xattr_validate(const char *name)
+ {
+ 	struct { const char *prefix; size_t len; } arr[] = {
++
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++		{ XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN},
++#endif
++
+ 		{ XATTR_SECURITY_PREFIX, XATTR_SECURITY_PREFIX_LEN },
+ 		{ XATTR_TRUSTED_PREFIX, XATTR_TRUSTED_PREFIX_LEN }
+ 	};
+@@ -2260,6 +2265,15 @@ static int shmem_setxattr(struct dentry
+ 	if (err)
+ 		return err;
+ 
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++	if (!strncmp(name, XATTR_USER_PREFIX, XATTR_USER_PREFIX_LEN)) {
++		if (strcmp(name, XATTR_NAME_PAX_FLAGS))
++			return -EOPNOTSUPP;
++		if (size > 8)
++			return -EINVAL;
++	}
++#endif
++
+ 	if (size == 0)
+ 		value = "";  /* empty EA, do not remove */
+ 
+@@ -2594,8 +2608,7 @@ int shmem_fill_super(struct super_block
  	int err = -ENOMEM;
  
  	/* Round up to L1_CACHE_BYTES to resist false sharing */
@@ -54015,7 +54091,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/util.c linux-3
  }
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linux-3.6.6-pax/mm/vmalloc.c
 --- linux-3.6.6/mm/vmalloc.c	2012-10-01 02:49:54.712114498 +0200
-+++ linux-3.6.6-pax/mm/vmalloc.c	2012-10-01 02:50:47.376114664 +0200
++++ linux-3.6.6-pax/mm/vmalloc.c	2012-11-13 00:24:23.036052764 +0100
 @@ -39,8 +39,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -54038,15 +54114,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  	} while (pte++, addr += PAGE_SIZE, addr != end);
  }
  
-@@ -91,6 +102,7 @@ static int vmap_pte_range(pmd_t *pmd, un
- 		unsigned long end, pgprot_t prot, struct page **pages, int *nr)
- {
- 	pte_t *pte;
-+	int ret = -ENOMEM;
- 
- 	/*
- 	 * nr is a running index into the array which helps higher level
-@@ -100,17 +112,30 @@ static int vmap_pte_range(pmd_t *pmd, un
+@@ -100,16 +111,29 @@ static int vmap_pte_range(pmd_t *pmd, un
  	pte = pte_alloc_kernel(pmd, addr);
  	if (!pte)
  		return -ENOMEM;
@@ -54056,33 +54124,29 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  		struct page *page = pages[*nr];
  
 -		if (WARN_ON(!pte_none(*pte)))
--			return -EBUSY;
--		if (WARN_ON(!page))
--			return -ENOMEM;
 +#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +		if (pgprot_val(prot) & _PAGE_NX)
 +#endif
 +
-+		if (WARN_ON(!pte_none(*pte))) {
-+			ret = -EBUSY;
-+			goto out;
++		if (!pte_none(*pte)) {
++			pax_close_kernel();
++			WARN_ON(1);
+ 			return -EBUSY;
+-		if (WARN_ON(!page))
 +		}
-+		if (WARN_ON(!page)) {
-+			ret = -ENOMEM;
-+			goto out;
++		if (!page) {
++			pax_close_kernel();
++			WARN_ON(1);
+ 			return -ENOMEM;
 +		}
  		set_pte_at(&init_mm, addr, pte, mk_pte(page, prot));
  		(*nr)++;
  	} while (pte++, addr += PAGE_SIZE, addr != end);
--	return 0;
-+	ret = 0;
-+out:
 +	pax_close_kernel();
-+	return ret;
+ 	return 0;
  }
  
- static int vmap_pmd_range(pud_t *pud, unsigned long addr,
-@@ -119,7 +144,7 @@ static int vmap_pmd_range(pud_t *pud, un
+@@ -119,7 +143,7 @@ static int vmap_pmd_range(pud_t *pud, un
  	pmd_t *pmd;
  	unsigned long next;
  
@@ -54091,7 +54155,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -136,7 +161,7 @@ static int vmap_pud_range(pgd_t *pgd, un
+@@ -136,7 +160,7 @@ static int vmap_pud_range(pgd_t *pgd, un
  	pud_t *pud;
  	unsigned long next;
  
@@ -54100,7 +54164,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -191,11 +216,20 @@ int is_vmalloc_or_module_addr(const void
+@@ -191,11 +215,20 @@ int is_vmalloc_or_module_addr(const void
  	 * and fall back on vmalloc() if that fails. Others
  	 * just put it in the vmalloc space.
  	 */
@@ -54122,7 +54186,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  	return is_vmalloc_addr(x);
  }
  
-@@ -216,8 +250,14 @@ struct page *vmalloc_to_page(const void
+@@ -216,8 +249,14 @@ struct page *vmalloc_to_page(const void
  
  	if (!pgd_none(*pgd)) {
  		pud_t *pud = pud_offset(pgd, addr);
@@ -54137,7 +54201,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  			if (!pmd_none(*pmd)) {
  				pte_t *ptep, pte;
  
-@@ -329,7 +369,7 @@ static void purge_vmap_area_lazy(void);
+@@ -329,7 +368,7 @@ static void purge_vmap_area_lazy(void);
   * Allocate a region of KVA of the specified size and alignment, within the
   * vstart and vend.
   */
@@ -54146,7 +54210,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  				unsigned long align,
  				unsigned long vstart, unsigned long vend,
  				int node, gfp_t gfp_mask)
-@@ -1328,6 +1368,16 @@ static struct vm_struct *__get_vm_area_n
+@@ -1328,6 +1367,16 @@ static struct vm_struct *__get_vm_area_n
  	struct vm_struct *area;
  
  	BUG_ON(in_interrupt());
@@ -54163,7 +54227,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  	if (flags & VM_IOREMAP) {
  		int bit = fls(size);
  
-@@ -1568,6 +1618,11 @@ void *vmap(struct page **pages, unsigned
+@@ -1568,6 +1617,11 @@ void *vmap(struct page **pages, unsigned
  	if (count > totalram_pages)
  		return NULL;
  
@@ -54175,7 +54239,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  	area = get_vm_area_caller((count << PAGE_SHIFT), flags,
  					__builtin_return_address(0));
  	if (!area)
-@@ -1669,6 +1724,13 @@ void *__vmalloc_node_range(unsigned long
+@@ -1669,6 +1723,13 @@ void *__vmalloc_node_range(unsigned long
  	if (!size || (size >> PAGE_SHIFT) > totalram_pages)
  		goto fail;
  
@@ -54189,7 +54253,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  	area = __get_vm_area_node(size, align, VM_ALLOC | VM_UNLIST,
  				  start, end, node, gfp_mask, caller);
  	if (!area)
-@@ -1842,10 +1904,9 @@ EXPORT_SYMBOL(vzalloc_node);
+@@ -1842,10 +1903,9 @@ EXPORT_SYMBOL(vzalloc_node);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -54201,7 +54265,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/mm/vmalloc.c linu
  			      -1, __builtin_return_address(0));
  }
  
-@@ -2136,6 +2197,8 @@ int remap_vmalloc_range(struct vm_area_s
+@@ -2136,6 +2196,8 @@ int remap_vmalloc_range(struct vm_area_s
  	unsigned long uaddr = vma->vm_start;
  	unsigned long usize = vma->vm_end - vma->vm_start;
  
@@ -64363,8 +64427,8 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +_003896_hash nfs_parse_server_name 2 1899 _003896_hash NULL
 diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_overflow_plugin.c linux-3.6.6-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.6.6/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.6.6-pax/tools/gcc/size_overflow_plugin.c	2012-10-01 12:21:03.496871873 +0200
-@@ -0,0 +1,1879 @@
++++ linux-3.6.6-pax/tools/gcc/size_overflow_plugin.c	2012-11-14 00:03:02.000000000 +0100
+@@ -0,0 +1,1865 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -64442,10 +64506,10 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +static unsigned int handle_function(void);
 +static void check_size_overflow(gimple stmt, tree size_overflow_type, tree cast_rhs, tree rhs, bool before);
 +static tree get_size_overflow_type(gimple stmt, const_tree node);
-+static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, tree size_overflow_type, tree rhs1, tree rhs2, tree __unused rhs3);
++static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20120930beta",
++	.version	= "20121113beta",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -64764,6 +64828,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	tree type = TREE_TYPE(rhs1);
 +	tree lhs = create_new_var(type);
 +
++	gcc_assert(types_compatible_p(type, TREE_TYPE(rhs2)));
 +	assign = gimple_build_assign_with_ops(code, lhs, rhs1, rhs2);
 +	gimple_set_lhs(assign, make_ssa_name(lhs, assign));
 +
@@ -64829,42 +64894,41 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	return assign;
 +}
 +
-+static tree cast_to_new_size_overflow_type(gimple stmt, tree new_rhs1, tree size_overflow_type, bool before)
++static tree cast_to_new_size_overflow_type(gimple stmt, tree rhs, tree size_overflow_type, bool before)
 +{
-+	const_gimple assign;
++	gimple assign;
 +	gimple_stmt_iterator gsi;
 +
-+	if (new_rhs1 == NULL_TREE)
++	if (rhs == NULL_TREE)
 +		return NULL_TREE;
 +
-+	if (!useless_type_conversion_p(TREE_TYPE(new_rhs1), size_overflow_type)) {
-+		gsi = gsi_for_stmt(stmt);
-+		assign = build_cast_stmt(size_overflow_type, new_rhs1, CREATE_NEW_VAR, &gsi, before);
-+		return gimple_get_lhs(assign);
-+	}
-+	return new_rhs1;
++	if (types_compatible_p(TREE_TYPE(rhs), size_overflow_type))
++		return rhs;
++
++	gsi = gsi_for_stmt(stmt);
++	assign = build_cast_stmt(size_overflow_type, rhs, CREATE_NEW_VAR, &gsi, before);
++	gimple_set_plf(assign, MY_STMT, true);
++	return gimple_get_lhs(assign);
 +}
 +
-+static tree follow_overflow_type_and_dup(struct pointer_set_t *visited, gimple stmt, const_tree node, tree new_rhs1, tree new_rhs2, tree new_rhs3)
++static tree cast_to_TI_type(gimple stmt, tree node)
 +{
-+	tree size_overflow_type = get_size_overflow_type(stmt, node);
++	gimple_stmt_iterator gsi;
++	gimple cast_stmt;
++	tree type = TREE_TYPE(node);
 +
-+	new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++	if (types_compatible_p(type, intTI_type_node))
++		return node;
 +
-+	if (new_rhs2 != NULL_TREE)
-+		new_rhs2 = cast_to_new_size_overflow_type(stmt, new_rhs2, size_overflow_type, BEFORE_STMT);
-+
-+	if (new_rhs3 != NULL_TREE)
-+		new_rhs3 = cast_to_new_size_overflow_type(stmt, new_rhs3, size_overflow_type, BEFORE_STMT);
-+
-+	return dup_assign(visited, stmt, size_overflow_type, new_rhs1, new_rhs2, new_rhs3);
++	gsi = gsi_for_stmt(stmt);
++	cast_stmt = build_cast_stmt(intTI_type_node, node, CREATE_NEW_VAR, &gsi, BEFORE_STMT);
++	gimple_set_plf(cast_stmt, MY_STMT, true);
++	return gimple_get_lhs(cast_stmt);
 +}
-+
 +
 +static tree create_assign(struct pointer_set_t *visited, gimple oldstmt, tree rhs1, bool before)
 +{
-+	tree size_overflow_type, lhs;
-+	gimple stmt;
++	tree lhs;
 +	gimple_stmt_iterator gsi;
 +
 +	if (rhs1 == NULL_TREE) {
@@ -64902,18 +64966,14 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +		oldstmt = gsi_stmt(gsi);
 +	}
 +
-+	size_overflow_type = get_size_overflow_type(oldstmt, lhs);
-+
-+	stmt = build_cast_stmt(size_overflow_type, rhs1, CREATE_NEW_VAR, &gsi, before);
-+	gimple_set_plf(stmt, MY_STMT, true);
-+	return gimple_get_lhs(stmt);
++	return cast_to_new_size_overflow_type(oldstmt, rhs1, get_size_overflow_type(oldstmt, lhs), before);
 +}
 +
-+static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, tree size_overflow_type, tree rhs1, tree rhs2, tree __unused rhs3)
++static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3)
 +{
 +	gimple stmt;
 +	gimple_stmt_iterator gsi;
-+	tree new_var, lhs = gimple_get_lhs(oldstmt);
++	tree size_overflow_type, new_var, lhs = gimple_get_lhs(oldstmt);
 +
 +	if (gimple_plf(oldstmt, MY_STMT))
 +		return lhs;
@@ -64934,6 +64994,8 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	if (gimple_assign_rhs_code(oldstmt) == WIDEN_MULT_EXPR)
 +		gimple_assign_set_rhs_code(stmt, MULT_EXPR);
 +
++	size_overflow_type = get_size_overflow_type(oldstmt, node);
++
 +	if (is_bool(lhs))
 +		new_var = SSA_NAME_VAR(lhs);
 +	else
@@ -64942,7 +65004,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	gimple_set_lhs(stmt, new_var);
 +
 +	if (rhs1 != NULL_TREE) {
-+		if (!gimple_assign_cast_p(oldstmt))
++		if (!gimple_assign_cast_p(oldstmt) && TREE_CODE_CLASS(gimple_assign_rhs_code(oldstmt)) != tcc_comparison)
 +			rhs1 = cast_a_tree(size_overflow_type, rhs1);
 +		gimple_assign_set_rhs1(stmt, rhs1);
 +	}
@@ -65194,7 +65256,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +		return lhs;
 +
 +	if (gimple_plf(stmt, NO_CAST_CHECK))
-+		return follow_overflow_type_and_dup(visited, stmt, rhs1, new_rhs1, NULL_TREE, NULL_TREE);
++		return dup_assign(visited, stmt, lhs, new_rhs1, NULL_TREE, NULL_TREE);
 +
 +	if (gimple_assign_rhs_code(stmt) == BIT_NOT_EXPR) {
 +		size_overflow_type = get_size_overflow_type(stmt, rhs1);
@@ -65204,7 +65266,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	}
 +
 +	if (!gimple_assign_cast_p(stmt) || check_undefined_integer_operation(stmt))
-+		return follow_overflow_type_and_dup(visited, stmt, lhs, new_rhs1, NULL_TREE, NULL_TREE);
++		return dup_assign(visited, stmt, lhs, new_rhs1, NULL_TREE, NULL_TREE);
 +
 +	size_overflow_type = get_size_overflow_type(stmt, rhs1);
 +	new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
@@ -65389,8 +65451,8 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	cast_rhs_type = TREE_TYPE(cast_rhs);
 +	type_max_type = TREE_TYPE(type_max);
 +	type_min_type = TREE_TYPE(type_min);
-+	gcc_assert(useless_type_conversion_p(cast_rhs_type, type_max_type));
-+	gcc_assert(useless_type_conversion_p(type_max_type, type_min_type));
++	gcc_assert(types_compatible_p(cast_rhs_type, type_max_type));
++	gcc_assert(types_compatible_p(type_max_type, type_min_type));
 +
 +	insert_check_size_overflow(stmt, GT_EXPR, cast_rhs, type_max, before, false);
 +	insert_check_size_overflow(stmt, LT_EXPR, cast_rhs, type_min, before, true);
@@ -65418,7 +65480,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	if (gimple_assign_rhs_code(def_stmt) == RSHIFT_EXPR)
 +		return get_size_overflow_type(change_rhs_def_stmt, change_rhs);
 +
-+	if (!useless_type_conversion_p(lhs_type, rhs1_type) || !useless_type_conversion_p(rhs1_type, rhs2_type)) {
++	if (!types_compatible_p(lhs_type, rhs1_type) || !useless_type_conversion_p(rhs1_type, rhs2_type)) {
 +		debug_gimple_stmt(def_stmt);
 +		gcc_unreachable();
 +	}
@@ -65435,64 +65497,20 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	return true;
 +}
 +
-+static tree get_cast_def_stmt_rhs(const_tree new_rhs)
-+{
-+	gimple def_stmt;
-+
-+	def_stmt = get_def_stmt(new_rhs);
-+	// get_size_overflow_type
-+	if (LONG_TYPE_SIZE != GET_MODE_BITSIZE(SImode))
-+		gcc_assert(gimple_assign_cast_p(def_stmt));
-+	return gimple_assign_rhs1(def_stmt);
-+}
-+
-+static tree cast_to_int_TI_type_and_check(gimple stmt, tree new_rhs)
-+{
-+	gimple_stmt_iterator gsi;
-+	const_gimple cast_stmt;
-+	gimple def_stmt;
-+	enum machine_mode mode = TYPE_MODE(TREE_TYPE(new_rhs));
-+
-+	if (mode != TImode && mode != DImode) {
-+		def_stmt = get_def_stmt(new_rhs);
-+		gcc_assert(gimple_assign_cast_p(def_stmt));
-+		new_rhs = gimple_assign_rhs1(def_stmt);
-+		mode = TYPE_MODE(TREE_TYPE(new_rhs));
-+	}
-+
-+	gcc_assert(mode == TImode || mode == DImode);
-+
-+	if (mode == TYPE_MODE(intTI_type_node) && useless_type_conversion_p(TREE_TYPE(new_rhs), intTI_type_node))
-+		return new_rhs;
-+
-+	gsi = gsi_for_stmt(stmt);
-+	cast_stmt = build_cast_stmt(intTI_type_node, new_rhs, CREATE_NEW_VAR, &gsi, BEFORE_STMT);
-+	new_rhs = gimple_get_lhs(cast_stmt);
-+
-+	if (mode == DImode)
-+		return new_rhs;
-+
-+	check_size_overflow(stmt, intTI_type_node, new_rhs, new_rhs, BEFORE_STMT);
-+
-+	return new_rhs;
-+}
-+
-+static bool is_an_integer_trunction(const_gimple stmt)
++static bool is_subtraction_special(const_gimple stmt)
 +{
 +	gimple rhs1_def_stmt, rhs2_def_stmt;
-+	const_tree rhs1_def_stmt_rhs1, rhs2_def_stmt_rhs1;
-+	enum machine_mode rhs1_def_stmt_rhs1_mode, rhs2_def_stmt_rhs1_mode;
++	const_tree rhs1_def_stmt_rhs1, rhs2_def_stmt_rhs1, rhs1_def_stmt_lhs, rhs2_def_stmt_lhs;
++	enum machine_mode rhs1_def_stmt_rhs1_mode, rhs2_def_stmt_rhs1_mode, rhs1_def_stmt_lhs_mode, rhs2_def_stmt_lhs_mode;
 +	const_tree rhs1 = gimple_assign_rhs1(stmt);
 +	const_tree rhs2 = gimple_assign_rhs2(stmt);
-+	enum machine_mode rhs1_mode = TYPE_MODE(TREE_TYPE(rhs1));
-+	enum machine_mode rhs2_mode = TYPE_MODE(TREE_TYPE(rhs2));
 +
 +	if (is_gimple_constant(rhs1) || is_gimple_constant(rhs2))
 +		return false;
 +
 +	gcc_assert(TREE_CODE(rhs1) == SSA_NAME && TREE_CODE(rhs2) == SSA_NAME);
 +
-+	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR || rhs1_mode != SImode || rhs2_mode != SImode)
++	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR)
 +		return false;
 +
 +	rhs1_def_stmt = get_def_stmt(rhs1);
@@ -65502,9 +65520,15 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +
 +	rhs1_def_stmt_rhs1 = gimple_assign_rhs1(rhs1_def_stmt);
 +	rhs2_def_stmt_rhs1 = gimple_assign_rhs1(rhs2_def_stmt);
++	rhs1_def_stmt_lhs = gimple_get_lhs(rhs1_def_stmt);
++	rhs2_def_stmt_lhs = gimple_get_lhs(rhs2_def_stmt);
 +	rhs1_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs1_def_stmt_rhs1));
 +	rhs2_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs2_def_stmt_rhs1));
-+	if (rhs1_def_stmt_rhs1_mode != DImode || rhs2_def_stmt_rhs1_mode != DImode)
++	rhs1_def_stmt_lhs_mode = TYPE_MODE(TREE_TYPE(rhs1_def_stmt_lhs));
++	rhs2_def_stmt_lhs_mode = TYPE_MODE(TREE_TYPE(rhs2_def_stmt_lhs));
++	if (GET_MODE_BITSIZE(rhs1_def_stmt_rhs1_mode) <= GET_MODE_BITSIZE(rhs1_def_stmt_lhs_mode))
++		return false;
++	if (GET_MODE_BITSIZE(rhs2_def_stmt_rhs1_mode) <= GET_MODE_BITSIZE(rhs2_def_stmt_lhs_mode))
 +		return false;
 +
 +	gimple_set_plf(rhs1_def_stmt, NO_CAST_CHECK, true);
@@ -65512,37 +65536,63 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	return true;
 +}
 +
++static tree get_def_stmt_rhs(const_tree var)
++{
++	tree rhs1, def_stmt_rhs1;
++	gimple rhs1_def_stmt, def_stmt_rhs1_def_stmt, def_stmt;
++
++	def_stmt = get_def_stmt(var);
++	gcc_assert(gimple_code(def_stmt) != GIMPLE_NOP && gimple_plf(def_stmt, MY_STMT) && gimple_assign_cast_p(def_stmt));
++
++	rhs1 = gimple_assign_rhs1(def_stmt);
++	rhs1_def_stmt = get_def_stmt(rhs1);
++	gcc_assert(gimple_code(rhs1_def_stmt) != GIMPLE_NOP);
++	if (!gimple_assign_cast_p(rhs1_def_stmt))
++		return rhs1;
++
++	def_stmt_rhs1 = gimple_assign_rhs1(rhs1_def_stmt);
++	def_stmt_rhs1_def_stmt = get_def_stmt(def_stmt_rhs1);
++
++	switch (gimple_code(def_stmt_rhs1_def_stmt)) {
++	case GIMPLE_CALL:
++	case GIMPLE_NOP:
++	case GIMPLE_ASM:
++		return def_stmt_rhs1;
++	case GIMPLE_ASSIGN:
++		return rhs1;
++	default:
++		debug_gimple_stmt(def_stmt_rhs1_def_stmt);
++		gcc_unreachable();
++	}
++}
++
 +static tree handle_integer_truncation(struct pointer_set_t *visited, const_tree lhs)
 +{
 +	tree new_rhs1, new_rhs2;
 +	tree new_rhs1_def_stmt_rhs1, new_rhs2_def_stmt_rhs1, new_lhs;
-+	tree new_rhs1_def_stmt_rhs1_type, new_rhs2_def_stmt_rhs1_type;
 +	gimple assign, stmt = get_def_stmt(lhs);
 +	tree rhs1 = gimple_assign_rhs1(stmt);
 +	tree rhs2 = gimple_assign_rhs2(stmt);
 +
-+	if (!is_an_integer_trunction(stmt))
++	if (!is_subtraction_special(stmt))
 +		return NULL_TREE;
 +
 +	new_rhs1 = expand(visited, rhs1);
 +	new_rhs2 = expand(visited, rhs2);
 +
-+	new_rhs1_def_stmt_rhs1 = get_cast_def_stmt_rhs(new_rhs1);
-+	new_rhs2_def_stmt_rhs1 = get_cast_def_stmt_rhs(new_rhs2);
++	new_rhs1_def_stmt_rhs1 = get_def_stmt_rhs(new_rhs1);
++	new_rhs2_def_stmt_rhs1 = get_def_stmt_rhs(new_rhs2);
 +
-+	new_rhs1_def_stmt_rhs1_type = TREE_TYPE(new_rhs1_def_stmt_rhs1);
-+	new_rhs2_def_stmt_rhs1_type = TREE_TYPE(new_rhs2_def_stmt_rhs1);
-+
-+	if (!useless_type_conversion_p(new_rhs1_def_stmt_rhs1_type, new_rhs2_def_stmt_rhs1_type)) {
-+		new_rhs1_def_stmt_rhs1 = cast_to_int_TI_type_and_check(stmt, new_rhs1_def_stmt_rhs1);
-+		new_rhs2_def_stmt_rhs1 = cast_to_int_TI_type_and_check(stmt, new_rhs2_def_stmt_rhs1);
++	if (!types_compatible_p(TREE_TYPE(new_rhs1_def_stmt_rhs1), TREE_TYPE(new_rhs2_def_stmt_rhs1))) {
++		new_rhs1_def_stmt_rhs1 = cast_to_TI_type(stmt, new_rhs1_def_stmt_rhs1);
++		new_rhs2_def_stmt_rhs1 = cast_to_TI_type(stmt, new_rhs2_def_stmt_rhs1);
 +	}
 +
 +	assign = create_binary_assign(MINUS_EXPR, stmt, new_rhs1_def_stmt_rhs1, new_rhs2_def_stmt_rhs1);
 +	new_lhs = gimple_get_lhs(assign);
 +	check_size_overflow(assign, TREE_TYPE(new_lhs), new_lhs, rhs1, AFTER_STMT);
 +
-+	return follow_overflow_type_and_dup(visited, stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
++	return dup_assign(visited, stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
 +}
 +
 +static bool is_a_neg_overflow(const_gimple stmt, const_tree rhs)
@@ -65645,7 +65695,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	if (is_a_constant_overflow(def_stmt, rhs1))
 +		return handle_intentional_overflow(visited, !is_a_cast_and_const_overflow(rhs2), def_stmt, new_rhs2, NULL_TREE, new_rhs2);
 +
-+	return follow_overflow_type_and_dup(visited, def_stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
++	return dup_assign(visited, def_stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4007
@@ -65672,7 +65722,7 @@ diff -NurpX linux-3.6.6-pax/Documentation/dontdiff linux-3.6.6/tools/gcc/size_ov
 +	new_rhs2 = get_new_rhs(visited, size_overflow_type, rhs2);
 +	new_rhs3 = get_new_rhs(visited, size_overflow_type, rhs3);
 +
-+	return follow_overflow_type_and_dup(visited, def_stmt, lhs, new_rhs1, new_rhs2, new_rhs3);
++	return dup_assign(visited, def_stmt, lhs, new_rhs1, new_rhs2, new_rhs3);
 +}
 +#endif
 +
