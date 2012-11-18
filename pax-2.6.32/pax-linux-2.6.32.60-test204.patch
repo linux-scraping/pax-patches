@@ -1,5 +1,7 @@
-- got rid of useless parameter in load_elf_interp
-- changed the limit of KERNEXEC's alternative code segment, thanks to 'rbrk ss' for asking about it :)
+- updated size_overflow plugin from Emese, fixes another false positive reported by Szymon Juraszczyk
+- compiler crash fix from Emese for compiling with the size_overflow plugin for 32 bit archs
+- user.pax.flags checks became more strict to prevent duplicate flags
+- some cleanups here and there
 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/alpha/include/asm/atomic.h linux-2.6.32.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.60/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -14325,7 +14327,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
   * End of kprobes section
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/entry_64.S linux-2.6.32.60-pax/arch/x86/kernel/entry_64.S
 --- linux-2.6.32.60/arch/x86/kernel/entry_64.S	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/entry_64.S	2012-08-25 11:12:17.281930015 +0200
++++ linux-2.6.32.60-pax/arch/x86/kernel/entry_64.S	2012-11-18 15:32:28.599513320 +0100
 @@ -53,6 +53,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -14399,7 +14401,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	retq
  #endif
  
-@@ -174,6 +182,280 @@ ENTRY(native_usergs_sysret64)
+@@ -174,6 +182,273 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -14485,13 +14487,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	ljmpq __KERNEL_CS,3f
 +3:	SET_RDI_INTO_CR0
 +	jmp 1b
-+#ifdef CONFIG_PARAVIRT
-+	PV_RESTORE_REGS(CLBR_RDI);
-+#endif
-+
-+	popq %rdi
-+	pax_force_retaddr
-+	retq
 +ENDPROC(pax_exit_kernel)
 +#endif
 +
@@ -14680,7 +14675,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -233,8 +515,8 @@ ENDPROC(native_usergs_sysret64)
+@@ -233,8 +508,8 @@ ENDPROC(native_usergs_sysret64)
  	.endm
  
  	.macro UNFAKE_STACK_FRAME
@@ -14691,7 +14686,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	.endm
  
  /*
-@@ -317,7 +599,7 @@ ENTRY(save_args)
+@@ -317,7 +592,7 @@ ENTRY(save_args)
  	leaq -ARGOFFSET+16(%rsp),%rdi	/* arg1 for handler */
  	movq_cfi rbp, 8		/* push %rbp */
  	leaq 8(%rsp), %rbp		/* mov %rsp, %ebp */
@@ -14700,7 +14695,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	je 1f
  	SWAPGS
  	/*
-@@ -337,9 +619,10 @@ ENTRY(save_args)
+@@ -337,9 +612,10 @@ ENTRY(save_args)
  	 * We entered an interrupt context - irqs are off:
  	 */
  2:	TRACE_IRQS_OFF
@@ -14712,7 +14707,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  ENTRY(save_rest)
  	PARTIAL_FRAME 1 REST_SKIP+8
-@@ -352,9 +635,10 @@ ENTRY(save_rest)
+@@ -352,9 +628,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
@@ -14724,7 +14719,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -383,9 +667,10 @@ ENTRY(save_paranoid)
+@@ -383,9 +660,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -14737,7 +14732,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	.popsection
  
  /*
-@@ -409,7 +694,7 @@ ENTRY(ret_from_fork)
+@@ -409,7 +687,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -14746,7 +14741,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -419,7 +704,7 @@ ENTRY(ret_from_fork)
+@@ -419,7 +697,7 @@ ENTRY(ret_from_fork)
  	jmp ret_from_sys_call			# go to the SYSRET fastpath
  
  	CFI_ENDPROC
@@ -14755,7 +14750,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * System call entry. Upto 6 arguments in registers are supported.
-@@ -455,7 +740,7 @@ END(ret_from_fork)
+@@ -455,7 +733,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -14764,7 +14759,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -468,12 +753,18 @@ ENTRY(system_call_after_swapgs)
+@@ -468,12 +746,18 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -14784,7 +14779,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -483,7 +774,7 @@ ENTRY(system_call_after_swapgs)
+@@ -483,7 +767,7 @@ ENTRY(system_call_after_swapgs)
  system_call_fastpath:
  	cmpq $__NR_syscall_max,%rax
  	ja badsys
@@ -14793,7 +14788,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	call *sys_call_table(,%rax,8)  # XXX:	 rip relative
  	movq %rax,RAX-ARGOFFSET(%rsp)
  /*
-@@ -502,6 +793,8 @@ sysret_check:
+@@ -502,6 +786,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -14802,7 +14797,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -555,14 +848,18 @@ badsys:
+@@ -555,14 +841,18 @@ badsys:
  	 * jump back to the normal fast path.
  	 */
  auditsys:
@@ -14822,7 +14817,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	jmp system_call_fastpath
  
  	/*
-@@ -592,16 +889,20 @@ tracesys:
+@@ -592,16 +882,20 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -14844,7 +14839,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	call *sys_call_table(,%rax,8)
  	movq %rax,RAX-ARGOFFSET(%rsp)
  	/* Use IRET because user could have changed frame */
-@@ -613,7 +914,7 @@ tracesys:
+@@ -613,7 +907,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -14853,7 +14848,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -624,7 +925,9 @@ GLOBAL(int_with_check)
+@@ -624,7 +918,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -14864,7 +14859,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -674,7 +977,7 @@ int_restore_rest:
+@@ -674,7 +970,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -14873,7 +14868,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * Certain special system calls that need to save a complete full stack frame.
-@@ -690,7 +993,7 @@ ENTRY(\label)
+@@ -690,7 +986,7 @@ ENTRY(\label)
  	call \func
  	jmp ptregscall_common
  	CFI_ENDPROC
@@ -14882,7 +14877,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	.endm
  
  	PTREGSCALL stub_clone, sys_clone, %r8
-@@ -708,9 +1011,10 @@ ENTRY(ptregscall_common)
+@@ -708,9 +1004,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
@@ -14894,7 +14889,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -726,7 +1030,7 @@ ENTRY(stub_execve)
+@@ -726,7 +1023,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -14903,7 +14898,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -744,7 +1048,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -744,7 +1041,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -14912,7 +14907,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * Build the entry stubs and pointer table with some assembler magic.
-@@ -780,7 +1084,7 @@ vector=vector+1
+@@ -780,7 +1077,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -14921,7 +14916,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  .previous
  END(interrupt)
-@@ -800,6 +1104,16 @@ END(interrupt)
+@@ -800,6 +1097,16 @@ END(interrupt)
  	CFI_ADJUST_CFA_OFFSET 10*8
  	call save_args
  	PARTIAL_FRAME 0
@@ -14938,7 +14933,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	call \func
  	.endm
  
-@@ -822,7 +1136,7 @@ ret_from_intr:
+@@ -822,7 +1129,7 @@ ret_from_intr:
  	CFI_ADJUST_CFA_OFFSET	-8
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -14947,7 +14942,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -844,12 +1158,16 @@ retint_swapgs:		/* return to user-space
+@@ -844,12 +1151,16 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -14964,7 +14959,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -940,7 +1258,7 @@ ENTRY(retint_kernel)
+@@ -940,7 +1251,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -14973,7 +14968,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * APIC interrupts.
-@@ -953,7 +1271,7 @@ ENTRY(\sym)
+@@ -953,7 +1264,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -14982,7 +14977,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1032,12 +1350,22 @@ ENTRY(\sym)
+@@ -1032,12 +1343,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -15006,7 +15001,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1049,12 +1377,22 @@ ENTRY(\sym)
+@@ -1049,12 +1370,22 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -15030,7 +15025,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  .endm
  
  .macro paranoidzeroentry_ist sym do_sym ist
-@@ -1066,15 +1404,30 @@ ENTRY(\sym)
+@@ -1066,15 +1397,30 @@ ENTRY(\sym)
  	subq $15*8, %rsp
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -15063,7 +15058,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  .endm
  
  .macro errorentry sym do_sym
-@@ -1085,13 +1438,23 @@ ENTRY(\sym)
+@@ -1085,13 +1431,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call error_entry
  	DEFAULT_FRAME 0
@@ -15088,7 +15083,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  .endm
  
  	/* error code is on the stack already */
-@@ -1104,13 +1467,23 @@ ENTRY(\sym)
+@@ -1104,13 +1460,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -15113,7 +15108,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1141,9 +1514,10 @@ gs_change:
+@@ -1141,9 +1507,10 @@ gs_change:
  	SWAPGS
  	popf
  	CFI_ADJUST_CFA_OFFSET -8
@@ -15125,7 +15120,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  	.section __ex_table,"a"
  	.align 8
-@@ -1193,11 +1567,12 @@ ENTRY(kernel_thread)
+@@ -1193,11 +1560,12 @@ ENTRY(kernel_thread)
  	 * of hacks for example to fork off the per-CPU idle tasks.
  	 * [Hopefully no generic code relies on the reschedule -AK]
  	 */
@@ -15140,7 +15135,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  ENTRY(child_rip)
  	pushq $0		# fake return address
-@@ -1208,13 +1583,14 @@ ENTRY(child_rip)
+@@ -1208,13 +1576,14 @@ ENTRY(child_rip)
  	 */
  	movq %rdi, %rax
  	movq %rsi, %rdi
@@ -15156,7 +15151,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1241,11 +1617,11 @@ ENTRY(kernel_execve)
+@@ -1241,11 +1610,11 @@ ENTRY(kernel_execve)
  	RESTORE_REST
  	testq %rax,%rax
  	je int_ret_from_sys_call
@@ -15170,7 +15165,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1263,9 +1639,10 @@ ENTRY(call_softirq)
+@@ -1263,9 +1632,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -15182,7 +15177,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1303,7 +1680,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1303,7 +1673,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -15191,7 +15186,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1362,7 +1739,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1362,7 +1732,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -15200,7 +15195,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  #endif /* CONFIG_XEN */
  
-@@ -1405,16 +1782,31 @@ ENTRY(paranoid_exit)
+@@ -1405,16 +1775,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -15233,7 +15228,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1443,7 +1835,7 @@ paranoid_schedule:
+@@ -1443,7 +1828,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -15242,7 +15237,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1470,12 +1862,13 @@ ENTRY(error_entry)
+@@ -1470,12 +1855,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -15257,7 +15252,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	ret
  	CFI_ENDPROC
  
-@@ -1497,7 +1890,7 @@ error_kernelspace:
+@@ -1497,7 +1883,7 @@ error_kernelspace:
  	cmpq $gs_change,RIP+8(%rsp)
  	je error_swapgs
  	jmp error_sti
@@ -15266,7 +15261,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1517,7 +1910,7 @@ ENTRY(error_exit)
+@@ -1517,7 +1903,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -15275,7 +15270,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  
  	/* runs on exception stack */
-@@ -1529,6 +1922,16 @@ ENTRY(nmi)
+@@ -1529,6 +1915,16 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET 15*8
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -15292,7 +15287,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1539,12 +1942,28 @@ ENTRY(nmi)
+@@ -1539,12 +1935,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -15322,7 +15317,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1573,14 +1992,14 @@ nmi_schedule:
+@@ -1573,14 +1985,14 @@ nmi_schedule:
  	jmp paranoid_exit
  	CFI_ENDPROC
  #endif
@@ -35701,7 +35696,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt_elf.c linux-2.6.32.60-pax/fs/binfmt_elf.c
 --- linux-2.6.32.60/fs/binfmt_elf.c	2012-03-18 17:44:12.476058731 +0100
-+++ linux-2.6.32.60-pax/fs/binfmt_elf.c	2012-10-28 23:24:28.006327056 +0100
++++ linux-2.6.32.60-pax/fs/binfmt_elf.c	2012-11-18 15:32:28.603513411 +0100
 @@ -31,6 +31,7 @@
  #include <linux/random.h>
  #include <linux/elf.h>
@@ -35845,7 +35840,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -532,6 +553,311 @@ out:
+@@ -532,6 +553,315 @@ out:
  	return error;
  }
  
@@ -36079,7 +36074,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
 +	xattr_size = vfs_getxattr(file->f_path.dentry, XATTR_NAME_PAX_FLAGS, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0)
++	if (xattr_size <= 0 || xattr_size > 5)
 +		return ~0UL;
 +
 +	for (i = 0; i < xattr_size; i++)
@@ -36089,9 +36084,13 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
 +
 +#define parse_flag(option1, option2, flag)			\
 +		case option1:					\
++			if (pax_flags_hardmode & MF_PAX_##flag)	\
++				return ~0UL;			\
 +			pax_flags_hardmode |= MF_PAX_##flag;	\
 +			break;					\
 +		case option2:					\
++			if (pax_flags_softmode & MF_PAX_##flag)	\
++				return ~0UL;			\
 +			pax_flags_softmode |= MF_PAX_##flag;	\
 +			break;
 +
@@ -36157,7 +36156,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -548,6 +874,11 @@ static unsigned long randomize_stack_top
+@@ -548,6 +878,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -36169,7 +36168,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -566,7 +897,7 @@ static int load_elf_binary(struct linux_
+@@ -566,7 +901,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -36178,7 +36177,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -576,11 +907,11 @@ static int load_elf_binary(struct linux_
+@@ -576,11 +911,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -36191,7 +36190,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -718,11 +1049,80 @@ static int load_elf_binary(struct linux_
+@@ -718,11 +1053,80 @@ static int load_elf_binary(struct linux_
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -36273,7 +36272,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -804,6 +1204,20 @@ static int load_elf_binary(struct linux_
+@@ -804,6 +1208,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -36294,7 +36293,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -836,9 +1250,9 @@ static int load_elf_binary(struct linux_
+@@ -836,9 +1254,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -36307,7 +36306,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -877,17 +1291,43 @@ static int load_elf_binary(struct linux_
+@@ -877,17 +1295,43 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -36326,7 +36325,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
 +#ifdef CONFIG_PAX_RANDMMAP
 +	if (current->mm->pax_flags & MF_PAX_RANDMMAP) {
 +		unsigned long start, size;
-+
+ 
 +		start = ELF_PAGEALIGN(elf_brk);
 +		size = PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
 +		down_write(&current->mm->mmap_sem);
@@ -36349,7 +36348,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
 +		}
 +	}
 +#endif
- 
++
 +	if (elf_interpreter) {
  		elf_entry = load_elf_interp(&loc->interp_elf_ex,
  					    interpreter,
@@ -36357,7 +36356,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1112,8 +1552,10 @@ static int dump_seek(struct file *file,
+@@ -1112,8 +1556,10 @@ static int dump_seek(struct file *file,
  			unsigned long n = off;
  			if (n > PAGE_SIZE)
  				n = PAGE_SIZE;
@@ -36369,7 +36368,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  			off -= n;
  		}
  		free_page((unsigned long)buf);
-@@ -1125,7 +1567,7 @@ static int dump_seek(struct file *file,
+@@ -1125,7 +1571,7 @@ static int dump_seek(struct file *file,
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -36378,7 +36377,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1159,7 +1601,7 @@ static unsigned long vma_dump_size(struc
+@@ -1159,7 +1605,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -36387,7 +36386,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  		goto whole;
  
  	/*
-@@ -1385,9 +1827,9 @@ static void fill_auxv_note(struct memelf
+@@ -1385,9 +1831,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -36399,7 +36398,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1973,7 +2415,7 @@ static int elf_core_dump(long signr, str
+@@ -1973,7 +2419,7 @@ static int elf_core_dump(long signr, str
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -36408,7 +36407,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2006,7 +2448,7 @@ static int elf_core_dump(long signr, str
+@@ -2006,7 +2452,7 @@ static int elf_core_dump(long signr, str
  		unsigned long addr;
  		unsigned long end;
  
@@ -36417,7 +36416,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2042,6 +2484,96 @@ out:
+@@ -2042,6 +2488,96 @@ out:
  
  #endif		/* USE_ELF_CORE_DUMP */
  
@@ -47815,6 +47814,47 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/lib/kref.
  	WARN_ON(release == (void (*)(struct kref *))kfree);
  
  	if (atomic_dec_and_test(&kref->refcount)) {
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/lib/list_debug.c linux-2.6.32.60-pax/lib/list_debug.c
+--- linux-2.6.32.60/lib/list_debug.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/lib/list_debug.c	2012-11-18 15:41:14.799497727 +0100
+@@ -20,14 +20,15 @@ void __list_add(struct list_head *new,
+ 			      struct list_head *prev,
+ 			      struct list_head *next)
+ {
+-	WARN(next->prev != prev,
++	if (WARN(next->prev != prev,
+ 		"list_add corruption. next->prev should be "
+ 		"prev (%p), but was %p. (next=%p).\n",
+-		prev, next->prev, next);
+-	WARN(prev->next != next,
++		prev, next->prev, next) ||
++	    WARN(prev->next != next,
+ 		"list_add corruption. prev->next should be "
+ 		"next (%p), but was %p. (prev=%p).\n",
+-		next, prev->next, prev);
++		next, prev->next, prev))
++		return;
+ 	next->prev = new;
+ 	new->next = next;
+ 	new->prev = prev;
+@@ -43,12 +44,13 @@ EXPORT_SYMBOL(__list_add);
+  */
+ void list_del(struct list_head *entry)
+ {
+-	WARN(entry->prev->next != entry,
++	if (WARN(entry->prev->next != entry,
+ 		"list_del corruption. prev->next should be %p, "
+-		"but was %p\n", entry, entry->prev->next);
+-	WARN(entry->next->prev != entry,
++		"but was %p\n", entry, entry->prev->next) ||
++	    WARN(entry->next->prev != entry,
+ 		"list_del corruption. next->prev should be %p, "
+-		"but was %p\n", entry, entry->next->prev);
++		"but was %p\n", entry, entry->next->prev))
++		return;
+ 	__list_del(entry->prev, entry->next);
+ 	entry->next = LIST_POISON1;
+ 	entry->prev = LIST_POISON2;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/lib/radix-tree.c linux-2.6.32.60-pax/lib/radix-tree.c
 --- linux-2.6.32.60/lib/radix-tree.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/lib/radix-tree.c	2012-03-13 13:15:35.916097948 +0100
@@ -51745,7 +51785,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/util.c
  }
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmalloc.c linux-2.6.32.60-pax/mm/vmalloc.c
 --- linux-2.6.32.60/mm/vmalloc.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/mm/vmalloc.c	2012-08-12 13:39:11.205244330 +0200
++++ linux-2.6.32.60-pax/mm/vmalloc.c	2012-11-18 15:38:13.703503927 +0100
 @@ -40,8 +40,19 @@ static void vunmap_pte_range(pmd_t *pmd,
  
  	pte = pte_offset_kernel(pmd, addr);
@@ -51768,15 +51808,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  	} while (pte++, addr += PAGE_SIZE, addr != end);
  }
  
-@@ -92,6 +103,7 @@ static int vmap_pte_range(pmd_t *pmd, un
- 		unsigned long end, pgprot_t prot, struct page **pages, int *nr)
- {
- 	pte_t *pte;
-+	int ret = -ENOMEM;
- 
- 	/*
- 	 * nr is a running index into the array which helps higher level
-@@ -101,17 +113,32 @@ static int vmap_pte_range(pmd_t *pmd, un
+@@ -101,16 +112,31 @@ static int vmap_pte_range(pmd_t *pmd, un
  	pte = pte_alloc_kernel(pmd, addr);
  	if (!pte)
  		return -ENOMEM;
@@ -51786,35 +51818,31 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  		struct page *page = pages[*nr];
  
 -		if (WARN_ON(!pte_none(*pte)))
--			return -EBUSY;
--		if (WARN_ON(!page))
--			return -ENOMEM;
 +#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +		if (!(pgprot_val(prot) & _PAGE_NX))
 +			BUG_ON(!pte_exec(*pte) || pte_pfn(*pte) != __pa(addr) >> PAGE_SHIFT);
 +		else
 +#endif
 +
-+		if (WARN_ON(!pte_none(*pte))) {
-+			ret = -EBUSY;
-+			goto out;
++		if (!pte_none(*pte)) {
++			pax_close_kernel();
++			WARN_ON(1);
+ 			return -EBUSY;
+-		if (WARN_ON(!page))
 +		}
-+		if (WARN_ON(!page)) {
-+			ret = -ENOMEM;
-+			goto out;
++		if (!page) {
++			pax_close_kernel();
++			WARN_ON(1);
+ 			return -ENOMEM;
 +		}
  		set_pte_at(&init_mm, addr, pte, mk_pte(page, prot));
  		(*nr)++;
  	} while (pte++, addr += PAGE_SIZE, addr != end);
--	return 0;
-+	ret = 0;
-+out:
 +	pax_close_kernel();
-+	return ret;
+ 	return 0;
  }
  
- static int vmap_pmd_range(pud_t *pud, unsigned long addr,
-@@ -120,7 +147,7 @@ static int vmap_pmd_range(pud_t *pud, un
+@@ -120,7 +146,7 @@ static int vmap_pmd_range(pud_t *pud, un
  	pmd_t *pmd;
  	unsigned long next;
  
@@ -51823,7 +51851,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -137,7 +164,7 @@ static int vmap_pud_range(pgd_t *pgd, un
+@@ -137,7 +163,7 @@ static int vmap_pud_range(pgd_t *pgd, un
  	pud_t *pud;
  	unsigned long next;
  
@@ -51832,7 +51860,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -192,11 +219,20 @@ int is_vmalloc_or_module_addr(const void
+@@ -192,11 +218,20 @@ int is_vmalloc_or_module_addr(const void
  	 * and fall back on vmalloc() if that fails. Others
  	 * just put it in the vmalloc space.
  	 */
@@ -51854,7 +51882,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  	return is_vmalloc_addr(x);
  }
  
-@@ -217,8 +253,14 @@ struct page *vmalloc_to_page(const void
+@@ -217,8 +252,14 @@ struct page *vmalloc_to_page(const void
  
  	if (!pgd_none(*pgd)) {
  		pud_t *pud = pud_offset(pgd, addr);
@@ -51869,7 +51897,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  			if (!pmd_none(*pmd)) {
  				pte_t *ptep, pte;
  
-@@ -292,13 +334,13 @@ static void __insert_vmap_area(struct vm
+@@ -292,13 +333,13 @@ static void __insert_vmap_area(struct vm
  	struct rb_node *tmp;
  
  	while (*p) {
@@ -51887,7 +51915,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  			p = &(*p)->rb_right;
  		else
  			BUG();
-@@ -323,7 +365,7 @@ static void purge_vmap_area_lazy(void);
+@@ -323,7 +364,7 @@ static void purge_vmap_area_lazy(void);
   * Allocate a region of KVA of the specified size and alignment, within the
   * vstart and vend.
   */
@@ -51896,7 +51924,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  				unsigned long align,
  				unsigned long vstart, unsigned long vend,
  				int node, gfp_t gfp_mask)
-@@ -1245,6 +1287,16 @@ static struct vm_struct *__get_vm_area_n
+@@ -1245,6 +1286,16 @@ static struct vm_struct *__get_vm_area_n
  	struct vm_struct *area;
  
  	BUG_ON(in_interrupt());
@@ -51913,7 +51941,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  	if (flags & VM_IOREMAP) {
  		int bit = fls(size);
  
-@@ -1484,6 +1536,11 @@ void *vmap(struct page **pages, unsigned
+@@ -1484,6 +1535,11 @@ void *vmap(struct page **pages, unsigned
  	if (count > totalram_pages)
  		return NULL;
  
@@ -51925,7 +51953,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  	area = get_vm_area_caller((count << PAGE_SHIFT), flags,
  					__builtin_return_address(0));
  	if (!area)
-@@ -1594,6 +1651,14 @@ static void *__vmalloc_node(unsigned lon
+@@ -1594,6 +1650,14 @@ static void *__vmalloc_node(unsigned lon
  	if (!size || (size >> PAGE_SHIFT) > totalram_pages)
  		return NULL;
  
@@ -51940,7 +51968,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  	area = __get_vm_area_node(size, align, VM_ALLOC | VM_UNLIST,
  				  VMALLOC_START, VMALLOC_END, node,
  				  gfp_mask, caller);
-@@ -1698,10 +1763,9 @@ EXPORT_SYMBOL(vmalloc_node);
+@@ -1698,10 +1762,9 @@ EXPORT_SYMBOL(vmalloc_node);
   *	For tight control over page level allocator and protection flags
   *	use __vmalloc() instead.
   */
@@ -51952,7 +51980,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/mm/vmallo
  			      -1, __builtin_return_address(0));
  }
  
-@@ -1998,6 +2062,8 @@ int remap_vmalloc_range(struct vm_area_s
+@@ -1998,6 +2061,8 @@ int remap_vmalloc_range(struct vm_area_s
  	unsigned long uaddr = vma->vm_start;
  	unsigned long usize = vma->vm_end - vma->vm_start;
  
@@ -60505,8 +60533,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +_002741_hash fbcon_prepare_logo 5 6246 _002741_hash NULL
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/size_overflow_plugin.c linux-2.6.32.60-pax/tools/gcc/size_overflow_plugin.c
 --- linux-2.6.32.60/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/size_overflow_plugin.c	2012-10-01 12:21:03.496871873 +0200
-@@ -0,0 +1,1879 @@
++++ linux-2.6.32.60-pax/tools/gcc/size_overflow_plugin.c	2012-11-18 15:32:33.947516480 +0100
+@@ -0,0 +1,1865 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -60584,10 +60612,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +static unsigned int handle_function(void);
 +static void check_size_overflow(gimple stmt, tree size_overflow_type, tree cast_rhs, tree rhs, bool before);
 +static tree get_size_overflow_type(gimple stmt, const_tree node);
-+static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, tree size_overflow_type, tree rhs1, tree rhs2, tree __unused rhs3);
++static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20120930beta",
++	.version	= "20121113beta",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -60906,6 +60934,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	tree type = TREE_TYPE(rhs1);
 +	tree lhs = create_new_var(type);
 +
++	gcc_assert(types_compatible_p(type, TREE_TYPE(rhs2)));
 +	assign = gimple_build_assign_with_ops(code, lhs, rhs1, rhs2);
 +	gimple_set_lhs(assign, make_ssa_name(lhs, assign));
 +
@@ -60971,42 +61000,41 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	return assign;
 +}
 +
-+static tree cast_to_new_size_overflow_type(gimple stmt, tree new_rhs1, tree size_overflow_type, bool before)
++static tree cast_to_new_size_overflow_type(gimple stmt, tree rhs, tree size_overflow_type, bool before)
 +{
-+	const_gimple assign;
++	gimple assign;
 +	gimple_stmt_iterator gsi;
 +
-+	if (new_rhs1 == NULL_TREE)
++	if (rhs == NULL_TREE)
 +		return NULL_TREE;
 +
-+	if (!useless_type_conversion_p(TREE_TYPE(new_rhs1), size_overflow_type)) {
-+		gsi = gsi_for_stmt(stmt);
-+		assign = build_cast_stmt(size_overflow_type, new_rhs1, CREATE_NEW_VAR, &gsi, before);
-+		return gimple_get_lhs(assign);
-+	}
-+	return new_rhs1;
++	if (types_compatible_p(TREE_TYPE(rhs), size_overflow_type) && gimple_plf(stmt, MY_STMT))
++		return rhs;
++
++	gsi = gsi_for_stmt(stmt);
++	assign = build_cast_stmt(size_overflow_type, rhs, CREATE_NEW_VAR, &gsi, before);
++	gimple_set_plf(assign, MY_STMT, true);
++	return gimple_get_lhs(assign);
 +}
 +
-+static tree follow_overflow_type_and_dup(struct pointer_set_t *visited, gimple stmt, const_tree node, tree new_rhs1, tree new_rhs2, tree new_rhs3)
++static tree cast_to_TI_type(gimple stmt, tree node)
 +{
-+	tree size_overflow_type = get_size_overflow_type(stmt, node);
++	gimple_stmt_iterator gsi;
++	gimple cast_stmt;
++	tree type = TREE_TYPE(node);
 +
-+	new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
++	if (types_compatible_p(type, intTI_type_node))
++		return node;
 +
-+	if (new_rhs2 != NULL_TREE)
-+		new_rhs2 = cast_to_new_size_overflow_type(stmt, new_rhs2, size_overflow_type, BEFORE_STMT);
-+
-+	if (new_rhs3 != NULL_TREE)
-+		new_rhs3 = cast_to_new_size_overflow_type(stmt, new_rhs3, size_overflow_type, BEFORE_STMT);
-+
-+	return dup_assign(visited, stmt, size_overflow_type, new_rhs1, new_rhs2, new_rhs3);
++	gsi = gsi_for_stmt(stmt);
++	cast_stmt = build_cast_stmt(intTI_type_node, node, CREATE_NEW_VAR, &gsi, BEFORE_STMT);
++	gimple_set_plf(cast_stmt, MY_STMT, true);
++	return gimple_get_lhs(cast_stmt);
 +}
-+
 +
 +static tree create_assign(struct pointer_set_t *visited, gimple oldstmt, tree rhs1, bool before)
 +{
-+	tree size_overflow_type, lhs;
-+	gimple stmt;
++	tree lhs;
 +	gimple_stmt_iterator gsi;
 +
 +	if (rhs1 == NULL_TREE) {
@@ -61044,18 +61072,14 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +		oldstmt = gsi_stmt(gsi);
 +	}
 +
-+	size_overflow_type = get_size_overflow_type(oldstmt, lhs);
-+
-+	stmt = build_cast_stmt(size_overflow_type, rhs1, CREATE_NEW_VAR, &gsi, before);
-+	gimple_set_plf(stmt, MY_STMT, true);
-+	return gimple_get_lhs(stmt);
++	return cast_to_new_size_overflow_type(oldstmt, rhs1, get_size_overflow_type(oldstmt, lhs), before);
 +}
 +
-+static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, tree size_overflow_type, tree rhs1, tree rhs2, tree __unused rhs3)
++static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3)
 +{
 +	gimple stmt;
 +	gimple_stmt_iterator gsi;
-+	tree new_var, lhs = gimple_get_lhs(oldstmt);
++	tree size_overflow_type, new_var, lhs = gimple_get_lhs(oldstmt);
 +
 +	if (gimple_plf(oldstmt, MY_STMT))
 +		return lhs;
@@ -61076,6 +61100,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	if (gimple_assign_rhs_code(oldstmt) == WIDEN_MULT_EXPR)
 +		gimple_assign_set_rhs_code(stmt, MULT_EXPR);
 +
++	size_overflow_type = get_size_overflow_type(oldstmt, node);
++
 +	if (is_bool(lhs))
 +		new_var = SSA_NAME_VAR(lhs);
 +	else
@@ -61084,7 +61110,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	gimple_set_lhs(stmt, new_var);
 +
 +	if (rhs1 != NULL_TREE) {
-+		if (!gimple_assign_cast_p(oldstmt))
++		if (!gimple_assign_cast_p(oldstmt) && TREE_CODE_CLASS(gimple_assign_rhs_code(oldstmt)) != tcc_comparison)
 +			rhs1 = cast_a_tree(size_overflow_type, rhs1);
 +		gimple_assign_set_rhs1(stmt, rhs1);
 +	}
@@ -61336,7 +61362,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +		return lhs;
 +
 +	if (gimple_plf(stmt, NO_CAST_CHECK))
-+		return follow_overflow_type_and_dup(visited, stmt, rhs1, new_rhs1, NULL_TREE, NULL_TREE);
++		return dup_assign(visited, stmt, lhs, new_rhs1, NULL_TREE, NULL_TREE);
 +
 +	if (gimple_assign_rhs_code(stmt) == BIT_NOT_EXPR) {
 +		size_overflow_type = get_size_overflow_type(stmt, rhs1);
@@ -61346,7 +61372,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	}
 +
 +	if (!gimple_assign_cast_p(stmt) || check_undefined_integer_operation(stmt))
-+		return follow_overflow_type_and_dup(visited, stmt, lhs, new_rhs1, NULL_TREE, NULL_TREE);
++		return dup_assign(visited, stmt, lhs, new_rhs1, NULL_TREE, NULL_TREE);
 +
 +	size_overflow_type = get_size_overflow_type(stmt, rhs1);
 +	new_rhs1 = cast_to_new_size_overflow_type(stmt, new_rhs1, size_overflow_type, BEFORE_STMT);
@@ -61531,8 +61557,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	cast_rhs_type = TREE_TYPE(cast_rhs);
 +	type_max_type = TREE_TYPE(type_max);
 +	type_min_type = TREE_TYPE(type_min);
-+	gcc_assert(useless_type_conversion_p(cast_rhs_type, type_max_type));
-+	gcc_assert(useless_type_conversion_p(type_max_type, type_min_type));
++	gcc_assert(types_compatible_p(cast_rhs_type, type_max_type));
++	gcc_assert(types_compatible_p(type_max_type, type_min_type));
 +
 +	insert_check_size_overflow(stmt, GT_EXPR, cast_rhs, type_max, before, false);
 +	insert_check_size_overflow(stmt, LT_EXPR, cast_rhs, type_min, before, true);
@@ -61560,7 +61586,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	if (gimple_assign_rhs_code(def_stmt) == RSHIFT_EXPR)
 +		return get_size_overflow_type(change_rhs_def_stmt, change_rhs);
 +
-+	if (!useless_type_conversion_p(lhs_type, rhs1_type) || !useless_type_conversion_p(rhs1_type, rhs2_type)) {
++	if (!types_compatible_p(lhs_type, rhs1_type) || !useless_type_conversion_p(rhs1_type, rhs2_type)) {
 +		debug_gimple_stmt(def_stmt);
 +		gcc_unreachable();
 +	}
@@ -61577,64 +61603,20 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	return true;
 +}
 +
-+static tree get_cast_def_stmt_rhs(const_tree new_rhs)
-+{
-+	gimple def_stmt;
-+
-+	def_stmt = get_def_stmt(new_rhs);
-+	// get_size_overflow_type
-+	if (LONG_TYPE_SIZE != GET_MODE_BITSIZE(SImode))
-+		gcc_assert(gimple_assign_cast_p(def_stmt));
-+	return gimple_assign_rhs1(def_stmt);
-+}
-+
-+static tree cast_to_int_TI_type_and_check(gimple stmt, tree new_rhs)
-+{
-+	gimple_stmt_iterator gsi;
-+	const_gimple cast_stmt;
-+	gimple def_stmt;
-+	enum machine_mode mode = TYPE_MODE(TREE_TYPE(new_rhs));
-+
-+	if (mode != TImode && mode != DImode) {
-+		def_stmt = get_def_stmt(new_rhs);
-+		gcc_assert(gimple_assign_cast_p(def_stmt));
-+		new_rhs = gimple_assign_rhs1(def_stmt);
-+		mode = TYPE_MODE(TREE_TYPE(new_rhs));
-+	}
-+
-+	gcc_assert(mode == TImode || mode == DImode);
-+
-+	if (mode == TYPE_MODE(intTI_type_node) && useless_type_conversion_p(TREE_TYPE(new_rhs), intTI_type_node))
-+		return new_rhs;
-+
-+	gsi = gsi_for_stmt(stmt);
-+	cast_stmt = build_cast_stmt(intTI_type_node, new_rhs, CREATE_NEW_VAR, &gsi, BEFORE_STMT);
-+	new_rhs = gimple_get_lhs(cast_stmt);
-+
-+	if (mode == DImode)
-+		return new_rhs;
-+
-+	check_size_overflow(stmt, intTI_type_node, new_rhs, new_rhs, BEFORE_STMT);
-+
-+	return new_rhs;
-+}
-+
-+static bool is_an_integer_trunction(const_gimple stmt)
++static bool is_subtraction_special(const_gimple stmt)
 +{
 +	gimple rhs1_def_stmt, rhs2_def_stmt;
-+	const_tree rhs1_def_stmt_rhs1, rhs2_def_stmt_rhs1;
-+	enum machine_mode rhs1_def_stmt_rhs1_mode, rhs2_def_stmt_rhs1_mode;
++	const_tree rhs1_def_stmt_rhs1, rhs2_def_stmt_rhs1, rhs1_def_stmt_lhs, rhs2_def_stmt_lhs;
++	enum machine_mode rhs1_def_stmt_rhs1_mode, rhs2_def_stmt_rhs1_mode, rhs1_def_stmt_lhs_mode, rhs2_def_stmt_lhs_mode;
 +	const_tree rhs1 = gimple_assign_rhs1(stmt);
 +	const_tree rhs2 = gimple_assign_rhs2(stmt);
-+	enum machine_mode rhs1_mode = TYPE_MODE(TREE_TYPE(rhs1));
-+	enum machine_mode rhs2_mode = TYPE_MODE(TREE_TYPE(rhs2));
 +
 +	if (is_gimple_constant(rhs1) || is_gimple_constant(rhs2))
 +		return false;
 +
 +	gcc_assert(TREE_CODE(rhs1) == SSA_NAME && TREE_CODE(rhs2) == SSA_NAME);
 +
-+	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR || rhs1_mode != SImode || rhs2_mode != SImode)
++	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR)
 +		return false;
 +
 +	rhs1_def_stmt = get_def_stmt(rhs1);
@@ -61644,9 +61626,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +	rhs1_def_stmt_rhs1 = gimple_assign_rhs1(rhs1_def_stmt);
 +	rhs2_def_stmt_rhs1 = gimple_assign_rhs1(rhs2_def_stmt);
++	rhs1_def_stmt_lhs = gimple_get_lhs(rhs1_def_stmt);
++	rhs2_def_stmt_lhs = gimple_get_lhs(rhs2_def_stmt);
 +	rhs1_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs1_def_stmt_rhs1));
 +	rhs2_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs2_def_stmt_rhs1));
-+	if (rhs1_def_stmt_rhs1_mode != DImode || rhs2_def_stmt_rhs1_mode != DImode)
++	rhs1_def_stmt_lhs_mode = TYPE_MODE(TREE_TYPE(rhs1_def_stmt_lhs));
++	rhs2_def_stmt_lhs_mode = TYPE_MODE(TREE_TYPE(rhs2_def_stmt_lhs));
++	if (GET_MODE_BITSIZE(rhs1_def_stmt_rhs1_mode) <= GET_MODE_BITSIZE(rhs1_def_stmt_lhs_mode))
++		return false;
++	if (GET_MODE_BITSIZE(rhs2_def_stmt_rhs1_mode) <= GET_MODE_BITSIZE(rhs2_def_stmt_lhs_mode))
 +		return false;
 +
 +	gimple_set_plf(rhs1_def_stmt, NO_CAST_CHECK, true);
@@ -61654,37 +61642,63 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	return true;
 +}
 +
++static tree get_def_stmt_rhs(const_tree var)
++{
++	tree rhs1, def_stmt_rhs1;
++	gimple rhs1_def_stmt, def_stmt_rhs1_def_stmt, def_stmt;
++
++	def_stmt = get_def_stmt(var);
++	gcc_assert(gimple_code(def_stmt) != GIMPLE_NOP && gimple_plf(def_stmt, MY_STMT) && gimple_assign_cast_p(def_stmt));
++
++	rhs1 = gimple_assign_rhs1(def_stmt);
++	rhs1_def_stmt = get_def_stmt(rhs1);
++	gcc_assert(gimple_code(rhs1_def_stmt) != GIMPLE_NOP);
++	if (!gimple_assign_cast_p(rhs1_def_stmt))
++		return rhs1;
++
++	def_stmt_rhs1 = gimple_assign_rhs1(rhs1_def_stmt);
++	def_stmt_rhs1_def_stmt = get_def_stmt(def_stmt_rhs1);
++
++	switch (gimple_code(def_stmt_rhs1_def_stmt)) {
++	case GIMPLE_CALL:
++	case GIMPLE_NOP:
++	case GIMPLE_ASM:
++		return def_stmt_rhs1;
++	case GIMPLE_ASSIGN:
++		return rhs1;
++	default:
++		debug_gimple_stmt(def_stmt_rhs1_def_stmt);
++		gcc_unreachable();
++	}
++}
++
 +static tree handle_integer_truncation(struct pointer_set_t *visited, const_tree lhs)
 +{
 +	tree new_rhs1, new_rhs2;
 +	tree new_rhs1_def_stmt_rhs1, new_rhs2_def_stmt_rhs1, new_lhs;
-+	tree new_rhs1_def_stmt_rhs1_type, new_rhs2_def_stmt_rhs1_type;
 +	gimple assign, stmt = get_def_stmt(lhs);
 +	tree rhs1 = gimple_assign_rhs1(stmt);
 +	tree rhs2 = gimple_assign_rhs2(stmt);
 +
-+	if (!is_an_integer_trunction(stmt))
++	if (!is_subtraction_special(stmt))
 +		return NULL_TREE;
 +
 +	new_rhs1 = expand(visited, rhs1);
 +	new_rhs2 = expand(visited, rhs2);
 +
-+	new_rhs1_def_stmt_rhs1 = get_cast_def_stmt_rhs(new_rhs1);
-+	new_rhs2_def_stmt_rhs1 = get_cast_def_stmt_rhs(new_rhs2);
++	new_rhs1_def_stmt_rhs1 = get_def_stmt_rhs(new_rhs1);
++	new_rhs2_def_stmt_rhs1 = get_def_stmt_rhs(new_rhs2);
 +
-+	new_rhs1_def_stmt_rhs1_type = TREE_TYPE(new_rhs1_def_stmt_rhs1);
-+	new_rhs2_def_stmt_rhs1_type = TREE_TYPE(new_rhs2_def_stmt_rhs1);
-+
-+	if (!useless_type_conversion_p(new_rhs1_def_stmt_rhs1_type, new_rhs2_def_stmt_rhs1_type)) {
-+		new_rhs1_def_stmt_rhs1 = cast_to_int_TI_type_and_check(stmt, new_rhs1_def_stmt_rhs1);
-+		new_rhs2_def_stmt_rhs1 = cast_to_int_TI_type_and_check(stmt, new_rhs2_def_stmt_rhs1);
++	if (!types_compatible_p(TREE_TYPE(new_rhs1_def_stmt_rhs1), TREE_TYPE(new_rhs2_def_stmt_rhs1))) {
++		new_rhs1_def_stmt_rhs1 = cast_to_TI_type(stmt, new_rhs1_def_stmt_rhs1);
++		new_rhs2_def_stmt_rhs1 = cast_to_TI_type(stmt, new_rhs2_def_stmt_rhs1);
 +	}
 +
 +	assign = create_binary_assign(MINUS_EXPR, stmt, new_rhs1_def_stmt_rhs1, new_rhs2_def_stmt_rhs1);
 +	new_lhs = gimple_get_lhs(assign);
 +	check_size_overflow(assign, TREE_TYPE(new_lhs), new_lhs, rhs1, AFTER_STMT);
 +
-+	return follow_overflow_type_and_dup(visited, stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
++	return dup_assign(visited, stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
 +}
 +
 +static bool is_a_neg_overflow(const_gimple stmt, const_tree rhs)
@@ -61787,7 +61801,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	if (is_a_constant_overflow(def_stmt, rhs1))
 +		return handle_intentional_overflow(visited, !is_a_cast_and_const_overflow(rhs2), def_stmt, new_rhs2, NULL_TREE, new_rhs2);
 +
-+	return follow_overflow_type_and_dup(visited, def_stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
++	return dup_assign(visited, def_stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4007
@@ -61814,7 +61828,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	new_rhs2 = get_new_rhs(visited, size_overflow_type, rhs2);
 +	new_rhs3 = get_new_rhs(visited, size_overflow_type, rhs3);
 +
-+	return follow_overflow_type_and_dup(visited, def_stmt, lhs, new_rhs1, new_rhs2, new_rhs3);
++	return dup_assign(visited, def_stmt, lhs, new_rhs1, new_rhs2, new_rhs3);
 +}
 +#endif
 +
