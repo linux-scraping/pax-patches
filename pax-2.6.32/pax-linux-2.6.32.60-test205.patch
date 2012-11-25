@@ -1,7 +1,5 @@
-- updated size_overflow plugin from Emese, fixes another false positive reported by Szymon Juraszczyk
-- compiler crash fix from Emese for compiling with the size_overflow plugin for 32 bit archs
-- user.pax.flags checks became more strict to prevent duplicate flags
-- some cleanups here and there
+- fixed the kernexec plugin to handle a new gcc 4.7 pattern, previously (simple) return insns weren't instrumented
+- changed the latent entropy to not instrument hotplug related init functions that stick around after boot
 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/alpha/include/asm/atomic.h linux-2.6.32.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.60/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -37281,7 +37279,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/ecrypt
  		goto out_free;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c linux-2.6.32.60-pax/fs/exec.c
 --- linux-2.6.32.60/fs/exec.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/fs/exec.c	2012-08-13 02:45:13.981813963 +0200
++++ linux-2.6.32.60-pax/fs/exec.c	2012-11-26 00:36:47.465421478 +0100
 @@ -56,12 +56,31 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -37302,7 +37300,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
 +#ifdef CONFIG_PAX_HAVE_ACL_FLAGS
 +void __weak pax_set_initial_flags(struct linux_binprm *bprm)
 +{
-+	WARN_ONCE(1, "PAX: PAX_HAVE_ACL_FLAGS was enabled without providing the pax_set_initial_flags callback, this is probably not what you wanted.\n");
++	pr_warn_once("PAX: PAX_HAVE_ACL_FLAGS was enabled without providing the pax_set_initial_flags callback, this is probably not what you wanted.\n");
 +}
 +#endif
 +
@@ -41971,48 +41969,66 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  #endif
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/init.h linux-2.6.32.60-pax/include/linux/init.h
 --- linux-2.6.32.60/include/linux/init.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/include/linux/init.h	2012-07-27 22:01:00.154359347 +0200
-@@ -38,9 +38,15 @@
++++ linux-2.6.32.60-pax/include/linux/init.h	2012-11-26 00:38:17.541419623 +0100
+@@ -38,9 +38,33 @@
   * Also note, that this data cannot be "const".
   */
  
 +#ifdef MODULE
-+#define add_latent_entropy
++#define add_init_latent_entropy
 +#else
-+#define add_latent_entropy __latent_entropy
++#define add_init_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_HOTPLUG
++#define add_devinit_latent_entropy
++#else
++#define add_devinit_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_HOTPLUG_CPU
++#define add_cpuinit_latent_entropy
++#else
++#define add_cpuinit_latent_entropy __latent_entropy
++#endif
++
++#ifdef CONFIG_MEMORY_HOTPLUG
++#define add_meminit_latent_entropy
++#else
++#define add_meminit_latent_entropy __latent_entropy
 +#endif
 +
  /* These are for everybody (although not all archs will actually
     discard it in modules) */
 -#define __init		__section(.init.text) __cold notrace
-+#define __init		__section(.init.text) __cold notrace add_latent_entropy
++#define __init		__section(.init.text) __cold notrace add_init_latent_entropy
  #define __initdata	__section(.init.data)
  #define __initconst	__section(.init.rodata)
  #define __exitdata	__section(.exit.data)
-@@ -75,7 +81,7 @@
+@@ -75,7 +99,7 @@
  #define __exit          __section(.exit.text) __exitused __cold
  
  /* Used for HOTPLUG */
 -#define __devinit        __section(.devinit.text) __cold
-+#define __devinit        __section(.devinit.text) __cold add_latent_entropy
++#define __devinit        __section(.devinit.text) __cold add_devinit_latent_entropy
  #define __devinitdata    __section(.devinit.data)
  #define __devinitconst   __section(.devinit.rodata)
  #define __devexit        __section(.devexit.text) __exitused __cold
-@@ -83,7 +89,7 @@
+@@ -83,7 +107,7 @@
  #define __devexitconst   __section(.devexit.rodata)
  
  /* Used for HOTPLUG_CPU */
 -#define __cpuinit        __section(.cpuinit.text) __cold
-+#define __cpuinit        __section(.cpuinit.text) __cold add_latent_entropy
++#define __cpuinit        __section(.cpuinit.text) __cold add_cpuinit_latent_entropy
  #define __cpuinitdata    __section(.cpuinit.data)
  #define __cpuinitconst   __section(.cpuinit.rodata)
  #define __cpuexit        __section(.cpuexit.text) __exitused __cold
-@@ -91,7 +97,7 @@
+@@ -91,7 +115,7 @@
  #define __cpuexitconst   __section(.cpuexit.rodata)
  
  /* Used for MEMORY_HOTPLUG */
 -#define __meminit        __section(.meminit.text) __cold
-+#define __meminit        __section(.meminit.text) __cold add_latent_entropy
++#define __meminit        __section(.meminit.text) __cold add_meminit_latent_entropy
  #define __meminitdata    __section(.meminit.data)
  #define __meminitconst   __section(.meminit.rodata)
  #define __memexit        __section(.memexit.text) __exitused __cold
@@ -47816,8 +47832,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/lib/kref.
  	if (atomic_dec_and_test(&kref->refcount)) {
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/lib/list_debug.c linux-2.6.32.60-pax/lib/list_debug.c
 --- linux-2.6.32.60/lib/list_debug.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/lib/list_debug.c	2012-11-18 15:41:14.799497727 +0100
-@@ -20,14 +20,15 @@ void __list_add(struct list_head *new,
++++ linux-2.6.32.60-pax/lib/list_debug.c	2012-11-18 15:57:03.827493124 +0100
+@@ -20,14 +20,18 @@ void __list_add(struct list_head *new,
  			      struct list_head *prev,
  			      struct list_head *next)
  {
@@ -47832,12 +47848,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/lib/list_
  		"list_add corruption. prev->next should be "
  		"next (%p), but was %p. (prev=%p).\n",
 -		next, prev->next, prev);
-+		next, prev->next, prev))
++		next, prev->next, prev) ||
++	    WARN(new == prev || new == next,
++		"list_add double add: new=%p, prev=%p, next=%p.\n",
++		new, prev, next))
 +		return;
  	next->prev = new;
  	new->next = next;
  	new->prev = prev;
-@@ -43,12 +44,13 @@ EXPORT_SYMBOL(__list_add);
+@@ -43,12 +47,13 @@ EXPORT_SYMBOL(__list_add);
   */
  void list_del(struct list_head *entry)
  {
@@ -57192,8 +57211,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/kernexec_plugin.c linux-2.6.32.60-pax/tools/gcc/kernexec_plugin.c
 --- linux-2.6.32.60/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/kernexec_plugin.c	2012-07-21 11:34:33.905082914 +0200
-@@ -0,0 +1,427 @@
++++ linux-2.6.32.60-pax/tools/gcc/kernexec_plugin.c	2012-11-26 00:36:47.613420647 +0100
+@@ -0,0 +1,432 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -57233,6 +57252,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +extern void print_gimple_stmt(FILE *, gimple, int, int);
 +extern rtx emit_move_insn(rtx x, rtx y);
++
++#if BUILDING_GCC_VERSION <= 4006
++#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
++#endif
 +
 +int plugin_is_GPL_compatible;
 +
@@ -57538,6 +57561,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
 +		// rtl match: (jump_insn 41 40 42 2 (return) fptr.c:42 634 {return_internal} (nil))
 +		//            (jump_insn 12 9 11 2 (parallel [ (return) (unspec [ (0) ] UNSPEC_REP) ]) fptr.c:46 635 {return_internal_long} (nil))
++		//            (jump_insn 97 96 98 6 (simple_return) fptr.c:50 -1 (nil) -> simple_return)
 +		rtx body;
 +
 +		// is it a retn
@@ -57546,7 +57570,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +		body = PATTERN(insn);
 +		if (GET_CODE(body) == PARALLEL)
 +			body = XVECEXP(body, 0, 0);
-+		if (GET_CODE(body) != RETURN)
++		if (!ANY_RETURN_P(body))
 +			continue;
 +		kernexec_instrument_retaddr(insn);
 +	}
