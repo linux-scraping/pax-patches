@@ -1,4 +1,4 @@
-- fix undefined symbol in modules problem introduced by the previous latent entropy related change
+- simplified/synchronized some UDEREF/amd64 logic based on the 3.7 forward port
 
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/alpha/include/asm/atomic.h linux-3.6.8-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.6.8/arch/alpha/include/asm/atomic.h	2012-10-01 02:49:04.300114340 +0200
@@ -8657,32 +8657,50 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  #endif /* _ASM_X86_EMERGENCY_RESTART_H */
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/asm/fpu-internal.h linux-3.6.8-pax/arch/x86/include/asm/fpu-internal.h
 --- linux-3.6.8/arch/x86/include/asm/fpu-internal.h	2012-07-23 00:22:19.222342471 +0200
-+++ linux-3.6.8-pax/arch/x86/include/asm/fpu-internal.h	2012-10-01 02:50:39.188114638 +0200
-@@ -86,6 +86,11 @@ static inline int fxrstor_checking(struc
++++ linux-3.6.8-pax/arch/x86/include/asm/fpu-internal.h	2012-11-30 20:11:38.909016648 +0100
+@@ -82,10 +82,12 @@ static inline void sanitize_i387_state(s
+ }
+ 
+ #ifdef CONFIG_X86_64
+-static inline int fxrstor_checking(struct i387_fxsave_struct *fx)
++static inline int fxrstor_checking(struct i387_fxsave_struct __user *fx)
  {
  	int err;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)fx < PAX_USER_SHADOW_BASE)
-+		fx = (struct i387_fxsave_struct __user *)((void *)fx + PAX_USER_SHADOW_BASE);
-+#endif
++	fx = (struct i387_fxsave_struct __user *)____m(fx);
 +
  	/* See comment in fxsave() below. */
  #ifdef CONFIG_AS_FXSAVEQ
  	asm volatile("1:  fxrstorq %[fx]\n\t"
-@@ -115,6 +120,11 @@ static inline int fxsave_user(struct i38
+@@ -115,6 +117,8 @@ static inline int fxsave_user(struct i38
  {
  	int err;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)fx < PAX_USER_SHADOW_BASE)
-+		fx = (struct i387_fxsave_struct __user *)((void __user *)fx + PAX_USER_SHADOW_BASE);
-+#endif
++	fx = (struct i387_fxsave_struct __user *)____m(fx);
 +
  	/*
  	 * Clear the bytes not touched by the fxsave and reserved
  	 * for the SW usage.
-@@ -271,7 +281,7 @@ static inline int restore_fpu_checking(s
+@@ -183,15 +187,15 @@ static inline void fpu_fxsave(struct fpu
+ #else  /* CONFIG_X86_32 */
+ 
+ /* perform fxrstor iff the processor has extended states, otherwise frstor */
+-static inline int fxrstor_checking(struct i387_fxsave_struct *fx)
++static inline int fxrstor_checking(struct i387_fxsave_struct __user *fx)
+ {
+ 	/*
+ 	 * The "nop" is needed to make the instructions the same
+ 	 * length.
+ 	 */
+ 	alternative_input(
+-		"nop ; frstor %1",
+-		"fxrstor %1",
++		__copyuser_seg" frstor %1; nop",
++		__copyuser_seg" fxrstor %1",
+ 		X86_FEATURE_FXSR,
+ 		"m" (*fx));
+ 
+@@ -271,7 +275,7 @@ static inline int restore_fpu_checking(s
  		"emms\n\t"		/* clear stack tags */
  		"fildl %P[addr]",	/* set F?P to defined value */
  		X86_FEATURE_FXSAVE_LEAK,
@@ -8693,8 +8711,8 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  }
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/asm/futex.h linux-3.6.8-pax/arch/x86/include/asm/futex.h
 --- linux-3.6.8/arch/x86/include/asm/futex.h	2012-05-21 11:32:56.839927625 +0200
-+++ linux-3.6.8-pax/arch/x86/include/asm/futex.h	2012-10-01 02:50:39.188114638 +0200
-@@ -11,16 +11,18 @@
++++ linux-3.6.8-pax/arch/x86/include/asm/futex.h	2012-11-28 20:23:14.976241712 +0100
+@@ -11,20 +11,22 @@
  #include <asm/processor.h>
  
  #define __futex_atomic_op1(insn, ret, oldval, uaddr, oparg)	\
@@ -8714,6 +8732,11 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  	asm volatile("1:\tmovl	%2, %0\n"			\
  		     "\tmovl\t%0, %3\n"				\
  		     "\t" insn "\n"				\
+-		     "2:\t" LOCK_PREFIX "cmpxchgl %3, %2\n"	\
++		     "2:\t" LOCK_PREFIX __copyuser_seg"cmpxchgl %3, %2\n"	\
+ 		     "\tjnz\t1b\n"				\
+ 		     "3:\t.section .fixup,\"ax\"\n"		\
+ 		     "4:\tmov\t%5, %1\n"			\
 @@ -33,7 +35,7 @@
  		     _ASM_EXTABLE(1b, 4b)			\
  		     _ASM_EXTABLE(2b, 4b)			\
@@ -10874,7 +10897,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  #endif /* _ASM_X86_UACCESS_32_H */
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/asm/uaccess_64.h linux-3.6.8-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-3.6.8/arch/x86/include/asm/uaccess_64.h	2012-10-01 02:49:14.536114372 +0200
-+++ linux-3.6.8-pax/arch/x86/include/asm/uaccess_64.h	2012-10-01 02:50:39.388114639 +0200
++++ linux-3.6.8-pax/arch/x86/include/asm/uaccess_64.h	2012-11-30 18:40:48.464807719 +0100
 @@ -10,6 +10,9 @@
  #include <asm/alternative.h>
  #include <asm/cpufeature.h>
@@ -10903,7 +10926,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  copy_user_generic(void *to, const void *from, unsigned len)
  {
  	unsigned ret;
-@@ -41,142 +44,238 @@ copy_user_generic(void *to, const void *
+@@ -41,142 +44,205 @@ copy_user_generic(void *to, const void *
  			 ASM_OUTPUT2("=a" (ret), "=D" (to), "=S" (from),
  				     "=d" (len)),
  			 "1" (to), "2" (from), "3" (len)
@@ -11003,13 +11026,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(dst, size, false);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic(dst, (__force_kernel const void *)src, size);
++		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
 +	}
  	switch (size) {
 -	case 1:__get_user_asm(*(u8 *)dst, (u8 __user *)src,
@@ -11052,13 +11069,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  		return ret;
  	default:
 -		return copy_user_generic(dst, (__force void *)src, size);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic(dst, (__force_kernel const void *)src, size);
++		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
  	}
  }
  
@@ -11089,13 +11100,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
 +
 +	if (!__builtin_constant_p(size)) {
 +		check_object_size(src, size, true);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst, src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
 +	}
  	switch (size) {
 -	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
@@ -11138,13 +11143,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  		return ret;
  	default:
 -		return copy_user_generic((__force void *)dst, src, size);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst, src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
  	}
  }
  
@@ -11156,9 +11155,6 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst,
--					 (__force void *)src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
@@ -11170,18 +11166,11 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
 +		return size;
 +#endif
 +
-+	if (!__builtin_constant_p(size)) {
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst,
-+					 (__force_kernel const void *)src, size);
-+	}
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst,
+-					 (__force void *)src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst),
++					 (__force_kernel const void *)____m(src), size);
  	switch (size) {
  	case 1: {
  		u8 tmp;
@@ -11190,7 +11179,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  			       ret, "b", "b", "=q", 1);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u8 __user *)dst,
-@@ -185,7 +284,7 @@ int __copy_in_user(void __user *dst, con
+@@ -185,7 +251,7 @@ int __copy_in_user(void __user *dst, con
  	}
  	case 2: {
  		u16 tmp;
@@ -11199,7 +11188,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  			       ret, "w", "w", "=r", 2);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u16 __user *)dst,
-@@ -195,7 +294,7 @@ int __copy_in_user(void __user *dst, con
+@@ -195,7 +261,7 @@ int __copy_in_user(void __user *dst, con
  
  	case 4: {
  		u32 tmp;
@@ -11208,7 +11197,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  			       ret, "l", "k", "=r", 4);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u32 __user *)dst,
-@@ -204,7 +303,7 @@ int __copy_in_user(void __user *dst, con
+@@ -204,7 +270,7 @@ int __copy_in_user(void __user *dst, con
  	}
  	case 8: {
  		u64 tmp;
@@ -11217,22 +11206,14 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  			       ret, "q", "", "=r", 8);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u64 __user *)dst,
-@@ -212,44 +311,89 @@ int __copy_in_user(void __user *dst, con
+@@ -212,44 +278,65 @@ int __copy_in_user(void __user *dst, con
  		return ret;
  	}
  	default:
 -		return copy_user_generic((__force void *)dst,
 -					 (__force void *)src, size);
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+			src += PAX_USER_SHADOW_BASE;
-+		if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+			dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((__force_kernel void *)dst,
-+					 (__force_kernel const void *)src, size);
++		return copy_user_generic((__force_kernel void *)____m(dst),
++					 (__force_kernel const void *)____m(src), size);
  	}
  }
  
@@ -11249,15 +11230,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
 +	if (size > INT_MAX)
 +		return size;
 +
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (!__access_ok(VERIFY_READ, src, size))
-+		return size;
-+
-+	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+		src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	return copy_user_generic(dst, (__force_kernel const void *)src, size);
++	return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
  }
  
 -static __must_check __always_inline int
@@ -11269,15 +11242,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
 +	if (size > INT_MAX)
 +		return size;
 +
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (!__access_ok(VERIFY_WRITE, dst, size))
-+		return size;
-+
-+	if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+		dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	return copy_user_generic((__force_kernel void *)dst, src, size);
++	return copy_user_generic((__force_kernel void *)____m(dst), src, size);
  }
  
 -extern long __copy_user_nocache(void *dst, const void __user *src,
@@ -11702,36 +11667,43 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/
  extern struct x86_cpuinit_ops x86_cpuinit;
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/include/asm/xsave.h linux-3.6.8-pax/arch/x86/include/asm/xsave.h
 --- linux-3.6.8/arch/x86/include/asm/xsave.h	2012-07-23 00:22:19.258342472 +0200
-+++ linux-3.6.8-pax/arch/x86/include/asm/xsave.h	2012-10-01 02:50:39.408114639 +0200
-@@ -65,6 +65,11 @@ static inline int xsave_user(struct xsav
++++ linux-3.6.8-pax/arch/x86/include/asm/xsave.h	2012-11-30 22:10:30.605304012 +0100
+@@ -65,6 +65,8 @@ static inline int xsave_user(struct xsav
  {
  	int err;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)buf < PAX_USER_SHADOW_BASE)
-+		buf = (struct xsave_struct __user *)((void __user*)buf + PAX_USER_SHADOW_BASE);
-+#endif
++	buf = (struct xsave_struct __user *)____m(buf);
 +
  	/*
  	 * Clear the xsave header first, so that reserved fields are
  	 * initialized to zero.
-@@ -93,10 +98,15 @@ static inline int xsave_user(struct xsav
+@@ -74,7 +76,9 @@ static inline int xsave_user(struct xsav
+ 	if (unlikely(err))
+ 		return -EFAULT;
+ 
+-	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x27\n"
++	__asm__ __volatile__("1:"
++			     __copyuser_seg
++			     ".byte " REX_PREFIX "0x0f,0xae,0x27\n"
+ 			     "2:\n"
+ 			     ".section .fixup,\"ax\"\n"
+ 			     "3:  movl $-1,%[err]\n"
+@@ -93,11 +97,13 @@ static inline int xsave_user(struct xsav
  static inline int xrestore_user(struct xsave_struct __user *buf, u64 mask)
  {
  	int err;
 -	struct xsave_struct *xstate = ((__force struct xsave_struct *)buf);
-+	struct xsave_struct *xstate = ((__force_kernel struct xsave_struct *)buf);
++	struct xsave_struct *xstate = ((__force_kernel struct xsave_struct *)____m(buf));
  	u32 lmask = mask;
  	u32 hmask = mask >> 32;
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if ((unsigned long)xstate < PAX_USER_SHADOW_BASE)
-+		xstate = (struct xsave_struct *)((void *)xstate + PAX_USER_SHADOW_BASE);
-+#endif
-+
- 	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x2f\n"
+-	__asm__ __volatile__("1: .byte " REX_PREFIX "0x0f,0xae,0x2f\n"
++	__asm__ __volatile__("1:"
++			     __copyuser_seg
++			     ".byte " REX_PREFIX "0x0f,0xae,0x2f\n"
  			     "2:\n"
  			     ".section .fixup,\"ax\"\n"
+ 			     "3:  movl $-1,%[err]\n"
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/Kconfig linux-3.6.8-pax/arch/x86/Kconfig
 --- linux-3.6.8/arch/x86/Kconfig	2012-10-01 02:49:14.384114371 +0200
 +++ linux-3.6.8-pax/arch/x86/Kconfig	2012-10-01 02:50:39.408114639 +0200
@@ -12681,7 +12653,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/d
  		.__cr3		= __pa_nodebug(swapper_pg_dir),
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/dumpstack_32.c linux-3.6.8-pax/arch/x86/kernel/dumpstack_32.c
 --- linux-3.6.8/arch/x86/kernel/dumpstack_32.c	2012-10-01 02:49:14.692114373 +0200
-+++ linux-3.6.8-pax/arch/x86/kernel/dumpstack_32.c	2012-10-01 02:50:39.496114640 +0200
++++ linux-3.6.8-pax/arch/x86/kernel/dumpstack_32.c	2012-11-28 20:14:16.868210870 +0100
 @@ -38,15 +38,13 @@ void dump_trace(struct task_struct *task
  		bp = stack_frame(task, regs);
  
@@ -12721,7 +12693,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/d
  		unsigned int code_len = code_bytes;
  		unsigned char c;
  		u8 *ip;
-+		unsigned long cs_base = get_desc_base(&get_cpu_gdt_table(smp_processor_id())[(0xffff & regs->cs) >> 3]);
++		unsigned long cs_base = get_desc_base(&get_cpu_gdt_table(0)[(0xffff & regs->cs) >> 3]);
  
  		pr_emerg("Stack:\n");
  		show_stack_log_lvl(NULL, regs, &regs->sp, 0, KERN_EMERG);
@@ -12772,7 +12744,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/d
 +#endif
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/dumpstack_64.c linux-3.6.8-pax/arch/x86/kernel/dumpstack_64.c
 --- linux-3.6.8/arch/x86/kernel/dumpstack_64.c	2012-10-01 02:49:14.696114373 +0200
-+++ linux-3.6.8-pax/arch/x86/kernel/dumpstack_64.c	2012-10-01 02:50:39.496114640 +0200
++++ linux-3.6.8-pax/arch/x86/kernel/dumpstack_64.c	2012-11-30 21:40:12.045216229 +0100
 @@ -119,9 +119,9 @@ void dump_trace(struct task_struct *task
  	unsigned long *irq_stack_end =
  		(unsigned long *)per_cpu(irq_stack_ptr, cpu);
@@ -12834,6 +12806,15 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/d
  	put_cpu();
  }
  EXPORT_SYMBOL(dump_trace);
+@@ -249,7 +253,7 @@ void show_regs(struct pt_regs *regs)
+ {
+ 	int i;
+ 	unsigned long sp;
+-	const int cpu = smp_processor_id();
++	const int cpu = raw_smp_processor_id();
+ 	struct task_struct *cur = current;
+ 
+ 	sp = regs->sp;
 @@ -304,3 +308,50 @@ int is_valid_bugaddr(unsigned long ip)
  
  	return ud2 == 0x0b0f;
@@ -13835,7 +13816,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/e
  /*
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/entry_64.S linux-3.6.8-pax/arch/x86/kernel/entry_64.S
 --- linux-3.6.8/arch/x86/kernel/entry_64.S	2012-10-28 21:30:17.529594535 +0100
-+++ linux-3.6.8-pax/arch/x86/kernel/entry_64.S	2012-11-13 02:24:38.471763170 +0100
++++ linux-3.6.8-pax/arch/x86/kernel/entry_64.S	2012-11-30 21:41:40.369220228 +0100
 @@ -57,6 +57,8 @@
  #include <asm/percpu.h>
  #include <asm/asm.h>
@@ -14467,7 +14448,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/e
  retint_restore_args:	/* return to kernel space */
  	DISABLE_INTERRUPTS(CLBR_ANY)
 +	pax_exit_kernel
-+	pax_force_retaddr RIP-ARGOFFSET
++	pax_force_retaddr (RIP-ARGOFFSET)
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
@@ -16492,7 +16473,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/p
  
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/process_32.c linux-3.6.8-pax/arch/x86/kernel/process_32.c
 --- linux-3.6.8/arch/x86/kernel/process_32.c	2012-07-23 00:22:19.318342474 +0200
-+++ linux-3.6.8-pax/arch/x86/kernel/process_32.c	2012-10-01 02:50:39.640114640 +0200
++++ linux-3.6.8-pax/arch/x86/kernel/process_32.c	2012-11-30 21:42:00.553221230 +0100
 @@ -64,6 +64,7 @@ asmlinkage void ret_from_fork(void) __as
  unsigned long thread_saved_pc(struct task_struct *tsk)
  {
@@ -16501,7 +16482,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/p
  }
  
  void __show_regs(struct pt_regs *regs, int all)
-@@ -73,15 +74,14 @@ void __show_regs(struct pt_regs *regs, i
+@@ -73,21 +74,20 @@ void __show_regs(struct pt_regs *regs, i
  	unsigned long sp;
  	unsigned short ss, gs;
  
@@ -16519,6 +16500,13 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/p
  
  	show_regs_common();
  
+ 	printk(KERN_DEFAULT "EIP: %04x:[<%08lx>] EFLAGS: %08lx CPU: %d\n",
+ 			(u16)regs->cs, regs->ip, regs->flags,
+-			smp_processor_id());
++			raw_smp_processor_id());
+ 	print_symbol("EIP is at %s\n", regs->ip);
+ 
+ 	printk(KERN_DEFAULT "EAX: %08lx EBX: %08lx ECX: %08lx EDX: %08lx\n",
 @@ -134,13 +134,14 @@ int copy_thread(unsigned long clone_flag
  	struct task_struct *tsk;
  	int err;
@@ -18221,7 +18209,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/x
  EXPORT_SYMBOL(clear_page);
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/xsave.c linux-3.6.8-pax/arch/x86/kernel/xsave.c
 --- linux-3.6.8/arch/x86/kernel/xsave.c	2012-10-01 02:49:14.804114373 +0200
-+++ linux-3.6.8-pax/arch/x86/kernel/xsave.c	2012-10-01 02:50:39.748114640 +0200
++++ linux-3.6.8-pax/arch/x86/kernel/xsave.c	2012-11-30 20:01:47.296991249 +0100
 @@ -132,7 +132,7 @@ int check_for_xstate(struct i387_fxsave_
  	    fx_sw_user->xstate_size > fx_sw_user->extended_size)
  		return -EINVAL;
@@ -18236,19 +18224,20 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kernel/x
  	 */
  	xrstor_state(init_xstate_buf, pcntxt_mask & ~XSTATE_FPSSE);
 -	return fxrstor_checking((__force struct i387_fxsave_struct *)buf);
-+	return fxrstor_checking((struct i387_fxsave_struct __force_kernel *)buf);
++	return fxrstor_checking((struct i387_fxsave_struct __user *)buf);
  }
  
  /*
-@@ -297,7 +297,7 @@ int restore_i387_xstate(void __user *buf
+@@ -297,8 +297,7 @@ int restore_i387_xstate(void __user *buf
  	if (use_xsave())
  		err = restore_user_xstate(buf);
  	else
 -		err = fxrstor_checking((__force struct i387_fxsave_struct *)
-+		err = fxrstor_checking((struct i387_fxsave_struct __force_kernel *)
- 				       buf);
+-				       buf);
++		err = fxrstor_checking((struct i387_fxsave_struct __user *)buf);
  	if (unlikely(err)) {
  		/*
+ 		 * Encountered an error while doing the restore from the
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/kvm/cpuid.c linux-3.6.8-pax/arch/x86/kvm/cpuid.c
 --- linux-3.6.8/arch/x86/kvm/cpuid.c	2012-10-01 02:49:14.804114373 +0200
 +++ linux-3.6.8-pax/arch/x86/kvm/cpuid.c	2012-10-01 02:50:39.748114640 +0200
@@ -19643,34 +19632,22 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/lib/csum
  
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/lib/csum-wrappers_64.c linux-3.6.8-pax/arch/x86/lib/csum-wrappers_64.c
 --- linux-3.6.8/arch/x86/lib/csum-wrappers_64.c	2012-07-23 00:22:19.394342476 +0200
-+++ linux-3.6.8-pax/arch/x86/lib/csum-wrappers_64.c	2012-10-01 02:50:39.816114641 +0200
-@@ -52,7 +52,13 @@ csum_partial_copy_from_user(const void _
++++ linux-3.6.8-pax/arch/x86/lib/csum-wrappers_64.c	2012-11-30 18:51:08.000831639 +0100
+@@ -52,7 +52,7 @@ csum_partial_copy_from_user(const void _
  			len -= 2;
  		}
  	}
 -	isum = csum_partial_copy_generic((__force const void *)src,
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if ((unsigned long)src < PAX_USER_SHADOW_BASE)
-+		src += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	isum = csum_partial_copy_generic((const void __force_kernel *)src,
++	isum = csum_partial_copy_generic((const void __force_kernel *)____m(src),
  				dst, len, isum, errp, NULL);
  	if (unlikely(*errp))
  		goto out_err;
-@@ -105,7 +111,13 @@ csum_partial_copy_to_user(const void *sr
+@@ -105,7 +105,7 @@ csum_partial_copy_to_user(const void *sr
  	}
  
  	*errp = 0;
 -	return csum_partial_copy_generic(src, (void __force *)dst,
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if ((unsigned long)dst < PAX_USER_SHADOW_BASE)
-+		dst += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+	return csum_partial_copy_generic(src, (void __force_kernel *)dst,
++	return csum_partial_copy_generic(src, (void __force_kernel *)____m(dst),
  					 len, isum, NULL, errp);
  }
  EXPORT_SYMBOL(csum_partial_copy_to_user);
@@ -21355,21 +21332,17 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/lib/user
 +#endif
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/lib/usercopy_64.c linux-3.6.8-pax/arch/x86/lib/usercopy_64.c
 --- linux-3.6.8/arch/x86/lib/usercopy_64.c	2012-07-23 00:22:19.398342476 +0200
-+++ linux-3.6.8-pax/arch/x86/lib/usercopy_64.c	2012-10-01 02:50:39.856114640 +0200
-@@ -16,6 +16,12 @@ unsigned long __clear_user(void __user *
- {
- 	long __d0;
- 	might_fault();
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if ((unsigned long)addr < PAX_USER_SHADOW_BASE)
-+		addr += PAX_USER_SHADOW_BASE;
-+#endif
-+
- 	/* no memory constraint because it doesn't change any memory gcc knows
- 	   about */
- 	asm volatile(
-@@ -52,12 +58,20 @@ unsigned long clear_user(void __user *to
++++ linux-3.6.8-pax/arch/x86/lib/usercopy_64.c	2012-11-30 18:52:21.740834846 +0100
+@@ -38,7 +38,7 @@ unsigned long __clear_user(void __user *
+ 		_ASM_EXTABLE(0b,3b)
+ 		_ASM_EXTABLE(1b,2b)
+ 		: [size8] "=&c"(size), [dst] "=&D" (__d0)
+-		: [size1] "r"(size & 7), "[size8]" (size / 8), "[dst]"(addr),
++		: [size1] "r"(size & 7), "[size8]" (size / 8), "[dst]"(____m(addr)),
+ 		  [zero] "r" (0UL), [eight] "r" (8UL));
+ 	return size;
+ }
+@@ -52,12 +52,11 @@ unsigned long clear_user(void __user *to
  }
  EXPORT_SYMBOL(clear_user);
  
@@ -21380,22 +21353,13 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/lib/user
 -		return copy_user_generic((__force void *)to, (__force void *)from, len);
 -	} 
 -	return len;		
-+	if (access_ok(VERIFY_WRITE, to, len) && access_ok(VERIFY_READ, from, len)) {
-+
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if ((unsigned long)to < PAX_USER_SHADOW_BASE)
-+			to += PAX_USER_SHADOW_BASE;
-+		if ((unsigned long)from < PAX_USER_SHADOW_BASE)
-+			from += PAX_USER_SHADOW_BASE;
-+#endif
-+
-+		return copy_user_generic((void __force_kernel *)to, (void __force_kernel *)from, len);
-+	}
++	if (access_ok(VERIFY_WRITE, to, len) && access_ok(VERIFY_READ, from, len))
++		return copy_user_generic((void __force_kernel *)____m(to), (void __force_kernel *)____m(from), len);
 +	return len;
  }
  EXPORT_SYMBOL(copy_in_user);
  
-@@ -67,7 +81,7 @@ EXPORT_SYMBOL(copy_in_user);
+@@ -67,7 +66,7 @@ EXPORT_SYMBOL(copy_in_user);
   * it is not necessary to optimize tail handling.
   */
  unsigned long
@@ -21404,7 +21368,7 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/x86/lib/user
  {
  	char c;
  	unsigned zero_len;
-@@ -84,3 +98,15 @@ copy_user_handle_tail(char *to, char *fr
+@@ -84,3 +83,15 @@ copy_user_handle_tail(char *to, char *fr
  			break;
  	return len;
  }
