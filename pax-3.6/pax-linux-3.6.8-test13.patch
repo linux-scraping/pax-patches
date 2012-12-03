@@ -1,4 +1,4 @@
-- simplified/synchronized some UDEREF/amd64 logic based on the 3.7 forward port
+- fixed a refcount false positive in the USB stack, thanks to Christian Perle for reporting it
 
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/arch/alpha/include/asm/atomic.h linux-3.6.8-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.6.8/arch/alpha/include/asm/atomic.h	2012-10-01 02:49:04.300114340 +0200
@@ -36483,6 +36483,51 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/drivers/usb/core/
  	if (file->f_version != event_count) {
  		file->f_version = event_count;
  		return POLLIN | POLLRDNORM;
+diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/drivers/usb/core/hcd.c linux-3.6.8-pax/drivers/usb/core/hcd.c
+--- linux-3.6.8/drivers/usb/core/hcd.c	2012-10-01 02:49:44.748114467 +0200
++++ linux-3.6.8-pax/drivers/usb/core/hcd.c	2012-12-03 21:23:53.295631141 +0100
+@@ -1478,7 +1478,7 @@ int usb_hcd_submit_urb (struct urb *urb,
+ 	 */
+ 	usb_get_urb(urb);
+ 	atomic_inc(&urb->use_count);
+-	atomic_inc(&urb->dev->urbnum);
++	atomic_inc_unchecked(&urb->dev->urbnum);
+ 	usbmon_urb_submit(&hcd->self, urb);
+ 
+ 	/* NOTE requirements on root-hub callers (usbfs and the hub
+@@ -1505,7 +1505,7 @@ int usb_hcd_submit_urb (struct urb *urb,
+ 		urb->hcpriv = NULL;
+ 		INIT_LIST_HEAD(&urb->urb_list);
+ 		atomic_dec(&urb->use_count);
+-		atomic_dec(&urb->dev->urbnum);
++		atomic_dec_unchecked(&urb->dev->urbnum);
+ 		if (atomic_read(&urb->reject))
+ 			wake_up(&usb_kill_urb_queue);
+ 		usb_put_urb(urb);
+diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/drivers/usb/core/sysfs.c linux-3.6.8-pax/drivers/usb/core/sysfs.c
+--- linux-3.6.8/drivers/usb/core/sysfs.c	2012-10-01 02:49:44.748114467 +0200
++++ linux-3.6.8-pax/drivers/usb/core/sysfs.c	2012-12-03 21:24:02.731631966 +0100
+@@ -226,7 +226,7 @@ show_urbnum(struct device *dev, struct d
+ 	struct usb_device *udev;
+ 
+ 	udev = to_usb_device(dev);
+-	return sprintf(buf, "%d\n", atomic_read(&udev->urbnum));
++	return sprintf(buf, "%d\n", atomic_read_unchecked(&udev->urbnum));
+ }
+ static DEVICE_ATTR(urbnum, S_IRUGO, show_urbnum, NULL);
+ 
+diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/drivers/usb/core/usb.c linux-3.6.8-pax/drivers/usb/core/usb.c
+--- linux-3.6.8/drivers/usb/core/usb.c	2012-10-01 02:49:44.752114467 +0200
++++ linux-3.6.8-pax/drivers/usb/core/usb.c	2012-12-03 21:24:18.307632087 +0100
+@@ -397,7 +397,7 @@ struct usb_device *usb_alloc_dev(struct
+ 	set_dev_node(&dev->dev, dev_to_node(bus->controller));
+ 	dev->state = USB_STATE_ATTACHED;
+ 	dev->lpm_disable_count = 1;
+-	atomic_set(&dev->urbnum, 0);
++	atomic_set_unchecked(&dev->urbnum, 0);
+ 
+ 	INIT_LIST_HEAD(&dev->ep0.urb_list);
+ 	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/drivers/usb/early/ehci-dbgp.c linux-3.6.8-pax/drivers/usb/early/ehci-dbgp.c
 --- linux-3.6.8/drivers/usb/early/ehci-dbgp.c	2012-10-01 02:49:44.768114467 +0200
 +++ linux-3.6.8-pax/drivers/usb/early/ehci-dbgp.c	2012-10-01 02:50:43.940114654 +0200
@@ -45364,6 +45409,18 @@ diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/include/linux/usb
  
  /*
   * parameters for renesas usbhs
+diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/include/linux/usb.h linux-3.6.8-pax/include/linux/usb.h
+--- linux-3.6.8/include/linux/usb.h	2012-10-01 02:49:52.568114491 +0200
++++ linux-3.6.8-pax/include/linux/usb.h	2012-12-03 21:23:38.551631366 +0100
+@@ -546,7 +546,7 @@ struct usb_device {
+ 	struct usb_device **children;
+ 
+ 	u32 quirks;
+-	atomic_t urbnum;
++	atomic_unchecked_t urbnum;
+ 
+ 	unsigned long active_duration;
+ 
 diff -NurpX linux-3.6.8-pax/Documentation/dontdiff linux-3.6.8/include/linux/vermagic.h linux-3.6.8-pax/include/linux/vermagic.h
 --- linux-3.6.8/include/linux/vermagic.h	2012-01-08 19:48:27.795470941 +0100
 +++ linux-3.6.8-pax/include/linux/vermagic.h	2012-10-01 02:50:45.932114660 +0200
