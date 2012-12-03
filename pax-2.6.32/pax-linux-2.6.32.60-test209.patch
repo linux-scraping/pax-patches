@@ -1,4 +1,4 @@
-- simplified/synchronized some UDEREF/amd64 logic based on the 3.7 forward port
+- fixed a refcount false positive in the USB stack, thanks to Christian Perle for reporting it
 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/alpha/include/asm/atomic.h linux-2.6.32.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.60/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -35191,6 +35191,51 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/u
  
  	if (!left--) {
  		if (instance->disconnected)
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/usb/core/hcd.c linux-2.6.32.60-pax/drivers/usb/core/hcd.c
+--- linux-2.6.32.60/drivers/usb/core/hcd.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/drivers/usb/core/hcd.c	2012-12-03 22:34:34.355767333 +0100
+@@ -1373,7 +1373,7 @@ int usb_hcd_submit_urb (struct urb *urb,
+ 	 */
+ 	usb_get_urb(urb);
+ 	atomic_inc(&urb->use_count);
+-	atomic_inc(&urb->dev->urbnum);
++	atomic_inc_unchecked(&urb->dev->urbnum);
+ 	usbmon_urb_submit(&hcd->self, urb);
+ 
+ 	/* NOTE requirements on root-hub callers (usbfs and the hub
+@@ -1401,7 +1401,7 @@ int usb_hcd_submit_urb (struct urb *urb,
+ 		urb->hcpriv = NULL;
+ 		INIT_LIST_HEAD(&urb->urb_list);
+ 		atomic_dec(&urb->use_count);
+-		atomic_dec(&urb->dev->urbnum);
++		atomic_dec_unchecked(&urb->dev->urbnum);
+ 		if (atomic_read(&urb->reject))
+ 			wake_up(&usb_kill_urb_queue);
+ 		usb_put_urb(urb);
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/usb/core/sysfs.c linux-2.6.32.60-pax/drivers/usb/core/sysfs.c
+--- linux-2.6.32.60/drivers/usb/core/sysfs.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/drivers/usb/core/sysfs.c	2012-12-03 22:34:34.355767333 +0100
+@@ -186,7 +186,7 @@ show_urbnum(struct device *dev, struct d
+ 	struct usb_device *udev;
+ 
+ 	udev = to_usb_device(dev);
+-	return sprintf(buf, "%d\n", atomic_read(&udev->urbnum));
++	return sprintf(buf, "%d\n", atomic_read_unchecked(&udev->urbnum));
+ }
+ static DEVICE_ATTR(urbnum, S_IRUGO, show_urbnum, NULL);
+ 
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/usb/core/usb.c linux-2.6.32.60-pax/drivers/usb/core/usb.c
+--- linux-2.6.32.60/drivers/usb/core/usb.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/drivers/usb/core/usb.c	2012-12-03 22:34:46.239767849 +0100
+@@ -377,7 +377,7 @@ struct usb_device *usb_alloc_dev(struct
+ 	dev->dev.dma_mask = bus->controller->dma_mask;
+ 	set_dev_node(&dev->dev, dev_to_node(bus->controller));
+ 	dev->state = USB_STATE_ATTACHED;
+-	atomic_set(&dev->urbnum, 0);
++	atomic_set_unchecked(&dev->urbnum, 0);
+ 
+ 	INIT_LIST_HEAD(&dev->ep0.urb_list);
+ 	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/usb/wusbcore/wa-hc.h linux-2.6.32.60-pax/drivers/usb/wusbcore/wa-hc.h
 --- linux-2.6.32.60/drivers/usb/wusbcore/wa-hc.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/drivers/usb/wusbcore/wa-hc.h	2012-03-13 13:15:35.336097979 +0100
@@ -43515,6 +43560,18 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  }
  
  static inline void put_unaligned_le16(u16 val, void *p)
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/usb.h linux-2.6.32.60-pax/include/linux/usb.h
+--- linux-2.6.32.60/include/linux/usb.h	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/include/linux/usb.h	2012-12-03 22:35:07.467768880 +0100
+@@ -500,7 +500,7 @@ struct usb_device {
+ 
+ 	int pm_usage_cnt;
+ 	u32 quirks;
+-	atomic_t urbnum;
++	atomic_unchecked_t urbnum;
+ 
+ 	unsigned long active_duration;
+ 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/vermagic.h linux-2.6.32.60-pax/include/linux/vermagic.h
 --- linux-2.6.32.60/include/linux/vermagic.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/include/linux/vermagic.h	2012-03-13 13:15:35.548097968 +0100
