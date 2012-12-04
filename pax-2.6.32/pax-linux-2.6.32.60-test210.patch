@@ -1,4 +1,5 @@
-- fixed a refcount false positive in the USB stack, thanks to Christian Perle for reporting it
+- removed old cruft
+- fixed i386/fpu regression introduced by a previous backport, thanks to Kevin Chadwick for reporting it
 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/alpha/include/asm/atomic.h linux-2.6.32.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.60/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -8996,7 +8997,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  extern void eisa_set_level_irq(unsigned int irq);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/i387.h linux-2.6.32.60-pax/arch/x86/include/asm/i387.h
 --- linux-2.6.32.60/arch/x86/include/asm/i387.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/i387.h	2012-12-01 02:47:14.552131586 +0100
++++ linux-2.6.32.60-pax/arch/x86/include/asm/i387.h	2012-12-05 00:41:09.203782426 +0100
 @@ -56,10 +56,12 @@ static inline void tolerant_fwait(void)
  		     _ASM_EXTABLE(1b, 2b));
  }
@@ -9055,7 +9056,26 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * These must be called with preempt disabled
-@@ -291,7 +290,7 @@ static inline void kernel_fpu_begin(void
+@@ -258,8 +257,16 @@ static inline int restore_fpu_checking(s
+ {
+ 	if (task_thread_info(tsk)->status & TS_XSAVE)
+ 		return xrstor_checking(&tsk->thread.xstate->xsave);
+-	else
+-		return fxrstor_checking(&tsk->thread.xstate->fxsave);
++	else {
++		int ret;
++		mm_segment_t fs;
++
++		fs = get_fs();
++		set_fs(KERNEL_DS);
++		ret = fxrstor_checking(&tsk->thread.xstate->fxsave);
++		set_fs(fs);
++		return ret;
++	}
+ }
+ 
+ /*
+@@ -291,7 +298,7 @@ static inline void kernel_fpu_begin(void
  	struct thread_info *me = current_thread_info();
  	preempt_disable();
  	if (me->status & TS_USEDFPU)
@@ -24572,7 +24592,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  EXPORT_SYMBOL(pcibios_set_irq_routing);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/power/cpu.c linux-2.6.32.60-pax/arch/x86/power/cpu.c
 --- linux-2.6.32.60/arch/x86/power/cpu.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/power/cpu.c	2012-03-13 13:15:34.856098005 +0100
++++ linux-2.6.32.60-pax/arch/x86/power/cpu.c	2012-12-05 00:25:34.799667519 +0100
 @@ -129,7 +129,7 @@ static void do_fpu_end(void)
  static void fix_processor_context(void)
  {
@@ -24582,16 +24602,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  	set_tss_desc(cpu, t);	/*
  				 * This just modifies memory; should not be
-@@ -139,7 +139,9 @@ static void fix_processor_context(void)
+@@ -139,8 +139,6 @@ static void fix_processor_context(void)
  				 */
  
  #ifdef CONFIG_X86_64
-+	pax_open_kernel();
- 	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].type = 9;
-+	pax_close_kernel();
- 
+-	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].type = 9;
+-
  	syscall_init();				/* This sets MSR_*STAR and related */
  #endif
+ 	load_TR_desc();				/* This does ltr */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/vdso/Makefile linux-2.6.32.60-pax/arch/x86/vdso/Makefile
 --- linux-2.6.32.60/arch/x86/vdso/Makefile	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/vdso/Makefile	2012-03-13 13:15:34.856098005 +0100
