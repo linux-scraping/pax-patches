@@ -1,4 +1,5 @@
-- fixed a refcount false positive in the USB stack, thanks to Christian Perle for reporting it
+- removed old cruft
+- fixed i386/fpu regression introduced by a previous backport, thanks to Kevin Chadwick for reporting it
 
 diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/alpha/include/asm/atomic.h linux-3.2.34-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.34/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -8690,7 +8691,7 @@ diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/includ
  extern void eisa_set_level_irq(unsigned int irq);
 diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/include/asm/i387.h linux-3.2.34-pax/arch/x86/include/asm/i387.h
 --- linux-3.2.34/arch/x86/include/asm/i387.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.34-pax/arch/x86/include/asm/i387.h	2012-12-01 02:31:26.884016106 +0100
++++ linux-3.2.34-pax/arch/x86/include/asm/i387.h	2012-12-04 23:38:24.971562110 +0100
 @@ -88,10 +88,12 @@ static inline void sanitize_i387_state(s
  }
  
@@ -8733,7 +8734,23 @@ diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/includ
  		X86_FEATURE_FXSR,
  		"m" (*fx));
  
-@@ -424,7 +428,7 @@ static inline bool interrupted_kernel_fp
+@@ -256,7 +260,14 @@ static inline int __save_init_fpu(struct
+ 
+ static inline int fpu_fxrstor_checking(struct fpu *fpu)
+ {
+-	return fxrstor_checking(&fpu->state->fxsave);
++	int ret;
++	mm_segment_t fs;
++
++	fs = get_fs();
++	set_fs(KERNEL_DS);
++	ret = fxrstor_checking(&fpu->state->fxsave);
++	set_fs(fs);
++	return ret;
+ }
+ 
+ static inline int fpu_restore_checking(struct fpu *fpu)
+@@ -424,7 +435,7 @@ static inline bool interrupted_kernel_fp
  static inline bool interrupted_user_mode(void)
  {
  	struct pt_regs *regs = get_irq_regs();
@@ -17734,7 +17751,7 @@ diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/kernel
  	.quad	0x00cf9b000000ffff	# __KERNEL32_CS
 diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/kernel/traps.c linux-3.2.34-pax/arch/x86/kernel/traps.c
 --- linux-3.2.34/arch/x86/kernel/traps.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.34-pax/arch/x86/kernel/traps.c	2012-07-04 19:24:47.600063005 +0200
++++ linux-3.2.34-pax/arch/x86/kernel/traps.c	2012-12-04 23:13:36.479545849 +0100
 @@ -70,12 +70,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -17884,7 +17901,7 @@ diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/kernel
 -	   in L1. We've just brought in "tsk->thread.has_fpu", so use that */
 -#define safe_address (tsk->thread.has_fpu)
 +	   in L1. */
-+#define safe_address (init_tss[smp_processor_id()].x86_tss.sp0)
++#define safe_address (init_tss[raw_smp_processor_id()].x86_tss.sp0)
  
  	/* AMD K7/K8 CPUs don't save/restore FDP/FIP/FOP unless an exception
  	   is pending.  Clear the x87 state here by setting it to fixed
@@ -24631,7 +24648,7 @@ diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/platfo
  /* parse all the mtimer info to a static mtimer array */
 diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/power/cpu.c linux-3.2.34-pax/arch/x86/power/cpu.c
 --- linux-3.2.34/arch/x86/power/cpu.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.34-pax/arch/x86/power/cpu.c	2012-07-04 19:24:47.656063004 +0200
++++ linux-3.2.34-pax/arch/x86/power/cpu.c	2012-12-05 00:25:23.659667305 +0100
 @@ -131,7 +131,7 @@ static void do_fpu_end(void)
  static void fix_processor_context(void)
  {
@@ -24641,16 +24658,15 @@ diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/power/
  
  	set_tss_desc(cpu, t);	/*
  				 * This just modifies memory; should not be
-@@ -141,7 +141,9 @@ static void fix_processor_context(void)
+@@ -141,8 +141,6 @@ static void fix_processor_context(void)
  				 */
  
  #ifdef CONFIG_X86_64
-+	pax_open_kernel();
- 	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].type = 9;
-+	pax_close_kernel();
- 
+-	get_cpu_gdt_table(cpu)[GDT_ENTRY_TSS].type = 9;
+-
  	syscall_init();				/* This sets MSR_*STAR and related */
  #endif
+ 	load_TR_desc();				/* This does ltr */
 diff -NurpX linux-3.2.34-pax/Documentation/dontdiff linux-3.2.34/arch/x86/tools/relocs.c linux-3.2.34-pax/arch/x86/tools/relocs.c
 --- linux-3.2.34/arch/x86/tools/relocs.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.34-pax/arch/x86/tools/relocs.c	2012-07-31 00:31:09.016074659 +0200
