@@ -1,4 +1,4 @@
-- added some list handling wrappers for KERNEXEC/LIST_DEBUG to minimize the exposure of an open kernel
+- prefix the KERNEXEC related oops messages on arm with the usual PaX reports as on x86
 
 diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/alpha/include/asm/atomic.h linux-3.7.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.1/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -1183,7 +1183,7 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/include/
  /*
 diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/include/asm/pgtable.h linux-3.7.1-pax/arch/arm/include/asm/pgtable.h
 --- linux-3.7.1/arch/arm/include/asm/pgtable.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.1-pax/arch/arm/include/asm/pgtable.h	2013-01-02 21:47:04.953795907 +0100
++++ linux-3.7.1-pax/arch/arm/include/asm/pgtable.h	2013-01-03 23:18:25.756052680 +0100
 @@ -30,6 +30,9 @@
  #include <asm/pgtable-2level.h>
  #endif
@@ -1250,6 +1250,15 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/include/
  
  #define __pgprot_modify(prot,mask,bits)		\
  	__pgprot((pgprot_val(prot) & ~(mask)) | (bits))
+@@ -242,7 +256,7 @@ static inline pte_t pte_mkspecial(pte_t
+ 
+ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
+ {
+-	const pteval_t mask = L_PTE_XN | L_PTE_RDONLY | L_PTE_USER;
++	const pteval_t mask = L_PTE_XN | L_PTE_PXN | L_PTE_RDONLY | L_PTE_USER;
+ 	pte_val(pte) = (pte_val(pte) & ~mask) | (pgprot_val(newprot) & mask);
+ 	return pte;
+ }
 diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/include/asm/proc-fns.h linux-3.7.1-pax/arch/arm/include/asm/proc-fns.h
 --- linux-3.7.1/arch/arm/include/asm/proc-fns.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.1-pax/arch/arm/include/asm/proc-fns.h	2013-01-01 19:21:34.658603336 +0100
@@ -1688,8 +1697,31 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/mach-oma
  static LIST_HEAD(omap_hwmod_list);
 diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/mm/fault.c linux-3.7.1-pax/arch/arm/mm/fault.c
 --- linux-3.7.1/arch/arm/mm/fault.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.1-pax/arch/arm/mm/fault.c	2013-01-02 21:29:20.857852722 +0100
-@@ -174,6 +174,13 @@ __do_user_fault(struct task_struct *tsk,
++++ linux-3.7.1-pax/arch/arm/mm/fault.c	2013-01-04 20:44:35.850924541 +0100
+@@ -25,6 +25,7 @@
+ #include <asm/system_misc.h>
+ #include <asm/system_info.h>
+ #include <asm/tlbflush.h>
++#include <asm/sections.h>
+ 
+ #include "fault.h"
+ 
+@@ -138,6 +139,14 @@ __do_kernel_fault(struct mm_struct *mm,
+ 	if (fixup_exception(regs))
+ 		return;
+ 
++#ifdef CONFIG_PAX_KERNEXEC
++	if (fsr & FSR_WRITE) {
++		if (((unsigned long)_stext <= addr && addr < init_mm.end_code) || (MODULES_VADDR <= addr && addr < MODULES_END))
++			printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to modify kernel code\n",
++					 current->comm, task_pid_nr(current), current_uid(), current_euid());
++	}
++#endif
++
+ 	/*
+ 	 * No handler, we'll have to terminate things with extreme prejudice.
+ 	 */
+@@ -174,6 +183,13 @@ __do_user_fault(struct task_struct *tsk,
  	}
  #endif
  
@@ -1703,7 +1735,7 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/mm/fault
  	tsk->thread.address = addr;
  	tsk->thread.error_code = fsr;
  	tsk->thread.trap_no = 14;
-@@ -398,6 +405,33 @@ do_page_fault(unsigned long addr, unsign
+@@ -398,6 +414,33 @@ do_page_fault(unsigned long addr, unsign
  }
  #endif					/* CONFIG_MMU */
  
@@ -1737,13 +1769,15 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/mm/fault
  /*
   * First Level Translation Fault Handler
   *
-@@ -575,12 +609,34 @@ do_PrefetchAbort(unsigned long addr, uns
+@@ -575,12 +618,36 @@ do_PrefetchAbort(unsigned long addr, uns
  	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
  	struct siginfo info;
  
 +#ifdef CONFIG_PAX_KERNEXEC
-+	if (is_pxn_fault(ifsr) && !user_mode(regs)) {
-+		printk(KERN_ALERT "PAX: Kernel attempted to execute userland memory at %08lx! ifsr=%08x\n", addr, ifsr);
++	if (!user_mode(regs) && is_xn_fault(ifsr)) {
++		printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to execute %s memory at %08lx\n",
++				 current->comm, task_pid_nr(current), current_uid(), current_euid(),
++				 addr >= TASK_SIZE ? "non-executable kernel" : "userland", addr);
 +		goto die;
 +	}
 +#endif
@@ -1774,7 +1808,7 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/mm/fault
  	info.si_code  = inf->code;
 diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/mm/fault.h linux-3.7.1-pax/arch/arm/mm/fault.h
 --- linux-3.7.1/arch/arm/mm/fault.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.1-pax/arch/arm/mm/fault.h	2013-01-02 21:47:46.765793675 +0100
++++ linux-3.7.1-pax/arch/arm/mm/fault.h	2013-01-04 11:21:39.701931462 +0100
 @@ -3,6 +3,7 @@
  
  /*
@@ -1788,7 +1822,7 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/arch/arm/mm/fault
  #endif
  
 +/* valid for LPAE and !LPAE */
-+static inline int is_pxn_fault(unsigned int fsr)
++static inline int is_xn_fault(unsigned int fsr)
 +{
 +	return ((fsr_fs(fsr) & 0x3c) == 0xc);
 +}
@@ -32983,6 +33017,16 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/drivers/mmc/core/
  	if (is_on_stack) {
  		/*
  		 * dma onto stack is unsafe/nonportable, but callers to this
+diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/drivers/mmc/host/dw_mmc.h linux-3.7.1-pax/drivers/mmc/host/dw_mmc.h
+--- linux-3.7.1/drivers/mmc/host/dw_mmc.h	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.1-pax/drivers/mmc/host/dw_mmc.h	2013-01-04 20:48:23.858931245 +0100
+@@ -205,5 +205,5 @@ struct dw_mci_drv_data {
+ 	int		(*parse_dt)(struct dw_mci *host);
+ 	int		(*setup_bus)(struct dw_mci *host,
+ 				struct device_node *slot_np, u8 bus_width);
+-};
++} __do_const;
+ #endif /* _DW_MMC_H_ */
 diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/drivers/mtd/devices/doc2000.c linux-3.7.1-pax/drivers/mtd/devices/doc2000.c
 --- linux-3.7.1/drivers/mtd/devices/doc2000.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.1-pax/drivers/mtd/devices/doc2000.c	2012-12-11 12:26:07.755203560 +0100
@@ -33017,6 +33061,22 @@ diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/drivers/mtd/nftlm
  #include <linux/mtd/mtd.h>
  #include <linux/mtd/nand.h>
  #include <linux/mtd/nftl.h>
+diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/drivers/net/ethernet/8390/ax88796.c linux-3.7.1-pax/drivers/net/ethernet/8390/ax88796.c
+--- linux-3.7.1/drivers/net/ethernet/8390/ax88796.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.1-pax/drivers/net/ethernet/8390/ax88796.c	2013-01-04 20:58:34.474949198 +0100
+@@ -872,9 +872,11 @@ static int ax_probe(struct platform_devi
+ 	if (ax->plat->reg_offsets)
+ 		ei_local->reg_offset = ax->plat->reg_offsets;
+ 	else {
++		resource_size_t _mem_size = mem_size;
++		do_div(_mem_size, 0x18);
+ 		ei_local->reg_offset = ax->reg_offsets;
+ 		for (ret = 0; ret < 0x18; ret++)
+-			ax->reg_offsets[ret] = (mem_size / 0x18) * ret;
++			ax->reg_offsets[ret] = _mem_size * ret;
+ 	}
+ 
+ 	if (!request_mem_region(mem->start, mem_size, pdev->name)) {
 diff -NurpX linux-3.7.1-pax/Documentation/dontdiff linux-3.7.1/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.h linux-3.7.1-pax/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.h
 --- linux-3.7.1/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.1-pax/drivers/net/ethernet/broadcom/bnx2x/bnx2x_sp.h	2012-12-11 12:26:07.759203561 +0100
