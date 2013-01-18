@@ -1,4 +1,5 @@
-- forward port to 3.7.3
+- fixed some fallout from the last constification changes
+- reverted the native_set_pgd_batched change as the underlying problem is somewhere else
 
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/alpha/include/asm/atomic.h linux-3.7.3-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.3/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -10398,7 +10399,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/include/
  /*
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/include/asm/pgtable_64.h linux-3.7.3-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-3.7.3/arch/x86/include/asm/pgtable_64.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.3-pax/arch/x86/include/asm/pgtable_64.h	2013-01-15 20:43:18.479210574 +0100
++++ linux-3.7.3-pax/arch/x86/include/asm/pgtable_64.h	2013-01-18 02:08:23.399609112 +0100
 @@ -16,10 +16,14 @@
  
  extern pud_t level3_kernel_pgt[512];
@@ -10436,23 +10437,20 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/include/
  }
  
  static inline void native_pud_clear(pud_t *pud)
-@@ -107,7 +115,16 @@ static inline void native_pud_clear(pud_
+@@ -107,6 +115,13 @@ static inline void native_pud_clear(pud_
  
  static inline void native_set_pgd(pgd_t *pgdp, pgd_t pgd)
  {
 +	pax_open_kernel();
- 	*pgdp = pgd;
++	*pgdp = pgd;
 +	pax_close_kernel();
 +}
 +
 +static inline void native_set_pgd_batched(pgd_t *pgdp, pgd_t pgd)
 +{
-+	pax_open_kernel();
-+	*pgdp = pgd;
-+	pax_close_kernel();
+ 	*pgdp = pgd;
  }
  
- static inline void native_pgd_clear(pgd_t *pgd)
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/include/asm/pgtable_64_types.h linux-3.7.3-pax/arch/x86/include/asm/pgtable_64_types.h
 --- linux-3.7.3/arch/x86/include/asm/pgtable_64_types.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.3-pax/arch/x86/include/asm/pgtable_64_types.h	2012-12-11 12:26:07.119204189 +0100
@@ -12792,6 +12790,32 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/kernel/a
  
  		eoi_ioapic_irq(irq, cfg);
  	}
+diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/kernel/apic/numaq_32.c linux-3.7.3-pax/arch/x86/kernel/apic/numaq_32.c
+--- linux-3.7.3/arch/x86/kernel/apic/numaq_32.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.3-pax/arch/x86/kernel/apic/numaq_32.c	2013-01-18 01:30:00.115722812 +0100
+@@ -257,14 +257,14 @@ static __init void early_check_numaq(voi
+ 		early_get_smp_config();
+ 
+ 	if (found_numaq) {
+-		x86_init.mpparse.mpc_record = numaq_mpc_record;
+-		x86_init.mpparse.setup_ioapic_ids = x86_init_noop;
+-		x86_init.mpparse.mpc_apic_id = mpc_apic_id;
+-		x86_init.mpparse.smp_read_mpc_oem = smp_read_mpc_oem;
+-		x86_init.mpparse.mpc_oem_pci_bus = mpc_oem_pci_bus;
+-		x86_init.mpparse.mpc_oem_bus_info = mpc_oem_bus_info;
+-		x86_init.timers.tsc_pre_init = numaq_tsc_init;
+-		x86_init.pci.init = pci_numaq_init;
++		*(void **)&x86_init.mpparse.mpc_record = numaq_mpc_record;
++		*(void **)&x86_init.mpparse.setup_ioapic_ids = x86_init_noop;
++		*(void **)&x86_init.mpparse.mpc_apic_id = mpc_apic_id;
++		*(void **)&x86_init.mpparse.smp_read_mpc_oem = smp_read_mpc_oem;
++		*(void **)&x86_init.mpparse.mpc_oem_pci_bus = mpc_oem_pci_bus;
++		*(void **)&x86_init.mpparse.mpc_oem_bus_info = mpc_oem_bus_info;
++		*(void **)&x86_init.timers.tsc_pre_init = numaq_tsc_init;
++		*(void **)&x86_init.pci.init = pci_numaq_init;
+ 	}
+ }
+ 
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/kernel/apic/x2apic_uv_x.c linux-3.7.3-pax/arch/x86/kernel/apic/x2apic_uv_x.c
 --- linux-3.7.3/arch/x86/kernel/apic/x2apic_uv_x.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.3-pax/arch/x86/kernel/apic/x2apic_uv_x.c	2013-01-15 22:37:00.175052934 +0100
@@ -15713,8 +15737,8 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/kernel/f
  
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/kernel/head32.c linux-3.7.3-pax/arch/x86/kernel/head32.c
 --- linux-3.7.3/arch/x86/kernel/head32.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.3-pax/arch/x86/kernel/head32.c	2012-12-11 12:26:07.155203405 +0100
-@@ -18,6 +18,7 @@
++++ linux-3.7.3-pax/arch/x86/kernel/head32.c	2013-01-18 01:17:38.811759406 +0100
+@@ -18,20 +18,20 @@
  #include <asm/io_apic.h>
  #include <asm/bios_ebda.h>
  #include <asm/tlbflush.h>
@@ -15722,7 +15746,14 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/kernel/h
  
  static void __init i386_default_early_setup(void)
  {
-@@ -30,8 +31,7 @@ static void __init i386_default_early_se
+ 	/* Initialize 32bit specific setup functions */
+-	x86_init.resources.reserve_resources = i386_reserve_resources;
+-	x86_init.mpparse.setup_ioapic_ids = setup_ioapic_ids_from_mpc;
++	*(void **)&x86_init.resources.reserve_resources = i386_reserve_resources;
++	*(void **)&x86_init.mpparse.setup_ioapic_ids = setup_ioapic_ids_from_mpc;
+ 
+ 	reserve_ebda_region();
+ }
  
  void __init i386_start_kernel(void)
  {
@@ -19592,7 +19623,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/kvm/x86.
  	struct kvm_x86_ops *ops = (struct kvm_x86_ops *)opaque;
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/lguest/boot.c linux-3.7.3-pax/arch/x86/lguest/boot.c
 --- linux-3.7.3/arch/x86/lguest/boot.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.3-pax/arch/x86/lguest/boot.c	2012-12-11 12:26:07.219203432 +0100
++++ linux-3.7.3-pax/arch/x86/lguest/boot.c	2013-01-18 01:27:46.903729388 +0100
 @@ -1116,12 +1116,12 @@ static u32 lguest_apic_safe_wait_icr_idl
  
  static void set_lguest_basic_apic_ops(void)
@@ -19624,6 +19655,81 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/lguest/b
  }
  
  /*G:050
+@@ -1292,28 +1293,28 @@ __init void lguest_init(void)
+ 	pv_irq_ops.safe_halt = lguest_safe_halt;
+ 
+ 	/* Setup operations */
+-	pv_init_ops.patch = lguest_patch;
++	*(void **)&pv_init_ops.patch = lguest_patch;
+ 
+ 	/* Intercepts of various CPU instructions */
+-	pv_cpu_ops.load_gdt = lguest_load_gdt;
+-	pv_cpu_ops.cpuid = lguest_cpuid;
+-	pv_cpu_ops.load_idt = lguest_load_idt;
+-	pv_cpu_ops.iret = lguest_iret;
+-	pv_cpu_ops.load_sp0 = lguest_load_sp0;
+-	pv_cpu_ops.load_tr_desc = lguest_load_tr_desc;
+-	pv_cpu_ops.set_ldt = lguest_set_ldt;
+-	pv_cpu_ops.load_tls = lguest_load_tls;
+-	pv_cpu_ops.set_debugreg = lguest_set_debugreg;
+-	pv_cpu_ops.clts = lguest_clts;
+-	pv_cpu_ops.read_cr0 = lguest_read_cr0;
+-	pv_cpu_ops.write_cr0 = lguest_write_cr0;
+-	pv_cpu_ops.read_cr4 = lguest_read_cr4;
+-	pv_cpu_ops.write_cr4 = lguest_write_cr4;
+-	pv_cpu_ops.write_gdt_entry = lguest_write_gdt_entry;
+-	pv_cpu_ops.write_idt_entry = lguest_write_idt_entry;
+-	pv_cpu_ops.wbinvd = lguest_wbinvd;
+-	pv_cpu_ops.start_context_switch = paravirt_start_context_switch;
+-	pv_cpu_ops.end_context_switch = lguest_end_context_switch;
++	*(void **)&pv_cpu_ops.load_gdt = lguest_load_gdt;
++	*(void **)&pv_cpu_ops.cpuid = lguest_cpuid;
++	*(void **)&pv_cpu_ops.load_idt = lguest_load_idt;
++	*(void **)&pv_cpu_ops.iret = lguest_iret;
++	*(void **)&pv_cpu_ops.load_sp0 = lguest_load_sp0;
++	*(void **)&pv_cpu_ops.load_tr_desc = lguest_load_tr_desc;
++	*(void **)&pv_cpu_ops.set_ldt = lguest_set_ldt;
++	*(void **)&pv_cpu_ops.load_tls = lguest_load_tls;
++	*(void **)&pv_cpu_ops.set_debugreg = lguest_set_debugreg;
++	*(void **)&pv_cpu_ops.clts = lguest_clts;
++	*(void **)&pv_cpu_ops.read_cr0 = lguest_read_cr0;
++	*(void **)&pv_cpu_ops.write_cr0 = lguest_write_cr0;
++	*(void **)&pv_cpu_ops.read_cr4 = lguest_read_cr4;
++	*(void **)&pv_cpu_ops.write_cr4 = lguest_write_cr4;
++	*(void **)&pv_cpu_ops.write_gdt_entry = lguest_write_gdt_entry;
++	*(void **)&pv_cpu_ops.write_idt_entry = lguest_write_idt_entry;
++	*(void **)&pv_cpu_ops.wbinvd = lguest_wbinvd;
++	*(void **)&pv_cpu_ops.start_context_switch = paravirt_start_context_switch;
++	*(void **)&pv_cpu_ops.end_context_switch = lguest_end_context_switch;
+ 
+ 	/* Pagetable management */
+ 	pv_mmu_ops.write_cr3 = lguest_write_cr3;
+@@ -1341,11 +1342,11 @@ __init void lguest_init(void)
+ 	set_lguest_basic_apic_ops();
+ #endif
+ 
+-	x86_init.resources.memory_setup = lguest_memory_setup;
+-	x86_init.irqs.intr_init = lguest_init_IRQ;
+-	x86_init.timers.timer_init = lguest_time_init;
+-	x86_platform.calibrate_tsc = lguest_tsc_khz;
+-	x86_platform.get_wallclock =  lguest_get_wallclock;
++	*(void **)&x86_init.resources.memory_setup = lguest_memory_setup;
++	*(void **)&x86_init.irqs.intr_init = lguest_init_IRQ;
++	*(void **)&x86_init.timers.timer_init = lguest_time_init;
++	*(void **)&x86_platform.calibrate_tsc = lguest_tsc_khz;
++	*(void **)&x86_platform.get_wallclock =  lguest_get_wallclock;
+ 
+ 	/*
+ 	 * Now is a good time to look at the implementations of these functions
+@@ -1434,7 +1435,7 @@ __init void lguest_init(void)
+ 	 * routine.
+ 	 */
+ 	pm_power_off = lguest_power_off;
+-	machine_ops.restart = lguest_restart;
++	*(void **)&machine_ops.restart = lguest_restart;
+ 
+ 	/*
+ 	 * Now we're set up, call i386_start_kernel() in head32.c and we proceed
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/lib/atomic64_386_32.S linux-3.7.3-pax/arch/x86/lib/atomic64_386_32.S
 --- linux-3.7.3/arch/x86/lib/atomic64_386_32.S	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.3-pax/arch/x86/lib/atomic64_386_32.S	2012-12-11 12:26:07.219203432 +0100
@@ -25465,6 +25571,20 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform
  	gdt_descr.address = (unsigned long)get_cpu_gdt_table(0);
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
+diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform/efi/efi.c linux-3.7.3-pax/arch/x86/platform/efi/efi.c
+--- linux-3.7.3/arch/x86/platform/efi/efi.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.3-pax/arch/x86/platform/efi/efi.c	2013-01-18 01:18:51.703755808 +0100
+@@ -738,8 +738,8 @@ void __init efi_init(void)
+ 	}
+ #ifdef CONFIG_X86_32
+ 	if (efi_is_native()) {
+-		x86_platform.get_wallclock = efi_get_time;
+-		x86_platform.set_wallclock = efi_set_rtc_mmss;
++		*(void **)&x86_platform.get_wallclock = efi_get_time;
++		*(void **)&x86_platform.set_wallclock = efi_set_rtc_mmss;
+ 	}
+ #endif
+ 
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform/efi/efi_stub_32.S linux-3.7.3-pax/arch/x86/platform/efi/efi_stub_32.S
 --- linux-3.7.3/arch/x86/platform/efi/efi_stub_32.S	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.3-pax/arch/x86/platform/efi/efi_stub_32.S	2012-12-11 12:26:07.263203444 +0100
@@ -25661,7 +25781,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform
  ENDPROC(efi_call6)
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform/mrst/mrst.c linux-3.7.3-pax/arch/x86/platform/mrst/mrst.c
 --- linux-3.7.3/arch/x86/platform/mrst/mrst.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.3-pax/arch/x86/platform/mrst/mrst.c	2012-12-11 12:26:07.267203445 +0100
++++ linux-3.7.3-pax/arch/x86/platform/mrst/mrst.c	2013-01-18 01:29:42.631723675 +0100
 @@ -78,13 +78,15 @@ struct sfi_rtc_table_entry sfi_mrtc_arra
  EXPORT_SYMBOL_GPL(sfi_mrtc_array);
  int sfi_mrtc_num;
@@ -25680,6 +25800,103 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform
  }
  
  /* parse all the mtimer info to a static mtimer array */
+@@ -233,14 +235,14 @@ static void __init mrst_time_init(void)
+ 	case MRST_TIMER_APBT_ONLY:
+ 		break;
+ 	case MRST_TIMER_LAPIC_APBT:
+-		x86_init.timers.setup_percpu_clockev = setup_boot_APIC_clock;
+-		x86_cpuinit.setup_percpu_clockev = setup_secondary_APIC_clock;
++		*(void **)&x86_init.timers.setup_percpu_clockev = setup_boot_APIC_clock;
++		*(void **)&x86_cpuinit.setup_percpu_clockev = setup_secondary_APIC_clock;
+ 		break;
+ 	default:
+ 		if (!boot_cpu_has(X86_FEATURE_ARAT))
+ 			break;
+-		x86_init.timers.setup_percpu_clockev = setup_boot_APIC_clock;
+-		x86_cpuinit.setup_percpu_clockev = setup_secondary_APIC_clock;
++		*(void **)&x86_init.timers.setup_percpu_clockev = setup_boot_APIC_clock;
++		*(void **)&x86_cpuinit.setup_percpu_clockev = setup_secondary_APIC_clock;
+ 		return;
+ 	}
+ 	/* we need at least one APB timer */
+@@ -282,35 +284,35 @@ static unsigned char mrst_get_nmi_reason
+  */
+ void __init x86_mrst_early_setup(void)
+ {
+-	x86_init.resources.probe_roms = x86_init_noop;
+-	x86_init.resources.reserve_resources = x86_init_noop;
++	*(void **)&x86_init.resources.probe_roms = x86_init_noop;
++	*(void **)&x86_init.resources.reserve_resources = x86_init_noop;
+ 
+-	x86_init.timers.timer_init = mrst_time_init;
+-	x86_init.timers.setup_percpu_clockev = x86_init_noop;
++	*(void **)&x86_init.timers.timer_init = mrst_time_init;
++	*(void **)&x86_init.timers.setup_percpu_clockev = x86_init_noop;
+ 
+-	x86_init.irqs.pre_vector_init = x86_init_noop;
++	*(void **)&x86_init.irqs.pre_vector_init = x86_init_noop;
+ 
+-	x86_init.oem.arch_setup = mrst_arch_setup;
++	*(void **)&x86_init.oem.arch_setup = mrst_arch_setup;
+ 
+-	x86_cpuinit.setup_percpu_clockev = apbt_setup_secondary_clock;
++	*(void **)&x86_cpuinit.setup_percpu_clockev = apbt_setup_secondary_clock;
+ 
+-	x86_platform.calibrate_tsc = mrst_calibrate_tsc;
+-	x86_platform.i8042_detect = mrst_i8042_detect;
+-	x86_init.timers.wallclock_init = mrst_rtc_init;
+-	x86_platform.get_nmi_reason = mrst_get_nmi_reason;
++	*(void **)&x86_platform.calibrate_tsc = mrst_calibrate_tsc;
++	*(void **)&x86_platform.i8042_detect = mrst_i8042_detect;
++	*(void **)&x86_init.timers.wallclock_init = mrst_rtc_init;
++	*(void **)&x86_platform.get_nmi_reason = mrst_get_nmi_reason;
+ 
+-	x86_init.pci.init = pci_mrst_init;
+-	x86_init.pci.fixup_irqs = x86_init_noop;
++	*(void **)&x86_init.pci.init = pci_mrst_init;
++	*(void **)&x86_init.pci.fixup_irqs = x86_init_noop;
+ 
+ 	legacy_pic = &null_legacy_pic;
+ 
+ 	/* Moorestown specific power_off/restart method */
+ 	pm_power_off = mrst_power_off;
+-	machine_ops.emergency_restart  = mrst_reboot;
++	*(void **)&machine_ops.emergency_restart  = mrst_reboot;
+ 
+ 	/* Avoid searching for BIOS MP tables */
+-	x86_init.mpparse.find_smp_config = x86_init_noop;
+-	x86_init.mpparse.get_smp_config = x86_init_uint_noop;
++	*(void **)&x86_init.mpparse.find_smp_config = x86_init_noop;
++	*(void **)&x86_init.mpparse.get_smp_config = x86_init_uint_noop;
+ 	set_bit(MP_BUS_ISA, mp_bus_not_pci);
+ }
+ 
+diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform/mrst/vrtc.c linux-3.7.3-pax/arch/x86/platform/mrst/vrtc.c
+--- linux-3.7.3/arch/x86/platform/mrst/vrtc.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.3-pax/arch/x86/platform/mrst/vrtc.c	2013-01-18 01:27:44.899729487 +0100
+@@ -120,8 +120,8 @@ void __init mrst_rtc_init(void)
+ 
+ 	vrtc_virt_base = (void __iomem *)set_fixmap_offset_nocache(FIX_LNW_VRTC,
+ 								vrtc_paddr);
+-	x86_platform.get_wallclock = vrtc_get_time;
+-	x86_platform.set_wallclock = vrtc_set_mmss;
++	*(void **)&x86_platform.get_wallclock = vrtc_get_time;
++	*(void **)&x86_platform.set_wallclock = vrtc_set_mmss;
+ }
+ 
+ /*
+diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform/olpc/olpc.c linux-3.7.3-pax/arch/x86/platform/olpc/olpc.c
+--- linux-3.7.3/arch/x86/platform/olpc/olpc.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.3-pax/arch/x86/platform/olpc/olpc.c	2013-01-18 01:28:15.303727986 +0100
+@@ -395,7 +395,7 @@ static int __init olpc_init(void)
+ 	 * XO-1 only. */
+ 	if (olpc_platform_info.boardrev < olpc_board_pre(0xd0) &&
+ 			!cs5535_has_vsa2())
+-		x86_init.pci.arch_init = pci_olpc_init;
++		*(void **)&x86_init.pci.arch_init = pci_olpc_init;
+ #endif
+ 
+ 	if (olpc_platform_info.boardrev < olpc_board_pre(0xd0)) { /* XO-1 */
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/platform/olpc/olpc_dt.c linux-3.7.3-pax/arch/x86/platform/olpc/olpc_dt.c
 --- linux-3.7.3/arch/x86/platform/olpc/olpc_dt.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.3-pax/arch/x86/platform/olpc/olpc_dt.c	2013-01-15 14:50:13.975700121 +0100
