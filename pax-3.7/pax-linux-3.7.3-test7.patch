@@ -1,5 +1,5 @@
-- fixed some fallout from the last constification changes
-- reverted the native_set_pgd_batched change as the underlying problem is somewhere else
+- fixed some more constification fallout (e.g., https://bugs.gentoo.org/show_bug.cgi?id=453216)
+- fixed a pointless alloca in Xen that interfered with STACKLEAK
 
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/alpha/include/asm/atomic.h linux-3.7.3-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.3/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -1342,6 +1342,18 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/arm/include/
  	if (access_ok(VERIFY_WRITE, to, n))
  		n = __copy_to_user(to, from, n);
  	return n;
+diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/arm/include/uapi/asm/ptrace.h linux-3.7.3-pax/arch/arm/include/uapi/asm/ptrace.h
+--- linux-3.7.3/arch/arm/include/uapi/asm/ptrace.h	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.3-pax/arch/arm/include/uapi/asm/ptrace.h	2013-01-21 02:39:14.066407499 +0100
+@@ -73,7 +73,7 @@
+  * ARMv7 groups of PSR bits
+  */
+ #define APSR_MASK	0xf80f0000	/* N, Z, C, V, Q and GE flags */
+-#define PSR_ISET_MASK	0x01000010	/* ISA state (J, T) mask */
++#define PSR_ISET_MASK	0x01000020	/* ISA state (J, T) mask */
+ #define PSR_IT_MASK	0x0600fc00	/* If-Then execution state mask */
+ #define PSR_ENDIAN_MASK	0x00000200	/* Endianness state mask */
+ 
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/arm/kernel/armksyms.c linux-3.7.3-pax/arch/arm/kernel/armksyms.c
 --- linux-3.7.3/arch/arm/kernel/armksyms.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.3-pax/arch/arm/kernel/armksyms.c	2012-12-11 12:26:06.991220071 +0100
@@ -1449,7 +1461,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/arm/kernel/p
   * The vectors page is always readable from user space for the
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/arm/kernel/setup.c linux-3.7.3-pax/arch/arm/kernel/setup.c
 --- linux-3.7.3/arch/arm/kernel/setup.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.3-pax/arch/arm/kernel/setup.c	2013-01-02 22:31:52.185652430 +0100
++++ linux-3.7.3-pax/arch/arm/kernel/setup.c	2013-01-20 19:49:38.361072727 +0100
 @@ -99,19 +99,19 @@ EXPORT_SYMBOL(elf_hwcap);
  
  
@@ -1475,6 +1487,15 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/arm/kernel/s
  EXPORT_SYMBOL(outer_cache);
  #endif
  
+@@ -455,7 +455,7 @@ static void __init setup_processor(void)
+ 	__cpu_architecture = __get_cpu_architecture();
+ 
+ #ifdef MULTI_CPU
+-	processor = *list->proc;
++	memcpy((void *)&processor, list->proc, sizeof processor);
+ #endif
+ #ifdef MULTI_TLB
+ 	cpu_tlb = *list->tlb;
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/arm/kernel/smp.c linux-3.7.3-pax/arch/arm/kernel/smp.c
 --- linux-3.7.3/arch/arm/kernel/smp.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.3-pax/arch/arm/kernel/smp.c	2013-01-02 19:32:20.450227557 +0100
@@ -26420,7 +26441,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/xen/apic
  }
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/xen/enlighten.c linux-3.7.3-pax/arch/x86/xen/enlighten.c
 --- linux-3.7.3/arch/x86/xen/enlighten.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.3-pax/arch/x86/xen/enlighten.c	2013-01-15 23:27:24.766983039 +0100
++++ linux-3.7.3-pax/arch/x86/xen/enlighten.c	2013-01-18 22:13:09.178226047 +0100
 @@ -99,8 +99,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -26430,6 +26451,15 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/arch/x86/xen/enli
  RESERVE_BRK(shared_info_page_brk, PAGE_SIZE);
  __read_mostly int xen_have_vector_callback;
  EXPORT_SYMBOL_GPL(xen_have_vector_callback);
+@@ -523,7 +521,7 @@ static void __init xen_load_gdt_boot(con
+ 	unsigned long va = dtr->address;
+ 	unsigned int size = dtr->size + 1;
+ 	unsigned pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+-	unsigned long frames[pages];
++	unsigned long frames[65536 / PAGE_SIZE];
+ 	int f;
+ 
+ 	/*
 @@ -918,21 +916,21 @@ static u32 xen_safe_apic_wait_icr_idle(v
  
  static void set_xen_basic_apic_ops(void)
@@ -35587,7 +35617,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/drivers/scsi/scsi
  	if (disposition != SUCCESS &&
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/drivers/scsi/scsi_sysfs.c linux-3.7.3-pax/drivers/scsi/scsi_sysfs.c
 --- linux-3.7.3/drivers/scsi/scsi_sysfs.c	2013-01-18 00:41:37.511866098 +0100
-+++ linux-3.7.3-pax/drivers/scsi/scsi_sysfs.c	2013-01-18 00:41:44.147865770 +0100
++++ linux-3.7.3-pax/drivers/scsi/scsi_sysfs.c	2013-01-19 21:29:57.801877393 +0100
 @@ -658,7 +658,7 @@ show_iostat_##field(struct device *dev,
  		    char *buf)						\
  {									\
@@ -51118,7 +51148,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/kernel/trace/trac
  	entry	= ring_buffer_event_data(event);
 diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/kernel/trace/trace_output.c linux-3.7.3-pax/kernel/trace/trace_output.c
 --- linux-3.7.3/kernel/trace/trace_output.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.3-pax/kernel/trace/trace_output.c	2013-01-15 23:33:49.358974152 +0100
++++ linux-3.7.3-pax/kernel/trace/trace_output.c	2013-01-21 02:23:39.290356729 +0100
 @@ -278,7 +278,7 @@ int trace_seq_path(struct trace_seq *s,
  
  	p = d_path(path, s->buffer + s->len, PAGE_SIZE - s->len);
@@ -51128,9 +51158,11 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/kernel/trace/trac
  		if (p) {
  			s->len = p - s->buffer;
  			return 1;
-@@ -825,13 +825,13 @@ int register_ftrace_event(struct trace_e
+@@ -824,14 +824,16 @@ int register_ftrace_event(struct trace_e
+ 			goto out;
  	}
  
++	pax_open_kernel();
  	if (event->funcs->trace == NULL)
 -		event->funcs->trace = trace_nop_print;
 +		*(void **)&event->funcs->trace = trace_nop_print;
@@ -51143,6 +51175,7 @@ diff -NurpX linux-3.7.3-pax/Documentation/dontdiff linux-3.7.3/kernel/trace/trac
  	if (event->funcs->binary == NULL)
 -		event->funcs->binary = trace_nop_print;
 +		*(void **)&event->funcs->binary = trace_nop_print;
++	pax_close_kernel();
  
  	key = event->type & (EVENT_HASHSIZE - 1);
  
