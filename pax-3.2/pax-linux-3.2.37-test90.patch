@@ -1,4 +1,5 @@
-- reverted the native_set_pgd_batched change as the underlying problem is somewhere else
+- fixed some more constification fallout (e.g., https://bugs.gentoo.org/show_bug.cgi?id=453216)
+- fixed a pointless alloca in Xen that interfered with STACKLEAK
 
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/alpha/include/asm/atomic.h linux-3.2.37-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.37/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -990,6 +991,18 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/arm/includ
  
  #ifdef MULTI_USER
  extern struct cpu_user_fns cpu_user;
+diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/arm/include/asm/ptrace.h linux-3.2.37-pax/arch/arm/include/asm/ptrace.h
+--- linux-3.2.37/arch/arm/include/asm/ptrace.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.37-pax/arch/arm/include/asm/ptrace.h	2013-01-22 12:36:49.385509715 +0100
+@@ -72,7 +72,7 @@
+  * ARMv7 groups of PSR bits
+  */
+ #define APSR_MASK	0xf80f0000	/* N, Z, C, V, Q and GE flags */
+-#define PSR_ISET_MASK	0x01000010	/* ISA state (J, T) mask */
++#define PSR_ISET_MASK	0x01000020	/* ISA state (J, T) mask */
+ #define PSR_IT_MASK	0x0600fc00	/* If-Then execution state mask */
+ #define PSR_ENDIAN_MASK	0x00000200	/* Endianness state mask */
+ 
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/arm/include/asm/system.h linux-3.2.37-pax/arch/arm/include/asm/system.h
 --- linux-3.2.37/arch/arm/include/asm/system.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.37-pax/arch/arm/include/asm/system.h	2012-07-04 19:24:47.364063058 +0200
@@ -25620,7 +25633,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/vdso/v
 -__setup("vdso=", vdso_setup);
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/enlighten.c linux-3.2.37-pax/arch/x86/xen/enlighten.c
 --- linux-3.2.37/arch/x86/xen/enlighten.c	2012-10-31 13:04:03.475702835 +0100
-+++ linux-3.2.37-pax/arch/x86/xen/enlighten.c	2013-01-16 22:54:23.538715884 +0100
++++ linux-3.2.37-pax/arch/x86/xen/enlighten.c	2013-01-23 01:40:26.458999367 +0100
 @@ -86,8 +86,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -25630,7 +25643,27 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  RESERVE_BRK(shared_info_page_brk, PAGE_SIZE);
  __read_mostly int xen_have_vector_callback;
  EXPORT_SYMBOL_GPL(xen_have_vector_callback);
-@@ -761,12 +759,12 @@ static u32 xen_safe_apic_wait_icr_idle(v
+@@ -367,8 +365,7 @@ static void xen_load_gdt(const struct de
+ {
+ 	unsigned long va = dtr->address;
+ 	unsigned int size = dtr->size + 1;
+-	unsigned pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+-	unsigned long frames[pages];
++	unsigned long frames[65536 / PAGE_SIZE];
+ 	int f;
+ 
+ 	/*
+@@ -416,8 +413,7 @@ static void __init xen_load_gdt_boot(con
+ {
+ 	unsigned long va = dtr->address;
+ 	unsigned int size = dtr->size + 1;
+-	unsigned pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
+-	unsigned long frames[pages];
++	unsigned long frames[65536 / PAGE_SIZE];
+ 	int f;
+ 
+ 	/*
+@@ -761,12 +757,12 @@ static u32 xen_safe_apic_wait_icr_idle(v
  
  static void set_xen_basic_apic_ops(void)
  {
@@ -25649,7 +25682,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  }
  
  #endif
-@@ -1057,7 +1055,7 @@ static const struct pv_apic_ops xen_apic
+@@ -1057,7 +1053,7 @@ static const struct pv_apic_ops xen_apic
  #endif
  };
  
@@ -25658,7 +25691,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  {
  	struct sched_shutdown r = { .reason = reason };
  
-@@ -1065,17 +1063,17 @@ static void xen_reboot(int reason)
+@@ -1065,17 +1061,17 @@ static void xen_reboot(int reason)
  		BUG();
  }
  
@@ -25679,7 +25712,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  {
  	xen_reboot(SHUTDOWN_poweroff);
  }
-@@ -1125,14 +1123,14 @@ static const struct machine_ops xen_mach
+@@ -1125,14 +1121,14 @@ static const struct machine_ops xen_mach
   */
  static void __init xen_setup_stackprotector(void)
  {
@@ -25698,7 +25731,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  }
  
  /* First C function to be called on Xen boot */
-@@ -1151,13 +1149,13 @@ asmlinkage void __init xen_start_kernel(
+@@ -1151,13 +1147,13 @@ asmlinkage void __init xen_start_kernel(
  
  	/* Install Xen paravirt ops */
  	pv_info = xen_info;
@@ -25719,7 +25752,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  
  	xen_init_time_ops();
  
-@@ -1181,7 +1179,17 @@ asmlinkage void __init xen_start_kernel(
+@@ -1181,7 +1177,17 @@ asmlinkage void __init xen_start_kernel(
  	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
  
  	/* Work out if we support NX */
@@ -25738,7 +25771,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  
  	xen_setup_features();
  
-@@ -1210,14 +1218,7 @@ asmlinkage void __init xen_start_kernel(
+@@ -1210,14 +1216,7 @@ asmlinkage void __init xen_start_kernel(
  		pv_mmu_ops.ptep_modify_prot_commit = xen_ptep_modify_prot_commit;
  	}
  
@@ -25754,7 +25787,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  
  	xen_smp_init();
  
-@@ -1293,7 +1294,7 @@ asmlinkage void __init xen_start_kernel(
+@@ -1293,7 +1292,7 @@ asmlinkage void __init xen_start_kernel(
  		add_preferred_console("tty", 0, NULL);
  		add_preferred_console("hvc", 0, NULL);
  		if (pci_xen)
@@ -25763,7 +25796,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  	} else {
  		const struct dom0_vga_console_info *info =
  			(void *)((char *)xen_start_info +
-@@ -1307,8 +1308,8 @@ asmlinkage void __init xen_start_kernel(
+@@ -1307,8 +1306,8 @@ asmlinkage void __init xen_start_kernel(
  		pci_request_acs();
  
  		/* Avoid searching for BIOS MP tables */
@@ -25774,7 +25807,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/xen/en
  	}
  #ifdef CONFIG_PCI
  	/* PCI BIOS service won't work from a PV guest. */
-@@ -1420,7 +1421,7 @@ static void __init xen_hvm_guest_init(vo
+@@ -1420,7 +1419,7 @@ static void __init xen_hvm_guest_init(vo
  	xen_hvm_smp_init();
  	register_cpu_notifier(&xen_hvm_cpu_notifier);
  	xen_unplug_emulated_devices();
@@ -50628,7 +50661,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/kernel/trace/tr
  	entry	= ring_buffer_event_data(event);
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/kernel/trace/trace_output.c linux-3.2.37-pax/kernel/trace/trace_output.c
 --- linux-3.2.37/kernel/trace/trace_output.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.37-pax/kernel/trace/trace_output.c	2013-01-16 21:26:55.346837163 +0100
++++ linux-3.2.37-pax/kernel/trace/trace_output.c	2013-01-22 12:36:20.269511269 +0100
 @@ -278,7 +278,7 @@ int trace_seq_path(struct trace_seq *s,
  
  	p = d_path(path, s->buffer + s->len, PAGE_SIZE - s->len);
@@ -50638,9 +50671,11 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/kernel/trace/tr
  		if (p) {
  			s->len = p - s->buffer;
  			return 1;
-@@ -811,13 +811,13 @@ int register_ftrace_event(struct trace_e
+@@ -810,14 +810,16 @@ int register_ftrace_event(struct trace_e
+ 			goto out;
  	}
  
++	pax_open_kernel();
  	if (event->funcs->trace == NULL)
 -		event->funcs->trace = trace_nop_print;
 +		*(void **)&event->funcs->trace = trace_nop_print;
@@ -50653,6 +50688,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/kernel/trace/tr
  	if (event->funcs->binary == NULL)
 -		event->funcs->binary = trace_nop_print;
 +		*(void **)&event->funcs->binary = trace_nop_print;
++	pax_close_kernel();
  
  	key = event->type & (EVENT_HASHSIZE - 1);
  
