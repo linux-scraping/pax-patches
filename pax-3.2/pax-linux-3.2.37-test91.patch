@@ -1,5 +1,7 @@
-- fixed some more constification fallout (e.g., https://bugs.gentoo.org/show_bug.cgi?id=453216)
-- fixed a pointless alloca in Xen that interfered with STACKLEAK
+- mips got more heap-stack gap enforcement
+- added countermeasure against attacks that reduce ASLR by exhausting the address space on 32 bit userland
+  see kingcope's post for the windows version
+  http://kingcope.wordpress.com/2013/01/24/attacking-the-windows-78-address-space-randomization/
 
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/alpha/include/asm/atomic.h linux-3.2.37-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.37/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -2168,7 +2170,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/mips/mm/fa
   * and the problem, and then passes it off to one of the appropriate
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/mips/mm/mmap.c linux-3.2.37-pax/arch/mips/mm/mmap.c
 --- linux-3.2.37/arch/mips/mm/mmap.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.37-pax/arch/mips/mm/mmap.c	2012-07-04 19:24:47.392062922 +0200
++++ linux-3.2.37-pax/arch/mips/mm/mmap.c	2013-01-28 18:24:02.403693961 +0100
 @@ -95,6 +95,11 @@ static unsigned long arch_get_unmapped_a
  		do_color_align = 1;
  
@@ -2209,7 +2211,19 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/mips/mm/mm
  				/* cache the address as a hint for next time */
  				return mm->free_area_cache = addr - len;
  			}
-@@ -165,7 +169,7 @@ static unsigned long arch_get_unmapped_a
+@@ -155,17 +159,17 @@ static unsigned long arch_get_unmapped_a
+ 			goto bottomup;
+ 
+ 		addr = mm->mmap_base - len;
+-		if (do_color_align)
+-			addr = COLOUR_ALIGN_DOWN(addr, pgoff);
+ 
+ 		do {
++			if (do_color_align)
++				addr = COLOUR_ALIGN_DOWN(addr, pgoff);
+ 			/*
+ 			 * Lookup failure means no vma is above this address,
+ 			 * else if new region fits below vma->vm_start,
  			 * return with success:
  			 */
  			vma = find_vma(mm, addr);
@@ -2218,7 +2232,20 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/mips/mm/mm
  				/* cache the address as a hint for next time */
  				return mm->free_area_cache = addr;
  			}
-@@ -242,30 +246,3 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -175,10 +179,8 @@ static unsigned long arch_get_unmapped_a
+ 				mm->cached_hole_size = vma->vm_start - addr;
+ 
+ 			/* try just below the current vma->vm_start */
+-			addr = vma->vm_start - len;
+-			if (do_color_align)
+-				addr = COLOUR_ALIGN_DOWN(addr, pgoff);
+-		} while (likely(len < vma->vm_start));
++			addr = skip_heap_stack_gap(vma, len);
++		} while (!IS_ERR_VALUE(addr));
+ 
+ bottomup:
+ 		/*
+@@ -242,30 +244,3 @@ void arch_pick_mmap_layout(struct mm_str
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
  }
@@ -16983,7 +17010,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/kernel
 +#endif
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/kernel/ptrace.c linux-3.2.37-pax/arch/x86/kernel/ptrace.c
 --- linux-3.2.37/arch/x86/kernel/ptrace.c	2012-12-06 19:03:21.335215616 +0100
-+++ linux-3.2.37-pax/arch/x86/kernel/ptrace.c	2013-01-16 21:26:41.590837481 +0100
++++ linux-3.2.37-pax/arch/x86/kernel/ptrace.c	2013-01-28 18:22:45.379695741 +0100
 @@ -181,14 +181,13 @@ unsigned long kernel_stack_pointer(struc
  {
  	unsigned long context = (unsigned long)regs & ~(THREAD_SIZE - 1);
@@ -17003,6 +17030,15 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/arch/x86/kernel
  
  	return (unsigned long)regs;
  }
+@@ -585,7 +584,7 @@ static void ptrace_triggered(struct perf
+ static unsigned long ptrace_get_dr7(struct perf_event *bp[])
+ {
+ 	int i;
+-	int dr7 = 0;
++	unsigned long dr7 = 0;
+ 	struct arch_hw_breakpoint *info;
+ 
+ 	for (i = 0; i < HBP_NUM; i++) {
 @@ -852,7 +851,7 @@ long arch_ptrace(struct task_struct *chi
  		 unsigned long addr, unsigned long data)
  {
@@ -33395,7 +33431,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/drivers/misc/sg
  extern int xpc_activate_IRQ_rcvd;
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/drivers/misc/sgi-xp/xpc_main.c linux-3.2.37-pax/drivers/misc/sgi-xp/xpc_main.c
 --- linux-3.2.37/drivers/misc/sgi-xp/xpc_main.c	2013-01-03 19:05:13.356036821 +0100
-+++ linux-3.2.37-pax/drivers/misc/sgi-xp/xpc_main.c	2013-01-17 00:50:13.226555286 +0100
++++ linux-3.2.37-pax/drivers/misc/sgi-xp/xpc_main.c	2013-01-28 20:29:15.719520338 +0100
 @@ -166,7 +166,7 @@ static struct notifier_block xpc_die_not
  	.notifier_call = xpc_system_die,
  };
@@ -33405,6 +33441,15 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/drivers/misc/sg
  
  /*
   * Timer function to enforce the timelimit on the partition disengage.
+@@ -1210,7 +1210,7 @@ xpc_system_die(struct notifier_block *nb
+ 
+ 		if (((die_args->trapnr == X86_TRAP_MF) ||
+ 		     (die_args->trapnr == X86_TRAP_XF)) &&
+-		    !user_mode_vm(die_args->regs))
++		    !user_mode(die_args->regs))
+ 			xpc_die_deactivate();
+ 
+ 		break;
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/drivers/misc/sgi-xp/xp.h linux-3.2.37-pax/drivers/misc/sgi-xp/xp.h
 --- linux-3.2.37/drivers/misc/sgi-xp/xp.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.37-pax/drivers/misc/sgi-xp/xp.h	2012-07-04 19:24:48.524063007 +0200
@@ -37835,7 +37880,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/binfmt_elf.c linux-3.2.37-pax/fs/binfmt_elf.c
 --- linux-3.2.37/fs/binfmt_elf.c	2012-10-24 01:05:57.304814639 +0200
-+++ linux-3.2.37-pax/fs/binfmt_elf.c	2012-11-18 15:51:34.827500831 +0100
++++ linux-3.2.37-pax/fs/binfmt_elf.c	2013-01-28 18:24:44.863692980 +0100
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -38300,7 +38345,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/binfmt_elf.c
  	unsigned int random_variable = 0;
  
 +#ifdef CONFIG_PAX_RANDUSTACK
-+	if (randomize_va_space)
++	if (current->mm->pax_flags & MF_PAX_RANDMMAP)
 +		return stack_top - current->mm->delta_stack;
 +#endif
 +
@@ -39459,13 +39504,14 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/ecryptfs/rea
  }
 diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux-3.2.37-pax/fs/exec.c
 --- linux-3.2.37/fs/exec.c	2013-01-03 19:05:14.616036858 +0100
-+++ linux-3.2.37-pax/fs/exec.c	2013-01-16 21:32:15.894829756 +0100
-@@ -55,12 +55,31 @@
++++ linux-3.2.37-pax/fs/exec.c	2013-01-28 20:51:51.091961248 +0100
+@@ -55,12 +55,32 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
  #include <linux/compat.h>
 +#include <linux/random.h>
 +#include <linux/seq_file.h>
++#include <linux/mman.h>
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +#include <linux/kallsyms.h>
@@ -39492,7 +39538,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  unsigned int core_pipe_limit;
-@@ -70,7 +89,7 @@ struct core_name {
+@@ -70,7 +90,7 @@ struct core_name {
  	char *corename;
  	int used, size;
  };
@@ -39501,7 +39547,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  
  /* The maximal length of core_pattern is also specified in sysctl.c */
  
-@@ -188,18 +207,10 @@ static struct page *get_arg_page(struct
+@@ -188,18 +208,10 @@ static struct page *get_arg_page(struct
  		int write)
  {
  	struct page *page;
@@ -39523,7 +39569,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  		return NULL;
  
  	if (write) {
-@@ -274,6 +285,11 @@ static int __bprm_mm_init(struct linux_b
+@@ -274,6 +286,11 @@ static int __bprm_mm_init(struct linux_b
  	vma->vm_end = STACK_TOP_MAX;
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  	vma->vm_flags = VM_STACK_FLAGS | VM_STACK_INCOMPLETE_SETUP;
@@ -39535,7 +39581,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  	INIT_LIST_HEAD(&vma->anon_vma_chain);
  
-@@ -288,6 +304,12 @@ static int __bprm_mm_init(struct linux_b
+@@ -288,6 +305,12 @@ static int __bprm_mm_init(struct linux_b
  	mm->stack_vm = mm->total_vm = 1;
  	up_write(&mm->mmap_sem);
  	bprm->p = vma->vm_end - sizeof(void *);
@@ -39548,7 +39594,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	return 0;
  err:
  	up_write(&mm->mmap_sem);
-@@ -417,14 +439,14 @@ static const char __user *get_user_arg_p
+@@ -417,14 +440,14 @@ static const char __user *get_user_arg_p
  		compat_uptr_t compat;
  
  		if (get_user(compat, argv.ptr.compat + nr))
@@ -39565,7 +39611,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  
  	return native;
  }
-@@ -443,7 +465,7 @@ static int count(struct user_arg_ptr arg
+@@ -443,7 +466,7 @@ static int count(struct user_arg_ptr arg
  			if (!p)
  				break;
  
@@ -39574,7 +39620,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  				return -EFAULT;
  
  			if (i++ >= max)
-@@ -477,7 +499,7 @@ static int copy_strings(int argc, struct
+@@ -477,7 +500,7 @@ static int copy_strings(int argc, struct
  
  		ret = -EFAULT;
  		str = get_user_arg_ptr(argv, argc);
@@ -39583,7 +39629,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  			goto out;
  
  		len = strnlen_user(str, MAX_ARG_STRLEN);
-@@ -559,7 +581,7 @@ int copy_strings_kernel(int argc, const
+@@ -559,7 +582,7 @@ int copy_strings_kernel(int argc, const
  	int r;
  	mm_segment_t oldfs = get_fs();
  	struct user_arg_ptr argv = {
@@ -39592,7 +39638,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	};
  
  	set_fs(KERNEL_DS);
-@@ -594,7 +616,8 @@ static int shift_arg_pages(struct vm_are
+@@ -594,7 +617,8 @@ static int shift_arg_pages(struct vm_are
  	unsigned long new_end = old_end - shift;
  	struct mmu_gather tlb;
  
@@ -39602,7 +39648,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  
  	/*
  	 * ensure there are no vmas between where we want to go
-@@ -603,6 +626,10 @@ static int shift_arg_pages(struct vm_are
+@@ -603,6 +627,10 @@ static int shift_arg_pages(struct vm_are
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -39613,7 +39659,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -683,10 +710,6 @@ int setup_arg_pages(struct linux_binprm
+@@ -683,10 +711,6 @@ int setup_arg_pages(struct linux_binprm
  	stack_top = arch_align_stack(stack_top);
  	stack_top = PAGE_ALIGN(stack_top);
  
@@ -39624,7 +39670,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	stack_shift = vma->vm_end - stack_top;
  
  	bprm->p -= stack_shift;
-@@ -698,8 +721,28 @@ int setup_arg_pages(struct linux_binprm
+@@ -698,8 +722,28 @@ int setup_arg_pages(struct linux_binprm
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -39653,7 +39699,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	/*
  	 * Adjust stack execute permissions; explicitly enable for
  	 * EXSTACK_ENABLE_X, disable for EXSTACK_DISABLE_X and leave alone
-@@ -718,13 +761,6 @@ int setup_arg_pages(struct linux_binprm
+@@ -718,13 +762,6 @@ int setup_arg_pages(struct linux_binprm
  		goto out_unlock;
  	BUG_ON(prev != vma);
  
@@ -39667,7 +39713,35 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	/* mprotect_fixup is overkill to remove the temporary stack flags */
  	vma->vm_flags &= ~VM_STACK_INCOMPLETE_SETUP;
  
-@@ -805,7 +841,7 @@ int kernel_read(struct file *file, loff_
+@@ -748,6 +785,27 @@ int setup_arg_pages(struct linux_binprm
+ #endif
+ 	current->mm->start_stack = bprm->p;
+ 	ret = expand_stack(vma, stack_base);
++
++#if !defined(CONFIG_STACK_GROWSUP) && defined(CONFIG_PAX_ASLR)
++	if (!ret && (mm->pax_flags & MF_PAX_RANDMMAP) && STACK_TOP <= 0xFFFFFFFFU && STACK_TOP > vma->vm_end) {
++		unsigned long size, flags, vm_flags;
++
++		size = STACK_TOP - vma->vm_end;
++		flags = MAP_FIXED | MAP_PRIVATE;
++		vm_flags = VM_DONTEXPAND | VM_RESERVED;
++
++		ret = vma->vm_end != mmap_region(NULL, vma->vm_end, size, flags, vm_flags, 0);
++
++#ifdef CONFIG_X86
++		if (!ret) {
++			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
++			ret = 0 != mmap_region(NULL, 0, size, flags, vm_flags, 0);
++		}
++#endif
++
++	}
++#endif
++
+ 	if (ret)
+ 		ret = -EFAULT;
+ 
+@@ -805,7 +863,7 @@ int kernel_read(struct file *file, loff_
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -39676,7 +39750,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	set_fs(old_fs);
  	return result;
  }
-@@ -1266,7 +1302,7 @@ int check_unsafe_exec(struct linux_binpr
+@@ -1266,7 +1324,7 @@ int check_unsafe_exec(struct linux_binpr
  	}
  	rcu_read_unlock();
  
@@ -39685,7 +39759,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1637,7 +1673,7 @@ static int expand_corename(struct core_n
+@@ -1637,7 +1695,7 @@ static int expand_corename(struct core_n
  {
  	char *old_corename = cn->corename;
  
@@ -39694,7 +39768,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	cn->corename = krealloc(old_corename, cn->size, GFP_KERNEL);
  
  	if (!cn->corename) {
-@@ -1734,7 +1770,7 @@ static int format_corename(struct core_n
+@@ -1734,7 +1792,7 @@ static int format_corename(struct core_n
  	int pid_in_pattern = 0;
  	int err = 0;
  
@@ -39703,7 +39777,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	cn->corename = kmalloc(cn->size, GFP_KERNEL);
  	cn->used = 0;
  
-@@ -1831,6 +1867,238 @@ out:
+@@ -1831,6 +1889,238 @@ out:
  	return ispipe;
  }
  
@@ -39942,7 +40016,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  static int zap_process(struct task_struct *start, int exit_code)
  {
  	struct task_struct *t;
-@@ -2042,17 +2310,17 @@ static void wait_for_dump_helpers(struct
+@@ -2042,17 +2332,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -39965,7 +40039,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	pipe_unlock(pipe);
  
  }
-@@ -2113,7 +2381,7 @@ void do_coredump(long signr, int exit_co
+@@ -2113,7 +2403,7 @@ void do_coredump(long signr, int exit_co
  	int retval = 0;
  	int flag = 0;
  	int ispipe;
@@ -39974,7 +40048,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  	struct coredump_params cprm = {
  		.signr = signr,
  		.regs = regs,
-@@ -2195,7 +2463,7 @@ void do_coredump(long signr, int exit_co
+@@ -2195,7 +2485,7 @@ void do_coredump(long signr, int exit_co
  		}
  		cprm.limit = RLIM_INFINITY;
  
@@ -39983,7 +40057,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -2265,7 +2533,7 @@ close_fail:
+@@ -2265,7 +2555,7 @@ close_fail:
  		filp_close(cprm.file, NULL);
  fail_dropcount:
  	if (ispipe)
@@ -39992,7 +40066,7 @@ diff -NurpX linux-3.2.37-pax/Documentation/dontdiff linux-3.2.37/fs/exec.c linux
  fail_unlock:
  	kfree(cn.corename);
  fail_corename:
-@@ -2284,7 +2552,7 @@ fail:
+@@ -2284,7 +2574,7 @@ fail:
   */
  int dump_write(struct file *file, const void *addr, int nr)
  {
