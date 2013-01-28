@@ -1,13 +1,6 @@
-- more constification based on stats supplied by Larry H of Subreption
-- ported USERCOPY to ia64 based on the discussion with Dennis Schridde at https://bugs.gentoo.org/show_bug.cgi?id=432100
-- simplified the latent entropy code a bit
-- added some list handling wrappers for KERNEXEC/LIST_DEBUG to minimize the exposure of an open kernel
-- some constification work
-  - smarter plugin allowed the removal of many no_const attrs
-  - function pointer array fields are recognized as well
-- new size overflow plugin from Emese to fix some false positives (http://forums.grsecurity.net/viewtopic.php?f=3&t=3208)
-- fixed some more constification fallout (e.g., https://bugs.gentoo.org/show_bug.cgi?id=453216)
-- fixed a pointless alloca in Xen that interfered with STACKLEAK
+- added countermeasure against attacks that reduce ASLR by exhausting the address space on 32 bit userland
+  see kingcope's post for the windows version
+  http://kingcope.wordpress.com/2013/01/24/attacking-the-windows-78-address-space-randomization/
 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/alpha/include/asm/atomic.h linux-2.6.32.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.60/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -36276,7 +36269,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt_elf.c linux-2.6.32.60-pax/fs/binfmt_elf.c
 --- linux-2.6.32.60/fs/binfmt_elf.c	2012-03-18 17:44:12.476058731 +0100
-+++ linux-2.6.32.60-pax/fs/binfmt_elf.c	2012-11-18 15:32:28.603513411 +0100
++++ linux-2.6.32.60-pax/fs/binfmt_elf.c	2013-01-28 20:41:20.391975823 +0100
 @@ -31,6 +31,7 @@
  #include <linux/random.h>
  #include <linux/elf.h>
@@ -36741,7 +36734,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/binfmt
  	unsigned int random_variable = 0;
  
 +#ifdef CONFIG_PAX_RANDUSTACK
-+	if (randomize_va_space)
++	if (current->mm->pax_flags & MF_PAX_RANDMMAP)
 +		return stack_top - current->mm->delta_stack;
 +#endif
 +
@@ -37861,13 +37854,14 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/ecrypt
  		goto out_free;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c linux-2.6.32.60-pax/fs/exec.c
 --- linux-2.6.32.60/fs/exec.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/fs/exec.c	2013-01-22 17:38:23.416543634 +0100
-@@ -56,12 +56,31 @@
++++ linux-2.6.32.60-pax/fs/exec.c	2013-01-28 20:52:13.111960739 +0100
+@@ -56,12 +56,32 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
  #include <linux/pipe_fs_i.h>
 +#include <linux/random.h>
 +#include <linux/seq_file.h>
++#include <linux/mman.h>
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +#include <linux/kallsyms.h>
@@ -37894,7 +37888,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  int core_uses_pid;
  char core_pattern[CORENAME_MAX_SIZE] = "core";
  unsigned int core_pipe_limit;
-@@ -178,18 +197,10 @@ struct page *get_arg_page(struct linux_b
+@@ -178,18 +198,10 @@ struct page *get_arg_page(struct linux_b
  		int write)
  {
  	struct page *page;
@@ -37916,7 +37910,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  		return NULL;
  
  	if (write) {
-@@ -263,6 +274,11 @@ static int __bprm_mm_init(struct linux_b
+@@ -263,6 +275,11 @@ static int __bprm_mm_init(struct linux_b
  	vma->vm_end = STACK_TOP_MAX;
  	vma->vm_start = vma->vm_end - PAGE_SIZE;
  	vma->vm_flags = VM_STACK_FLAGS;
@@ -37928,7 +37922,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
  
  	err = security_file_mmap(NULL, 0, 0, 0, vma->vm_start, 1);
-@@ -276,6 +292,12 @@ static int __bprm_mm_init(struct linux_b
+@@ -276,6 +293,12 @@ static int __bprm_mm_init(struct linux_b
  	mm->stack_vm = mm->total_vm = 1;
  	up_write(&mm->mmap_sem);
  	bprm->p = vma->vm_end - sizeof(void *);
@@ -37941,7 +37935,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	return 0;
  err:
  	up_write(&mm->mmap_sem);
-@@ -510,7 +532,7 @@ int copy_strings_kernel(int argc,char **
+@@ -510,7 +533,7 @@ int copy_strings_kernel(int argc,char **
  	int r;
  	mm_segment_t oldfs = get_fs();
  	set_fs(KERNEL_DS);
@@ -37950,7 +37944,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	set_fs(oldfs);
  	return r;
  }
-@@ -540,7 +562,8 @@ static int shift_arg_pages(struct vm_are
+@@ -540,7 +563,8 @@ static int shift_arg_pages(struct vm_are
  	unsigned long new_end = old_end - shift;
  	struct mmu_gather *tlb;
  
@@ -37960,7 +37954,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  
  	/*
  	 * ensure there are no vmas between where we want to go
-@@ -549,6 +572,10 @@ static int shift_arg_pages(struct vm_are
+@@ -549,6 +573,10 @@ static int shift_arg_pages(struct vm_are
  	if (vma != find_vma(mm, new_start))
  		return -EFAULT;
  
@@ -37971,7 +37965,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	/*
  	 * cover the whole range: [new_start, old_end)
  	 */
-@@ -630,10 +657,6 @@ int setup_arg_pages(struct linux_binprm
+@@ -630,10 +658,6 @@ int setup_arg_pages(struct linux_binprm
  	stack_top = arch_align_stack(stack_top);
  	stack_top = PAGE_ALIGN(stack_top);
  
@@ -37982,7 +37976,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	stack_shift = vma->vm_end - stack_top;
  
  	bprm->p -= stack_shift;
-@@ -645,6 +668,14 @@ int setup_arg_pages(struct linux_binprm
+@@ -645,6 +669,14 @@ int setup_arg_pages(struct linux_binprm
  	bprm->exec -= stack_shift;
  
  	down_write(&mm->mmap_sem);
@@ -37997,7 +37991,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	vm_flags = VM_STACK_FLAGS;
  
  	/*
-@@ -658,19 +689,24 @@ int setup_arg_pages(struct linux_binprm
+@@ -658,19 +690,24 @@ int setup_arg_pages(struct linux_binprm
  		vm_flags &= ~VM_EXEC;
  	vm_flags |= mm->def_flags;
  
@@ -38029,7 +38023,35 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	stack_expand = EXTRA_STACK_VM_PAGES * PAGE_SIZE;
  	stack_size = vma->vm_end - vma->vm_start;
  	/*
-@@ -744,7 +780,7 @@ int kernel_read(struct file *file, loff_
+@@ -690,6 +727,27 @@ int setup_arg_pages(struct linux_binprm
+ 		stack_base = vma->vm_start - stack_expand;
+ #endif
+ 	ret = expand_stack(vma, stack_base);
++
++#if !defined(CONFIG_STACK_GROWSUP) && defined(CONFIG_PAX_ASLR)
++	if (!ret && (mm->pax_flags & MF_PAX_RANDMMAP) && STACK_TOP <= 0xFFFFFFFFU && STACK_TOP > vma->vm_end) {
++		unsigned long size, flags, vm_flags;
++
++		size = STACK_TOP - vma->vm_end;
++		flags = MAP_FIXED | MAP_PRIVATE;
++		vm_flags = VM_DONTEXPAND | VM_RESERVED;
++
++		ret = vma->vm_end != mmap_region(NULL, vma->vm_end, size, flags, vm_flags, 0);
++
++#ifdef CONFIG_X86
++		if (!ret) {
++			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
++			ret = 0 != mmap_region(NULL, 0, size, flags, vm_flags, 0);
++		}
++#endif
++
++	}
++#endif
++
+ 	if (ret)
+ 		ret = -EFAULT;
+ 
+@@ -744,7 +802,7 @@ int kernel_read(struct file *file, loff_
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -38038,7 +38060,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	set_fs(old_fs);
  	return result;
  }
-@@ -1152,7 +1188,7 @@ int check_unsafe_exec(struct linux_binpr
+@@ -1152,7 +1210,7 @@ int check_unsafe_exec(struct linux_binpr
  	}
  	rcu_read_unlock();
  
@@ -38047,7 +38069,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1591,6 +1627,238 @@ out:
+@@ -1591,6 +1649,238 @@ out:
  	return ispipe;
  }
  
@@ -38286,7 +38308,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  static int zap_process(struct task_struct *start)
  {
  	struct task_struct *t;
-@@ -1793,17 +2061,17 @@ static void wait_for_dump_helpers(struct
+@@ -1793,17 +2083,17 @@ static void wait_for_dump_helpers(struct
  	pipe = file->f_path.dentry->d_inode->i_pipe;
  
  	pipe_lock(pipe);
@@ -38309,7 +38331,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  	pipe_unlock(pipe);
  
  }
-@@ -1826,7 +2094,7 @@ void do_coredump(long signr, int exit_co
+@@ -1826,7 +2116,7 @@ void do_coredump(long signr, int exit_co
  	char **helper_argv = NULL;
  	int helper_argc = 0;
  	int dump_count = 0;
@@ -38318,7 +38340,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  
  	audit_core_dumps(signr);
  
-@@ -1908,7 +2176,7 @@ void do_coredump(long signr, int exit_co
+@@ -1908,7 +2198,7 @@ void do_coredump(long signr, int exit_co
  			goto fail_unlock;
  		}
  
@@ -38327,7 +38349,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
  		if (core_pipe_limit && (core_pipe_limit < dump_count)) {
  			printk(KERN_WARNING "Pid %d(%s) over core_pipe_limit\n",
  			       task_tgid_vnr(current), current->comm);
-@@ -1972,7 +2240,7 @@ close_fail:
+@@ -1972,7 +2262,7 @@ close_fail:
  	filp_close(file, NULL);
  fail_dropcount:
  	if (dump_count)
