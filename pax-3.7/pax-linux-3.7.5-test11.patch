@@ -1,5 +1,4 @@
-- added runtime arm/PXN support detection by spender
-- added compile time detection for non-optimal use of kmalloc_array/kcalloc
+- fixed some more arm/CONSTIFY conflicts, reported by Michael Tremer
 
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/alpha/include/asm/atomic.h linux-3.7.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.5/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -32789,6 +32788,153 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/media/pla
  	spin_lock_init(&vout->vbq_lock);
  
  	videobuf_queue_dma_contig_init(q, &video_vbq_ops, q->dev,
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/media/platform/s5p-tv/mixer_grp_layer.c linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_grp_layer.c
+--- linux-3.7.5/drivers/media/platform/s5p-tv/mixer_grp_layer.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_grp_layer.c	2013-01-31 00:18:15.498537735 +0100
+@@ -235,7 +235,7 @@ struct mxr_layer *mxr_graph_layer_create
+ {
+ 	struct mxr_layer *layer;
+ 	int ret;
+-	struct mxr_layer_ops ops = {
++	static struct mxr_layer_ops ops = {
+ 		.release = mxr_graph_layer_release,
+ 		.buffer_set = mxr_graph_buffer_set,
+ 		.stream_set = mxr_graph_stream_set,
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/media/platform/s5p-tv/mixer.h linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer.h
+--- linux-3.7.5/drivers/media/platform/s5p-tv/mixer.h	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer.h	2013-01-31 00:22:46.502552454 +0100
+@@ -155,7 +155,7 @@ struct mxr_layer {
+ 	/** layer index (unique identifier) */
+ 	int idx;
+ 	/** callbacks for layer methods */
+-	struct mxr_layer_ops ops;
++	struct mxr_layer_ops *ops;
+ 	/** format array */
+ 	const struct mxr_format **fmt_array;
+ 	/** size of format array */
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/media/platform/s5p-tv/mixer_reg.c linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_reg.c
+--- linux-3.7.5/drivers/media/platform/s5p-tv/mixer_reg.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_reg.c	2013-01-31 16:24:31.837112263 +0100
+@@ -276,7 +276,7 @@ static void mxr_irq_layer_handle(struct
+ 		layer->update_buf = next;
+ 	}
+ 
+-	layer->ops.buffer_set(layer, layer->update_buf);
++	layer->ops->buffer_set(layer, layer->update_buf);
+ 
+ 	if (done && done != layer->shadow_buf)
+ 		vb2_buffer_done(&done->vb, VB2_BUF_STATE_DONE);
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/media/platform/s5p-tv/mixer_video.c linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_video.c
+--- linux-3.7.5/drivers/media/platform/s5p-tv/mixer_video.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_video.c	2013-01-31 16:22:00.733104057 +0100
+@@ -209,7 +209,7 @@ static void mxr_layer_default_geo(struct
+ 	layer->geo.src.height = layer->geo.src.full_height;
+ 
+ 	mxr_geometry_dump(mdev, &layer->geo);
+-	layer->ops.fix_geometry(layer, MXR_GEOMETRY_SINK, 0);
++	layer->ops->fix_geometry(layer, MXR_GEOMETRY_SINK, 0);
+ 	mxr_geometry_dump(mdev, &layer->geo);
+ }
+ 
+@@ -227,7 +227,7 @@ static void mxr_layer_update_output(stru
+ 	layer->geo.dst.full_width = mbus_fmt.width;
+ 	layer->geo.dst.full_height = mbus_fmt.height;
+ 	layer->geo.dst.field = mbus_fmt.field;
+-	layer->ops.fix_geometry(layer, MXR_GEOMETRY_SINK, 0);
++	layer->ops->fix_geometry(layer, MXR_GEOMETRY_SINK, 0);
+ 
+ 	mxr_geometry_dump(mdev, &layer->geo);
+ }
+@@ -333,7 +333,7 @@ static int mxr_s_fmt(struct file *file,
+ 	/* set source size to highest accepted value */
+ 	geo->src.full_width = max(geo->dst.full_width, pix->width);
+ 	geo->src.full_height = max(geo->dst.full_height, pix->height);
+-	layer->ops.fix_geometry(layer, MXR_GEOMETRY_SOURCE, 0);
++	layer->ops->fix_geometry(layer, MXR_GEOMETRY_SOURCE, 0);
+ 	mxr_geometry_dump(mdev, &layer->geo);
+ 	/* set cropping to total visible screen */
+ 	geo->src.width = pix->width;
+@@ -341,12 +341,12 @@ static int mxr_s_fmt(struct file *file,
+ 	geo->src.x_offset = 0;
+ 	geo->src.y_offset = 0;
+ 	/* assure consistency of geometry */
+-	layer->ops.fix_geometry(layer, MXR_GEOMETRY_CROP, MXR_NO_OFFSET);
++	layer->ops->fix_geometry(layer, MXR_GEOMETRY_CROP, MXR_NO_OFFSET);
+ 	mxr_geometry_dump(mdev, &layer->geo);
+ 	/* set full size to lowest possible value */
+ 	geo->src.full_width = 0;
+ 	geo->src.full_height = 0;
+-	layer->ops.fix_geometry(layer, MXR_GEOMETRY_SOURCE, 0);
++	layer->ops->fix_geometry(layer, MXR_GEOMETRY_SOURCE, 0);
+ 	mxr_geometry_dump(mdev, &layer->geo);
+ 
+ 	/* returning results */
+@@ -473,7 +473,7 @@ static int mxr_s_selection(struct file *
+ 		target->width = s->r.width;
+ 		target->height = s->r.height;
+ 
+-		layer->ops.fix_geometry(layer, stage, s->flags);
++		layer->ops->fix_geometry(layer, stage, s->flags);
+ 
+ 		/* retrieve update selection rectangle */
+ 		res.left = target->x_offset;
+@@ -928,13 +928,13 @@ static int start_streaming(struct vb2_qu
+ 	mxr_output_get(mdev);
+ 
+ 	mxr_layer_update_output(layer);
+-	layer->ops.format_set(layer);
++	layer->ops->format_set(layer);
+ 	/* enabling layer in hardware */
+ 	spin_lock_irqsave(&layer->enq_slock, flags);
+ 	layer->state = MXR_LAYER_STREAMING;
+ 	spin_unlock_irqrestore(&layer->enq_slock, flags);
+ 
+-	layer->ops.stream_set(layer, MXR_ENABLE);
++	layer->ops->stream_set(layer, MXR_ENABLE);
+ 	mxr_streamer_get(mdev);
+ 
+ 	return 0;
+@@ -1004,7 +1004,7 @@ static int stop_streaming(struct vb2_que
+ 	spin_unlock_irqrestore(&layer->enq_slock, flags);
+ 
+ 	/* disabling layer in hardware */
+-	layer->ops.stream_set(layer, MXR_DISABLE);
++	layer->ops->stream_set(layer, MXR_DISABLE);
+ 	/* remove one streamer */
+ 	mxr_streamer_put(mdev);
+ 	/* allow changes in output configuration */
+@@ -1043,8 +1043,8 @@ void mxr_base_layer_unregister(struct mx
+ 
+ void mxr_layer_release(struct mxr_layer *layer)
+ {
+-	if (layer->ops.release)
+-		layer->ops.release(layer);
++	if (layer->ops->release)
++		layer->ops->release(layer);
+ }
+ 
+ void mxr_base_layer_release(struct mxr_layer *layer)
+@@ -1070,7 +1070,7 @@ struct mxr_layer *mxr_base_layer_create(
+ 
+ 	layer->mdev = mdev;
+ 	layer->idx = idx;
+-	layer->ops = *ops;
++	layer->ops = ops;
+ 
+ 	spin_lock_init(&layer->enq_slock);
+ 	INIT_LIST_HEAD(&layer->enq_list);
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/media/platform/s5p-tv/mixer_vp_layer.c linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_vp_layer.c
+--- linux-3.7.5/drivers/media/platform/s5p-tv/mixer_vp_layer.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/drivers/media/platform/s5p-tv/mixer_vp_layer.c	2013-02-01 00:02:35.726604987 +0100
+@@ -206,7 +206,7 @@ struct mxr_layer *mxr_vp_layer_create(st
+ {
+ 	struct mxr_layer *layer;
+ 	int ret;
+-	struct mxr_layer_ops ops = {
++	static struct mxr_layer_ops ops = {
+ 		.release = mxr_vp_layer_release,
+ 		.buffer_set = mxr_vp_buffer_set,
+ 		.stream_set = mxr_vp_stream_set,
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/media/platform/timblogiw.c linux-3.7.5-pax/drivers/media/platform/timblogiw.c
 --- linux-3.7.5/drivers/media/platform/timblogiw.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.5-pax/drivers/media/platform/timblogiw.c	2013-01-15 13:45:38.487789679 +0100
@@ -33462,6 +33608,24 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/mmc/host/
 -};
 +} __do_const;
  #endif /* _DW_MMC_H_ */
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/mmc/host/sdhci-s3c.c linux-3.7.5-pax/drivers/mmc/host/sdhci-s3c.c
+--- linux-3.7.5/drivers/mmc/host/sdhci-s3c.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/drivers/mmc/host/sdhci-s3c.c	2013-01-31 23:59:38.290595350 +0100
+@@ -719,9 +719,11 @@ static int __devinit sdhci_s3c_probe(str
+ 	 * we can use overriding functions instead of default.
+ 	 */
+ 	if (host->quirks & SDHCI_QUIRK_NONSTANDARD_CLOCK) {
+-		sdhci_s3c_ops.set_clock = sdhci_cmu_set_clock;
+-		sdhci_s3c_ops.get_min_clock = sdhci_cmu_get_min_clock;
+-		sdhci_s3c_ops.get_max_clock = sdhci_cmu_get_max_clock;
++		pax_open_kernel();
++		*(void **)&sdhci_s3c_ops.set_clock = sdhci_cmu_set_clock;
++		*(void **)&sdhci_s3c_ops.get_min_clock = sdhci_cmu_get_min_clock;
++		*(void **)&sdhci_s3c_ops.get_max_clock = sdhci_cmu_get_max_clock;
++		pax_close_kernel();
+ 	}
+ 
+ 	/* It supports additional host capabilities if needed */
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/mtd/devices/doc2000.c linux-3.7.5-pax/drivers/mtd/devices/doc2000.c
 --- linux-3.7.5/drivers/mtd/devices/doc2000.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.5-pax/drivers/mtd/devices/doc2000.c	2012-12-11 12:26:07.755203560 +0100
