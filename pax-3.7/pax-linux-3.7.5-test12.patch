@@ -1,4 +1,10 @@
-- fixed some more arm/CONSTIFY conflicts, reported by Michael Tremer
+- reworked the USERCOPY interface a bit to make checking for constant copy sizes easier
+- various ASLR cleanups
+  - enabled it for hugetlb (x86 and generic)
+  - made arm/mips/powerpc/sparc ignore PF_RANDOMIZE as x86 does
+- fixed the KERNEXEC instrumentation for twofish/avx
+- removed some dead code from entry_32.S
+- added a fix for http://vulnfactory.org/blog/2013/02/06/a-linux-memory-trick/
 
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/alpha/include/asm/atomic.h linux-3.7.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.5/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -1299,17 +1305,8 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/arm/include/
   * set platform specific SMP operations
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/arm/include/asm/uaccess.h linux-3.7.5-pax/arch/arm/include/asm/uaccess.h
 --- linux-3.7.5/arch/arm/include/asm/uaccess.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/arm/include/asm/uaccess.h	2012-12-11 12:26:06.991220071 +0100
-@@ -22,6 +22,8 @@
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The exception table consists of pairs of addresses: the first is the
-  * address of an instruction that is allowed to fault, and the second is
-@@ -418,8 +420,23 @@ do {									\
++++ linux-3.7.5-pax/arch/arm/include/asm/uaccess.h	2013-02-05 02:28:40.244441474 +0100
+@@ -418,8 +418,23 @@ do {									\
  
  
  #ifdef CONFIG_MMU
@@ -1320,22 +1317,22 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/arm/include/
 +
 +static inline unsigned long __must_check __copy_from_user(void *to, const void __user *from, unsigned long n)
 +{
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
++	check_object_size(to, n, false);
++
 +	return ___copy_from_user(to, from, n);
 +}
 +
 +static inline unsigned long __must_check __copy_to_user(void __user *to, const void *from, unsigned long n)
 +{
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
++	check_object_size(from, n, true);
++
 +	return ___copy_to_user(to, from, n);
 +}
 +
  extern unsigned long __must_check __copy_to_user_std(void __user *to, const void *from, unsigned long n);
  extern unsigned long __must_check __clear_user(void __user *addr, unsigned long n);
  extern unsigned long __must_check __clear_user_std(void __user *addr, unsigned long n);
-@@ -431,6 +448,9 @@ extern unsigned long __must_check __clea
+@@ -431,6 +446,9 @@ extern unsigned long __must_check __clea
  
  static inline unsigned long __must_check copy_from_user(void *to, const void __user *from, unsigned long n)
  {
@@ -1345,7 +1342,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/arm/include/
  	if (access_ok(VERIFY_READ, from, n))
  		n = __copy_from_user(to, from, n);
  	else /* security hole - plug it */
-@@ -440,6 +460,9 @@ static inline unsigned long __must_check
+@@ -440,6 +458,9 @@ static inline unsigned long __must_check
  
  static inline unsigned long __must_check copy_to_user(void __user *to, const void *from, unsigned long n)
  {
@@ -1958,7 +1955,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/arm/mm/init.
  				    __phys_to_pfn(__pa(&__tcm_end)),
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/arm/mm/mmap.c linux-3.7.5-pax/arch/arm/mm/mmap.c
 --- linux-3.7.5/arch/arm/mm/mmap.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/arm/mm/mmap.c	2013-01-10 03:45:25.951165219 +0100
++++ linux-3.7.5-pax/arch/arm/mm/mmap.c	2013-02-05 19:56:59.409749362 +0100
 @@ -93,6 +93,10 @@ arch_get_unmapped_area(struct file *filp
  	if (len > TASK_SIZE)
  		return -ENOMEM;
@@ -2072,7 +2069,18 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/arm/mm/mmap.
  
  bottomup:
  	/*
-@@ -266,10 +270,22 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -259,6 +263,10 @@ void arch_pick_mmap_layout(struct mm_str
+ {
+ 	unsigned long random_factor = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	/* 8 bits of randomness in 20 address space bits */
+ 	if ((current->flags & PF_RANDOMIZE) &&
+ 	    !(current->personality & ADDR_NO_RANDOMIZE))
+@@ -266,10 +274,22 @@ void arch_pick_mmap_layout(struct mm_str
  
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -3013,7 +3021,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/mips/mm/faul
   * and the problem, and then passes it off to one of the appropriate
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/mips/mm/mmap.c linux-3.7.5-pax/arch/mips/mm/mmap.c
 --- linux-3.7.5/arch/mips/mm/mmap.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/mips/mm/mmap.c	2013-01-26 01:24:31.600371333 +0100
++++ linux-3.7.5-pax/arch/mips/mm/mmap.c	2013-02-05 15:37:13.594581524 +0100
 @@ -95,6 +95,11 @@ static unsigned long arch_get_unmapped_a
  		do_color_align = 1;
  
@@ -3088,7 +3096,38 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/mips/mm/mmap
  
  bottomup:
  		/*
-@@ -242,30 +244,3 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -223,6 +225,10 @@ void arch_pick_mmap_layout(struct mm_str
+ {
+ 	unsigned long random_factor = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		random_factor = get_random_int();
+ 		random_factor = random_factor << PAGE_SHIFT;
+@@ -234,38 +240,23 @@ void arch_pick_mmap_layout(struct mm_str
+ 
+ 	if (mmap_is_legacy()) {
+ 		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
++
++#ifdef CONFIG_PAX_RANDMMAP
++		if (mm->pax_flags & MF_PAX_RANDMMAP)
++			mm->mmap_base += mm->delta_mmap;
++#endif
++
+ 		mm->get_unmapped_area = arch_get_unmapped_area;
+ 		mm->unmap_area = arch_unmap_area;
+ 	} else {
+ 		mm->mmap_base = mmap_base(random_factor);
++
++#ifdef CONFIG_PAX_RANDMMAP
++		if (mm->pax_flags & MF_PAX_RANDMMAP)
++			mm->mmap_base -= mm->delta_mmap + mm->delta_stack;
++#endif
++
+ 		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
  		mm->unmap_area = arch_unmap_area_topdown;
  	}
  }
@@ -4237,8 +4276,19 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/powerpc/mm/f
  	}
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/powerpc/mm/mmap_64.c linux-3.7.5-pax/arch/powerpc/mm/mmap_64.c
 --- linux-3.7.5/arch/powerpc/mm/mmap_64.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/powerpc/mm/mmap_64.c	2012-12-11 12:26:07.043210503 +0100
-@@ -91,10 +91,22 @@ void arch_pick_mmap_layout(struct mm_str
++++ linux-3.7.5-pax/arch/powerpc/mm/mmap_64.c	2013-02-05 15:38:28.774577510 +0100
+@@ -57,6 +57,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		/* 8MB for 32bit, 1GB for 64bit */
+ 		if (is_32bit_task())
+@@ -91,10 +95,22 @@ void arch_pick_mmap_layout(struct mm_str
  	 */
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE;
@@ -5283,7 +5333,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/sparc/kernel
  		if (flags & MAP_SHARED)
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/sparc/kernel/sys_sparc_64.c linux-3.7.5-pax/arch/sparc/kernel/sys_sparc_64.c
 --- linux-3.7.5/arch/sparc/kernel/sys_sparc_64.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/sparc/kernel/sys_sparc_64.c	2012-12-11 12:26:07.059208813 +0100
++++ linux-3.7.5-pax/arch/sparc/kernel/sys_sparc_64.c	2013-02-05 15:37:48.946579636 +0100
 @@ -107,7 +107,7 @@ unsigned long arch_get_unmapped_area(str
  		/* We do not accept a shared mapping if it would violate
  		 * cache aliasing constraints.
@@ -5405,7 +5455,18 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/sparc/kernel
  
  bottomup:
  	/*
-@@ -373,6 +373,12 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -348,6 +348,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		unsigned long val = get_random_int();
+ 		if (test_thread_flag(TIF_32BIT))
+@@ -373,6 +377,12 @@ void arch_pick_mmap_layout(struct mm_str
  	    gap == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -5418,7 +5479,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/sparc/kernel
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
-@@ -385,6 +391,12 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -385,6 +395,12 @@ void arch_pick_mmap_layout(struct mm_str
  			gap = (task_size / 6 * 5);
  
  		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
@@ -7544,7 +7605,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/crypto/s
  	.size	\name, .-\name
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/crypto/twofish-avx-x86_64-asm_64.S linux-3.7.5-pax/arch/x86/crypto/twofish-avx-x86_64-asm_64.S
 --- linux-3.7.5/arch/x86/crypto/twofish-avx-x86_64-asm_64.S	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/x86/crypto/twofish-avx-x86_64-asm_64.S	2012-12-11 12:26:07.087206264 +0100
++++ linux-3.7.5-pax/arch/x86/crypto/twofish-avx-x86_64-asm_64.S	2013-02-07 01:32:16.416640986 +0100
 @@ -23,6 +23,8 @@
   *
   */
@@ -7558,14 +7619,14 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/crypto/t
  	outunpack_blocks(%r11, RC1, RD1, RA1, RB1, RK1, RX0, RY0, RK2);
  	outunpack_blocks(%rax, RC2, RD2, RA2, RB2, RK1, RX0, RY0, RK2);
  
-+	pax_force_retaddr
++	pax_force_retaddr 0, 1
  	ret;
  
  __enc_xor8:
  	outunpack_xor_blocks(%r11, RC1, RD1, RA1, RB1, RK1, RX0, RY0, RK2);
  	outunpack_xor_blocks(%rax, RC2, RD2, RA2, RB2, RK1, RX0, RY0, RK2);
  
-+	pax_force_retaddr
++	pax_force_retaddr 0, 1
  	ret;
  
  .align 8
@@ -7573,7 +7634,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/crypto/t
  	outunpack_blocks(%r11, RA1, RB1, RC1, RD1, RK1, RX0, RY0, RK2);
  	outunpack_blocks(%rax, RA2, RB2, RC2, RD2, RK1, RX0, RY0, RK2);
  
-+	pax_force_retaddr
++	pax_force_retaddr 0, 1
  	ret;
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/crypto/twofish-x86_64-asm_64-3way.S linux-3.7.5-pax/arch/x86/crypto/twofish-x86_64-asm_64-3way.S
 --- linux-3.7.5/arch/x86/crypto/twofish-x86_64-asm_64-3way.S	2012-12-11 04:30:57.000000000 +0100
@@ -11619,7 +11680,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/asm/uaccess_32.h linux-3.7.5-pax/arch/x86/include/asm/uaccess_32.h
 --- linux-3.7.5/arch/x86/include/asm/uaccess_32.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/x86/include/asm/uaccess_32.h	2012-12-11 12:26:07.127203800 +0100
++++ linux-3.7.5-pax/arch/x86/include/asm/uaccess_32.h	2013-02-05 02:28:18.620442629 +0100
 @@ -11,15 +11,15 @@
  #include <asm/page.h>
  
@@ -11641,24 +11702,17 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  
  /**
   * __copy_to_user_inatomic: - Copy a block of data into user space, with less checking.
-@@ -43,6 +43,9 @@ unsigned long __must_check __copy_from_u
+@@ -43,6 +43,11 @@ unsigned long __must_check __copy_from_u
  static __always_inline unsigned long __must_check
  __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
  {
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(from, n, true);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -61,6 +64,8 @@ __copy_to_user_inatomic(void __user *to,
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
- 	return __copy_to_user_ll(to, from, n);
- }
  
 @@ -82,12 +87,16 @@ static __always_inline unsigned long __m
  __copy_to_user(void __user *to, const void *from, unsigned long n)
@@ -11677,7 +11731,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  	/* Avoid zeroing the tail if the copy fails..
  	 * If 'n' is constant and 1, 2, or 4, we do still zero on a failure,
  	 * but as the zeroing behaviour is only significant when n is not
-@@ -137,6 +146,10 @@ static __always_inline unsigned long
+@@ -137,6 +146,12 @@ static __always_inline unsigned long
  __copy_from_user(void *to, const void __user *from, unsigned long n)
  {
  	might_fault();
@@ -11685,17 +11739,10 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(to, n, false);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -152,6 +165,8 @@ __copy_from_user(void *to, const void __
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
- 	return __copy_from_user_ll(to, from, n);
- }
  
 @@ -159,6 +174,10 @@ static __always_inline unsigned long __c
  				const void __user *from, unsigned long n)
@@ -11735,7 +11782,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  
  extern void copy_from_user_overflow(void)
  #ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
-@@ -199,17 +222,61 @@ extern void copy_from_user_overflow(void
+@@ -199,17 +222,60 @@ extern void copy_from_user_overflow(void
  #endif
  ;
  
@@ -11773,7 +11820,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 +		n = __copy_to_user(to, from, n);
 +	return n;
 +}
- 
++
 +/**
 + * copy_from_user: - Copy a block of data from user space.
 + * @to:   Destination address, in kernel space.
@@ -11795,21 +11842,20 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 +{
 +	size_t sz = __compiletime_object_size(to);
 +
++	check_object_size(to, n, false);
+ 
 +	if (unlikely(sz != (size_t)-1 && sz < n))
 +		copy_from_user_overflow();
 +	else if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if ((long)n > 0) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if ((long)n > 0)
 +		memset(to, 0, n);
-+	}
  	return n;
  }
  
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/asm/uaccess_64.h linux-3.7.5-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-3.7.5/arch/x86/include/asm/uaccess_64.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/x86/include/asm/uaccess_64.h	2012-12-11 12:26:07.131203697 +0100
++++ linux-3.7.5-pax/arch/x86/include/asm/uaccess_64.h	2013-02-05 02:28:07.824443205 +0100
 @@ -10,6 +10,9 @@
  #include <asm/alternative.h>
  #include <asm/cpufeature.h>
@@ -11838,7 +11884,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  copy_user_generic(void *to, const void *from, unsigned len)
  {
  	unsigned ret;
-@@ -41,142 +44,205 @@ copy_user_generic(void *to, const void *
+@@ -41,142 +44,203 @@ copy_user_generic(void *to, const void *
  			 ASM_OUTPUT2("=a" (ret), "=D" (to), "=S" (from),
  				     "=d" (len)),
  			 "1" (to), "2" (from), "3" (len)
@@ -11889,13 +11935,11 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 -		WARN(1, "Buffer overflow detected!\n");
 -#endif
 +
++	check_object_size(to, n, false);
 +	if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if (n < INT_MAX) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if (n < INT_MAX)
 +		memset(to, 0, n);
-+	}
  	return n;
  }
  
@@ -11920,11 +11964,11 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic(dst, (__force void *)src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(dst, size, false);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_READ, src, size))
@@ -11936,10 +11980,9 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(dst, size, false);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic(dst, (__force void *)src, size);
 +		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
-+	}
  	switch (size) {
 -	case 1:__get_user_asm(*(u8 *)dst, (u8 __user *)src,
 +	case 1:__get_user_asm(*(u8 *)dst, (const u8 __user *)src,
@@ -11994,11 +12037,11 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst, src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(src, size, true);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_WRITE, dst, size))
@@ -12010,10 +12053,9 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(src, size, true);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst, src, size);
 +		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
-+	}
  	switch (size) {
 -	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
 +	case 1:__put_user_asm(*(const u8 *)src, (u8 __user *)dst,
@@ -12091,7 +12133,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  			       ret, "b", "b", "=q", 1);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u8 __user *)dst,
-@@ -185,7 +251,7 @@ int __copy_in_user(void __user *dst, con
+@@ -185,7 +249,7 @@ int __copy_in_user(void __user *dst, con
  	}
  	case 2: {
  		u16 tmp;
@@ -12100,7 +12142,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  			       ret, "w", "w", "=r", 2);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u16 __user *)dst,
-@@ -195,7 +261,7 @@ int __copy_in_user(void __user *dst, con
+@@ -195,7 +259,7 @@ int __copy_in_user(void __user *dst, con
  
  	case 4: {
  		u32 tmp;
@@ -12109,7 +12151,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  			       ret, "l", "k", "=r", 4);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u32 __user *)dst,
-@@ -204,7 +270,7 @@ int __copy_in_user(void __user *dst, con
+@@ -204,7 +268,7 @@ int __copy_in_user(void __user *dst, con
  	}
  	case 8: {
  		u64 tmp;
@@ -12118,7 +12160,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  			       ret, "q", "", "=r", 8);
  		if (likely(!ret))
  			__put_user_asm(tmp, (u64 __user *)dst,
-@@ -212,41 +278,72 @@ int __copy_in_user(void __user *dst, con
+@@ -212,41 +276,72 @@ int __copy_in_user(void __user *dst, con
  		return ret;
  	}
  	default:
@@ -12209,7 +12251,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/asm/uaccess.h linux-3.7.5-pax/arch/x86/include/asm/uaccess.h
 --- linux-3.7.5/arch/x86/include/asm/uaccess.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/x86/include/asm/uaccess.h	2012-12-11 12:26:07.131203697 +0100
++++ linux-3.7.5-pax/arch/x86/include/asm/uaccess.h	2013-02-05 02:28:58.900440478 +0100
 @@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
@@ -12218,16 +12260,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  #include <asm/asm.h>
  #include <asm/page.h>
  #include <asm/smap.h>
-@@ -14,6 +15,8 @@
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The fs value determines whether argument validity checking should be
-  * performed or not.  If get_fs() == USER_DS, checking is performed, with
-@@ -29,7 +32,12 @@
+@@ -29,7 +30,12 @@
  
  #define get_ds()	(KERNEL_DS)
  #define get_fs()	(current_thread_info()->addr_limit)
@@ -12240,7 +12273,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -77,8 +85,33 @@
+@@ -77,8 +83,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -12276,7 +12309,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  
  /*
   * The exception table consists of pairs of addresses relative to the
-@@ -189,13 +222,21 @@ extern int __get_user_bad(void);
+@@ -189,13 +220,21 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -12301,7 +12334,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  		     "3: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
-@@ -208,8 +249,8 @@ extern int __get_user_bad(void);
+@@ -208,8 +247,8 @@ extern int __get_user_bad(void);
  
  #define __put_user_asm_ex_u64(x, addr)					\
  	asm volatile(ASM_STAC "\n"					\
@@ -12312,7 +12345,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  		     "3: " ASM_CLAC "\n"				\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     _ASM_EXTABLE_EX(2b, 3b)				\
-@@ -261,7 +302,7 @@ extern void __put_user_8(void);
+@@ -261,7 +300,7 @@ extern void __put_user_8(void);
  	__typeof__(*(ptr)) __pu_val;				\
  	__chk_user_ptr(ptr);					\
  	might_fault();						\
@@ -12321,7 +12354,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  	switch (sizeof(*(ptr))) {				\
  	case 1:							\
  		__put_user_x(1, __pu_val, ptr, __ret_pu);	\
-@@ -383,7 +424,7 @@ do {									\
+@@ -383,7 +422,7 @@ do {									\
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
  	asm volatile(ASM_STAC "\n"					\
@@ -12330,7 +12363,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  		     "2: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -391,7 +432,7 @@ do {									\
+@@ -391,7 +430,7 @@ do {									\
  		     "	jmp 2b\n"					\
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
@@ -12339,7 +12372,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  		     : "m" (__m(addr)), "i" (errret), "0" (err))
  
  #define __get_user_size_ex(x, ptr, size)				\
-@@ -416,7 +457,7 @@ do {									\
+@@ -416,7 +455,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -12348,7 +12381,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  		     "2:\n"						\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     : ltype(x) : "m" (__m(addr)))
-@@ -433,13 +474,24 @@ do {									\
+@@ -433,13 +472,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -12375,7 +12408,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -448,7 +500,7 @@ struct __large_struct { unsigned long bu
+@@ -448,7 +498,7 @@ struct __large_struct { unsigned long bu
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
  	asm volatile(ASM_STAC "\n"					\
@@ -12384,7 +12417,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  		     "2: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -456,10 +508,10 @@ struct __large_struct { unsigned long bu
+@@ -456,10 +506,10 @@ struct __large_struct { unsigned long bu
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
@@ -12397,7 +12430,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  		     "2:\n"						\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     : : ltype(x), "m" (__m(addr)))
-@@ -498,8 +550,12 @@ struct __large_struct { unsigned long bu
+@@ -498,8 +548,12 @@ struct __large_struct { unsigned long bu
   * On error, the variable @x is set to zero.
   */
  
@@ -12410,7 +12443,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  
  /**
   * __put_user: - Write a simple value into user space, with less checking.
-@@ -521,8 +577,12 @@ struct __large_struct { unsigned long bu
+@@ -521,8 +575,12 @@ struct __large_struct { unsigned long bu
   * Returns zero on success, or -EFAULT on error.
   */
  
@@ -12423,7 +12456,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  
  #define __get_user_unaligned __get_user
  #define __put_user_unaligned __put_user
-@@ -540,7 +600,7 @@ struct __large_struct { unsigned long bu
+@@ -540,7 +598,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -12432,7 +12465,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/include/
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -574,8 +634,8 @@ strncpy_from_user(char *dst, const char
+@@ -574,8 +632,8 @@ strncpy_from_user(char *dst, const char
  extern __must_check long strlen_user(const char __user *str);
  extern __must_check long strnlen_user(const char __user *str, long n);
  
@@ -13994,7 +14027,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  #include <asm/fcntl.h>
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/entry_32.S linux-3.7.5-pax/arch/x86/kernel/entry_32.S
 --- linux-3.7.5/arch/x86/kernel/entry_32.S	2013-01-21 22:19:55.509739749 +0100
-+++ linux-3.7.5-pax/arch/x86/kernel/entry_32.S	2013-01-21 22:20:00.773740035 +0100
++++ linux-3.7.5-pax/arch/x86/kernel/entry_32.S	2013-02-05 03:29:00.344248189 +0100
 @@ -177,13 +177,153 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -14466,44 +14499,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  	CFI_ENDPROC
  /*
   * End of kprobes section
-@@ -763,6 +995,36 @@ ENTRY(ptregs_clone)
- 	CFI_ENDPROC
- ENDPROC(ptregs_clone)
- 
-+	ALIGN;
-+ENTRY(kernel_execve)
-+	CFI_STARTPROC
-+	pushl_cfi %ebp
-+	sub $PT_OLDSS+4,%esp
-+	pushl_cfi %edi
-+	pushl_cfi %ecx
-+	pushl_cfi %eax
-+	lea 3*4(%esp),%edi
-+	mov $PT_OLDSS/4+1,%ecx
-+	xorl %eax,%eax
-+	rep stosl
-+	popl_cfi %eax
-+	popl_cfi %ecx
-+	popl_cfi %edi
-+	movl $X86_EFLAGS_IF,PT_EFLAGS(%esp)
-+	pushl_cfi %esp
-+	call sys_execve
-+	add $4,%esp
-+	CFI_ADJUST_CFA_OFFSET -4
-+	GET_THREAD_INFO(%ebp)
-+	test %eax,%eax
-+	jz syscall_exit
-+	add $PT_OLDSS+4,%esp
-+	CFI_ADJUST_CFA_OFFSET -PT_OLDSS-4
-+	popl_cfi %ebp
-+	ret
-+	CFI_ENDPROC
-+ENDPROC(kernel_execve)
-+
- .macro FIXUP_ESPFIX_STACK
- /*
-  * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -772,8 +1034,15 @@ ENDPROC(ptregs_clone)
+@@ -772,8 +1004,15 @@ ENDPROC(ptregs_clone)
   * normal stack and adjusts ESP with the matching offset.
   */
  	/* fixup the stack */
@@ -14521,7 +14517,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl_cfi $__KERNEL_DS
-@@ -826,7 +1095,7 @@ vector=vector+1
+@@ -826,7 +1065,7 @@ vector=vector+1
    .endr
  2:	jmp common_interrupt
  .endr
@@ -14530,7 +14526,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  .previous
  END(interrupt)
-@@ -877,7 +1146,7 @@ ENTRY(coprocessor_error)
+@@ -877,7 +1116,7 @@ ENTRY(coprocessor_error)
  	pushl_cfi $do_coprocessor_error
  	jmp error_code
  	CFI_ENDPROC
@@ -14539,7 +14535,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(simd_coprocessor_error)
  	RING0_INT_FRAME
-@@ -899,7 +1168,7 @@ ENTRY(simd_coprocessor_error)
+@@ -899,7 +1138,7 @@ ENTRY(simd_coprocessor_error)
  #endif
  	jmp error_code
  	CFI_ENDPROC
@@ -14548,7 +14544,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(device_not_available)
  	RING0_INT_FRAME
-@@ -908,18 +1177,18 @@ ENTRY(device_not_available)
+@@ -908,18 +1147,18 @@ ENTRY(device_not_available)
  	pushl_cfi $do_device_not_available
  	jmp error_code
  	CFI_ENDPROC
@@ -14570,7 +14566,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  #endif
  
  ENTRY(overflow)
-@@ -929,7 +1198,7 @@ ENTRY(overflow)
+@@ -929,7 +1168,7 @@ ENTRY(overflow)
  	pushl_cfi $do_overflow
  	jmp error_code
  	CFI_ENDPROC
@@ -14579,7 +14575,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(bounds)
  	RING0_INT_FRAME
-@@ -938,7 +1207,7 @@ ENTRY(bounds)
+@@ -938,7 +1177,7 @@ ENTRY(bounds)
  	pushl_cfi $do_bounds
  	jmp error_code
  	CFI_ENDPROC
@@ -14588,7 +14584,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(invalid_op)
  	RING0_INT_FRAME
-@@ -947,7 +1216,7 @@ ENTRY(invalid_op)
+@@ -947,7 +1186,7 @@ ENTRY(invalid_op)
  	pushl_cfi $do_invalid_op
  	jmp error_code
  	CFI_ENDPROC
@@ -14597,7 +14593,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(coprocessor_segment_overrun)
  	RING0_INT_FRAME
-@@ -956,7 +1225,7 @@ ENTRY(coprocessor_segment_overrun)
+@@ -956,7 +1195,7 @@ ENTRY(coprocessor_segment_overrun)
  	pushl_cfi $do_coprocessor_segment_overrun
  	jmp error_code
  	CFI_ENDPROC
@@ -14606,7 +14602,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(invalid_TSS)
  	RING0_EC_FRAME
-@@ -964,7 +1233,7 @@ ENTRY(invalid_TSS)
+@@ -964,7 +1203,7 @@ ENTRY(invalid_TSS)
  	pushl_cfi $do_invalid_TSS
  	jmp error_code
  	CFI_ENDPROC
@@ -14615,7 +14611,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(segment_not_present)
  	RING0_EC_FRAME
-@@ -972,7 +1241,7 @@ ENTRY(segment_not_present)
+@@ -972,7 +1211,7 @@ ENTRY(segment_not_present)
  	pushl_cfi $do_segment_not_present
  	jmp error_code
  	CFI_ENDPROC
@@ -14624,7 +14620,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(stack_segment)
  	RING0_EC_FRAME
-@@ -980,7 +1249,7 @@ ENTRY(stack_segment)
+@@ -980,7 +1219,7 @@ ENTRY(stack_segment)
  	pushl_cfi $do_stack_segment
  	jmp error_code
  	CFI_ENDPROC
@@ -14633,7 +14629,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(alignment_check)
  	RING0_EC_FRAME
-@@ -988,7 +1257,7 @@ ENTRY(alignment_check)
+@@ -988,7 +1227,7 @@ ENTRY(alignment_check)
  	pushl_cfi $do_alignment_check
  	jmp error_code
  	CFI_ENDPROC
@@ -14642,7 +14638,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(divide_error)
  	RING0_INT_FRAME
-@@ -997,7 +1266,7 @@ ENTRY(divide_error)
+@@ -997,7 +1236,7 @@ ENTRY(divide_error)
  	pushl_cfi $do_divide_error
  	jmp error_code
  	CFI_ENDPROC
@@ -14651,7 +14647,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  #ifdef CONFIG_X86_MCE
  ENTRY(machine_check)
-@@ -1007,7 +1276,7 @@ ENTRY(machine_check)
+@@ -1007,7 +1246,7 @@ ENTRY(machine_check)
  	pushl_cfi machine_check_vector
  	jmp error_code
  	CFI_ENDPROC
@@ -14660,7 +14656,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  #endif
  
  ENTRY(spurious_interrupt_bug)
-@@ -1017,7 +1286,7 @@ ENTRY(spurious_interrupt_bug)
+@@ -1017,7 +1256,7 @@ ENTRY(spurious_interrupt_bug)
  	pushl_cfi $do_spurious_interrupt_bug
  	jmp error_code
  	CFI_ENDPROC
@@ -14669,7 +14665,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  /*
   * End of kprobes section
   */
-@@ -1120,7 +1389,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector
+@@ -1120,7 +1359,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector
  
  ENTRY(mcount)
  	ret
@@ -14678,7 +14674,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1153,7 +1422,7 @@ ftrace_graph_call:
+@@ -1153,7 +1392,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -14687,7 +14683,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(ftrace_regs_caller)
  	pushf	/* push flags before compare (in cs location) */
-@@ -1254,7 +1523,7 @@ trace:
+@@ -1254,7 +1493,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -14696,7 +14692,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1272,7 +1541,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1272,7 +1511,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -14705,7 +14701,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  .globl return_to_handler
  return_to_handler:
-@@ -1328,15 +1597,18 @@ error_code:
+@@ -1328,15 +1567,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -14726,7 +14722,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1379,7 +1651,7 @@ debug_stack_correct:
+@@ -1379,7 +1621,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -14735,7 +14731,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1417,6 +1689,9 @@ nmi_stack_correct:
+@@ -1417,6 +1659,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -14745,7 +14741,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1453,12 +1728,15 @@ nmi_espfix_stack:
+@@ -1453,12 +1698,15 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -14762,7 +14758,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1471,14 +1749,14 @@ ENTRY(int3)
+@@ -1471,14 +1719,14 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -14779,7 +14775,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/kernel/e
  
  #ifdef CONFIG_KVM_GUEST
  ENTRY(async_page_fault)
-@@ -1487,7 +1765,7 @@ ENTRY(async_page_fault)
+@@ -1487,7 +1735,7 @@ ENTRY(async_page_fault)
  	pushl_cfi $do_async_page_fault
  	jmp error_code
  	CFI_ENDPROC
@@ -22765,7 +22761,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/extab
  
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault.c linux-3.7.5-pax/arch/x86/mm/fault.c
 --- linux-3.7.5/arch/x86/mm/fault.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/x86/mm/fault.c	2013-01-30 01:21:08.579366546 +0100
++++ linux-3.7.5-pax/arch/x86/mm/fault.c	2013-02-07 00:07:19.476491127 +0100
 @@ -13,12 +13,19 @@
  #include <linux/perf_event.h>		/* perf_sw_event		*/
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
@@ -22961,7 +22957,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -749,6 +825,21 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -749,12 +825,29 @@ __bad_area_nosemaphore(struct pt_regs *r
  		}
  #endif
  
@@ -22980,10 +22976,20 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
 +		}
 +#endif
 +
++		/* Kernel addresses are always protection faults: */
++		error_code |= address >= TASK_SIZE;
++
  		if (unlikely(show_unhandled_signals))
  			show_signal_msg(regs, error_code, address, tsk);
  
-@@ -845,7 +936,7 @@ do_sigbus(struct pt_regs *regs, unsigned
+-		/* Kernel addresses are always protection faults: */
+ 		tsk->thread.cr2		= address;
+-		tsk->thread.error_code	= error_code | (address >= TASK_SIZE);
++		tsk->thread.error_code	= error_code;
+ 		tsk->thread.trap_nr	= X86_TRAP_PF;
+ 
+ 		force_sig_info_fault(SIGSEGV, si_code, address, tsk, 0);
+@@ -845,7 +938,7 @@ do_sigbus(struct pt_regs *regs, unsigned
  	if (fault & (VM_FAULT_HWPOISON|VM_FAULT_HWPOISON_LARGE)) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -22992,7 +22998,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -901,6 +992,99 @@ static int spurious_fault_check(unsigned
+@@ -901,6 +994,99 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -23092,7 +23098,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -973,6 +1157,9 @@ int show_unhandled_signals = 1;
+@@ -973,6 +1159,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -23102,7 +23108,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -1001,7 +1188,7 @@ static inline bool smap_violation(int er
+@@ -1001,7 +1190,7 @@ static inline bool smap_violation(int er
  	if (error_code & PF_USER)
  		return false;
  
@@ -23111,7 +23117,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  		return false;
  
  	return true;
-@@ -1017,19 +1204,34 @@ __do_page_fault(struct pt_regs *regs, un
+@@ -1017,19 +1206,34 @@ __do_page_fault(struct pt_regs *regs, un
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -23150,7 +23156,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1089,7 +1291,7 @@ __do_page_fault(struct pt_regs *regs, un
+@@ -1089,7 +1293,7 @@ __do_page_fault(struct pt_regs *regs, un
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -23159,7 +23165,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1151,6 +1353,11 @@ retry:
+@@ -1151,6 +1355,11 @@ retry:
  		might_sleep();
  	}
  
@@ -23171,7 +23177,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1162,18 +1369,24 @@ retry:
+@@ -1162,18 +1371,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -23207,7 +23213,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/fault
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1237,3 +1450,292 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1237,3 +1452,292 @@ do_page_fault(struct pt_regs *regs, unsi
  	__do_page_fault(regs, error_code);
  	exception_exit(regs);
  }
@@ -23529,7 +23535,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/highm
  	return (void *)vaddr;
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/hugetlbpage.c linux-3.7.5-pax/arch/x86/mm/hugetlbpage.c
 --- linux-3.7.5/arch/x86/mm/hugetlbpage.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/arch/x86/mm/hugetlbpage.c	2012-12-11 12:26:07.243203439 +0100
++++ linux-3.7.5-pax/arch/x86/mm/hugetlbpage.c	2013-02-07 00:05:23.828487726 +0100
 @@ -276,13 +276,20 @@ static unsigned long hugetlb_get_unmappe
  	struct hstate *h = hstate_file(file);
  	struct mm_struct *mm = current->mm;
@@ -23711,7 +23717,14 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/arch/x86/mm/huget
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -420,8 +441,7 @@ hugetlb_get_unmapped_area(struct file *f
+@@ -417,11 +438,14 @@ hugetlb_get_unmapped_area(struct file *f
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
@@ -27490,41 +27503,28 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/acpi/ec_s
  			return err;
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/acpi/proc.c linux-3.7.5-pax/drivers/acpi/proc.c
 --- linux-3.7.5/drivers/acpi/proc.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/drivers/acpi/proc.c	2012-12-11 12:26:07.543203505 +0100
-@@ -360,19 +360,13 @@ acpi_system_write_wakeup_device(struct f
- 				size_t count, loff_t * ppos)
- {
++++ linux-3.7.5-pax/drivers/acpi/proc.c	2013-02-05 00:20:08.856853203 +0100
+@@ -362,16 +362,13 @@ acpi_system_write_wakeup_device(struct f
  	struct list_head *node, *next;
--	char strbuf[5];
--	char str[5] = "";
+ 	char strbuf[5];
+ 	char str[5] = "";
 -	unsigned int len = count;
-+	char strbuf[5] = {0};
  
 -	if (len > 4)
 -		len = 4;
 -	if (len < 0)
+-		return -EFAULT;
 +	if (count > 4)
 +		count = 4;
+ 
+-	if (copy_from_user(strbuf, buffer, len))
 +	if (copy_from_user(strbuf, buffer, count))
  		return -EFAULT;
--
--	if (copy_from_user(strbuf, buffer, len))
--		return -EFAULT;
 -	strbuf[len] = '\0';
--	sscanf(strbuf, "%s", str);
 +	strbuf[count] = '\0';
+ 	sscanf(strbuf, "%s", str);
  
  	mutex_lock(&acpi_device_lock);
- 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
-@@ -381,7 +375,7 @@ acpi_system_write_wakeup_device(struct f
- 		if (!dev->wakeup.flags.valid)
- 			continue;
- 
--		if (!strncmp(dev->pnp.bus_id, str, 4)) {
-+		if (!strncmp(dev->pnp.bus_id, strbuf, 4)) {
- 			if (device_can_wakeup(&dev->dev)) {
- 				bool enable = !device_may_wakeup(&dev->dev);
- 				device_set_wakeup_enable(&dev->dev, enable);
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/drivers/acpi/processor_driver.c linux-3.7.5-pax/drivers/acpi/processor_driver.c
 --- linux-3.7.5/drivers/acpi/processor_driver.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.5-pax/drivers/acpi/processor_driver.c	2012-12-11 12:26:07.543203505 +0100
@@ -40401,7 +40401,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/fs/ecryptfs/read_
  }
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/fs/exec.c linux-3.7.5-pax/fs/exec.c
 --- linux-3.7.5/fs/exec.c	2013-01-16 18:30:11.919082195 +0100
-+++ linux-3.7.5-pax/fs/exec.c	2013-01-30 01:19:53.639362476 +0100
++++ linux-3.7.5-pax/fs/exec.c	2013-02-05 02:14:31.324486800 +0100
 @@ -55,6 +55,15 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -40848,7 +40848,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/fs/exec.c linux-3
 +}
 +#endif
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++void __check_object_size(const void *ptr, unsigned long n, bool to)
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
@@ -40868,7 +40868,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/fs/exec.c linux-3
 +#endif
 +
 +}
-+EXPORT_SYMBOL(check_object_size);
++EXPORT_SYMBOL(__check_object_size);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +void pax_track_stack(void)
@@ -42558,6 +42558,53 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/fs/gfs2/inode.c l
  	if (!IS_ERR(s))
  		kfree(s);
  }
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/fs/hugetlbfs/inode.c linux-3.7.5-pax/fs/hugetlbfs/inode.c
+--- linux-3.7.5/fs/hugetlbfs/inode.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/fs/hugetlbfs/inode.c	2013-02-07 00:17:57.596509889 +0100
+@@ -165,18 +165,21 @@ hugetlb_get_unmapped_area(struct file *f
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (addr) {
+ 		addr = ALIGN(addr, huge_page_size(h));
+ 		vma = find_vma(mm, addr);
+-		if (TASK_SIZE - len >= addr &&
+-		    (!vma || addr + len <= vma->vm_start))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
+ 			return addr;
+ 	}
+ 
+ 	if (len > mm->cached_hole_size)
+ 		start_addr = mm->free_area_cache;
+ 	else {
+-		start_addr = TASK_UNMAPPED_BASE;
++		start_addr = mm->mmap_base;
+ 		mm->cached_hole_size = 0;
+ 	}
+ 
+@@ -190,15 +193,15 @@ full_search:
+ 			 * Start a new search - just in case we missed
+ 			 * some holes.
+ 			 */
+-			if (start_addr != TASK_UNMAPPED_BASE) {
+-				start_addr = TASK_UNMAPPED_BASE;
++			if (start_addr != mm->mmap_base) {
++				start_addr = mm->mmap_base;
+ 				mm->cached_hole_size = 0;
+ 				goto full_search;
+ 			}
+ 			return -ENOMEM;
+ 		}
+ 
+-		if (!vma || addr + len <= vma->vm_start) {
++		if (check_heap_stack_gap(vma, addr, len)) {
+ 			mm->free_area_cache = addr + len;
+ 			return addr;
+ 		}
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/fs/inode.c linux-3.7.5-pax/fs/inode.c
 --- linux-3.7.5/fs/inode.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.5-pax/fs/inode.c	2012-12-11 12:26:08.495203693 +0100
@@ -45916,7 +45963,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/rma
  				  struct vm_area_struct *next)
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/sched.h linux-3.7.5-pax/include/linux/sched.h
 --- linux-3.7.5/include/linux/sched.h	2013-01-28 18:38:27.587673968 +0100
-+++ linux-3.7.5-pax/include/linux/sched.h	2013-01-28 18:38:42.567673622 +0100
++++ linux-3.7.5-pax/include/linux/sched.h	2013-02-05 02:30:42.928434924 +0100
 @@ -61,6 +61,7 @@ struct bio_list;
  struct fs_struct;
  struct perf_event_context;
@@ -45961,7 +46008,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/sch
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
-@@ -1550,6 +1558,51 @@ struct task_struct {
+@@ -1550,6 +1558,50 @@ struct task_struct {
  #endif
  };
  
@@ -46008,12 +46055,11 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/sch
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2092,7 +2145,9 @@ void yield(void);
+@@ -2092,7 +2144,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -46023,7 +46069,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/sch
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2281,7 +2336,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2281,7 +2335,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -46032,7 +46078,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/sch
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2485,9 +2540,9 @@ static inline unsigned long *end_of_stac
+@@ -2485,9 +2539,9 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -46444,6 +46490,23 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/sys
  
  #ifdef CONFIG_MAGIC_SYSRQ
  
+diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/thread_info.h linux-3.7.5-pax/include/linux/thread_info.h
+--- linux-3.7.5/include/linux/thread_info.h	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.7.5-pax/include/linux/thread_info.h	2013-02-05 02:29:43.548438094 +0100
+@@ -146,6 +146,13 @@ static inline bool test_and_clear_restor
+ #error "no set_restore_sigmask() provided and default one won't work"
+ #endif
+ 
++extern void __check_object_size(const void *ptr, unsigned long n, bool to);
++static inline void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++	if (!__builtin_constant_p(n))
++		__check_object_size(ptr, n, to);
++}
++
+ #endif	/* __KERNEL__ */
+ 
+ #endif /* _LINUX_THREAD_INFO_H */
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/linux/tty_driver.h linux-3.7.5-pax/include/linux/tty_driver.h
 --- linux-3.7.5/include/linux/tty_driver.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.5-pax/include/linux/tty_driver.h	2013-01-01 19:20:59.258605226 +0100
@@ -47442,18 +47505,6 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/uapi/linu
 +#define XATTR_NAME_PAX_FLAGS XATTR_PAX_PREFIX XATTR_PAX_FLAGS_SUFFIX
  
  #endif /* _UAPI_LINUX_XATTR_H */
-diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/video/omapdss.h linux-3.7.5-pax/include/video/omapdss.h
---- linux-3.7.5/include/video/omapdss.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/include/video/omapdss.h	2013-01-02 01:09:02.521490222 +0100
-@@ -323,7 +323,7 @@ struct omap_dss_board_info {
- 	int (*dsi_enable_pads)(int dsi_id, unsigned lane_mask);
- 	void (*dsi_disable_pads)(int dsi_id, unsigned lane_mask);
- 	int (*set_min_bus_tput)(struct device *dev, unsigned long r);
--};
-+} __do_const;
- 
- /* Init with the board info */
- extern int omap_display_init(struct omap_dss_board_info *board_data);
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/include/video/udlfb.h linux-3.7.5-pax/include/video/udlfb.h
 --- linux-3.7.5/include/video/udlfb.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.5-pax/include/video/udlfb.h	2012-12-11 12:26:09.011203769 +0100
@@ -49029,7 +49080,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/kernel/lockdep_pr
  	if (!name) {
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/kernel/module.c linux-3.7.5-pax/kernel/module.c
 --- linux-3.7.5/kernel/module.c	2013-01-28 18:38:27.587673968 +0100
-+++ linux-3.7.5-pax/kernel/module.c	2013-01-28 18:51:02.087656533 +0100
++++ linux-3.7.5-pax/kernel/module.c	2013-02-07 01:27:06.232631866 +0100
 @@ -153,7 +153,8 @@ static BLOCKING_NOTIFIER_HEAD(module_not
  
  /* Bounds of module allocation, for speeding __module_address.
@@ -49381,7 +49432,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/kernel/module.c l
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2758,23 +2772,50 @@ static int move_module(struct module *mo
+@@ -2758,10 +2772,10 @@ static int move_module(struct module *mo
  	if (!ptr)
  		return -ENOMEM;
  
@@ -49395,19 +49446,16 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/kernel/module.c l
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. This block doesn't need to be
- 	 * scanned as it contains data and code that will be freed
+@@ -2769,12 +2783,39 @@ static int move_module(struct module *mo
  	 * after the module is initialized.
  	 */
--	kmemleak_ignore(ptr);
+ 	kmemleak_ignore(ptr);
 -	if (!ptr && mod->init_size) {
 -		module_free(mod, mod->module_core);
-+	kmemleak_not_leak(ptr);
 +	if (!ptr && mod->init_size_rw) {
 +		module_free(mod, mod->module_core_rw);
- 		return -ENOMEM;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
++		return -ENOMEM;
++	}
 +	memset(ptr, 0, mod->init_size_rw);
 +	mod->module_init_rw = ptr;
 +
@@ -49425,13 +49473,15 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/kernel/module.c l
 +	mod->module_core_rx = ptr;
 +
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
-+	kmemleak_not_leak(ptr);
++	kmemleak_ignore(ptr);
 +	if (!ptr && mod->init_size_rx) {
 +		module_free_exec(mod, mod->module_core_rx);
 +		module_free(mod, mod->module_init_rw);
 +		module_free(mod, mod->module_core_rw);
-+		return -ENOMEM;
-+	}
+ 		return -ENOMEM;
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
 +
 +	pax_open_kernel();
 +	memset(ptr, 0, mod->init_size_rx);
@@ -55026,7 +55076,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/mm/shmem.c linux-
  
 diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/mm/slab.c linux-3.7.5-pax/mm/slab.c
 --- linux-3.7.5/mm/slab.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.5-pax/mm/slab.c	2012-12-20 23:54:39.073879809 +0100
++++ linux-3.7.5-pax/mm/slab.c	2013-02-05 04:12:58.412107337 +0100
 @@ -164,7 +164,7 @@ static bool pfmemalloc_active __read_mos
  
  /* Legal flag mask for kmem_cache_create(). */
@@ -55141,7 +55191,7 @@ diff -NurpX linux-3.7.5-pax/Documentation/dontdiff linux-3.7.5/mm/slab.c linux-3
 +
 +#ifdef CONFIG_PAX_USERCOPY_SLABS
 +		sizes->cs_usercopycachep = kmem_cache_zalloc(kmem_cache, GFP_NOWAIT);
-+		sizes->cs_usercopycachep->name = names->name_dma;
++		sizes->cs_usercopycachep->name = names->name_usercopy;
 +		sizes->cs_usercopycachep->size = sizes->cs_size;
 +		sizes->cs_usercopycachep->object_size = sizes->cs_size;
 +		sizes->cs_usercopycachep->align = ARCH_KMALLOC_MINALIGN;
