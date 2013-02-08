@@ -1,4 +1,4 @@
-- forward port to 3.7.6
+- fixed some arm/KERNEXEC fallout
 
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/alpha/include/asm/atomic.h linux-3.7.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.6/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -1388,14 +1388,16 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/arm/kernel/h
  /*
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/arm/kernel/module.c linux-3.7.6-pax/arch/arm/kernel/module.c
 --- linux-3.7.6/arch/arm/kernel/module.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.6-pax/arch/arm/kernel/module.c	2013-01-02 20:15:36.110088969 +0100
-@@ -37,12 +37,35 @@
++++ linux-3.7.6-pax/arch/arm/kernel/module.c	2013-02-08 00:38:40.346279469 +0100
+@@ -37,12 +37,37 @@
  #endif
  
  #ifdef CONFIG_MMU
 -void *module_alloc(unsigned long size)
 +static inline void *__module_alloc(unsigned long size, pgprot_t prot)
  {
++	if (!size || PAGE_ALIGN(size) > MODULES_END - MODULES_VADDR)
++		return NULL;
  	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
 -				GFP_KERNEL, PAGE_KERNEL_EXEC, -1,
 +				GFP_KERNEL, prot, -1,
@@ -2099,7 +2101,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/arm/mm/mmap.
  	}
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/arm/mm/mmu.c linux-3.7.6-pax/arch/arm/mm/mmu.c
 --- linux-3.7.6/arch/arm/mm/mmu.c	2013-01-16 18:30:11.883082196 +0100
-+++ linux-3.7.6-pax/arch/arm/mm/mmu.c	2013-01-30 23:33:56.506393318 +0100
++++ linux-3.7.6-pax/arch/arm/mm/mmu.c	2013-02-08 00:25:40.994321081 +0100
 @@ -227,16 +227,16 @@ static struct mem_type mem_types[] = {
  	[MT_UNCACHED] = {
  		.prot_pte	= PROT_PTE_DEVICE,
@@ -2201,12 +2203,12 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/arm/mm/mmu.c
  	mem_types[MT_MEMORY_DMA_READY].prot_pte |= kern_pgprot;
  	mem_types[MT_MEMORY_NONCACHED].prot_sect |= ecc_mask;
  	mem_types[MT_ROM].prot_sect |= cp->pmd;
-@@ -1198,8 +1232,37 @@ static void __init map_lowmem(void)
+@@ -1198,7 +1232,41 @@ static void __init map_lowmem(void)
  		map.pfn = __phys_to_pfn(start);
  		map.virtual = __phys_to_virt(start);
  		map.length = end - start;
--		map.type = MT_MEMORY;
- 
++
++#ifdef CONFIG_PAX_KERNEXEC
 +		if (map.virtual <= (unsigned long)_stext && ((unsigned long)_end < (map.virtual + map.length))) {
 +			struct map_desc kernel;
 +			struct map_desc initmap;
@@ -2237,9 +2239,12 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/arm/mm/mmu.c
 +		}
 +
 +		map.type = MT_MEMORY_RW;
++#else
+ 		map.type = MT_MEMORY;
++#endif
+ 
  		create_mapping(&map);
  	}
- }
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/arm/plat-orion/include/plat/addr-map.h linux-3.7.6-pax/arch/arm/plat-orion/include/plat/addr-map.h
 --- linux-3.7.6/arch/arm/plat-orion/include/plat/addr-map.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.6-pax/arch/arm/plat-orion/include/plat/addr-map.h	2012-12-11 12:26:06.999218318 +0100
@@ -17307,7 +17312,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/x86/kernel/m
  static void microcode_fini_cpu(int cpu)
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/x86/kernel/module.c linux-3.7.6-pax/arch/x86/kernel/module.c
 --- linux-3.7.6/arch/x86/kernel/module.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.6-pax/arch/x86/kernel/module.c	2012-12-11 12:26:07.167203427 +0100
++++ linux-3.7.6-pax/arch/x86/kernel/module.c	2013-02-08 00:38:39.426279518 +0100
 @@ -43,15 +43,60 @@ do {							\
  } while (0)
  #endif
@@ -17316,7 +17321,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/x86/kernel/m
 +static inline void *__module_alloc(unsigned long size, pgprot_t prot)
  {
 -	if (PAGE_ALIGN(size) > MODULES_LEN)
-+	if (size == 0 || PAGE_ALIGN(size) > MODULES_LEN)
++	if (!size || PAGE_ALIGN(size) > MODULES_LEN)
  		return NULL;
  	return __vmalloc_node_range(size, 1, MODULES_VADDR, MODULES_END,
 -				GFP_KERNEL | __GFP_HIGHMEM, PAGE_KERNEL_EXEC,
