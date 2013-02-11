@@ -1,4 +1,4 @@
-- fixed some arm/KERNEXEC fallout
+- gcc plugins should now work with gcc 4.8 as well
 
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/arch/alpha/include/asm/atomic.h linux-3.7.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.6/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -60998,7 +60998,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/sound/pci/ymfpci/
  	chip->irq = -1;
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/checker_plugin.c linux-3.7.6-pax/tools/gcc/checker_plugin.c
 --- linux-3.7.6/tools/gcc/checker_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/checker_plugin.c	2012-12-11 12:26:09.295203840 +0100
++++ linux-3.7.6-pax/tools/gcc/checker_plugin.c	2013-02-11 21:03:26.000000000 +0100
 @@ -0,0 +1,171 @@
 +/*
 + * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
@@ -61173,10 +61173,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/checker
 +}
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/colorize_plugin.c linux-3.7.6-pax/tools/gcc/colorize_plugin.c
 --- linux-3.7.6/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/colorize_plugin.c	2012-12-11 12:26:09.295203840 +0100
-@@ -0,0 +1,148 @@
++++ linux-3.7.6-pax/tools/gcc/colorize_plugin.c	2013-02-11 21:04:04.000000000 +0100
+@@ -0,0 +1,151 @@
 +/*
-+ * Copyright 2012 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -61205,7 +61205,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/coloriz
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info colorize_plugin_info = {
-+	.version	= "201203092200",
++	.version	= "201302112000",
 +	.help		= NULL,
 +};
 +
@@ -61284,6 +61284,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/coloriz
 +	.pass = {
 +		.type			= SIMPLE_IPA_PASS,
 +		.name			= "colorize_rearm",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_colorize_rearm,
 +		.sub			= NULL,
@@ -61325,8 +61328,8 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/coloriz
 +}
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/constify_plugin.c linux-3.7.6-pax/tools/gcc/constify_plugin.c
 --- linux-3.7.6/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/constify_plugin.c	2013-01-15 21:47:18.247121842 +0100
-@@ -0,0 +1,349 @@
++++ linux-3.7.6-pax/tools/gcc/constify_plugin.c	2013-02-11 21:04:26.000000000 +0100
+@@ -0,0 +1,359 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -61367,7 +61370,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/constif
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201301150230",
++	.version	= "201302112000",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -61589,16 +61592,23 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/constif
 +{
 +	unsigned int ret = 0;
 +	tree var;
-+	referenced_var_iterator rvi;
 +
 +#if BUILDING_GCC_VERSION == 4005
-+	FOR_EACH_REFERENCED_VAR(var, rvi) {
++	tree vars;
 +#else
-+	FOR_EACH_REFERENCED_VAR(cfun, var, rvi) {
++	unsigned int i;
++#endif
++
++#if BUILDING_GCC_VERSION == 4005
++	for (vars = cfun->local_decls; vars; vars = TREE_CHAIN(vars)) {
++		var = TREE_VALUE(vars);
++#else
++	FOR_EACH_LOCAL_DECL(cfun, i, var) {
 +#endif
 +		tree type = TREE_TYPE(var);
 +
-+		if (!DECL_P(var) || TREE_STATIC(var) || DECL_EXTERNAL(var))
++		gcc_assert(DECL_P(var));
++		if (is_global_var(var))
 +			continue;
 +
 +		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
@@ -61610,8 +61620,8 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/constif
 +//		if (lookup_attribute("no_const", DECL_ATTRIBUTES(var)))
 +//			continue;
 +
-+//		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
-+//			continue;
++		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
++			continue;
 +
 +		if (walk_struct(type)) {
 +			error_at(DECL_SOURCE_LOCATION(var), "constified variable %qE cannot be local", var);
@@ -61625,6 +61635,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/constif
 +	{
 +		.type			= GIMPLE_PASS,
 +		.name			= "check_local_variables",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= check_local_variables,
 +		.sub			= NULL,
@@ -61781,10 +61794,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/.gitign
 +size_overflow_hash.h
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kallocstat_plugin.c linux-3.7.6-pax/tools/gcc/kallocstat_plugin.c
 --- linux-3.7.6/tools/gcc/kallocstat_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/kallocstat_plugin.c	2012-12-11 12:26:09.295203840 +0100
-@@ -0,0 +1,167 @@
++++ linux-3.7.6-pax/tools/gcc/kallocstat_plugin.c	2013-02-11 21:04:59.000000000 +0100
+@@ -0,0 +1,170 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -61836,7 +61849,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kallocs
 +};
 +
 +static struct plugin_info kallocstat_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201302112000",
 +};
 +
 +static unsigned int execute_kallocstat(void);
@@ -61845,6 +61858,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kallocs
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kallocstat",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_kallocstat,
 +		.sub			= NULL,
@@ -61952,10 +61968,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kallocs
 +}
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexec_plugin.c linux-3.7.6-pax/tools/gcc/kernexec_plugin.c
 --- linux-3.7.6/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/kernexec_plugin.c	2012-12-11 12:26:09.299203841 +0100
-@@ -0,0 +1,432 @@
++++ linux-3.7.6-pax/tools/gcc/kernexec_plugin.c	2013-02-11 21:05:15.000000000 +0100
+@@ -0,0 +1,465 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -61998,10 +62014,14 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
 +#endif
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info kernexec_plugin_info = {
-+	.version	= "201111291120",
++	.version	= "201302112000",
 +	.help		= "method=[bts|or]\tinstrumentation method\n"
 +};
 +
@@ -62017,6 +62037,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_reload",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_reload,
 +		.sub			= NULL,
@@ -62035,6 +62058,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_fptr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_fptr,
 +		.sub			= NULL,
@@ -62053,6 +62079,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "kernexec_retaddr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_retaddr,
 +		.sub			= NULL,
@@ -62150,8 +62179,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +
 +	// create temporary unsigned long variable used for bitops and cast fptr to it
 +	intptr = create_tmp_var(long_unsigned_type_node, "kernexec_bts");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(intptr);
 +	mark_sym_for_renaming(intptr);
++#endif
 +	assign_intptr = gimple_build_assign(intptr, fold_convert(long_unsigned_type_node, old_fptr));
 +	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
@@ -62165,8 +62196,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +
 +	// cast temporary unsigned long back to a temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_fptr");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +	assign_new_fptr = gimple_build_assign(new_fptr, fold_convert(TREE_TYPE(old_fptr), intptr));
 +	gsi_insert_before(gsi, assign_new_fptr, GSI_SAME_STMT);
 +	update_stmt(assign_new_fptr);
@@ -62180,24 +62213,36 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +{
 +	gimple asm_or_stmt, call_stmt;
 +	tree old_fptr, new_fptr, input, output;
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC(tree, gc) *inputs = NULL;
 +	VEC(tree, gc) *outputs = NULL;
++#else
++	vec<tree, va_gc> *inputs = NULL;
++	vec<tree, va_gc> *outputs = NULL;
++#endif
 +
 +	call_stmt = gsi_stmt(*gsi);
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_or");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +
 +	// build asm volatile("orq %%r10, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
 +	input = build_tree_list(NULL_TREE, build_string(2, "0"));
 +	input = chainon(NULL_TREE, build_tree_list(input, old_fptr));
 +	output = build_tree_list(NULL_TREE, build_string(3, "=r"));
 +	output = chainon(NULL_TREE, build_tree_list(output, new_fptr));
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC_safe_push(tree, gc, inputs, input);
 +	VEC_safe_push(tree, gc, outputs, output);
++#else
++	vec_safe_push(inputs, input);
++	vec_safe_push(outputs, output);
++#endif
 +	asm_or_stmt = gimple_build_asm_vec("orq %%r10, %0\n\t", inputs, outputs, NULL, NULL);
 +	gimple_asm_set_volatile(asm_or_stmt, true);
 +	gsi_insert_before(gsi, asm_or_stmt, GSI_SAME_STMT);
@@ -62235,9 +62280,13 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +				gcc_unreachable();
 +
 +			// ... through a function pointer
-+			fn = SSA_NAME_VAR(fn);
-+			if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL)
-+				continue;
++			if (SSA_NAME_VAR(fn) != NULL_TREE) {
++				fn = SSA_NAME_VAR(fn);
++				if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL) {
++					debug_tree(fn);
++					gcc_unreachable();
++				}
++			}
 +			fn = TREE_TYPE(fn);
 +			if (TREE_CODE(fn) != POINTER_TYPE)
 +				continue;
@@ -62388,10 +62437,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/kernexe
 +}
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_entropy_plugin.c linux-3.7.6-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.7.6/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/latent_entropy_plugin.c	2012-12-11 12:26:09.299203841 +0100
-@@ -0,0 +1,295 @@
++++ linux-3.7.6-pax/tools/gcc/latent_entropy_plugin.c	2013-02-11 21:05:50.000000000 +0100
+@@ -0,0 +1,321 @@
 +/*
-+ * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -62431,12 +62480,16 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207271820",
++	.version	= "201302112000",
 +	.help		= NULL
 +};
 +
@@ -62447,6 +62500,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "latent_entropy",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_latent_entropy,
 +		.execute		= execute_latent_entropy,
 +		.sub			= NULL,
@@ -62542,7 +62598,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +	op = get_op(&rhs);
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, op, unsigned_intDI_type_node, local_entropy, rhs);
 +	assign = gimple_build_assign(local_entropy, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +//debug_bb(bb);
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_before(&gsi, assign, GSI_NEW_STMT);
@@ -62557,12 +62615,16 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +
 +	// 1. create temporary copy of latent_entropy
 +	temp = create_tmp_var(unsigned_intDI_type_node, "temp_latent_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(temp);
 +	mark_sym_for_renaming(temp);
++#endif
 +
 +	// 2. read...
 +	assign = gimple_build_assign(temp, latent_entropy_decl);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
@@ -62570,13 +62632,17 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +	// 3. ...modify...
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, get_op(NULL), unsigned_intDI_type_node, temp, rhs);
 +	assign = gimple_build_assign(temp, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +
 +	// 4. ...write latent_entropy
 +	assign = gimple_build_assign(latent_entropy_decl, temp);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +}
@@ -62591,8 +62657,13 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +	if (!latent_entropy_decl) {
 +		struct varpool_node *node;
 +
++#if BUILDING_GCC_VERSION <= 4007
 +		for (node = varpool_nodes; node; node = node->next) {
 +			tree var = node->decl;
++#else
++		FOR_EACH_VARIABLE(node) {
++			tree var = node->symbol.decl;
++#endif
 +			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
 +				continue;
 +			latent_entropy_decl = var;
@@ -62609,8 +62680,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +
 +	// 1. create local entropy variable
 +	local_entropy = create_tmp_var(unsigned_intDI_type_node, "local_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(local_entropy);
 +	mark_sym_for_renaming(local_entropy);
++#endif
 +
 +	// 2. initialize local entropy variable
 +	bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
@@ -62620,7 +62693,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/latent_
 +
 +	assign = gimple_build_assign(local_entropy, build_int_cstu(unsigned_intDI_type_node, get_random_const()));
 +//	gimple_set_location(assign, loc);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +	bb = bb->next_bb;
@@ -66451,8 +66526,8 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/size_ov
 +atyfb_setup_generic_49151 atyfb_setup_generic 3 49151 NULL
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/size_overflow_plugin.c linux-3.7.6-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.7.6/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/size_overflow_plugin.c	2013-01-09 23:27:04.030709435 +0100
-@@ -0,0 +1,1930 @@
++++ linux-3.7.6-pax/tools/gcc/size_overflow_plugin.c	2013-02-11 15:14:48.000000000 +0100
+@@ -0,0 +1,1941 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -66491,6 +66566,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/size_ov
 +#include "c-tree.h"
 +#else
 +#define C_DECL_IMPLICIT(EXP) DECL_LANG_FLAG_2 (EXP)
++#endif
++
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
 +#endif
 +
 +struct size_overflow_hash {
@@ -66845,8 +66924,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/size_ov
 +{
 +	tree new_var = create_tmp_var(type, "cicus");
 +
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_var);
 +	mark_sym_for_renaming(new_var);
++#endif
 +	return new_var;
 +}
 +
@@ -67066,11 +67147,13 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/size_ov
 +	basic_block bb;
 +	gimple phi;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(oldstmt);
++	gimple_seq seq;
 +
 +	bb = gsi_bb(gsi);
 +
 +	phi = create_phi_node(result, bb);
-+	gsi = gsi_last(phi_nodes(bb));
++	seq = phi_nodes(bb);
++	gsi = gsi_last(seq);
 +	gsi_remove(&gsi, false);
 +
 +	gsi = gsi_for_stmt(oldstmt);
@@ -68310,13 +68393,16 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/size_ov
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "size_overflow",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= handle_function,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
 +		.tv_id			= TV_NONE,
-+		.properties_required	= PROP_cfg | PROP_referenced_vars,
++		.properties_required	= PROP_cfg,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
@@ -68385,10 +68471,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/size_ov
 +}
 diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackleak_plugin.c linux-3.7.6-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.7.6/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.6-pax/tools/gcc/stackleak_plugin.c	2012-12-11 12:26:09.303203842 +0100
-@@ -0,0 +1,313 @@
++++ linux-3.7.6-pax/tools/gcc/stackleak_plugin.c	2013-02-11 21:06:43.000000000 +0100
+@@ -0,0 +1,327 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -68426,6 +68512,10 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackle
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +extern void print_gimple_stmt(FILE *, gimple, int, int);
 +
 +int plugin_is_GPL_compatible;
@@ -68436,7 +68526,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackle
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201203140940",
++	.version	= "201302112000",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
@@ -68449,6 +68539,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackle
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "stackleak_tree_instrument",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_tree_instrument,
 +		.sub			= NULL,
@@ -68467,6 +68560,9 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackle
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "stackleak_final",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_final,
 +		.sub			= NULL,
@@ -68603,7 +68699,7 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackle
 +
 +static unsigned int execute_stackleak_final(void)
 +{
-+	rtx insn;
++	rtx insn, next;
 +
 +	if (cfun->calls_alloca)
 +		return 0;
@@ -68613,10 +68709,11 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackle
 +		return 0;
 +
 +	// 1. find pax_track_stack calls
-+	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
++	for (insn = get_insns(); insn; insn = next) {
 +		// rtl match: (call_insn 8 7 9 3 (call (mem (symbol_ref ("pax_track_stack") [flags 0x41] <function_decl 0xb7470e80 pax_track_stack>) [0 S1 A8]) (4)) -1 (nil) (nil))
 +		rtx body;
 +
++		next = NEXT_INSN(insn);
 +		if (!CALL_P(insn))
 +			continue;
 +		body = PATTERN(insn);
@@ -68632,10 +68729,13 @@ diff -NurpX linux-3.7.6-pax/Documentation/dontdiff linux-3.7.6/tools/gcc/stackle
 +			continue;
 +//		warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
 +		// 2. delete call
-+		insn = delete_insn_and_edges(insn);
++		delete_insn_and_edges(insn);
 +#if BUILDING_GCC_VERSION >= 4007
-+		if (GET_CODE(insn) == NOTE && NOTE_KIND(insn) == NOTE_INSN_CALL_ARG_LOCATION)
-+			insn = delete_insn_and_edges(insn);
++		if (GET_CODE(next) == NOTE && NOTE_KIND(next) == NOTE_INSN_CALL_ARG_LOCATION) {
++			insn = next;
++			next = NEXT_INSN(insn);
++			delete_insn_and_edges(insn);
++		}
 +#endif
 +	}
 +
