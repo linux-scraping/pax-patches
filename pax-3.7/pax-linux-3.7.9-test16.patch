@@ -1,4 +1,5 @@
-- forward port to 3.7.9
+- fixed http://forums.grsecurity.net/viewtopic.php?f=3&t=3288
+- fixed gcc plugin support for gcc 4.8
 
 diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/arch/alpha/include/asm/atomic.h linux-3.7.9-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.7.9/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -30229,7 +30230,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/drivers/gpu/drm/r
  
 diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/drivers/gpu/drm/radeon/radeon_ttm.c linux-3.7.9-pax/drivers/gpu/drm/radeon/radeon_ttm.c
 --- linux-3.7.9/drivers/gpu/drm/radeon/radeon_ttm.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.7.9-pax/drivers/gpu/drm/radeon/radeon_ttm.c	2013-02-14 05:06:29.329432041 +0100
++++ linux-3.7.9-pax/drivers/gpu/drm/radeon/radeon_ttm.c	2013-02-17 23:35:15.479884006 +0100
 @@ -781,7 +781,7 @@ void radeon_ttm_set_active_vram_size(str
  	man->size = size >> PAGE_SHIFT;
  }
@@ -30239,6 +30240,17 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/drivers/gpu/drm/r
  static const struct vm_operations_struct *ttm_vm_ops = NULL;
  
  static int radeon_ttm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+@@ -822,8 +822,10 @@ int radeon_mmap(struct file *filp, struc
+ 	}
+ 	if (unlikely(ttm_vm_ops == NULL)) {
+ 		ttm_vm_ops = vma->vm_ops;
++		pax_open_kernel();
+ 		radeon_ttm_vm_ops = *ttm_vm_ops;
+ 		radeon_ttm_vm_ops.fault = &radeon_ttm_fault;
++		pax_close_kernel();
+ 	}
+ 	vma->vm_ops = &radeon_ttm_vm_ops;
+ 	return 0;
 diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/drivers/gpu/drm/radeon/rs690.c linux-3.7.9-pax/drivers/gpu/drm/radeon/rs690.c
 --- linux-3.7.9/drivers/gpu/drm/radeon/rs690.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.7.9-pax/drivers/gpu/drm/radeon/rs690.c	2012-12-11 12:26:07.655203534 +0100
@@ -51547,7 +51559,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/lib/vsprintf.c li
  
 diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.7.9-pax/Makefile
 --- linux-3.7.9/Makefile	2013-02-17 21:27:10.555364305 +0100
-+++ linux-3.7.9-pax/Makefile	2013-02-17 21:27:16.007364014 +0100
++++ linux-3.7.9-pax/Makefile	2013-02-17 23:51:45.803831130 +0100
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -51571,11 +51583,15 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -575,6 +576,56 @@ else
+@@ -575,6 +576,60 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
++ifeq ($(call cc-ifversion, -ge, 0408, y), y)
++PLUGINCC := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCXX)" "$(HOSTCXX)" "$(CC)")
++else
 +PLUGINCC := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(HOSTCXX)" "$(CC)")
++endif
 +ifneq ($(PLUGINCC),)
 +ifdef CONFIG_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
@@ -51628,7 +51644,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifdef CONFIG_READABLE_ASM
-@@ -778,6 +829,8 @@ endif
+@@ -778,6 +833,8 @@ endif
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -51637,7 +51653,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  $(sort $(vmlinux-deps)): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -787,7 +840,7 @@ $(sort $(vmlinux-deps)): $(vmlinux-dirs)
+@@ -787,7 +844,7 @@ $(sort $(vmlinux-deps)): $(vmlinux-dirs)
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -51646,7 +51662,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=$@
  
  # Store (new) KERNELRELASE string in include/config/kernel.release
-@@ -831,6 +884,7 @@ prepare0: archprepare FORCE
+@@ -831,6 +888,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=.
  
  # All the preparing..
@@ -51654,7 +51670,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  prepare: prepare0
  
  # Generate some files
-@@ -938,6 +992,8 @@ all: modules
+@@ -938,6 +996,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -51663,7 +51679,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -953,7 +1009,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
+@@ -953,7 +1013,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -51672,7 +51688,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  
  # Target to install modules
  PHONY += modules_install
-@@ -1013,7 +1069,7 @@ MRPROPER_FILES += .config .config.old .v
+@@ -1013,7 +1073,7 @@ MRPROPER_FILES += .config .config.old .v
  		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS \
  		  signing_key.priv signing_key.x509 x509.genkey		\
  		  extra_certificates signing_key.x509.keyid		\
@@ -51681,7 +51697,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1053,6 +1109,7 @@ distclean: mrproper
+@@ -1053,6 +1113,7 @@ distclean: mrproper
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
  		-o -name '.*.rej' \
@@ -51689,7 +51705,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1213,6 +1270,8 @@ PHONY += $(module-dirs) modules
+@@ -1213,6 +1274,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -51698,7 +51714,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1349,17 +1408,21 @@ else
+@@ -1349,17 +1412,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -51724,7 +51740,7 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1369,11 +1432,15 @@ endif
+@@ -1369,11 +1436,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -58835,10 +58851,10 @@ diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/scripts/basic/fix
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-3.7.9-pax/Documentation/dontdiff linux-3.7.9/scripts/gcc-plugin.sh linux-3.7.9-pax/scripts/gcc-plugin.sh
 --- linux-3.7.9/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.7.9-pax/scripts/gcc-plugin.sh	2012-12-11 12:26:09.263203832 +0100
++++ linux-3.7.9-pax/scripts/gcc-plugin.sh	2013-02-17 23:48:19.843842127 +0100
 @@ -0,0 +1,17 @@
 +#!/bin/bash
-+plugincc=`$1 -x c -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
++plugincc=`$1 -E -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
 +#include "gcc-plugin.h"
 +#include "tree.h"
 +#include "tm.h"
