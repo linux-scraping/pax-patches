@@ -1,7 +1,5 @@
-- reverted/rewrote some of the recent constification changes as gcc proved to be
-  a bit too smart in optimizing constified function pointer dereferences that in
-  turn broke special cases where such pointers did have to be modified, reported
-  by gaima (http://forums.grsecurity.net/viewtopic.php?f=3&t=3276)
+- fixed http://forums.grsecurity.net/viewtopic.php?f=3&t=3288
+- fixed gcc plugin support for gcc 4.8
 
 diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/arch/alpha/include/asm/atomic.h linux-3.2.38-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.38/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -29830,7 +29828,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/drivers/gpu/drm
  
 diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/drivers/gpu/drm/radeon/radeon_ttm.c linux-3.2.38-pax/drivers/gpu/drm/radeon/radeon_ttm.c
 --- linux-3.2.38/drivers/gpu/drm/radeon/radeon_ttm.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.38-pax/drivers/gpu/drm/radeon/radeon_ttm.c	2013-02-17 16:28:47.552320187 +0100
++++ linux-3.2.38-pax/drivers/gpu/drm/radeon/radeon_ttm.c	2013-02-18 00:09:25.547774548 +0100
 @@ -631,7 +631,7 @@ void radeon_ttm_set_active_vram_size(str
  	man->size = size >> PAGE_SHIFT;
  }
@@ -29840,6 +29838,17 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/drivers/gpu/drm
  static const struct vm_operations_struct *ttm_vm_ops = NULL;
  
  static int radeon_ttm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+@@ -672,8 +672,10 @@ int radeon_mmap(struct file *filp, struc
+ 	}
+ 	if (unlikely(ttm_vm_ops == NULL)) {
+ 		ttm_vm_ops = vma->vm_ops;
++		pax_open_kernel();
+ 		radeon_ttm_vm_ops = *ttm_vm_ops;
+ 		radeon_ttm_vm_ops.fault = &radeon_ttm_fault;
++		pax_close_kernel();
+ 	}
+ 	vma->vm_ops = &radeon_ttm_vm_ops;
+ 	return 0;
 diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/drivers/gpu/drm/radeon/rs690.c linux-3.2.38-pax/drivers/gpu/drm/radeon/rs690.c
 --- linux-3.2.38/drivers/gpu/drm/radeon/rs690.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.38-pax/drivers/gpu/drm/radeon/rs690.c	2012-07-04 19:24:48.404063007 +0200
@@ -50996,7 +51005,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/lib/vsprintf.c 
  
 diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-3.2.38-pax/Makefile
 --- linux-3.2.38/Makefile	2013-02-09 01:12:40.716782284 +0100
-+++ linux-3.2.38-pax/Makefile	2013-02-09 01:12:46.836782464 +0100
++++ linux-3.2.38-pax/Makefile	2013-02-18 00:09:25.547774548 +0100
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -51020,11 +51029,15 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -564,6 +565,56 @@ else
+@@ -564,6 +565,60 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
++ifeq ($(call cc-ifversion, -ge, 0408, y), y)
++PLUGINCC := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCXX)" "$(HOSTCXX)" "$(CC)")
++else
 +PLUGINCC := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(HOSTCXX)" "$(CC)")
++endif
 +ifneq ($(PLUGINCC),)
 +ifdef CONFIG_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
@@ -51077,7 +51090,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -932,6 +983,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
+@@ -932,6 +987,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -51086,7 +51099,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -941,7 +994,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
+@@ -941,7 +998,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -51095,7 +51108,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  	$(Q)$(MAKE) $(build)=$@
  
  # Store (new) KERNELRELASE string in include/config/kernel.release
-@@ -985,6 +1038,7 @@ prepare0: archprepare FORCE
+@@ -985,6 +1042,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=.
  
  # All the preparing..
@@ -51103,7 +51116,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  prepare: prepare0
  
  # Generate some files
-@@ -1089,6 +1143,8 @@ all: modules
+@@ -1089,6 +1147,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -51112,7 +51125,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1104,7 +1160,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
+@@ -1104,7 +1164,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -51121,7 +51134,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  
  # Target to install modules
  PHONY += modules_install
-@@ -1163,7 +1219,7 @@ CLEAN_FILES +=	vmlinux System.map \
+@@ -1163,7 +1223,7 @@ CLEAN_FILES +=	vmlinux System.map \
  MRPROPER_DIRS  += include/config usr/include include/generated          \
                    arch/*/include/generated
  MRPROPER_FILES += .config .config.old .version .old_version             \
@@ -51130,7 +51143,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS
  
  # clean - Delete most, but leave enough to build external modules
-@@ -1201,6 +1257,7 @@ distclean: mrproper
+@@ -1201,6 +1261,7 @@ distclean: mrproper
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
  		-o -name '.*.rej' \
@@ -51138,7 +51151,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1361,6 +1418,8 @@ PHONY += $(module-dirs) modules
+@@ -1361,6 +1422,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -51147,7 +51160,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1487,17 +1546,21 @@ else
+@@ -1487,17 +1550,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -51173,7 +51186,7 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/Makefile linux-
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1507,11 +1570,15 @@ endif
+@@ -1507,11 +1574,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -58579,10 +58592,10 @@ diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-3.2.38-pax/Documentation/dontdiff linux-3.2.38/scripts/gcc-plugin.sh linux-3.2.38-pax/scripts/gcc-plugin.sh
 --- linux-3.2.38/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.38-pax/scripts/gcc-plugin.sh	2012-07-04 19:24:49.040063009 +0200
++++ linux-3.2.38-pax/scripts/gcc-plugin.sh	2013-02-18 00:09:25.547774548 +0100
 @@ -0,0 +1,17 @@
 +#!/bin/bash
-+plugincc=`$1 -x c -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
++plugincc=`$1 -E -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
 +#include "gcc-plugin.h"
 +#include "tree.h"
 +#include "tm.h"
