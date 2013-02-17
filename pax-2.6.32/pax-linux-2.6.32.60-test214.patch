@@ -1,6 +1,14 @@
-- added countermeasure against attacks that reduce ASLR by exhausting the address space on 32 bit userland
-  see kingcope's post for the windows version
-  http://kingcope.wordpress.com/2013/01/24/attacking-the-windows-78-address-space-randomization/
+- added compile time detection for non-optimal use of kmalloc_array/kcalloc
+- reworked the USERCOPY interface a bit to make checking for constant copy sizes easier
+- various ASLR cleanups
+  - enabled it for hugetlb (x86 and generic)
+  - made powerpc/sparc ignore PF_RANDOMIZE as x86 does
+- added a fix for http://vulnfactory.org/blog/2013/02/06/a-linux-memory-trick/
+- gcc plugins should now work with gcc 4.8 as well
+- reverted/rewrote some of the recent constification changes as gcc proved to be
+  a bit too smart in optimizing constified function pointer dereferences that in
+  turn broke special cases where such pointers did have to be modified, reported
+  by gaima (http://forums.grsecurity.net/viewtopic.php?f=3&t=3276)
 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/alpha/include/asm/atomic.h linux-2.6.32.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.60/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -3098,8 +3106,19 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/powe
  	}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/powerpc/mm/mmap_64.c linux-2.6.32.60-pax/arch/powerpc/mm/mmap_64.c
 --- linux-2.6.32.60/arch/powerpc/mm/mmap_64.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/powerpc/mm/mmap_64.c	2012-03-13 13:15:34.360098031 +0100
-@@ -99,10 +99,22 @@ void arch_pick_mmap_layout(struct mm_str
++++ linux-2.6.32.60-pax/arch/powerpc/mm/mmap_64.c	2013-02-17 17:05:31.728202501 +0100
+@@ -65,6 +65,10 @@ static unsigned long mmap_rnd(void)
+ {
+ 	unsigned long rnd = 0;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		/* 8MB for 32bit, 1GB for 64bit */
+ 		if (is_32bit_task())
+@@ -99,10 +103,22 @@ void arch_pick_mmap_layout(struct mm_str
  	 */
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE;
@@ -4224,7 +4243,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/spar
  		if (flags & MAP_SHARED)
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/sparc/kernel/sys_sparc_64.c linux-2.6.32.60-pax/arch/sparc/kernel/sys_sparc_64.c
 --- linux-2.6.32.60/arch/sparc/kernel/sys_sparc_64.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/sparc/kernel/sys_sparc_64.c	2012-03-13 13:15:34.392098030 +0100
++++ linux-2.6.32.60-pax/arch/sparc/kernel/sys_sparc_64.c	2013-02-17 17:05:49.728201540 +0100
 @@ -125,7 +125,7 @@ unsigned long arch_get_unmapped_area(str
  		/* We do not accept a shared mapping if it would violate
  		 * cache aliasing constraints.
@@ -4346,7 +4365,18 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/spar
  
  bottomup:
  	/*
-@@ -384,6 +384,12 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -366,6 +366,10 @@ void arch_pick_mmap_layout(struct mm_str
+ {
+ 	unsigned long random_factor = 0UL;
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (current->flags & PF_RANDOMIZE) {
+ 		random_factor = get_random_int();
+ 		if (test_thread_flag(TIF_32BIT))
+@@ -384,6 +388,12 @@ void arch_pick_mmap_layout(struct mm_str
  	    current->signal->rlim[RLIMIT_STACK].rlim_cur == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -4359,7 +4389,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/spar
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
-@@ -398,6 +404,12 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -398,6 +408,12 @@ void arch_pick_mmap_layout(struct mm_str
  			gap = (task_size / 6 * 5);
  
  		mm->mmap_base = PAGE_ALIGN(task_size - gap - random_factor);
@@ -9755,7 +9785,43 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #endif /* __ASSEMBLY__ */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/paravirt_types.h linux-2.6.32.60-pax/arch/x86/include/asm/paravirt_types.h
 --- linux-2.6.32.60/arch/x86/include/asm/paravirt_types.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/paravirt_types.h	2013-01-22 12:56:38.713446214 +0100
++++ linux-2.6.32.60-pax/arch/x86/include/asm/paravirt_types.h	2013-02-17 20:17:00.495589090 +0100
+@@ -78,7 +78,7 @@ struct pv_init_ops {
+ 	 */
+ 	unsigned (*patch)(u8 type, u16 clobber, void *insnbuf,
+ 			  unsigned long addr, unsigned len);
+-};
++} __no_const;
+ 
+ 
+ struct pv_lazy_ops {
+@@ -90,7 +90,7 @@ struct pv_lazy_ops {
+ struct pv_time_ops {
+ 	unsigned long long (*sched_clock)(void);
+ 	unsigned long (*get_tsc_khz)(void);
+-};
++} __no_const;
+ 
+ struct pv_cpu_ops {
+ 	/* hooks for various privileged instructions */
+@@ -186,7 +186,7 @@ struct pv_cpu_ops {
+ 
+ 	void (*start_context_switch)(struct task_struct *prev);
+ 	void (*end_context_switch)(struct task_struct *next);
+-};
++} __no_const;
+ 
+ struct pv_irq_ops {
+ 	/*
+@@ -217,7 +217,7 @@ struct pv_apic_ops {
+ 				 unsigned long start_eip,
+ 				 unsigned long start_esp);
+ #endif
+-};
++} __no_const;
+ 
+ struct pv_mmu_ops {
+ 	unsigned long (*read_cr2)(void);
 @@ -301,6 +301,7 @@ struct pv_mmu_ops {
  	struct paravirt_callee_save make_pud;
  
@@ -9777,6 +9843,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  };
  
  struct raw_spinlock;
+@@ -326,7 +333,7 @@ struct pv_lock_ops {
+ 	void (*spin_lock_flags)(struct raw_spinlock *lock, unsigned long flags);
+ 	int (*spin_trylock)(struct raw_spinlock *lock);
+ 	void (*spin_unlock)(struct raw_spinlock *lock);
+-};
++} __no_const;
+ 
+ /* This contains all the paravirt structures: we get a convenient
+  * number for each function using the offset which we use to indicate
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/percpu.h linux-2.6.32.60-pax/arch/x86/include/asm/percpu.h
 --- linux-2.6.32.60/arch/x86/include/asm/percpu.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/include/asm/percpu.h	2012-03-13 13:15:34.472098025 +0100
@@ -10022,7 +10097,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/pgtable.h linux-2.6.32.60-pax/arch/x86/include/asm/pgtable.h
 --- linux-2.6.32.60/arch/x86/include/asm/pgtable.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/pgtable.h	2012-05-28 00:40:22.987136113 +0200
++++ linux-2.6.32.60-pax/arch/x86/include/asm/pgtable.h	2013-02-17 17:06:17.596200052 +0100
 @@ -39,6 +39,7 @@ extern struct list_head pgd_list;
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -10050,7 +10125,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	preempt_disable();
 +	barrier();
 +	cr0 = read_cr0() ^ X86_CR0_WP;
-+	BUG_ON(unlikely(cr0 & X86_CR0_WP));
++	BUG_ON(cr0 & X86_CR0_WP);
 +	write_cr0(cr0);
 +	return cr0 ^ X86_CR0_WP;
 +}
@@ -10060,7 +10135,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	unsigned long cr0;
 +
 +	cr0 = read_cr0() ^ X86_CR0_WP;
-+	BUG_ON(unlikely(!(cr0 & X86_CR0_WP)));
++	BUG_ON(!(cr0 & X86_CR0_WP));
 +	write_cr0(cr0);
 +	barrier();
 +	preempt_enable_no_resched();
@@ -10469,7 +10544,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/reboot.h linux-2.6.32.60-pax/arch/x86/include/asm/reboot.h
 --- linux-2.6.32.60/arch/x86/include/asm/reboot.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/reboot.h	2013-01-22 17:38:23.380543636 +0100
++++ linux-2.6.32.60-pax/arch/x86/include/asm/reboot.h	2013-02-17 17:41:19.476087828 +0100
 @@ -6,19 +6,19 @@
  struct pt_regs;
  
@@ -10483,8 +10558,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	void (*shutdown)(void);
  	void (*crash_shutdown)(struct pt_regs *);
 -	void (*emergency_restart)(void);
+-};
 +	void (* __noreturn emergency_restart)(void);
- };
++} __no_const;
  
  extern struct machine_ops machine_ops;
  
@@ -10702,7 +10778,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #define __USER_CS     (GDT_ENTRY_DEFAULT_USER_CS* 8 + 3)
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/smp.h linux-2.6.32.60-pax/arch/x86/include/asm/smp.h
 --- linux-2.6.32.60/arch/x86/include/asm/smp.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/smp.h	2013-01-22 17:38:23.380543636 +0100
++++ linux-2.6.32.60-pax/arch/x86/include/asm/smp.h	2013-02-17 17:40:13.824091333 +0100
 @@ -24,7 +24,7 @@ extern unsigned int num_processors;
  DECLARE_PER_CPU(cpumask_var_t, cpu_sibling_map);
  DECLARE_PER_CPU(cpumask_var_t, cpu_core_map);
@@ -10712,6 +10788,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  static inline struct cpumask *cpu_sibling_mask(int cpu)
  {
+@@ -60,7 +60,7 @@ struct smp_ops {
+ 
+ 	void (*send_call_func_ipi)(const struct cpumask *mask);
+ 	void (*send_call_func_single_ipi)(int cpu);
+-};
++} __no_const;
+ 
+ /* Globals due to paravirt */
+ extern void set_cpu_sibling_map(int cpu);
 @@ -175,14 +175,8 @@ extern unsigned disabled_cpus __cpuinitd
  extern int safe_smp_processor_id(void);
  
@@ -11012,7 +11097,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/uaccess_32.h linux-2.6.32.60-pax/arch/x86/include/asm/uaccess_32.h
 --- linux-2.6.32.60/arch/x86/include/asm/uaccess_32.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/uaccess_32.h	2012-07-01 11:07:46.042370831 +0200
++++ linux-2.6.32.60-pax/arch/x86/include/asm/uaccess_32.h	2013-02-17 17:07:14.588197009 +0100
 @@ -12,15 +12,15 @@
  #include <asm/page.h>
  
@@ -11034,24 +11119,17 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /**
   * __copy_to_user_inatomic: - Copy a block of data into user space, with less checking.
-@@ -44,6 +44,9 @@ unsigned long __must_check __copy_from_u
+@@ -44,6 +44,11 @@ unsigned long __must_check __copy_from_u
  static __always_inline unsigned long __must_check
  __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
  {
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(from, n, true);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -62,6 +65,8 @@ __copy_to_user_inatomic(void __user *to,
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(from, n, true);
- 	return __copy_to_user_ll(to, from, n);
- }
  
 @@ -83,12 +88,16 @@ static __always_inline unsigned long __m
  __copy_to_user(void __user *to, const void *from, unsigned long n)
@@ -11070,7 +11148,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	/* Avoid zeroing the tail if the copy fails..
  	 * If 'n' is constant and 1, 2, or 4, we do still zero on a failure,
  	 * but as the zeroing behaviour is only significant when n is not
-@@ -138,6 +147,10 @@ static __always_inline unsigned long
+@@ -138,6 +147,12 @@ static __always_inline unsigned long
  __copy_from_user(void *to, const void __user *from, unsigned long n)
  {
  	might_fault();
@@ -11078,17 +11156,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	if ((long)n < 0)
 +		return n;
 +
++	check_object_size(to, n, false);
++
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
- 
-@@ -153,6 +166,8 @@ __copy_from_user(void *to, const void __
- 			return ret;
- 		}
- 	}
-+	if (!__builtin_constant_p(n))
-+		check_object_size(to, n, false);
- 	return __copy_from_user_ll(to, from, n);
- }
  
 @@ -160,6 +175,10 @@ static __always_inline unsigned long __c
  				const void __user *from, unsigned long n)
@@ -11101,7 +11172,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	if (__builtin_constant_p(n)) {
  		unsigned long ret;
  
-@@ -182,14 +201,73 @@ static __always_inline unsigned long
+@@ -182,14 +201,72 @@ static __always_inline unsigned long
  __copy_from_user_inatomic_nocache(void *to, const void __user *from,
  				  unsigned long n)
  {
@@ -11161,15 +11232,14 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +{
 +	size_t sz = __compiletime_object_size(to);
 +
++	check_object_size(to, n, false);
++
 +	if (unlikely(sz != (size_t)-1 && sz < n))
 +		copy_from_user_overflow();
 +	else if (access_ok(VERIFY_READ, from, n))
 +		n = __copy_from_user(to, from, n);
-+	else if ((long)n > 0) {
-+		if (!__builtin_constant_p(n))
-+			check_object_size(to, n, false);
++	else if ((long)n > 0)
 +		memset(to, 0, n);
-+	}
 +	return n;
  }
  
@@ -11181,7 +11251,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  long __must_check strncpy_from_user(char *dst, const char __user *src,
  				    long count);
  long __must_check __strncpy_from_user(char *dst,
-@@ -212,7 +290,7 @@ long __must_check __strncpy_from_user(ch
+@@ -212,7 +289,7 @@ long __must_check __strncpy_from_user(ch
  #define strlen_user(str) strnlen_user(str, LONG_MAX)
  
  long strnlen_user(const char __user *str, long n);
@@ -11193,7 +11263,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #endif /* _ASM_X86_UACCESS_32_H */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/uaccess_64.h linux-2.6.32.60-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-2.6.32.60/arch/x86/include/asm/uaccess_64.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/uaccess_64.h	2012-12-01 02:39:40.676118420 +0100
++++ linux-2.6.32.60-pax/arch/x86/include/asm/uaccess_64.h	2013-02-17 17:09:41.008189191 +0100
 @@ -9,6 +9,9 @@
  #include <linux/prefetch.h>
  #include <linux/lockdep.h>
@@ -11237,6 +11307,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	if (size > INT_MAX)
 +		return size;
 +
++	check_object_size(dst, size, false);
++
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_READ, src, size))
 +		return size;
@@ -11248,7 +11320,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	}
 +
 +	if (!__builtin_constant_p(size)) {
-+		check_object_size(dst, size, false);
 +		return copy_user_generic(dst, (__force_kernel const void *)____m(src), size);
 +	}
  	switch (size) {
@@ -11305,11 +11376,11 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	unsigned ret = 0;
  
  	might_fault();
--	if (!__builtin_constant_p(size))
--		return copy_user_generic((__force void *)dst, src, size);
 +
 +	if (size > INT_MAX)
 +		return size;
++
++	check_object_size(src, size, true);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (!__access_ok(VERIFY_WRITE, dst, size))
@@ -11321,10 +11392,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +		return size;
 +	}
 +
-+	if (!__builtin_constant_p(size)) {
-+		check_object_size(src, size, true);
+ 	if (!__builtin_constant_p(size))
+-		return copy_user_generic((__force void *)dst, src, size);
 +		return copy_user_generic((__force_kernel void *)____m(dst), src, size);
-+	}
  	switch (size) {
 -	case 1:__put_user_asm(*(u8 *)src, (u8 __user *)dst,
 +	case 1:__put_user_asm(*(const u8 *)src, (u8 __user *)dst,
@@ -11385,13 +11455,12 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +{
  	might_fault();
 +
++	check_object_size(to, len, false);
++
 +	if (access_ok(VERIFY_READ, from, len))
 +		len = __copy_from_user(to, from, len);
-+	else if (len < INT_MAX) {
-+		if (!__builtin_constant_p(len))
-+			check_object_size(to, len, false);
++	else if (len < INT_MAX)
 +		memset(to, 0, len);
-+	}
 +	return len;
 +}
 +
@@ -11542,8 +11611,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/uaccess.h linux-2.6.32.60-pax/arch/x86/include/asm/uaccess.h
 --- linux-2.6.32.60/arch/x86/include/asm/uaccess.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/include/asm/uaccess.h	2012-03-13 13:15:34.492098024 +0100
-@@ -8,12 +8,15 @@
++++ linux-2.6.32.60-pax/arch/x86/include/asm/uaccess.h	2013-02-17 17:10:04.508187936 +0100
+@@ -8,6 +8,7 @@
  #include <linux/thread_info.h>
  #include <linux/prefetch.h>
  #include <linux/string.h>
@@ -11551,15 +11620,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #include <asm/asm.h>
  #include <asm/page.h>
  
- #define VERIFY_READ 0
- #define VERIFY_WRITE 1
- 
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
-+
- /*
-  * The fs value determines whether argument validity checking should be
-  * performed or not.  If get_fs() == USER_DS, checking is performed, with
-@@ -29,7 +32,12 @@
+@@ -29,7 +30,12 @@
  
  #define get_ds()	(KERNEL_DS)
  #define get_fs()	(current_thread_info()->addr_limit)
@@ -11572,7 +11633,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -77,7 +85,33 @@
+@@ -77,7 +83,33 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -11607,7 +11668,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * The exception table consists of pairs of addresses: the first is the
-@@ -183,12 +217,20 @@ extern int __get_user_bad(void);
+@@ -183,12 +215,20 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -11631,7 +11692,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		     "3:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
-@@ -200,8 +242,8 @@ extern int __get_user_bad(void);
+@@ -200,8 +240,8 @@ extern int __get_user_bad(void);
  		     : "A" (x), "r" (addr), "i" (errret), "0" (err))
  
  #define __put_user_asm_ex_u64(x, addr)					\
@@ -11642,7 +11703,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		     "3:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     _ASM_EXTABLE(2b, 3b - 2b)				\
-@@ -253,7 +295,7 @@ extern void __put_user_8(void);
+@@ -253,7 +293,7 @@ extern void __put_user_8(void);
  	__typeof__(*(ptr)) __pu_val;				\
  	__chk_user_ptr(ptr);					\
  	might_fault();						\
@@ -11651,7 +11712,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	switch (sizeof(*(ptr))) {				\
  	case 1:							\
  		__put_user_x(1, __pu_val, ptr, __ret_pu);	\
-@@ -374,7 +416,7 @@ do {									\
+@@ -374,7 +414,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -11660,7 +11721,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -382,7 +424,7 @@ do {									\
+@@ -382,7 +422,7 @@ do {									\
  		     "	jmp 2b\n"					\
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
@@ -11669,7 +11730,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		     : "m" (__m(addr)), "i" (errret), "0" (err))
  
  #define __get_user_size_ex(x, ptr, size)				\
-@@ -407,7 +449,7 @@ do {									\
+@@ -407,7 +447,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -11678,7 +11739,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : ltype(x) : "m" (__m(addr)))
-@@ -424,13 +466,24 @@ do {									\
+@@ -424,13 +464,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -11705,7 +11766,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -438,7 +491,7 @@ struct __large_struct { unsigned long bu
+@@ -438,7 +489,7 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -11714,7 +11775,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -446,10 +499,10 @@ struct __large_struct { unsigned long bu
+@@ -446,10 +497,10 @@ struct __large_struct { unsigned long bu
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
@@ -11727,7 +11788,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : : ltype(x), "m" (__m(addr)))
-@@ -488,8 +541,12 @@ struct __large_struct { unsigned long bu
+@@ -488,8 +539,12 @@ struct __large_struct { unsigned long bu
   * On error, the variable @x is set to zero.
   */
  
@@ -11740,7 +11801,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  /**
   * __put_user: - Write a simple value into user space, with less checking.
-@@ -511,8 +568,12 @@ struct __large_struct { unsigned long bu
+@@ -511,8 +566,12 @@ struct __large_struct { unsigned long bu
   * Returns zero on success, or -EFAULT on error.
   */
  
@@ -11753,7 +11814,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  #define __get_user_unaligned __get_user
  #define __put_user_unaligned __put_user
-@@ -530,7 +591,7 @@ struct __large_struct { unsigned long bu
+@@ -530,7 +589,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -11762,7 +11823,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  } while (0)
  
  #ifdef CONFIG_X86_WP_WORKS_OK
-@@ -567,6 +628,7 @@ extern struct movsl_mask {
+@@ -567,6 +626,7 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -11849,6 +11910,45 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #endif /* __KERNEL__ */
  
  #endif /* _ASM_X86_VSYSCALL_H */
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/x86_init.h linux-2.6.32.60-pax/arch/x86/include/asm/x86_init.h
+--- linux-2.6.32.60/arch/x86/include/asm/x86_init.h	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/arch/x86/include/asm/x86_init.h	2013-02-17 17:35:09.276107593 +0100
+@@ -88,7 +88,7 @@ struct x86_init_timers {
+ 	void (*setup_percpu_clockev)(void);
+ 	void (*tsc_pre_init)(void);
+ 	void (*timer_init)(void);
+-};
++} __no_const;
+ 
+ /**
+  * struct x86_init_ops - functions for platform specific setup
+@@ -101,7 +101,7 @@ struct x86_init_ops {
+ 	struct x86_init_oem		oem;
+ 	struct x86_init_paging		paging;
+ 	struct x86_init_timers		timers;
+-};
++} __no_const;
+ 
+ /**
+  * struct x86_cpuinit_ops - platform specific cpu hotplug setups
+@@ -109,7 +109,7 @@ struct x86_init_ops {
+  */
+ struct x86_cpuinit_ops {
+ 	void (*setup_percpu_clockev)(void);
+-};
++} __no_const;
+ 
+ /**
+  * struct x86_platform_ops - platform specific runtime functions
+@@ -121,7 +121,7 @@ struct x86_platform_ops {
+ 	unsigned long (*calibrate_tsc)(void);
+ 	unsigned long (*get_wallclock)(void);
+ 	int (*set_wallclock)(unsigned long nowtime);
+-};
++} __no_const;
+ 
+ extern struct x86_init_ops x86_init;
+ extern struct x86_cpuinit_ops x86_cpuinit;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/include/asm/xsave.h linux-2.6.32.60-pax/arch/x86/include/asm/xsave.h
 --- linux-2.6.32.60/arch/x86/include/asm/xsave.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/include/asm/xsave.h	2012-12-01 02:44:17.884127096 +0100
@@ -11884,7 +11984,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  			     "3:  movl $-1,%[err]\n"
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/Kconfig linux-2.6.32.60-pax/arch/x86/Kconfig
 --- linux-2.6.32.60/arch/x86/Kconfig	2012-10-09 11:00:35.428882463 +0200
-+++ linux-2.6.32.60-pax/arch/x86/Kconfig	2012-10-09 11:00:39.228883020 +0200
++++ linux-2.6.32.60-pax/arch/x86/Kconfig	2013-02-17 17:10:28.316186665 +0100
 @@ -223,7 +223,7 @@ config X86_TRAMPOLINE
  
  config X86_32_LAZY_GS
@@ -11927,7 +12027,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	range 0x2000 0x1000000
  	---help---
  	  This value puts the alignment restrictions on physical address
-@@ -1621,7 +1624,7 @@ config HOTPLUG_CPU
+@@ -1621,9 +1624,10 @@ config HOTPLUG_CPU
  	  Say N if you want to disable CPU hotplug.
  
  config COMPAT_VDSO
@@ -11935,6 +12035,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +	def_bool n
  	prompt "Compat VDSO support"
  	depends on X86_32 || IA32_EMULATION
++	depends on !PAX_PAGEEXEC && !PAX_SEGMEXEC && !PAX_KERNEXEC && !PAX_MEMORY_UDEREF
+ 	---help---
+ 	  Map the 32-bit VDSO to the predictable old-style address too.
  	---help---
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/Kconfig.cpu linux-2.6.32.60-pax/arch/x86/Kconfig.cpu
 --- linux-2.6.32.60/arch/x86/Kconfig.cpu	2012-03-04 18:49:44.000000000 +0100
@@ -12232,30 +12335,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		spin_lock(&ioapic_lock);
  		__mask_and_edge_IO_APIC_irq(cfg);
  		__unmask_and_level_IO_APIC_irq(cfg);
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/apic/numaq_32.c linux-2.6.32.60-pax/arch/x86/kernel/apic/numaq_32.c
---- linux-2.6.32.60/arch/x86/kernel/apic/numaq_32.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/apic/numaq_32.c	2013-01-22 22:05:56.851686505 +0100
-@@ -275,13 +275,13 @@ static __init void early_check_numaq(voi
- 		early_get_smp_config();
- 
- 	if (found_numaq) {
--		x86_init.mpparse.mpc_record = numaq_mpc_record;
--		x86_init.mpparse.setup_ioapic_ids = x86_init_noop;
--		x86_init.mpparse.mpc_apic_id = mpc_apic_id;
--		x86_init.mpparse.smp_read_mpc_oem = smp_read_mpc_oem;
--		x86_init.mpparse.mpc_oem_pci_bus = mpc_oem_pci_bus;
--		x86_init.mpparse.mpc_oem_bus_info = mpc_oem_bus_info;
--		x86_init.timers.tsc_pre_init = numaq_tsc_init;
-+		*(void **)&x86_init.mpparse.mpc_record = numaq_mpc_record;
-+		*(void **)&x86_init.mpparse.setup_ioapic_ids = x86_init_noop;
-+		*(void **)&x86_init.mpparse.mpc_apic_id = mpc_apic_id;
-+		*(void **)&x86_init.mpparse.smp_read_mpc_oem = smp_read_mpc_oem;
-+		*(void **)&x86_init.mpparse.mpc_oem_pci_bus = mpc_oem_pci_bus;
-+		*(void **)&x86_init.mpparse.mpc_oem_bus_info = mpc_oem_bus_info;
-+		*(void **)&x86_init.timers.tsc_pre_init = numaq_tsc_init;
- 	}
- }
- 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/apm_32.c linux-2.6.32.60-pax/arch/x86/kernel/apm_32.c
 --- linux-2.6.32.60/arch/x86/kernel/apm_32.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/kernel/apm_32.c	2012-03-13 13:15:34.512098023 +0100
@@ -12903,18 +12982,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	}
  }
  
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/cpu/vmware.c linux-2.6.32.60-pax/arch/x86/kernel/cpu/vmware.c
---- linux-2.6.32.60/arch/x86/kernel/cpu/vmware.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/cpu/vmware.c	2013-01-22 17:38:23.540543627 +0100
-@@ -79,7 +79,7 @@ void __init vmware_platform_setup(void)
- 	VMWARE_PORT(GETHZ, eax, ebx, ecx, edx);
- 
- 	if (ebx != UINT_MAX)
--		x86_platform.calibrate_tsc = vmware_get_tsc_khz;
-+		*(void **)&x86_platform.calibrate_tsc = vmware_get_tsc_khz;
- 	else
- 		printk(KERN_WARNING
- 		       "Failed to get TSC freq from the hypervisor\n");
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/crash.c linux-2.6.32.60-pax/arch/x86/kernel/crash.c
 --- linux-2.6.32.60/arch/x86/kernel/crash.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/kernel/crash.c	2012-03-13 13:15:34.524098022 +0100
@@ -13391,20 +13458,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  	/*
  	 * After the lock is released, the original page table is restored.
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/efi.c linux-2.6.32.60-pax/arch/x86/kernel/efi.c
---- linux-2.6.32.60/arch/x86/kernel/efi.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/efi.c	2013-01-22 16:57:36.108674301 +0100
-@@ -455,8 +455,8 @@ void __init efi_init(void)
- 		do_add_efi_memmap();
- 
- #ifdef CONFIG_X86_32
--	x86_platform.get_wallclock = efi_get_time;
--	x86_platform.set_wallclock = efi_set_rtc_mmss;
-+	*(void **)&x86_platform.get_wallclock = efi_get_time;
-+	*(void **)&x86_platform.set_wallclock = efi_set_rtc_mmss;
- #endif
- 
- 	/* Setup for EFI runtime service */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/efi_stub_32.S linux-2.6.32.60-pax/arch/x86/kernel/efi_stub_32.S
 --- linux-2.6.32.60/arch/x86/kernel/efi_stub_32.S	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/kernel/efi_stub_32.S	2012-08-06 13:25:13.803004527 +0200
@@ -15495,8 +15548,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/head32.c linux-2.6.32.60-pax/arch/x86/kernel/head32.c
 --- linux-2.6.32.60/arch/x86/kernel/head32.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/head32.c	2013-01-22 12:59:26.865437236 +0100
-@@ -16,13 +16,14 @@
++++ linux-2.6.32.60-pax/arch/x86/kernel/head32.c	2013-02-17 17:29:47.240124788 +0100
+@@ -16,6 +16,7 @@
  #include <asm/apic.h>
  #include <asm/io_apic.h>
  #include <asm/bios_ebda.h>
@@ -15504,16 +15557,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  static void __init i386_default_early_setup(void)
  {
- 	/* Initilize 32bit specific setup functions */
--	x86_init.resources.probe_roms = probe_roms;
--	x86_init.resources.reserve_resources = i386_reserve_resources;
--	x86_init.mpparse.setup_ioapic_ids = setup_ioapic_ids_from_mpc;
-+	*(void **)&x86_init.resources.probe_roms = probe_roms;
-+	*(void **)&x86_init.resources.reserve_resources = i386_reserve_resources;
-+	*(void **)&x86_init.mpparse.setup_ioapic_ids = setup_ioapic_ids_from_mpc;
- 
- 	reserve_ebda_region();
- }
 @@ -31,7 +32,7 @@ void __init i386_start_kernel(void)
  {
  	reserve_trampoline_memory();
@@ -16748,16 +16791,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	switch (val) {
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/kvm.c linux-2.6.32.60-pax/arch/x86/kernel/kvm.c
 --- linux-2.6.32.60/arch/x86/kernel/kvm.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/kvm.c	2013-01-22 13:00:22.489434266 +0100
-@@ -201,7 +201,7 @@ static void __init paravirt_ops_setup(vo
- 	pv_info.paravirt_enabled = 1;
- 
- 	if (kvm_para_has_feature(KVM_FEATURE_NOP_IO_DELAY))
--		pv_cpu_ops.io_delay = kvm_io_delay;
-+		*(void **)&pv_cpu_ops.io_delay = kvm_io_delay;
- 
- 	if (kvm_para_has_feature(KVM_FEATURE_MMU_OP)) {
- 		pv_mmu_ops.set_pte = kvm_set_pte;
++++ linux-2.6.32.60-pax/arch/x86/kernel/kvm.c	2013-02-17 17:37:48.300099103 +0100
 @@ -216,6 +216,7 @@ static void __init paravirt_ops_setup(vo
  		pv_mmu_ops.set_pud = kvm_set_pud;
  #if PAGETABLE_LEVELS == 4
@@ -16766,38 +16800,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #endif
  #endif
  		pv_mmu_ops.flush_tlb_user = kvm_flush_tlb;
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/kvmclock.c linux-2.6.32.60-pax/arch/x86/kernel/kvmclock.c
---- linux-2.6.32.60/arch/x86/kernel/kvmclock.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/kvmclock.c	2013-01-22 22:01:42.527700084 +0100
-@@ -184,20 +184,20 @@ void __init kvmclock_init(void)
- 	if (kvmclock && kvm_para_has_feature(KVM_FEATURE_CLOCKSOURCE)) {
- 		if (kvm_register_clock("boot clock"))
- 			return;
--		pv_time_ops.sched_clock = kvm_clock_read;
--		x86_platform.calibrate_tsc = kvm_get_tsc_khz;
--		x86_platform.get_wallclock = kvm_get_wallclock;
--		x86_platform.set_wallclock = kvm_set_wallclock;
-+		*(void **)&pv_time_ops.sched_clock = kvm_clock_read;
-+		*(void **)&x86_platform.calibrate_tsc = kvm_get_tsc_khz;
-+		*(void **)&x86_platform.get_wallclock = kvm_get_wallclock;
-+		*(void **)&x86_platform.set_wallclock = kvm_set_wallclock;
- #ifdef CONFIG_X86_LOCAL_APIC
--		x86_cpuinit.setup_percpu_clockev =
-+		*(void **)&x86_cpuinit.setup_percpu_clockev =
- 			kvm_setup_secondary_clock;
- #endif
- #ifdef CONFIG_SMP
--		smp_ops.smp_prepare_boot_cpu = kvm_smp_prepare_boot_cpu;
-+		*(void **)&smp_ops.smp_prepare_boot_cpu = kvm_smp_prepare_boot_cpu;
- #endif
--		machine_ops.shutdown  = kvm_shutdown;
-+		*(void **)&machine_ops.shutdown  = kvm_shutdown;
- #ifdef CONFIG_KEXEC
--		machine_ops.crash_shutdown  = kvm_crash_shutdown;
-+		*(void **)&machine_ops.crash_shutdown  = kvm_crash_shutdown;
- #endif
- 		kvm_get_preset_lpj();
- 		clocksource_register(&kvm_clock);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/ldt.c linux-2.6.32.60-pax/arch/x86/kernel/ldt.c
 --- linux-2.6.32.60/arch/x86/kernel/ldt.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/kernel/ldt.c	2012-05-20 19:21:25.289167262 +0200
@@ -17057,21 +17059,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  #if 0
  			if ((s64)val != *(s32 *)loc)
  				goto overflow;
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/mrst.c linux-2.6.32.60-pax/arch/x86/kernel/mrst.c
---- linux-2.6.32.60/arch/x86/kernel/mrst.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/mrst.c	2013-01-23 01:54:51.798953165 +0100
-@@ -19,6 +19,6 @@
-  */
- void __init x86_mrst_early_setup(void)
- {
--	x86_init.resources.probe_roms = x86_init_noop;
--	x86_init.resources.reserve_resources = x86_init_noop;
-+	*(void **)&x86_init.resources.probe_roms = x86_init_noop;
-+	*(void **)&x86_init.resources.reserve_resources = x86_init_noop;
- }
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/paravirt.c linux-2.6.32.60-pax/arch/x86/kernel/paravirt.c
 --- linux-2.6.32.60/arch/x86/kernel/paravirt.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/paravirt.c	2013-01-22 13:01:56.009429273 +0100
++++ linux-2.6.32.60-pax/arch/x86/kernel/paravirt.c	2013-02-17 19:25:30.183754088 +0100
 @@ -53,6 +53,9 @@ u64 _paravirt_ident_64(u64 x)
  {
  	return x;
@@ -17114,7 +17104,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  	return insn_len;
  }
-@@ -294,7 +301,7 @@ void arch_flush_lazy_mmu_mode(void)
+@@ -294,22 +301,22 @@ void arch_flush_lazy_mmu_mode(void)
  	preempt_enable();
  }
  
@@ -17123,7 +17113,16 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	.name = "bare hardware",
  	.paravirt_enabled = 0,
  	.kernel_rpl = 0,
-@@ -309,7 +316,7 @@ struct pv_time_ops pv_time_ops = {
+ 	.shared_kernel_pmd = 1,	/* Only used when CONFIG_X86_PAE is set */
+ };
+ 
+-struct pv_init_ops pv_init_ops = {
++struct pv_init_ops pv_init_ops __read_only = {
+ 	.patch = native_patch,
+ };
+ 
+-struct pv_time_ops pv_time_ops = {
++struct pv_time_ops pv_time_ops __read_only = {
  	.sched_clock = native_sched_clock,
  };
  
@@ -17132,7 +17131,23 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	.save_fl = __PV_IS_CALLEE_SAVE(native_save_fl),
  	.restore_fl = __PV_IS_CALLEE_SAVE(native_restore_fl),
  	.irq_disable = __PV_IS_CALLEE_SAVE(native_irq_disable),
-@@ -388,15 +395,20 @@ struct pv_apic_ops pv_apic_ops = {
+@@ -321,7 +328,7 @@ struct pv_irq_ops pv_irq_ops = {
+ #endif
+ };
+ 
+-struct pv_cpu_ops pv_cpu_ops = {
++struct pv_cpu_ops pv_cpu_ops __read_only = {
+ 	.cpuid = native_cpuid,
+ 	.get_debugreg = native_get_debugreg,
+ 	.set_debugreg = native_set_debugreg,
+@@ -382,21 +389,26 @@ struct pv_cpu_ops pv_cpu_ops = {
+ 	.end_context_switch = paravirt_nop,
+ };
+ 
+-struct pv_apic_ops pv_apic_ops = {
++struct pv_apic_ops pv_apic_ops __read_only = {
+ #ifdef CONFIG_X86_LOCAL_APIC
+ 	.startup_ipi_hook = paravirt_nop,
  #endif
  };
  
@@ -17584,7 +17599,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		audit_syscall_exit(AUDITSC_RESULT(regs->ax), regs->ax);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/reboot.c linux-2.6.32.60-pax/arch/x86/kernel/reboot.c
 --- linux-2.6.32.60/arch/x86/kernel/reboot.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/reboot.c	2012-09-11 21:10:51.024025608 +0200
++++ linux-2.6.32.60-pax/arch/x86/kernel/reboot.c	2013-02-17 17:41:28.652087338 +0100
 @@ -33,7 +33,7 @@ void (*pm_power_off)(void);
  EXPORT_SYMBOL(pm_power_off);
  
@@ -17703,14 +17718,18 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  {
  	if (pm_power_off) {
  		if (!reboot_force)
-@@ -694,6 +694,7 @@ static void native_machine_power_off(voi
+@@ -694,9 +694,10 @@ static void native_machine_power_off(voi
  	}
  	/* a fallback in case there is no PM info available */
  	tboot_shutdown(TB_SHUTDOWN_HALT);
 +	do { } while (1);
  }
  
- struct machine_ops machine_ops = {
+-struct machine_ops machine_ops = {
++struct machine_ops machine_ops __read_only = {
+ 	.power_off = native_machine_power_off,
+ 	.shutdown = native_machine_shutdown,
+ 	.emergency_restart = native_machine_emergency_restart,
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/relocate_kernel_64.S linux-2.6.32.60-pax/arch/x86/kernel/relocate_kernel_64.S
 --- linux-2.6.32.60/arch/x86/kernel/relocate_kernel_64.S	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/kernel/relocate_kernel_64.S	2012-03-13 13:15:34.560098021 +0100
@@ -17956,6 +17975,18 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	err = do_boot_cpu(apicid, cpu);
  
  	if (err) {
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/smp.c linux-2.6.32.60-pax/arch/x86/kernel/smp.c
+--- linux-2.6.32.60/arch/x86/kernel/smp.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/arch/x86/kernel/smp.c	2013-02-17 17:40:41.152089874 +0100
+@@ -224,7 +224,7 @@ void smp_call_function_single_interrupt(
+ 	irq_exit();
+ }
+ 
+-struct smp_ops smp_ops = {
++struct smp_ops smp_ops __read_only = {
+ 	.smp_prepare_boot_cpu	= native_smp_prepare_boot_cpu,
+ 	.smp_prepare_cpus	= native_smp_prepare_cpus,
+ 	.smp_cpus_done		= native_smp_cpus_done,
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/step.c linux-2.6.32.60-pax/arch/x86/kernel/step.c
 --- linux-2.6.32.60/arch/x86/kernel/step.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/kernel/step.c	2012-03-13 13:15:34.568098020 +0100
@@ -18806,7 +18837,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	if ((segoffs >> 16) == BIOSSEG)
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/vmi_32.c linux-2.6.32.60-pax/arch/x86/kernel/vmi_32.c
 --- linux-2.6.32.60/arch/x86/kernel/vmi_32.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/vmi_32.c	2013-01-23 01:54:30.798954286 +0100
++++ linux-2.6.32.60-pax/arch/x86/kernel/vmi_32.c	2013-02-17 17:30:49.468121465 +0100
 @@ -44,12 +44,17 @@ typedef u32 __attribute__((regparm(1)))
  typedef u64 __attribute__((regparm(2))) (VROMLONGFUNC)(int);
  
@@ -18927,79 +18958,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  			return 1;
  		}
  	}
-@@ -604,9 +626,9 @@ do {								\
- 	reloc = call_vrom_long_func(vmi_rom, get_reloc,		\
- 				    VMI_CALL_##vmicall);	\
- 	if (rel->type == VMI_RELOCATION_CALL_REL) 		\
--		opname = (void *)rel->eip;			\
-+		*(void **)&opname = (void *)rel->eip;		\
- 	else if (rel->type == VMI_RELOCATION_NOP) 		\
--		opname = (void *)vmi_nop;			\
-+		*(void **)&opname = (void *)vmi_nop;		\
- 	else if (rel->type != VMI_RELOCATION_NONE)		\
- 		printk(KERN_WARNING "VMI: Unknown relocation "	\
- 				    "type %d for " #vmicall"\n",\
-@@ -626,7 +648,7 @@ do {								\
- 				    VMI_CALL_##vmicall);	\
- 	BUG_ON(rel->type == VMI_RELOCATION_JUMP_REL);		\
- 	if (rel->type == VMI_RELOCATION_CALL_REL) {		\
--		opname = wrapper;				\
-+		*(void **)&opname = wrapper;			\
- 		vmi_ops.cache = (void *)rel->eip;		\
- 	}							\
- } while (0)
-@@ -650,7 +672,7 @@ static inline int __init activate_vmi(vo
- 	pv_info.kernel_rpl = kernel_cs & SEGMENT_RPL_MASK;
- 	pv_info.name = "vmi [deprecated]";
- 
--	pv_init_ops.patch = vmi_patch;
-+	*(void **)&pv_init_ops.patch = vmi_patch;
- 
- 	/*
- 	 * Many of these operations are ABI compatible with VMI.
-@@ -706,7 +728,7 @@ static inline int __init activate_vmi(vo
- 	para_fill(pv_cpu_ops.store_gdt, GetGDT);
- 	para_fill(pv_cpu_ops.store_idt, GetIDT);
- 	para_fill(pv_cpu_ops.store_tr, GetTR);
--	pv_cpu_ops.load_tls = vmi_load_tls;
-+	*(void **)&pv_cpu_ops.load_tls = vmi_load_tls;
- 	para_wrap(pv_cpu_ops.write_ldt_entry, vmi_write_ldt_entry,
- 		  write_ldt_entry, WriteLDTEntry);
- 	para_wrap(pv_cpu_ops.write_gdt_entry, vmi_write_gdt_entry,
-@@ -790,8 +812,8 @@ static inline int __init activate_vmi(vo
- 	 * the backend.  They are performance critical anyway, so requiring
- 	 * a patch is not a big problem.
- 	 */
--	pv_cpu_ops.irq_enable_sysexit = (void *)0xfeedbab0;
--	pv_cpu_ops.iret = (void *)0xbadbab0;
-+	*(void **)&pv_cpu_ops.irq_enable_sysexit = (void *)0xfeedbab0;
-+	*(void **)&pv_cpu_ops.iret = (void *)0xbadbab0;
- 
- #ifdef CONFIG_SMP
- 	para_wrap(pv_apic_ops.startup_ipi_hook, vmi_startup_ipi_hook, set_initial_ap_state, SetInitialAPState);
-@@ -817,15 +839,15 @@ static inline int __init activate_vmi(vo
- 		vmi_timer_ops.set_alarm = vmi_get_function(VMI_CALL_SetAlarm);
- 		vmi_timer_ops.cancel_alarm =
- 			 vmi_get_function(VMI_CALL_CancelAlarm);
--		x86_init.timers.timer_init = vmi_time_init;
-+		*(void **)&x86_init.timers.timer_init = vmi_time_init;
- #ifdef CONFIG_X86_LOCAL_APIC
--		x86_init.timers.setup_percpu_clockev = vmi_time_bsp_init;
--		x86_cpuinit.setup_percpu_clockev = vmi_time_ap_init;
-+		*(void **)&x86_init.timers.setup_percpu_clockev = vmi_time_bsp_init;
-+		*(void **)&x86_cpuinit.setup_percpu_clockev = vmi_time_ap_init;
- #endif
--		pv_time_ops.sched_clock = vmi_sched_clock;
--		x86_platform.calibrate_tsc = vmi_tsc_khz;
--		x86_platform.get_wallclock = vmi_get_wallclock;
--		x86_platform.set_wallclock = vmi_set_wallclock;
-+		*(void **)&pv_time_ops.sched_clock = vmi_sched_clock;
-+		*(void **)&x86_platform.calibrate_tsc = vmi_tsc_khz;
-+		*(void **)&x86_platform.get_wallclock = vmi_get_wallclock;
-+		*(void **)&x86_platform.set_wallclock = vmi_set_wallclock;
- 
- 		/* We have true wallclock functions; disable CMOS clock sync */
- 		no_sync_cmos_clock = 1;
 @@ -836,6 +858,11 @@ static inline int __init activate_vmi(vo
  
  	para_fill(pv_irq_ops.safe_halt, Halt);
@@ -19338,18 +19296,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	   "kernel image bigger than KERNEL_IMAGE_SIZE");
  
  #ifdef CONFIG_SMP
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/vsmp_64.c linux-2.6.32.60-pax/arch/x86/kernel/vsmp_64.c
---- linux-2.6.32.60/arch/x86/kernel/vsmp_64.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/kernel/vsmp_64.c	2013-01-22 17:38:23.544543627 +0100
-@@ -98,7 +98,7 @@ static void __init set_vsmp_pv_ops(void)
- 		pv_irq_ops.irq_enable  = PV_CALLEE_SAVE(vsmp_irq_enable);
- 		pv_irq_ops.save_fl  = PV_CALLEE_SAVE(vsmp_save_fl);
- 		pv_irq_ops.restore_fl  = PV_CALLEE_SAVE(vsmp_restore_fl);
--		pv_init_ops.patch = vsmp_patch;
-+		*(void **)&pv_init_ops.patch = vsmp_patch;
- 
- 		ctl &= ~(1 << 4);
- 		writel(ctl, address + 4);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/kernel/vsyscall_64.c linux-2.6.32.60-pax/arch/x86/kernel/vsyscall_64.c
 --- linux-2.6.32.60/arch/x86/kernel/vsyscall_64.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/kernel/vsyscall_64.c	2012-03-13 13:15:34.580098020 +0100
@@ -19667,26 +19613,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	struct kvm_x86_ops *ops = (struct kvm_x86_ops *)opaque;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/lguest/boot.c linux-2.6.32.60-pax/arch/x86/lguest/boot.c
 --- linux-2.6.32.60/arch/x86/lguest/boot.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/lguest/boot.c	2013-01-22 17:38:23.384543635 +0100
-@@ -1088,12 +1088,12 @@ static u32 lguest_apic_safe_wait_icr_idl
- 
- static void set_lguest_basic_apic_ops(void)
- {
--	apic->read = lguest_apic_read;
--	apic->write = lguest_apic_write;
--	apic->icr_read = lguest_apic_icr_read;
--	apic->icr_write = lguest_apic_icr_write;
--	apic->wait_icr_idle = lguest_apic_wait_icr_idle;
--	apic->safe_wait_icr_idle = lguest_apic_safe_wait_icr_idle;
-+	*(void **)&apic->read = lguest_apic_read;
-+	*(void **)&apic->write = lguest_apic_write;
-+	*(void **)&apic->icr_read = lguest_apic_icr_read;
-+	*(void **)&apic->icr_write = lguest_apic_icr_write;
-+	*(void **)&apic->wait_icr_idle = lguest_apic_wait_icr_idle;
-+	*(void **)&apic->safe_wait_icr_idle = lguest_apic_safe_wait_icr_idle;
- };
- #endif
- 
++++ linux-2.6.32.60-pax/arch/x86/lguest/boot.c	2013-02-17 17:31:20.864119789 +0100
 @@ -1172,9 +1172,10 @@ static __init int early_put_chars(u32 vt
   * Rebooting also tells the Host we're finished, but the RESTART flag tells the
   * Launcher to reboot us.
@@ -19699,81 +19626,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  }
  
  /*G:050
-@@ -1264,28 +1265,28 @@ __init void lguest_init(void)
- 	pv_irq_ops.safe_halt = lguest_safe_halt;
- 
- 	/* Setup operations */
--	pv_init_ops.patch = lguest_patch;
-+	*(void **)&pv_init_ops.patch = lguest_patch;
- 
- 	/* Intercepts of various CPU instructions */
--	pv_cpu_ops.load_gdt = lguest_load_gdt;
--	pv_cpu_ops.cpuid = lguest_cpuid;
--	pv_cpu_ops.load_idt = lguest_load_idt;
--	pv_cpu_ops.iret = lguest_iret;
--	pv_cpu_ops.load_sp0 = lguest_load_sp0;
--	pv_cpu_ops.load_tr_desc = lguest_load_tr_desc;
--	pv_cpu_ops.set_ldt = lguest_set_ldt;
--	pv_cpu_ops.load_tls = lguest_load_tls;
--	pv_cpu_ops.set_debugreg = lguest_set_debugreg;
--	pv_cpu_ops.clts = lguest_clts;
--	pv_cpu_ops.read_cr0 = lguest_read_cr0;
--	pv_cpu_ops.write_cr0 = lguest_write_cr0;
--	pv_cpu_ops.read_cr4 = lguest_read_cr4;
--	pv_cpu_ops.write_cr4 = lguest_write_cr4;
--	pv_cpu_ops.write_gdt_entry = lguest_write_gdt_entry;
--	pv_cpu_ops.write_idt_entry = lguest_write_idt_entry;
--	pv_cpu_ops.wbinvd = lguest_wbinvd;
--	pv_cpu_ops.start_context_switch = paravirt_start_context_switch;
--	pv_cpu_ops.end_context_switch = lguest_end_context_switch;
-+	*(void **)&pv_cpu_ops.load_gdt = lguest_load_gdt;
-+	*(void **)&pv_cpu_ops.cpuid = lguest_cpuid;
-+	*(void **)&pv_cpu_ops.load_idt = lguest_load_idt;
-+	*(void **)&pv_cpu_ops.iret = lguest_iret;
-+	*(void **)&pv_cpu_ops.load_sp0 = lguest_load_sp0;
-+	*(void **)&pv_cpu_ops.load_tr_desc = lguest_load_tr_desc;
-+	*(void **)&pv_cpu_ops.set_ldt = lguest_set_ldt;
-+	*(void **)&pv_cpu_ops.load_tls = lguest_load_tls;
-+	*(void **)&pv_cpu_ops.set_debugreg = lguest_set_debugreg;
-+	*(void **)&pv_cpu_ops.clts = lguest_clts;
-+	*(void **)&pv_cpu_ops.read_cr0 = lguest_read_cr0;
-+	*(void **)&pv_cpu_ops.write_cr0 = lguest_write_cr0;
-+	*(void **)&pv_cpu_ops.read_cr4 = lguest_read_cr4;
-+	*(void **)&pv_cpu_ops.write_cr4 = lguest_write_cr4;
-+	*(void **)&pv_cpu_ops.write_gdt_entry = lguest_write_gdt_entry;
-+	*(void **)&pv_cpu_ops.write_idt_entry = lguest_write_idt_entry;
-+	*(void **)&pv_cpu_ops.wbinvd = lguest_wbinvd;
-+	*(void **)&pv_cpu_ops.start_context_switch = paravirt_start_context_switch;
-+	*(void **)&pv_cpu_ops.end_context_switch = lguest_end_context_switch;
- 
- 	/* Pagetable management */
- 	pv_mmu_ops.write_cr3 = lguest_write_cr3;
-@@ -1313,11 +1314,11 @@ __init void lguest_init(void)
- 	set_lguest_basic_apic_ops();
- #endif
- 
--	x86_init.resources.memory_setup = lguest_memory_setup;
--	x86_init.irqs.intr_init = lguest_init_IRQ;
--	x86_init.timers.timer_init = lguest_time_init;
--	x86_platform.calibrate_tsc = lguest_tsc_khz;
--	x86_platform.get_wallclock =  lguest_get_wallclock;
-+	*(void **)&x86_init.resources.memory_setup = lguest_memory_setup;
-+	*(void **)&x86_init.irqs.intr_init = lguest_init_IRQ;
-+	*(void **)&x86_init.timers.timer_init = lguest_time_init;
-+	*(void **)&x86_platform.calibrate_tsc = lguest_tsc_khz;
-+	*(void **)&x86_platform.get_wallclock =  lguest_get_wallclock;
- 
- 	/*
- 	 * Now is a good time to look at the implementations of these functions
-@@ -1410,7 +1411,7 @@ __init void lguest_init(void)
- 	 * routine.
- 	 */
- 	pm_power_off = lguest_power_off;
--	machine_ops.restart = lguest_restart;
-+	*(void **)&machine_ops.restart = lguest_restart;
- 
- 	/*
- 	 * Now we're set up, call i386_start_kernel() in head32.c and we proceed
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/lib/atomic64_32.c linux-2.6.32.60-pax/arch/x86/lib/atomic64_32.c
 --- linux-2.6.32.60/arch/x86/lib/atomic64_32.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/lib/atomic64_32.c	2012-03-13 13:15:34.596098019 +0100
@@ -22294,7 +22146,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/mm/fault.c linux-2.6.32.60-pax/arch/x86/mm/fault.c
 --- linux-2.6.32.60/arch/x86/mm/fault.c	2012-10-09 11:00:35.432882464 +0200
-+++ linux-2.6.32.60-pax/arch/x86/mm/fault.c	2012-10-09 11:06:13.752928580 +0200
++++ linux-2.6.32.60-pax/arch/x86/mm/fault.c	2013-02-17 17:11:44.616182591 +0100
 @@ -11,10 +11,19 @@
  #include <linux/kprobes.h>		/* __kprobes, ...		*/
  #include <linux/mmiotrace.h>		/* kmmio_handler, ...		*/
@@ -22529,7 +22381,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	/* User mode accesses just cause a SIGSEGV */
  	if (error_code & PF_USER) {
  		/*
-@@ -720,6 +822,21 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -720,12 +822,29 @@ __bad_area_nosemaphore(struct pt_regs *r
  		if (is_errata100(regs, address))
  			return;
  
@@ -22548,10 +22400,20 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 +		}
 +#endif
 +
++		/* Kernel addresses are always protection faults: */
++		error_code |= address >= TASK_SIZE;
++
  		if (unlikely(show_unhandled_signals))
  			show_signal_msg(regs, error_code, address, tsk);
  
-@@ -816,7 +933,7 @@ do_sigbus(struct pt_regs *regs, unsigned
+-		/* Kernel addresses are always protection faults: */
+ 		tsk->thread.cr2		= address;
+-		tsk->thread.error_code	= error_code | (address >= TASK_SIZE);
++		tsk->thread.error_code	= error_code;
+ 		tsk->thread.trap_no	= 14;
+ 
+ 		force_sig_info_fault(SIGSEGV, si_code, address, tsk);
+@@ -816,7 +935,7 @@ do_sigbus(struct pt_regs *regs, unsigned
  	if (fault & VM_FAULT_HWPOISON) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -22560,7 +22422,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -855,6 +972,99 @@ static int spurious_fault_check(unsigned
+@@ -855,6 +974,99 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -22660,7 +22522,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -921,6 +1131,9 @@ int show_unhandled_signals = 1;
+@@ -921,6 +1133,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, int write, struct vm_area_struct *vma)
  {
@@ -22670,7 +22532,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	if (write) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -954,17 +1167,31 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -954,17 +1169,31 @@ do_page_fault(struct pt_regs *regs, unsi
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -22706,7 +22568,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1024,7 +1251,7 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1024,7 +1253,7 @@ do_page_fault(struct pt_regs *regs, unsi
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -22715,7 +22577,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1078,6 +1305,11 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1078,6 +1307,11 @@ do_page_fault(struct pt_regs *regs, unsi
  		might_sleep();
  	}
  
@@ -22727,7 +22589,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1089,18 +1321,24 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1089,18 +1323,24 @@ do_page_fault(struct pt_regs *regs, unsi
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -22763,7 +22625,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1144,3 +1382,292 @@ good_area:
+@@ -1144,3 +1384,292 @@ good_area:
  
  	up_read(&mm->mmap_sem);
  }
@@ -23084,7 +22946,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  }
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/mm/hugetlbpage.c linux-2.6.32.60-pax/arch/x86/mm/hugetlbpage.c
 --- linux-2.6.32.60/arch/x86/mm/hugetlbpage.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/mm/hugetlbpage.c	2012-05-08 23:38:04.255923391 +0200
++++ linux-2.6.32.60-pax/arch/x86/mm/hugetlbpage.c	2013-02-17 17:12:19.936180706 +0100
 @@ -267,13 +267,20 @@ static unsigned long hugetlb_get_unmappe
  	struct hstate *h = hstate_file(file);
  	struct mm_struct *mm = current->mm;
@@ -23283,7 +23145,14 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  		return -ENOMEM;
  
  	if (flags & MAP_FIXED) {
-@@ -415,8 +436,7 @@ hugetlb_get_unmapped_area(struct file *f
+@@ -412,11 +433,14 @@ hugetlb_get_unmapped_area(struct file *f
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
  	if (addr) {
  		addr = ALIGN(addr, huge_page_size(h));
  		vma = find_vma(mm, addr);
@@ -24641,6 +24510,19 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  {
  #ifdef CONFIG_SMP
  	return smp_num_siblings == 2 ? 2 : 1;
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/pci/mmconfig-shared.c linux-2.6.32.60-pax/arch/x86/pci/mmconfig-shared.c
+--- linux-2.6.32.60/arch/x86/pci/mmconfig-shared.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/arch/x86/pci/mmconfig-shared.c	2013-02-17 17:45:09.700075535 +0100
+@@ -340,8 +340,7 @@ static void __init pci_mmcfg_insert_reso
+ 	char *names;
+ 	unsigned num_buses;
+ 
+-	res = kcalloc(PCI_MMCFG_RESOURCE_NAME_LEN + sizeof(*res),
+-			pci_mmcfg_config_num, GFP_KERNEL);
++	res = kcalloc(pci_mmcfg_config_num, PCI_MMCFG_RESOURCE_NAME_LEN + sizeof(*res), GFP_KERNEL);
+ 	if (!res) {
+ 		printk(KERN_ERR "PCI: Unable to allocate MMCONFIG resources\n");
+ 		return;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/pci/pcbios.c linux-2.6.32.60-pax/arch/x86/pci/pcbios.c
 --- linux-2.6.32.60/arch/x86/pci/pcbios.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/pci/pcbios.c	2012-03-13 13:15:34.856098005 +0100
@@ -25292,7 +25174,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 -__setup("vdso=", vdso_setup);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/xen/enlighten.c linux-2.6.32.60-pax/arch/x86/xen/enlighten.c
 --- linux-2.6.32.60/arch/x86/xen/enlighten.c	2012-10-09 11:00:35.436882465 +0200
-+++ linux-2.6.32.60-pax/arch/x86/xen/enlighten.c	2013-01-22 23:55:58.403334033 +0100
++++ linux-2.6.32.60-pax/arch/x86/xen/enlighten.c	2013-02-17 17:38:43.444096159 +0100
 @@ -71,8 +71,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -25331,26 +25213,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	end = start + __get_cpu_var(idt_desc).size + 1;
  
  	xen_mc_flush();
-@@ -718,12 +714,12 @@ static u32 xen_safe_apic_wait_icr_idle(v
- 
- static void set_xen_basic_apic_ops(void)
- {
--	apic->read = xen_apic_read;
--	apic->write = xen_apic_write;
--	apic->icr_read = xen_apic_icr_read;
--	apic->icr_write = xen_apic_icr_write;
--	apic->wait_icr_idle = xen_apic_wait_icr_idle;
--	apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
-+	*(void **)&apic->read = xen_apic_read;
-+	*(void **)&apic->write = xen_apic_write;
-+	*(void **)&apic->icr_read = xen_apic_icr_read;
-+	*(void **)&apic->icr_write = xen_apic_icr_write;
-+	*(void **)&apic->wait_icr_idle = xen_apic_wait_icr_idle;
-+	*(void **)&apic->safe_wait_icr_idle = xen_safe_apic_wait_icr_idle;
- }
- 
- #endif
-@@ -996,7 +992,7 @@ static const struct pv_apic_ops xen_apic
+@@ -996,25 +992,25 @@ static const struct pv_apic_ops xen_apic
  #endif
  };
  
@@ -25359,8 +25222,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  {
  	struct sched_shutdown r = { .reason = reason };
  
-@@ -1004,17 +1000,17 @@ static void xen_reboot(int reason)
- 		BUG();
+-	if (HYPERVISOR_sched_op(SCHEDOP_shutdown, &r))
+-		BUG();
++	HYPERVISOR_sched_op(SCHEDOP_shutdown, &r);
++	BUG();
  }
  
 -static void xen_restart(char *msg)
@@ -25380,26 +25245,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  {
  	xen_reboot(SHUTDOWN_poweroff);
  }
-@@ -1040,14 +1036,14 @@ static const struct machine_ops __initda
-  */
- static void __init xen_setup_stackprotector(void)
- {
--	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry_boot;
--	pv_cpu_ops.load_gdt = xen_load_gdt_boot;
-+	*(void **)&pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry_boot;
-+	*(void **)&pv_cpu_ops.load_gdt = xen_load_gdt_boot;
- 
- 	setup_stack_canary_segment(0);
- 	switch_to_new_gdt(0);
- 
--	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry;
--	pv_cpu_ops.load_gdt = xen_load_gdt;
-+	*(void **)&pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry;
-+	*(void **)&pv_cpu_ops.load_gdt = xen_load_gdt;
- }
- 
- /* First C function to be called on Xen boot */
-@@ -1062,22 +1058,22 @@ asmlinkage void __init xen_start_kernel(
+@@ -1062,10 +1058,10 @@ asmlinkage void __init xen_start_kernel(
  
  	/* Install Xen paravirt ops */
  	pv_info = xen_info;
@@ -25407,37 +25253,13 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
 -	pv_time_ops = xen_time_ops;
 -	pv_cpu_ops = xen_cpu_ops;
 -	pv_apic_ops = xen_apic_ops;
--
--	x86_init.resources.memory_setup = xen_memory_setup;
--	x86_init.oem.arch_setup = xen_arch_setup;
--	x86_init.oem.banner = xen_banner;
--
--	x86_init.timers.timer_init = xen_time_init;
--	x86_init.timers.setup_percpu_clockev = x86_init_noop;
--	x86_cpuinit.setup_percpu_clockev = x86_init_noop;
--
--	x86_platform.calibrate_tsc = xen_tsc_khz;
--	x86_platform.get_wallclock = xen_get_wallclock;
--	x86_platform.set_wallclock = xen_set_wallclock;
 +	memcpy((void *)&pv_init_ops, &xen_init_ops, sizeof pv_init_ops);
 +	memcpy((void *)&pv_time_ops, &xen_time_ops, sizeof pv_time_ops);
 +	memcpy((void *)&pv_cpu_ops, &xen_cpu_ops, sizeof pv_cpu_ops);
 +	memcpy((void *)&pv_apic_ops, &xen_apic_ops, sizeof pv_apic_ops);
-+
-+	*(void **)&x86_init.resources.memory_setup = xen_memory_setup;
-+	*(void **)&x86_init.oem.arch_setup = xen_arch_setup;
-+	*(void **)&x86_init.oem.banner = xen_banner;
-+
-+	*(void **)&x86_init.timers.timer_init = xen_time_init;
-+	*(void **)&x86_init.timers.setup_percpu_clockev = x86_init_noop;
-+	*(void **)&x86_cpuinit.setup_percpu_clockev = x86_init_noop;
-+
-+	*(void **)&x86_platform.calibrate_tsc = xen_tsc_khz;
-+	*(void **)&x86_platform.get_wallclock = xen_get_wallclock;
-+	*(void **)&x86_platform.set_wallclock = xen_set_wallclock;
  
- 	/*
- 	 * Set up some pagetable state before starting to set any ptes.
+ 	x86_init.resources.memory_setup = xen_memory_setup;
+ 	x86_init.oem.arch_setup = xen_arch_setup;
 @@ -1098,9 +1094,20 @@ asmlinkage void __init xen_start_kernel(
  	 */
  	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
@@ -25477,19 +25299,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  	xen_smp_init();
  
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/xen/irq.c linux-2.6.32.60-pax/arch/x86/xen/irq.c
---- linux-2.6.32.60/arch/x86/xen/irq.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/xen/irq.c	2013-01-22 17:29:06.444573372 +0100
-@@ -129,5 +129,5 @@ static const struct pv_irq_ops xen_irq_o
- void __init xen_init_irq_ops()
- {
- 	pv_irq_ops = xen_irq_ops;
--	x86_init.irqs.intr_init = xen_init_IRQ;
-+	*(void **)&x86_init.irqs.intr_init = xen_init_IRQ;
- }
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/xen/mmu.c linux-2.6.32.60-pax/arch/x86/xen/mmu.c
 --- linux-2.6.32.60/arch/x86/xen/mmu.c	2012-10-09 11:00:35.436882465 +0200
-+++ linux-2.6.32.60-pax/arch/x86/xen/mmu.c	2013-01-22 15:20:15.176986162 +0100
++++ linux-2.6.32.60-pax/arch/x86/xen/mmu.c	2013-02-17 17:33:15.864113649 +0100
 @@ -1717,6 +1717,9 @@ __init pgd_t *xen_setup_kernel_pagetable
  	convert_pfn_mfn(init_level4_pgt);
  	convert_pfn_mfn(level3_ident_pgt);
@@ -25528,17 +25340,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  
  	.alloc_pud = xen_alloc_pmd_init,
  	.release_pud = xen_release_pmd_init,
-@@ -1963,8 +1972,8 @@ static const struct pv_mmu_ops xen_mmu_o
- 
- void __init xen_init_mmu_ops(void)
- {
--	x86_init.paging.pagetable_setup_start = xen_pagetable_setup_start;
--	x86_init.paging.pagetable_setup_done = xen_pagetable_setup_done;
-+	*(void **)&x86_init.paging.pagetable_setup_start = xen_pagetable_setup_start;
-+	*(void **)&x86_init.paging.pagetable_setup_done = xen_pagetable_setup_done;
- 	pv_mmu_ops = xen_mmu_ops;
- }
- 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/xen/smp.c linux-2.6.32.60-pax/arch/x86/xen/smp.c
 --- linux-2.6.32.60/arch/x86/xen/smp.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/xen/smp.c	2013-01-22 15:21:38.084981735 +0100
@@ -25595,28 +25396,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/
  	xen_fill_possible_map();
  	xen_init_spinlocks();
  }
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/xen/spinlock.c linux-2.6.32.60-pax/arch/x86/xen/spinlock.c
---- linux-2.6.32.60/arch/x86/xen/spinlock.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/arch/x86/xen/spinlock.c	2013-01-22 22:00:20.499704463 +0100
-@@ -372,12 +372,12 @@ void xen_uninit_lock_cpu(int cpu)
- 
- void __init xen_init_spinlocks(void)
- {
--	pv_lock_ops.spin_is_locked = xen_spin_is_locked;
--	pv_lock_ops.spin_is_contended = xen_spin_is_contended;
--	pv_lock_ops.spin_lock = xen_spin_lock;
--	pv_lock_ops.spin_lock_flags = xen_spin_lock_flags;
--	pv_lock_ops.spin_trylock = xen_spin_trylock;
--	pv_lock_ops.spin_unlock = xen_spin_unlock;
-+	*(void **)&pv_lock_ops.spin_is_locked = xen_spin_is_locked;
-+	*(void **)&pv_lock_ops.spin_is_contended = xen_spin_is_contended;
-+	*(void **)&pv_lock_ops.spin_lock = xen_spin_lock;
-+	*(void **)&pv_lock_ops.spin_lock_flags = xen_spin_lock_flags;
-+	*(void **)&pv_lock_ops.spin_trylock = xen_spin_trylock;
-+	*(void **)&pv_lock_ops.spin_unlock = xen_spin_unlock;
- }
- 
- #ifdef CONFIG_XEN_DEBUG_FS
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/x86/xen/xen-asm_32.S linux-2.6.32.60-pax/arch/x86/xen/xen-asm_32.S
 --- linux-2.6.32.60/arch/x86/xen/xen-asm_32.S	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/arch/x86/xen/xen-asm_32.S	2012-03-13 13:15:34.864098004 +0100
@@ -26141,15 +25920,12 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/a
  	resource->trip[attr->index - 7] = temp;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/acpi/proc.c linux-2.6.32.60-pax/drivers/acpi/proc.c
 --- linux-2.6.32.60/drivers/acpi/proc.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/drivers/acpi/proc.c	2012-03-13 13:15:34.892098003 +0100
-@@ -391,20 +391,15 @@ acpi_system_write_wakeup_device(struct f
- 				size_t count, loff_t * ppos)
- {
++++ linux-2.6.32.60-pax/drivers/acpi/proc.c	2013-02-17 17:13:55.920175581 +0100
+@@ -393,17 +393,14 @@ acpi_system_write_wakeup_device(struct f
  	struct list_head *node, *next;
--	char strbuf[5];
--	char str[5] = "";
+ 	char strbuf[5];
+ 	char str[5] = "";
 -	unsigned int len = count;
-+	char strbuf[5] = {0};
  	struct acpi_device *found_dev = NULL;
  
 -	if (len > 4)
@@ -26163,20 +25939,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/a
 +	if (copy_from_user(strbuf, buffer, count))
  		return -EFAULT;
 -	strbuf[len] = '\0';
--	sscanf(strbuf, "%s", str);
 +	strbuf[count] = '\0';
+ 	sscanf(strbuf, "%s", str);
  
  	mutex_lock(&acpi_device_lock);
- 	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
-@@ -413,7 +408,7 @@ acpi_system_write_wakeup_device(struct f
- 		if (!dev->wakeup.flags.valid)
- 			continue;
- 
--		if (!strncmp(dev->pnp.bus_id, str, 4)) {
-+		if (!strncmp(dev->pnp.bus_id, strbuf, 4)) {
- 			dev->wakeup.state.enabled =
- 			    dev->wakeup.state.enabled ? 0 : 1;
- 			found_dev = dev;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/acpi/processor_core.c linux-2.6.32.60-pax/drivers/acpi/processor_core.c
 --- linux-2.6.32.60/drivers/acpi/processor_core.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/drivers/acpi/processor_core.c	2012-03-13 13:15:34.892098003 +0100
@@ -29065,7 +28831,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/g
  	/** Refcount for i915_user_irq_get() versus i915_user_irq_put(). */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/gpu/drm/i915/i915_gem.c linux-2.6.32.60-pax/drivers/gpu/drm/i915/i915_gem.c
 --- linux-2.6.32.60/drivers/gpu/drm/i915/i915_gem.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/drivers/gpu/drm/i915/i915_gem.c	2012-03-13 13:15:35.000097997 +0100
++++ linux-2.6.32.60-pax/drivers/gpu/drm/i915/i915_gem.c	2013-02-17 18:05:09.632011468 +0100
 @@ -102,7 +102,7 @@ i915_gem_get_aperture_ioctl(struct drm_d
  
  	args->aper_size = dev->gtt_total;
@@ -29117,6 +28883,17 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/g
  
  	/* Assert that the object is not currently in any GPU domain. As it
  	 * wasn't in the GTT, there shouldn't be any way it could have been in
+@@ -3639,8 +3649,8 @@ i915_gem_execbuffer(struct drm_device *d
+ 		return -EINVAL;
+ 	}
+ 	/* Copy in the exec list from userland */
+-	exec_list = drm_calloc_large(sizeof(*exec_list), args->buffer_count);
+-	object_list = drm_calloc_large(sizeof(*object_list), args->buffer_count);
++	exec_list = drm_calloc_large(args->buffer_count, sizeof(*exec_list));
++	object_list = drm_calloc_large(args->buffer_count, sizeof(*object_list));
+ 	if (exec_list == NULL || object_list == NULL) {
+ 		DRM_ERROR("Failed to allocate exec or object list "
+ 			  "for %d buffers\n",
 @@ -3755,9 +3765,9 @@ i915_gem_execbuffer(struct drm_device *d
  					  "%d/%d gtt bytes\n",
  					  atomic_read(&dev->object_count),
@@ -31980,35 +31757,19 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/m
  };
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/media/video/usbvideo/ibmcam.c linux-2.6.32.60-pax/drivers/media/video/usbvideo/ibmcam.c
 --- linux-2.6.32.60/drivers/media/video/usbvideo/ibmcam.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/ibmcam.c	2012-03-13 13:15:35.160097989 +0100
-@@ -3947,15 +3947,15 @@ static struct usb_device_id id_table[] =
++++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/ibmcam.c	2013-02-17 20:10:01.975611435 +0100
+@@ -3947,7 +3947,7 @@ static struct usb_device_id id_table[] =
  static int __init ibmcam_init(void)
  {
  	struct usbvideo_cb cbTbl;
 -	memset(&cbTbl, 0, sizeof(cbTbl));
--	cbTbl.probe = ibmcam_probe;
--	cbTbl.setupOnOpen = ibmcam_setup_on_open;
--	cbTbl.videoStart = ibmcam_video_start;
--	cbTbl.videoStop = ibmcam_video_stop;
--	cbTbl.processData = ibmcam_ProcessIsocData;
--	cbTbl.postProcess = usbvideo_DeinterlaceFrame;
--	cbTbl.adjustPicture = ibmcam_adjust_picture;
--	cbTbl.getFPS = ibmcam_calculate_fps;
 +	memset((void *)&cbTbl, 0, sizeof(cbTbl));
-+	*(void **)&cbTbl.probe = ibmcam_probe;
-+	*(void **)&cbTbl.setupOnOpen = ibmcam_setup_on_open;
-+	*(void **)&cbTbl.videoStart = ibmcam_video_start;
-+	*(void **)&cbTbl.videoStop = ibmcam_video_stop;
-+	*(void **)&cbTbl.processData = ibmcam_ProcessIsocData;
-+	*(void **)&cbTbl.postProcess = usbvideo_DeinterlaceFrame;
-+	*(void **)&cbTbl.adjustPicture = ibmcam_adjust_picture;
-+	*(void **)&cbTbl.getFPS = ibmcam_calculate_fps;
- 	return usbvideo_register(
- 		&cams,
- 		MAX_IBMCAM,
+ 	cbTbl.probe = ibmcam_probe;
+ 	cbTbl.setupOnOpen = ibmcam_setup_on_open;
+ 	cbTbl.videoStart = ibmcam_video_start;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/media/video/usbvideo/konicawc.c linux-2.6.32.60-pax/drivers/media/video/usbvideo/konicawc.c
 --- linux-2.6.32.60/drivers/media/video/usbvideo/konicawc.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/konicawc.c	2012-03-13 13:15:35.164097988 +0100
++++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/konicawc.c	2013-02-17 20:09:43.387612428 +0100
 @@ -225,7 +225,7 @@ static void konicawc_register_input(stru
  	int error;
  
@@ -32018,33 +31779,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/m
  
  	cam->input = input_dev = input_allocate_device();
  	if (!input_dev) {
-@@ -935,16 +935,16 @@ static int __init konicawc_init(void)
+@@ -935,7 +935,7 @@ static int __init konicawc_init(void)
  	struct usbvideo_cb cbTbl;
  	printk(KERN_INFO KBUILD_MODNAME ": " DRIVER_VERSION ":"
  	       DRIVER_DESC "\n");
 -	memset(&cbTbl, 0, sizeof(cbTbl));
--	cbTbl.probe = konicawc_probe;
--	cbTbl.setupOnOpen = konicawc_setup_on_open;
--	cbTbl.processData = konicawc_process_isoc;
--	cbTbl.getFPS = konicawc_calculate_fps;
--	cbTbl.setVideoMode = konicawc_set_video_mode;
--	cbTbl.startDataPump = konicawc_start_data;
--	cbTbl.stopDataPump = konicawc_stop_data;
--	cbTbl.adjustPicture = konicawc_adjust_picture;
--	cbTbl.userFree = konicawc_free_uvd;
 +	memset((void * )&cbTbl, 0, sizeof(cbTbl));
-+	*(void **)&cbTbl.probe = konicawc_probe;
-+	*(void **)&cbTbl.setupOnOpen = konicawc_setup_on_open;
-+	*(void **)&cbTbl.processData = konicawc_process_isoc;
-+	*(void **)&cbTbl.getFPS = konicawc_calculate_fps;
-+	*(void **)&cbTbl.setVideoMode = konicawc_set_video_mode;
-+	*(void **)&cbTbl.startDataPump = konicawc_start_data;
-+	*(void **)&cbTbl.stopDataPump = konicawc_stop_data;
-+	*(void **)&cbTbl.adjustPicture = konicawc_adjust_picture;
-+	*(void **)&cbTbl.userFree = konicawc_free_uvd;
- 	return usbvideo_register(
- 		&cams,
- 		MAX_CAMERAS,
+ 	cbTbl.probe = konicawc_probe;
+ 	cbTbl.setupOnOpen = konicawc_setup_on_open;
+ 	cbTbl.processData = konicawc_process_isoc;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/media/video/usbvideo/quickcam_messenger.c linux-2.6.32.60-pax/drivers/media/video/usbvideo/quickcam_messenger.c
 --- linux-2.6.32.60/drivers/media/video/usbvideo/quickcam_messenger.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/quickcam_messenger.c	2012-03-13 13:15:35.164097988 +0100
@@ -32057,56 +31800,18 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/m
  
  	cam->input = input_dev = input_allocate_device();
  	if (!input_dev) {
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/media/video/usbvideo/ultracam.c linux-2.6.32.60-pax/drivers/media/video/usbvideo/ultracam.c
---- linux-2.6.32.60/drivers/media/video/usbvideo/ultracam.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/ultracam.c	2012-03-13 13:15:35.164097988 +0100
-@@ -655,14 +655,14 @@ static int __init ultracam_init(void)
- {
- 	struct usbvideo_cb cbTbl;
- 	memset(&cbTbl, 0, sizeof(cbTbl));
--	cbTbl.probe = ultracam_probe;
--	cbTbl.setupOnOpen = ultracam_setup_on_open;
--	cbTbl.videoStart = ultracam_video_start;
--	cbTbl.videoStop = ultracam_video_stop;
--	cbTbl.processData = ultracam_ProcessIsocData;
--	cbTbl.postProcess = usbvideo_DeinterlaceFrame;
--	cbTbl.adjustPicture = ultracam_adjust_picture;
--	cbTbl.getFPS = ultracam_calculate_fps;
-+	*(void **)&cbTbl.probe = ultracam_probe;
-+	*(void **)&cbTbl.setupOnOpen = ultracam_setup_on_open;
-+	*(void **)&cbTbl.videoStart = ultracam_video_start;
-+	*(void **)&cbTbl.videoStop = ultracam_video_stop;
-+	*(void **)&cbTbl.processData = ultracam_ProcessIsocData;
-+	*(void **)&cbTbl.postProcess = usbvideo_DeinterlaceFrame;
-+	*(void **)&cbTbl.adjustPicture = ultracam_adjust_picture;
-+	*(void **)&cbTbl.getFPS = ultracam_calculate_fps;
- 	return usbvideo_register(
- 		&cams,
- 		MAX_CAMERAS,
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/media/video/usbvideo/usbvideo.c linux-2.6.32.60-pax/drivers/media/video/usbvideo/usbvideo.c
 --- linux-2.6.32.60/drivers/media/video/usbvideo/usbvideo.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/usbvideo.c	2012-03-13 13:15:35.164097988 +0100
-@@ -697,15 +697,15 @@ int usbvideo_register(
++++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/usbvideo.c	2013-02-17 20:06:01.587624270 +0100
+@@ -697,7 +697,7 @@ int usbvideo_register(
  	    __func__, cams, base_size, num_cams);
  
  	/* Copy callbacks, apply defaults for those that are not set */
 -	memmove(&cams->cb, cbTbl, sizeof(cams->cb));
 +	memmove((void *)&cams->cb, cbTbl, sizeof(cams->cb));
  	if (cams->cb.getFrame == NULL)
--		cams->cb.getFrame = usbvideo_GetFrame;
-+		*(void **)&cams->cb.getFrame = usbvideo_GetFrame;
+ 		cams->cb.getFrame = usbvideo_GetFrame;
  	if (cams->cb.disconnect == NULL)
--		cams->cb.disconnect = usbvideo_Disconnect;
-+		*(void **)&cams->cb.disconnect = usbvideo_Disconnect;
- 	if (cams->cb.startDataPump == NULL)
--		cams->cb.startDataPump = usbvideo_StartDataPump;
-+		*(void **)&cams->cb.startDataPump = usbvideo_StartDataPump;
- 	if (cams->cb.stopDataPump == NULL)
--		cams->cb.stopDataPump = usbvideo_StopDataPump;
-+		*(void **)&cams->cb.stopDataPump = usbvideo_StopDataPump;
- 
- 	cams->num_cameras = num_cams;
- 	cams->cam = (struct uvd *) &cams[1];
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/media/video/usbvideo/usbvideo.h linux-2.6.32.60-pax/drivers/media/video/usbvideo/usbvideo.h
 --- linux-2.6.32.60/drivers/media/video/usbvideo/usbvideo.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/drivers/media/video/usbvideo/usbvideo.h	2012-03-13 13:15:35.168097988 +0100
@@ -32820,6 +32525,19 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/n
  	.kind		= "macvlan",
  	.priv_size	= sizeof(struct macvlan_dev),
  	.get_tx_queues  = macvlan_get_tx_queues,
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/net/mlx4/eq.c linux-2.6.32.60-pax/drivers/net/mlx4/eq.c
+--- linux-2.6.32.60/drivers/net/mlx4/eq.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/drivers/net/mlx4/eq.c	2013-02-17 18:23:59.243951156 +0100
+@@ -552,8 +552,7 @@ int mlx4_init_eq_table(struct mlx4_dev *
+ 	int err;
+ 	int i;
+ 
+-	priv->eq_table.uar_map = kcalloc(sizeof *priv->eq_table.uar_map,
+-					 mlx4_num_eq_uar(dev), GFP_KERNEL);
++	priv->eq_table.uar_map = kcalloc(mlx4_num_eq_uar(dev), sizeof *priv->eq_table.uar_map, GFP_KERNEL);
+ 	if (!priv->eq_table.uar_map) {
+ 		err = -ENOMEM;
+ 		goto err_out_free;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/drivers/net/mlx4/main.c linux-2.6.32.60-pax/drivers/net/mlx4/main.c
 --- linux-2.6.32.60/drivers/net/mlx4/main.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/drivers/net/mlx4/main.c	2012-03-13 13:15:35.200097986 +0100
@@ -37854,7 +37572,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/ecrypt
  		goto out_free;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c linux-2.6.32.60-pax/fs/exec.c
 --- linux-2.6.32.60/fs/exec.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/fs/exec.c	2013-01-28 20:52:13.111960739 +0100
++++ linux-2.6.32.60-pax/fs/exec.c	2013-02-17 17:14:31.340173690 +0100
 @@ -56,12 +56,32 @@
  #include <linux/fsnotify.h>
  #include <linux/fs_struct.h>
@@ -38262,7 +37980,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
 +}
 +#endif
 +
-+void check_object_size(const void *ptr, unsigned long n, bool to)
++void __check_object_size(const void *ptr, unsigned long n, bool to)
 +{
 +
 +#ifdef CONFIG_PAX_USERCOPY
@@ -38282,7 +38000,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/exec.c
 +#endif
 +
 +}
-+EXPORT_SYMBOL(check_object_size);
++EXPORT_SYMBOL(__check_object_size);
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +void pax_track_stack(void)
@@ -40056,6 +39774,59 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/fuse/d
  {
  	if (!IS_ERR(link))
  		free_page((unsigned long) link);
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/gfs2/dir.c linux-2.6.32.60-pax/fs/gfs2/dir.c
+--- linux-2.6.32.60/fs/gfs2/dir.c	2012-03-04 18:49:44.000000000 +0100
++++ linux-2.6.32.60-pax/fs/gfs2/dir.c	2013-02-17 17:53:17.892049470 +0100
+@@ -1095,7 +1095,7 @@ static int dir_double_exhash(struct gfs2
+ 
+ 	/*  Allocate both the "from" and "to" buffers in one big chunk  */
+ 
+-	buf = kcalloc(3, sdp->sd_hash_bsize, GFP_NOFS | __GFP_NOFAIL);
++	buf = kcalloc(sdp->sd_hash_bsize, 3, GFP_NOFS | __GFP_NOFAIL);
+ 
+ 	for (block = dip->i_disksize >> sdp->sd_hash_bsize_shift; block--;) {
+ 		error = gfs2_dir_read_data(dip, (char *)buf,
+diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/hugetlbfs/inode.c linux-2.6.32.60-pax/fs/hugetlbfs/inode.c
+--- linux-2.6.32.60/fs/hugetlbfs/inode.c	2012-10-09 11:00:35.480882475 +0200
++++ linux-2.6.32.60-pax/fs/hugetlbfs/inode.c	2013-02-17 17:19:43.700157012 +0100
+@@ -146,6 +146,10 @@ hugetlb_get_unmapped_area(struct file *f
+ 		return addr;
+ 	}
+ 
++#ifdef CONFIG_PAX_RANDMMAP
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
++#endif
++
+ 	if (addr) {
+ 		addr = ALIGN(addr, huge_page_size(h));
+ 		vma = find_vma(mm, addr);
+@@ -157,7 +161,7 @@ hugetlb_get_unmapped_area(struct file *f
+ 	start_addr = mm->free_area_cache;
+ 
+ 	if (len <= mm->cached_hole_size)
+-		start_addr = TASK_UNMAPPED_BASE;
++		start_addr = mm->mmap_base;
+ 
+ full_search:
+ 	addr = ALIGN(start_addr, huge_page_size(h));
+@@ -169,14 +173,14 @@ full_search:
+ 			 * Start a new search - just in case we missed
+ 			 * some holes.
+ 			 */
+-			if (start_addr != TASK_UNMAPPED_BASE) {
+-				start_addr = TASK_UNMAPPED_BASE;
++			if (start_addr != mm->mmap_base) {
++				start_addr = mm->mmap_base;
+ 				goto full_search;
+ 			}
+ 			return -ENOMEM;
+ 		}
+ 
+-		if (!vma || addr + len <= vma->vm_start)
++		if (check_heap_stack_gap(vma, addr, len))
+ 			return addr;
+ 		addr = ALIGN(vma->vm_end, huge_page_size(h));
+ 	}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/ioctl.c linux-2.6.32.60-pax/fs/ioctl.c
 --- linux-2.6.32.60/fs/ioctl.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/fs/ioctl.c	2012-03-13 13:15:35.408097975 +0100
@@ -40202,21 +39973,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/locks.
  	}
  
  	lock_kernel();
-diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/mbcache.c linux-2.6.32.60-pax/fs/mbcache.c
---- linux-2.6.32.60/fs/mbcache.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/fs/mbcache.c	2012-03-13 13:15:35.416097975 +0100
-@@ -266,9 +266,9 @@ mb_cache_create(const char *name, struct
- 	if (!cache)
- 		goto fail;
- 	cache->c_name = name;
--	cache->c_op.free = NULL;
-+	*(void **)&cache->c_op.free = NULL;
- 	if (cache_op)
--		cache->c_op.free = cache_op->free;
-+		*(void **)&cache->c_op.free = cache_op->free;
- 	atomic_set(&cache->c_entry_count, 0);
- 	cache->c_bucket_bits = bucket_bits;
- #ifdef MB_CACHE_INDEXES_COUNT
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/namei.c linux-2.6.32.60-pax/fs/namei.c
 --- linux-2.6.32.60/fs/namei.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/fs/namei.c	2012-03-13 13:15:35.420097975 +0100
@@ -40914,7 +40670,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/seq_fi
  	if (op) {
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/fs/smbfs/proc.c linux-2.6.32.60-pax/fs/smbfs/proc.c
 --- linux-2.6.32.60/fs/smbfs/proc.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/fs/smbfs/proc.c	2012-03-13 13:15:35.448097973 +0100
++++ linux-2.6.32.60-pax/fs/smbfs/proc.c	2013-02-17 20:00:19.527642533 +0100
 @@ -266,9 +266,9 @@ int smb_setcodepage(struct smb_sb_info *
  
  out:
@@ -41905,7 +41661,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/d
  	int (*get_modes)(struct drm_connector *connector);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/drm/drmP.h linux-2.6.32.60-pax/include/drm/drmP.h
 --- linux-2.6.32.60/include/drm/drmP.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/include/drm/drmP.h	2012-03-13 13:15:35.476097972 +0100
++++ linux-2.6.32.60-pax/include/drm/drmP.h	2013-02-17 17:53:57.252047368 +0100
 @@ -71,6 +71,7 @@
  #include <linux/workqueue.h>
  #include <linux/poll.h>
@@ -42733,7 +42489,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  	.signal		= &init_signals,				\
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/interrupt.h linux-2.6.32.60-pax/include/linux/interrupt.h
 --- linux-2.6.32.60/include/linux/interrupt.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/include/linux/interrupt.h	2012-03-13 13:15:35.504097970 +0100
++++ linux-2.6.32.60-pax/include/linux/interrupt.h	2013-02-17 19:42:31.739699545 +0100
 @@ -369,7 +369,7 @@ enum
  /* map softirq index to softirq name. update 'softirq_to_name' in
   * kernel/softirq.c when adding a new softirq.
@@ -42748,8 +42504,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  struct softirq_action
  {
 -	void	(*action)(struct softirq_action *);
+-};
 +	void	(*action)(void);
- };
++} __no_const;
  
  asmlinkage void do_softirq(void);
  asmlinkage void __do_softirq(void);
@@ -43587,7 +43344,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
   * CONFIG_RELAY kernel API, kernel/relay.c
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/sched.h linux-2.6.32.60-pax/include/linux/sched.h
 --- linux-2.6.32.60/include/linux/sched.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/include/linux/sched.h	2012-07-27 21:59:35.786356865 +0200
++++ linux-2.6.32.60-pax/include/linux/sched.h	2013-02-17 17:14:41.988173121 +0100
 @@ -101,6 +101,7 @@ struct bio;
  struct fs_struct;
  struct bts_context;
@@ -43640,7 +43397,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
-@@ -1542,6 +1550,51 @@ struct task_struct {
+@@ -1542,6 +1550,50 @@ struct task_struct {
  #endif /* CONFIG_TRACING */
  };
  
@@ -43687,12 +43444,11 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
-+extern void check_object_size(const void *ptr, unsigned long n, bool to);
 +
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpumask(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1978,7 +2031,9 @@ void yield(void);
+@@ -1978,7 +2030,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -43702,7 +43458,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2155,7 +2210,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2155,7 +2209,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -43711,7 +43467,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2284,9 +2339,9 @@ static inline unsigned long *end_of_stac
+@@ -2284,9 +2338,9 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -43879,7 +43635,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  		ret = kmem_cache_alloc_node_notrace(cachep, flags, node);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/slab.h linux-2.6.32.60-pax/include/linux/slab.h
 --- linux-2.6.32.60/include/linux/slab.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/include/linux/slab.h	2013-01-22 17:38:23.460543631 +0100
++++ linux-2.6.32.60-pax/include/linux/slab.h	2013-02-17 17:15:32.280170436 +0100
 @@ -11,12 +11,20 @@
  
  #include <linux/gfp.h>
@@ -43927,7 +43683,26 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  
  /*
   * Allocator specific definitions. These are mainly used to establish optimized
-@@ -263,7 +276,7 @@ static inline void *kmem_cache_alloc_nod
+@@ -217,8 +230,18 @@ size_t ksize(const void *);
+  * for general use, and so are not documented here. For a full list of
+  * potential flags, always refer to linux/gfp.h.
+  */
++
++extern void kcalloc_error(void)
++#if defined(CONFIG_GCOV_KERNEL) && defined(CONFIG_PAX_SIZE_OVERFLOW)
++__compiletime_warning("kcalloc called with swapped arguments?");
++#else
++__compiletime_error("kcalloc called with swapped arguments?");
++#endif
++
+ static inline void *kcalloc(size_t n, size_t size, gfp_t flags)
+ {
++	if (__builtin_constant_p(n) && !__builtin_constant_p(size))
++		kcalloc_error();
+ 	if (size != 0 && n > ULONG_MAX / size)
+ 		return NULL;
+ 	return __kmalloc(n * size, flags | __GFP_ZERO);
+@@ -263,7 +286,7 @@ static inline void *kmem_cache_alloc_nod
   * request comes from.
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB)
@@ -43936,7 +43711,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  #define kmalloc_track_caller(size, flags) \
  	__kmalloc_track_caller(size, flags, _RET_IP_)
  #else
-@@ -281,7 +294,7 @@ extern void *__kmalloc_track_caller(size
+@@ -281,7 +304,7 @@ extern void *__kmalloc_track_caller(size
   * allocation request comes from.
   */
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB)
@@ -44129,7 +43904,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/thread_info.h linux-2.6.32.60-pax/include/linux/thread_info.h
 --- linux-2.6.32.60/include/linux/thread_info.h	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/include/linux/thread_info.h	2012-03-13 13:15:35.548097968 +0100
++++ linux-2.6.32.60-pax/include/linux/thread_info.h	2013-02-17 17:20:03.728155943 +0100
 @@ -23,7 +23,7 @@ struct restart_block {
  		};
  		/* For futex_wait and futex_wait_requeue_pi */
@@ -44139,6 +43914,20 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/l
  			u32 val;
  			u32 flags;
  			u32 bitset;
+@@ -126,6 +126,13 @@ static inline void set_restore_sigmask(v
+ }
+ #endif	/* TIF_RESTORE_SIGMASK && !HAVE_SET_RESTORE_SIGMASK */
+ 
++extern void __check_object_size(const void *ptr, unsigned long n, bool to);
++static inline void check_object_size(const void *ptr, unsigned long n, bool to)
++{
++	if (!__builtin_constant_p(n))
++		__check_object_size(ptr, n, to);
++}
++
+ #endif	/* __KERNEL__ */
+ 
+ #endif /* _LINUX_THREAD_INFO_H */
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/include/linux/tty_driver.h linux-2.6.32.60-pax/include/linux/tty_driver.h
 --- linux-2.6.32.60/include/linux/tty_driver.h	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/include/linux/tty_driver.h	2013-01-22 17:38:23.588543625 +0100
@@ -46270,7 +46059,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/lo
  	if (!name) {
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/module.c linux-2.6.32.60-pax/kernel/module.c
 --- linux-2.6.32.60/kernel/module.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/kernel/module.c	2012-03-13 13:24:31.400069357 +0100
++++ linux-2.6.32.60-pax/kernel/module.c	2013-02-17 17:16:58.652165824 +0100
 @@ -89,7 +89,8 @@ static DECLARE_WAIT_QUEUE_HEAD(module_wq
  static BLOCKING_NOTIFIER_HEAD(module_notify_list);
  
@@ -46555,7 +46344,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/mo
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. Just mark it as not being a
-@@ -2274,23 +2309,47 @@ static noinline struct module *load_modu
+@@ -2274,10 +2309,10 @@ static noinline struct module *load_modu
  		err = -ENOMEM;
  		goto free_percpu;
  	}
@@ -46569,19 +46358,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/mo
  	/*
  	 * The pointer to this block is stored in the module structure
  	 * which is inside the block. This block doesn't need to be
- 	 * scanned as it contains data and code that will be freed
+@@ -2285,12 +2320,36 @@ static noinline struct module *load_modu
  	 * after the module is initialized.
  	 */
--	kmemleak_ignore(ptr);
+ 	kmemleak_ignore(ptr);
 -	if (!ptr && mod->init_size) {
-+	kmemleak_not_leak(ptr);
 +	if (!ptr && mod->init_size_rw) {
- 		err = -ENOMEM;
--		goto free_core;
++		err = -ENOMEM;
 +		goto free_core_rw;
- 	}
--	memset(ptr, 0, mod->init_size);
--	mod->module_init = ptr;
++	}
 +	memset(ptr, 0, mod->init_size_rw);
 +	mod->module_init_rw = ptr;
 +
@@ -46598,11 +46383,14 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/mo
 +	mod->module_core_rx = ptr;
 +
 +	ptr = module_alloc_update_bounds_rx(mod->init_size_rx);
-+	kmemleak_not_leak(ptr);
++	kmemleak_ignore(ptr);
 +	if (!ptr && mod->init_size_rx) {
-+		err = -ENOMEM;
+ 		err = -ENOMEM;
+-		goto free_core;
 +		goto free_core_rx;
-+	}
+ 	}
+-	memset(ptr, 0, mod->init_size);
+-	mod->module_init = ptr;
 +
 +	pax_open_kernel();
 +	memset(ptr, 0, mod->init_size_rx);
@@ -47949,8 +47737,13 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/sm
  }
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/softirq.c linux-2.6.32.60-pax/kernel/softirq.c
 --- linux-2.6.32.60/kernel/softirq.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/kernel/softirq.c	2012-03-13 13:15:35.660097962 +0100
-@@ -56,7 +56,7 @@ static struct softirq_action softirq_vec
++++ linux-2.6.32.60-pax/kernel/softirq.c	2013-02-17 19:42:54.755698316 +0100
+@@ -52,11 +52,11 @@ irq_cpustat_t irq_stat[NR_CPUS] ____cach
+ EXPORT_SYMBOL(irq_stat);
+ #endif
+ 
+-static struct softirq_action softirq_vec[NR_SOFTIRQS] __cacheline_aligned_in_smp;
++static struct softirq_action softirq_vec[NR_SOFTIRQS] __read_only __aligned(PAGE_SIZE);
  
  static DEFINE_PER_CPU(struct task_struct *, ksoftirqd);
  
@@ -47968,21 +47761,16 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/so
  			trace_softirq_exit(h, softirq_vec);
  			if (unlikely(prev_count != preempt_count())) {
  				printk(KERN_ERR "huh, entered softirq %td %s %p"
-@@ -363,9 +363,11 @@ void raise_softirq(unsigned int nr)
+@@ -363,7 +363,7 @@ void raise_softirq(unsigned int nr)
  	local_irq_restore(flags);
  }
  
 -void open_softirq(int nr, void (*action)(struct softirq_action *))
 +void open_softirq(int nr, void (*action)(void))
  {
--	softirq_vec[nr].action = action;
-+	pax_open_kernel();
-+	*(void **)&softirq_vec[nr].action = action;
-+	pax_close_kernel();
+ 	softirq_vec[nr].action = action;
  }
- 
- /*
-@@ -419,7 +421,7 @@ void __tasklet_hi_schedule_first(struct
+@@ -419,7 +419,7 @@ void __tasklet_hi_schedule_first(struct
  
  EXPORT_SYMBOL(__tasklet_hi_schedule_first);
  
@@ -47991,7 +47779,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/so
  {
  	struct tasklet_struct *list;
  
-@@ -454,7 +456,7 @@ static void tasklet_action(struct softir
+@@ -454,7 +454,7 @@ static void tasklet_action(struct softir
  	}
  }
  
@@ -48595,7 +48383,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/tr
  
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/trace/trace_events.c linux-2.6.32.60-pax/kernel/trace/trace_events.c
 --- linux-2.6.32.60/kernel/trace/trace_events.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/kernel/trace/trace_events.c	2012-03-13 13:15:35.900097949 +0100
++++ linux-2.6.32.60-pax/kernel/trace/trace_events.c	2013-02-17 19:39:30.031709247 +0100
 @@ -951,13 +951,10 @@ static LIST_HEAD(ftrace_module_file_list
   * Modules must own their file_operations to keep up with
   * reference counting.
@@ -48627,10 +48415,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/kernel/tr
 -	file_ops->format = ftrace_event_format_fops;
 -	file_ops->format.owner = mod;
 +	pax_open_kernel();
-+	*(void **)&mod->trace_id.owner = mod;
-+	*(void **)&mod->trace_enable.owner = mod;
-+	*(void **)&mod->trace_filter.owner = mod;
-+	*(void **)&mod->trace_format.owner = mod;
++	mod->trace_id.owner = mod;
++	mod->trace_enable.owner = mod;
++	mod->trace_filter.owner = mod;
++	mod->trace_format.owner = mod;
 +	pax_close_kernel();
  
  	list_add(&file_ops->list, &ftrace_module_file_list);
@@ -53575,36 +53363,16 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/net/core/
  				continue;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/net/core/rtnetlink.c linux-2.6.32.60-pax/net/core/rtnetlink.c
 --- linux-2.6.32.60/net/core/rtnetlink.c	2012-10-09 11:00:35.504882482 +0200
-+++ linux-2.6.32.60-pax/net/core/rtnetlink.c	2013-01-22 22:02:51.887696380 +0100
-@@ -160,11 +160,13 @@ int __rtnl_register(int protocol, int ms
- 		rtnl_msg_handlers[protocol] = tab;
- 	}
++++ linux-2.6.32.60-pax/net/core/rtnetlink.c	2013-02-17 19:41:04.891704182 +0100
+@@ -57,7 +57,7 @@ struct rtnl_link
+ {
+ 	rtnl_doit_func		doit;
+ 	rtnl_dumpit_func	dumpit;
+-};
++} __no_const;
  
-+	pax_open_kernel();
- 	if (doit)
--		tab[msgindex].doit = doit;
-+		*(void **)&tab[msgindex].doit = doit;
+ static DEFINE_MUTEX(rtnl_mutex);
  
- 	if (dumpit)
--		tab[msgindex].dumpit = dumpit;
-+		*(void **)&tab[msgindex].dumpit = dumpit;
-+	pax_close_kernel();
- 
- 	return 0;
- }
-@@ -208,8 +210,10 @@ int rtnl_unregister(int protocol, int ms
- 	if (rtnl_msg_handlers[protocol] == NULL)
- 		return -ENOENT;
- 
--	rtnl_msg_handlers[protocol][msgindex].doit = NULL;
--	rtnl_msg_handlers[protocol][msgindex].dumpit = NULL;
-+	pax_open_kernel();
-+	*(void **)&rtnl_msg_handlers[protocol][msgindex].doit = NULL;
-+	*(void **)&rtnl_msg_handlers[protocol][msgindex].dumpit = NULL;
-+	pax_close_kernel();
- 
- 	return 0;
- }
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/net/core/scm.c linux-2.6.32.60-pax/net/core/scm.c
 --- linux-2.6.32.60/net/core/scm.c	2012-03-04 18:49:44.000000000 +0100
 +++ linux-2.6.32.60-pax/net/core/scm.c	2012-03-13 13:15:35.972097945 +0100
@@ -56178,7 +55946,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/security/
  	return 0;
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/security/Kconfig linux-2.6.32.60-pax/security/Kconfig
 --- linux-2.6.32.60/security/Kconfig	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/security/Kconfig	2013-01-22 17:38:23.512543629 +0100
++++ linux-2.6.32.60-pax/security/Kconfig	2013-02-17 17:18:15.220161736 +0100
 @@ -4,6 +4,656 @@
  
  menu "Security options"
@@ -56352,7 +56120,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/security/
 +
 +config PAX_PAGEEXEC
 +	bool "Paging based non-executable pages"
-+	depends on !COMPAT_VDSO && PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MATOM || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
++	depends on PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MATOM || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
 +	select X86_PAE if X86_32 && !HIGHMEM4G && (MCORE2 || MPSC || MATOM || MK8)
 +	select ARCH_TRACK_EXEC_LIMIT if X86_32
 +	select S390_SWITCH_AMODE if S390
@@ -56375,7 +56143,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/security/
 +
 +config PAX_SEGMEXEC
 +	bool "Segmentation based non-executable pages"
-+	depends on !COMPAT_VDSO && PAX_NOEXEC && X86_32
++	depends on PAX_NOEXEC && X86_32
 +	help
 +	  This implementation is based on the segmentation feature of the
 +	  CPU and has a very small performance impact, however applications
@@ -56522,7 +56290,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/security/
 +
 +config PAX_KERNEXEC
 +	bool "Enforce non-executable kernel pages"
-+	depends on X86 && !COMPAT_VDSO && !XEN && (!X86_32 || X86_WP_WORKS_OK)
++	depends on X86 && !XEN && (!X86_32 || X86_WP_WORKS_OK)
 +	select PAX_PER_CPU_PGD if X86_64 || (X86_32 && X86_PAE)
 +	select PAX_KERNEXEC_PLUGIN if X86_64
 +	help
@@ -56717,7 +56485,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/security/
 +
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
-+	depends on X86 && !COMPAT_VDSO && !UML_X86 && !XEN
++	depends on X86 && !UML_X86 && !XEN
 +	select PAX_PER_CPU_PGD if X86_64
 +	help
 +	  By saying Y here the kernel will be prevented from dereferencing
@@ -57415,51 +57183,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/sound/soc
  		snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &soc_pcm_ops);
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/sound/usb/usbaudio.c linux-2.6.32.60-pax/sound/usb/usbaudio.c
 --- linux-2.6.32.60/sound/usb/usbaudio.c	2012-03-04 18:49:44.000000000 +0100
-+++ linux-2.6.32.60-pax/sound/usb/usbaudio.c	2012-05-20 19:21:25.553167290 +0200
-@@ -963,12 +963,12 @@ static int snd_usb_pcm_playback_trigger(
- 	switch (cmd) {
- 	case SNDRV_PCM_TRIGGER_START:
- 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
--		subs->ops.prepare = prepare_playback_urb;
-+		*(void **)&subs->ops.prepare = prepare_playback_urb;
- 		return 0;
- 	case SNDRV_PCM_TRIGGER_STOP:
- 		return deactivate_urbs(subs, 0, 0);
- 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
--		subs->ops.prepare = prepare_nodata_playback_urb;
-+		*(void **)&subs->ops.prepare = prepare_nodata_playback_urb;
- 		return 0;
- 	default:
- 		return -EINVAL;
-@@ -985,15 +985,15 @@ static int snd_usb_pcm_capture_trigger(s
- 
- 	switch (cmd) {
- 	case SNDRV_PCM_TRIGGER_START:
--		subs->ops.retire = retire_capture_urb;
-+		*(void **)&subs->ops.retire = retire_capture_urb;
- 		return start_urbs(subs, substream->runtime);
- 	case SNDRV_PCM_TRIGGER_STOP:
- 		return deactivate_urbs(subs, 0, 0);
- 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
--		subs->ops.retire = retire_paused_capture_urb;
-+		*(void **)&subs->ops.retire = retire_paused_capture_urb;
- 		return 0;
- 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
--		subs->ops.retire = retire_capture_urb;
-+		*(void **)&subs->ops.retire = retire_capture_urb;
- 		return 0;
- 	default:
- 		return -EINVAL;
-@@ -1542,7 +1542,7 @@ static int snd_usb_pcm_prepare(struct sn
- 	/* for playback, submit the URBs now; otherwise, the first hwptr_done
- 	 * updates for all URBs would happen at the same time when starting */
- 	if (subs->direction == SNDRV_PCM_STREAM_PLAYBACK) {
--		subs->ops.prepare = prepare_nodata_playback_urb;
-+		*(void **)&subs->ops.prepare = prepare_nodata_playback_urb;
- 		return start_urbs(subs, runtime);
- 	} else
- 		return 0;
-@@ -2228,14 +2228,14 @@ static void init_substream(struct snd_us
++++ linux-2.6.32.60-pax/sound/usb/usbaudio.c	2013-02-17 19:27:26.903747856 +0100
+@@ -2228,9 +2228,9 @@ static void init_substream(struct snd_us
  	subs->direction = stream;
  	subs->dev = as->chip->dev;
  	if (snd_usb_get_speed(subs->dev) == USB_SPEED_FULL) {
@@ -57471,12 +57196,6 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/sound/usb
  		switch (as->chip->usb_id) {
  		case USB_ID(0x041e, 0x3f02): /* E-Mu 0202 USB */
  		case USB_ID(0x041e, 0x3f04): /* E-Mu 0404 USB */
- 		case USB_ID(0x041e, 0x3f0a): /* E-Mu Tracker Pre */
--			subs->ops.retire_sync = retire_playback_sync_urb_hs_emu;
-+			*(void **)&subs->ops.retire_sync = retire_playback_sync_urb_hs_emu;
- 			break;
- 		}
- 	}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/checker_plugin.c linux-2.6.32.60-pax/tools/gcc/checker_plugin.c
 --- linux-2.6.32.60/tools/gcc/checker_plugin.c	1970-01-01 01:00:00.000000000 +0100
 +++ linux-2.6.32.60-pax/tools/gcc/checker_plugin.c	2012-03-13 13:15:36.120097937 +0100
@@ -57654,10 +57373,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/colorize_plugin.c linux-2.6.32.60-pax/tools/gcc/colorize_plugin.c
 --- linux-2.6.32.60/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/colorize_plugin.c	2012-07-21 11:33:47.957082567 +0200
-@@ -0,0 +1,148 @@
++++ linux-2.6.32.60-pax/tools/gcc/colorize_plugin.c	2013-02-17 17:20:34.384154306 +0100
+@@ -0,0 +1,151 @@
 +/*
-+ * Copyright 2012 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -57686,7 +57405,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info colorize_plugin_info = {
-+	.version	= "201203092200",
++	.version	= "201302112000",
 +	.help		= NULL,
 +};
 +
@@ -57765,6 +57484,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= SIMPLE_IPA_PASS,
 +		.name			= "colorize_rearm",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_colorize_rearm,
 +		.sub			= NULL,
@@ -57806,8 +57528,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/constify_plugin.c linux-2.6.32.60-pax/tools/gcc/constify_plugin.c
 --- linux-2.6.32.60/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/constify_plugin.c	2013-01-22 17:38:23.512543629 +0100
-@@ -0,0 +1,349 @@
++++ linux-2.6.32.60-pax/tools/gcc/constify_plugin.c	2013-02-17 17:20:34.388154306 +0100
+@@ -0,0 +1,359 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -57848,7 +57570,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201301150230",
++	.version	= "201302112000",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -58070,16 +57792,23 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +{
 +	unsigned int ret = 0;
 +	tree var;
-+	referenced_var_iterator rvi;
 +
 +#if BUILDING_GCC_VERSION == 4005
-+	FOR_EACH_REFERENCED_VAR(var, rvi) {
++	tree vars;
 +#else
-+	FOR_EACH_REFERENCED_VAR(cfun, var, rvi) {
++	unsigned int i;
++#endif
++
++#if BUILDING_GCC_VERSION == 4005
++	for (vars = cfun->local_decls; vars; vars = TREE_CHAIN(vars)) {
++		var = TREE_VALUE(vars);
++#else
++	FOR_EACH_LOCAL_DECL(cfun, i, var) {
 +#endif
 +		tree type = TREE_TYPE(var);
 +
-+		if (!DECL_P(var) || TREE_STATIC(var) || DECL_EXTERNAL(var))
++		gcc_assert(DECL_P(var));
++		if (is_global_var(var))
 +			continue;
 +
 +		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
@@ -58091,8 +57820,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +//		if (lookup_attribute("no_const", DECL_ATTRIBUTES(var)))
 +//			continue;
 +
-+//		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
-+//			continue;
++		if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type)))
++			continue;
 +
 +		if (walk_struct(type)) {
 +			error_at(DECL_SOURCE_LOCATION(var), "constified variable %qE cannot be local", var);
@@ -58106,6 +57835,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	{
 +		.type			= GIMPLE_PASS,
 +		.name			= "check_local_variables",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= check_local_variables,
 +		.sub			= NULL,
@@ -58262,10 +57994,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +size_overflow_hash.h
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/kallocstat_plugin.c linux-2.6.32.60-pax/tools/gcc/kallocstat_plugin.c
 --- linux-2.6.32.60/tools/gcc/kallocstat_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/kallocstat_plugin.c	2012-07-21 11:34:13.053082774 +0200
-@@ -0,0 +1,167 @@
++++ linux-2.6.32.60-pax/tools/gcc/kallocstat_plugin.c	2013-02-17 17:20:34.388154306 +0100
+@@ -0,0 +1,170 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -58317,7 +58049,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +};
 +
 +static struct plugin_info kallocstat_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201302112000",
 +};
 +
 +static unsigned int execute_kallocstat(void);
@@ -58326,6 +58058,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kallocstat",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= execute_kallocstat,
 +		.sub			= NULL,
@@ -58433,10 +58168,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/kernexec_plugin.c linux-2.6.32.60-pax/tools/gcc/kernexec_plugin.c
 --- linux-2.6.32.60/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/kernexec_plugin.c	2012-11-26 00:36:47.613420647 +0100
-@@ -0,0 +1,432 @@
++++ linux-2.6.32.60-pax/tools/gcc/kernexec_plugin.c	2013-02-17 17:20:34.392154305 +0100
+@@ -0,0 +1,465 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -58479,10 +58214,14 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
 +#endif
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info kernexec_plugin_info = {
-+	.version	= "201111291120",
++	.version	= "201302112000",
 +	.help		= "method=[bts|or]\tinstrumentation method\n"
 +};
 +
@@ -58498,6 +58237,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_reload",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_reload,
 +		.sub			= NULL,
@@ -58516,6 +58258,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "kernexec_fptr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_fptr,
 +		.sub			= NULL,
@@ -58534,6 +58279,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "kernexec_retaddr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= kernexec_cmodel_check,
 +		.execute		= execute_kernexec_retaddr,
 +		.sub			= NULL,
@@ -58631,8 +58379,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +	// create temporary unsigned long variable used for bitops and cast fptr to it
 +	intptr = create_tmp_var(long_unsigned_type_node, "kernexec_bts");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(intptr);
 +	mark_sym_for_renaming(intptr);
++#endif
 +	assign_intptr = gimple_build_assign(intptr, fold_convert(long_unsigned_type_node, old_fptr));
 +	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
@@ -58646,8 +58396,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +	// cast temporary unsigned long back to a temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_fptr");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +	assign_new_fptr = gimple_build_assign(new_fptr, fold_convert(TREE_TYPE(old_fptr), intptr));
 +	gsi_insert_before(gsi, assign_new_fptr, GSI_SAME_STMT);
 +	update_stmt(assign_new_fptr);
@@ -58661,24 +58413,36 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +{
 +	gimple asm_or_stmt, call_stmt;
 +	tree old_fptr, new_fptr, input, output;
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC(tree, gc) *inputs = NULL;
 +	VEC(tree, gc) *outputs = NULL;
++#else
++	vec<tree, va_gc> *inputs = NULL;
++	vec<tree, va_gc> *outputs = NULL;
++#endif
 +
 +	call_stmt = gsi_stmt(*gsi);
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_or");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
 +	mark_sym_for_renaming(new_fptr);
++#endif
 +
 +	// build asm volatile("orq %%r10, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
 +	input = build_tree_list(NULL_TREE, build_string(2, "0"));
 +	input = chainon(NULL_TREE, build_tree_list(input, old_fptr));
 +	output = build_tree_list(NULL_TREE, build_string(3, "=r"));
 +	output = chainon(NULL_TREE, build_tree_list(output, new_fptr));
++#if BUILDING_GCC_VERSION <= 4007
 +	VEC_safe_push(tree, gc, inputs, input);
 +	VEC_safe_push(tree, gc, outputs, output);
++#else
++	vec_safe_push(inputs, input);
++	vec_safe_push(outputs, output);
++#endif
 +	asm_or_stmt = gimple_build_asm_vec("orq %%r10, %0\n\t", inputs, outputs, NULL, NULL);
 +	gimple_asm_set_volatile(asm_or_stmt, true);
 +	gsi_insert_before(gsi, asm_or_stmt, GSI_SAME_STMT);
@@ -58716,9 +58480,13 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +				gcc_unreachable();
 +
 +			// ... through a function pointer
-+			fn = SSA_NAME_VAR(fn);
-+			if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL)
-+				continue;
++			if (SSA_NAME_VAR(fn) != NULL_TREE) {
++				fn = SSA_NAME_VAR(fn);
++				if (TREE_CODE(fn) != VAR_DECL && TREE_CODE(fn) != PARM_DECL) {
++					debug_tree(fn);
++					gcc_unreachable();
++				}
++			}
 +			fn = TREE_TYPE(fn);
 +			if (TREE_CODE(fn) != POINTER_TYPE)
 +				continue;
@@ -58869,10 +58637,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/latent_entropy_plugin.c linux-2.6.32.60-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-2.6.32.60/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/latent_entropy_plugin.c	2012-07-27 21:51:26.490342480 +0200
-@@ -0,0 +1,295 @@
++++ linux-2.6.32.60-pax/tools/gcc/latent_entropy_plugin.c	2013-02-17 17:20:34.392154305 +0100
+@@ -0,0 +1,321 @@
 +/*
-+ * Copyright 2012 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -58912,12 +58680,16 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201207271820",
++	.version	= "201302112000",
 +	.help		= NULL
 +};
 +
@@ -58928,6 +58700,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "latent_entropy",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_latent_entropy,
 +		.execute		= execute_latent_entropy,
 +		.sub			= NULL,
@@ -59023,7 +58798,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	op = get_op(&rhs);
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, op, unsigned_intDI_type_node, local_entropy, rhs);
 +	assign = gimple_build_assign(local_entropy, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +//debug_bb(bb);
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_before(&gsi, assign, GSI_NEW_STMT);
@@ -59038,12 +58815,16 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +	// 1. create temporary copy of latent_entropy
 +	temp = create_tmp_var(unsigned_intDI_type_node, "temp_latent_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(temp);
 +	mark_sym_for_renaming(temp);
++#endif
 +
 +	// 2. read...
 +	assign = gimple_build_assign(temp, latent_entropy_decl);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
@@ -59051,13 +58832,17 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	// 3. ...modify...
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, get_op(NULL), unsigned_intDI_type_node, temp, rhs);
 +	assign = gimple_build_assign(temp, addxorrol);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +
 +	// 4. ...write latent_entropy
 +	assign = gimple_build_assign(latent_entropy_decl, temp);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +}
@@ -59072,8 +58857,13 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	if (!latent_entropy_decl) {
 +		struct varpool_node *node;
 +
++#if BUILDING_GCC_VERSION <= 4007
 +		for (node = varpool_nodes; node; node = node->next) {
 +			tree var = node->decl;
++#else
++		FOR_EACH_VARIABLE(node) {
++			tree var = node->symbol.decl;
++#endif
 +			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
 +				continue;
 +			latent_entropy_decl = var;
@@ -59090,8 +58880,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +	// 1. create local entropy variable
 +	local_entropy = create_tmp_var(unsigned_intDI_type_node, "local_entropy");
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(local_entropy);
 +	mark_sym_for_renaming(local_entropy);
++#endif
 +
 +	// 2. initialize local entropy variable
 +	bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
@@ -59101,7 +58893,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +	assign = gimple_build_assign(local_entropy, build_int_cstu(unsigned_intDI_type_node, get_random_const()));
 +//	gimple_set_location(assign, loc);
++#if BUILDING_GCC_VERSION <= 4007
 +	find_referenced_vars_in(assign);
++#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +	bb = bb->next_bb;
@@ -61784,8 +61578,8 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +atyfb_setup_generic_49151 atyfb_setup_generic 3 49151 NULL
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/size_overflow_plugin.c linux-2.6.32.60-pax/tools/gcc/size_overflow_plugin.c
 --- linux-2.6.32.60/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/size_overflow_plugin.c	2013-01-22 17:38:23.516543628 +0100
-@@ -0,0 +1,1930 @@
++++ linux-2.6.32.60-pax/tools/gcc/size_overflow_plugin.c	2013-02-17 17:20:34.396154305 +0100
+@@ -0,0 +1,1941 @@
 +/*
 + * Copyright 2011, 2012 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -61824,6 +61618,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +#include "c-tree.h"
 +#else
 +#define C_DECL_IMPLICIT(EXP) DECL_LANG_FLAG_2 (EXP)
++#endif
++
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
 +#endif
 +
 +struct size_overflow_hash {
@@ -62178,8 +61976,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +{
 +	tree new_var = create_tmp_var(type, "cicus");
 +
++#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_var);
 +	mark_sym_for_renaming(new_var);
++#endif
 +	return new_var;
 +}
 +
@@ -62399,11 +62199,13 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	basic_block bb;
 +	gimple phi;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(oldstmt);
++	gimple_seq seq;
 +
 +	bb = gsi_bb(gsi);
 +
 +	phi = create_phi_node(result, bb);
-+	gsi = gsi_last(phi_nodes(bb));
++	seq = phi_nodes(bb);
++	gsi = gsi_last(seq);
 +	gsi_remove(&gsi, false);
 +
 +	gsi = gsi_for_stmt(oldstmt);
@@ -63643,13 +63445,16 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "size_overflow",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= NULL,
 +		.execute		= handle_function,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
 +		.tv_id			= TV_NONE,
-+		.properties_required	= PROP_cfg | PROP_referenced_vars,
++		.properties_required	= PROP_cfg,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
@@ -63718,10 +63523,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +}
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc/stackleak_plugin.c linux-2.6.32.60-pax/tools/gcc/stackleak_plugin.c
 --- linux-2.6.32.60/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/tools/gcc/stackleak_plugin.c	2012-07-21 11:35:43.913085306 +0200
-@@ -0,0 +1,313 @@
++++ linux-2.6.32.60-pax/tools/gcc/stackleak_plugin.c	2013-02-17 17:20:34.400154305 +0100
+@@ -0,0 +1,327 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -63759,6 +63564,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
 +extern void print_gimple_stmt(FILE *, gimple, int, int);
 +
 +int plugin_is_GPL_compatible;
@@ -63769,7 +63578,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201203140940",
++	.version	= "201302112000",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
@@ -63782,6 +63591,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= GIMPLE_PASS,
 +		.name			= "stackleak_tree_instrument",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_tree_instrument,
 +		.sub			= NULL,
@@ -63800,6 +63612,9 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +	.pass = {
 +		.type			= RTL_PASS,
 +		.name			= "stackleak_final",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
 +		.gate			= gate_stackleak_track_stack,
 +		.execute		= execute_stackleak_final,
 +		.sub			= NULL,
@@ -63936,7 +63751,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +
 +static unsigned int execute_stackleak_final(void)
 +{
-+	rtx insn;
++	rtx insn, next;
 +
 +	if (cfun->calls_alloca)
 +		return 0;
@@ -63946,10 +63761,11 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +		return 0;
 +
 +	// 1. find pax_track_stack calls
-+	for (insn = get_insns(); insn; insn = NEXT_INSN(insn)) {
++	for (insn = get_insns(); insn; insn = next) {
 +		// rtl match: (call_insn 8 7 9 3 (call (mem (symbol_ref ("pax_track_stack") [flags 0x41] <function_decl 0xb7470e80 pax_track_stack>) [0 S1 A8]) (4)) -1 (nil) (nil))
 +		rtx body;
 +
++		next = NEXT_INSN(insn);
 +		if (!CALL_P(insn))
 +			continue;
 +		body = PATTERN(insn);
@@ -63965,10 +63781,13 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/tools/gcc
 +			continue;
 +//		warning(0, "track_frame_size: %d %ld %d", cfun->calls_alloca, get_frame_size(), track_frame_size);
 +		// 2. delete call
-+		insn = delete_insn_and_edges(insn);
++		delete_insn_and_edges(insn);
 +#if BUILDING_GCC_VERSION >= 4007
-+		if (GET_CODE(insn) == NOTE && NOTE_KIND(insn) == NOTE_INSN_CALL_ARG_LOCATION)
-+			insn = delete_insn_and_edges(insn);
++		if (GET_CODE(next) == NOTE && NOTE_KIND(next) == NOTE_INSN_CALL_ARG_LOCATION) {
++			insn = next;
++			next = NEXT_INSN(insn);
++			delete_insn_and_edges(insn);
++		}
 +#endif
 +	}
 +
@@ -64060,7 +63879,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/usr/gen_i
         }
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/virt/kvm/kvm_main.c linux-2.6.32.60-pax/virt/kvm/kvm_main.c
 --- linux-2.6.32.60/virt/kvm/kvm_main.c	2012-10-09 11:00:35.516882485 +0200
-+++ linux-2.6.32.60-pax/virt/kvm/kvm_main.c	2013-01-22 17:36:38.016549261 +0100
++++ linux-2.6.32.60-pax/virt/kvm/kvm_main.c	2013-02-17 18:09:59.979995966 +0100
 @@ -81,7 +81,12 @@ static cpumask_var_t cpus_hardware_enabl
  struct kmem_cache *kvm_vcpu_cache;
  EXPORT_SYMBOL_GPL(kvm_vcpu_cache);
@@ -64075,6 +63894,33 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/virt/kvm/
  
  struct dentry *kvm_debugfs_dir;
  
+@@ -1823,7 +1828,7 @@ static int kvm_vcpu_release(struct inode
+ 	return 0;
+ }
+ 
+-static struct file_operations kvm_vcpu_fops = {
++static file_operations_no_const kvm_vcpu_fops __read_only = {
+ 	.release        = kvm_vcpu_release,
+ 	.unlocked_ioctl = kvm_vcpu_ioctl,
+ 	.compat_ioctl   = kvm_vcpu_ioctl,
+@@ -2423,7 +2428,7 @@ static int kvm_vm_mmap(struct file *file
+ 	return 0;
+ }
+ 
+-static struct file_operations kvm_vm_fops = {
++static file_operations_no_const kvm_vm_fops __read_only = {
+ 	.release        = kvm_vm_release,
+ 	.unlocked_ioctl = kvm_vm_ioctl,
+ 	.compat_ioctl   = kvm_vm_ioctl,
+@@ -2510,7 +2515,7 @@ out:
+ 	return r;
+ }
+ 
+-static struct file_operations kvm_chardev_ops = {
++static file_operations_no_const kvm_chardev_ops __read_only = {
+ 	.unlocked_ioctl = kvm_dev_ioctl,
+ 	.compat_ioctl   = kvm_dev_ioctl,
+ };
 @@ -2573,7 +2578,7 @@ asmlinkage void kvm_handle_fault_on_rebo
  	if (kvm_rebooting)
  		/* spin while reset goes on */
@@ -64104,13 +63950,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/virt/kvm/
  		goto out_free_5;
  	}
  
--	kvm_chardev_ops.owner = module;
--	kvm_vm_fops.owner = module;
--	kvm_vcpu_fops.owner = module;
 +	pax_open_kernel();
-+	*(void **)&kvm_chardev_ops.owner = module;
-+	*(void **)&kvm_vm_fops.owner = module;
-+	*(void **)&kvm_vcpu_fops.owner = module;
+ 	kvm_chardev_ops.owner = module;
+ 	kvm_vm_fops.owner = module;
+ 	kvm_vcpu_fops.owner = module;
 +	pax_close_kernel();
  
  	r = misc_register(&kvm_dev);
