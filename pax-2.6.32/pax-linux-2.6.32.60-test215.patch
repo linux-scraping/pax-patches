@@ -1,14 +1,4 @@
-- added compile time detection for non-optimal use of kmalloc_array/kcalloc
-- reworked the USERCOPY interface a bit to make checking for constant copy sizes easier
-- various ASLR cleanups
-  - enabled it for hugetlb (x86 and generic)
-  - made powerpc/sparc ignore PF_RANDOMIZE as x86 does
-- added a fix for http://vulnfactory.org/blog/2013/02/06/a-linux-memory-trick/
-- gcc plugins should now work with gcc 4.8 as well
-- reverted/rewrote some of the recent constification changes as gcc proved to be
-  a bit too smart in optimizing constified function pointer dereferences that in
-  turn broke special cases where such pointers did have to be modified, reported
-  by gaima (http://forums.grsecurity.net/viewtopic.php?f=3&t=3276)
+- fixed gcc plugin support for gcc 4.8
 
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/arch/alpha/include/asm/atomic.h linux-2.6.32.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-2.6.32.60/arch/alpha/include/asm/atomic.h	2012-03-04 18:49:44.000000000 +0100
@@ -48909,7 +48899,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/lib/vspri
  
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile linux-2.6.32.60-pax/Makefile
 --- linux-2.6.32.60/Makefile	2012-10-09 11:00:35.412882459 +0200
-+++ linux-2.6.32.60-pax/Makefile	2012-10-09 11:00:39.208883016 +0200
++++ linux-2.6.32.60-pax/Makefile	2013-02-18 00:10:32.675770964 +0100
 @@ -221,8 +221,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -48942,11 +48932,15 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  			 include/linux/version.h headers_% \
  			 kernelrelease kernelversion
  
-@@ -526,6 +527,56 @@ else
+@@ -526,6 +527,60 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
++ifeq ($(call cc-ifversion, -ge, 0408, y), y)
++PLUGINCC := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCXX)" "$(HOSTCXX)" "$(CC)")
++else
 +PLUGINCC := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-plugin.sh "$(HOSTCC)" "$(HOSTCXX)" "$(CC)")
++endif
 +ifneq ($(PLUGINCC),)
 +ifdef CONFIG_PAX_CONSTIFY_PLUGIN
 +CONSTIFY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/constify_plugin.so -DCONSTIFY_PLUGIN
@@ -48999,7 +48993,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifneq ($(CONFIG_FRAME_WARN),0)
-@@ -868,6 +919,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
+@@ -868,6 +923,8 @@ vmlinux.o: $(modpost-init) $(vmlinux-mai
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -49008,7 +49002,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  $(sort $(vmlinux-init) $(vmlinux-main)) $(vmlinux-lds): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -877,7 +930,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
+@@ -877,7 +934,7 @@ $(sort $(vmlinux-init) $(vmlinux-main))
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -49017,7 +49011,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  	$(Q)$(MAKE) $(build)=$@
  
  # Build the kernel release string
-@@ -986,6 +1039,7 @@ prepare0: archprepare FORCE
+@@ -986,6 +1043,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=. missing-syscalls
  
  # All the preparing..
@@ -49025,7 +49019,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  prepare: prepare0
  
  # The asm symlink changes when $(ARCH) changes.
-@@ -1127,6 +1181,8 @@ all: modules
+@@ -1127,6 +1185,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -49034,7 +49028,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux)
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1136,7 +1192,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
+@@ -1136,7 +1196,7 @@ modules: $(vmlinux-dirs) $(if $(KBUILD_B
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -49043,7 +49037,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  
  # Target to install modules
  PHONY += modules_install
-@@ -1199,9 +1255,9 @@ CLEAN_FILES +=	vmlinux System.map \
+@@ -1199,9 +1259,9 @@ CLEAN_FILES +=	vmlinux System.map \
  MRPROPER_DIRS  += include/config include2 usr/include include/generated
  MRPROPER_FILES += .config .config.old include/asm .version .old_version \
                    include/linux/autoconf.h include/linux/version.h      \
@@ -49055,7 +49049,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1245,7 +1301,7 @@ distclean: mrproper
+@@ -1245,7 +1305,7 @@ distclean: mrproper
  	@find $(srctree) $(RCS_FIND_IGNORE) \
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
@@ -49064,7 +49058,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1292,6 +1348,7 @@ help:
+@@ -1292,6 +1352,7 @@ help:
  	@echo  '  modules_prepare - Set up for building external modules'
  	@echo  '  tags/TAGS	  - Generate tags file for editors'
  	@echo  '  cscope	  - Generate cscope index'
@@ -49072,7 +49066,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  	@echo  '  kernelrelease	  - Output the release version string'
  	@echo  '  kernelversion	  - Output the version stored in Makefile'
  	@echo  '  headers_install - Install sanitised kernel headers to INSTALL_HDR_PATH'; \
-@@ -1393,6 +1450,8 @@ PHONY += $(module-dirs) modules
+@@ -1393,6 +1454,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -49081,7 +49075,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1448,7 +1507,7 @@ endif # KBUILD_EXTMOD
+@@ -1448,7 +1511,7 @@ endif # KBUILD_EXTMOD
  quiet_cmd_tags = GEN     $@
        cmd_tags = $(CONFIG_SHELL) $(srctree)/scripts/tags.sh $@
  
@@ -49090,7 +49084,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  	$(call cmd,tags)
  
  # Scripts to check various things for consistency
-@@ -1513,17 +1572,21 @@ else
+@@ -1513,17 +1576,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -49116,7 +49110,7 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/Makefile 
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1533,11 +1596,15 @@ endif
+@@ -1533,11 +1600,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -55507,10 +55501,10 @@ diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/scripts/b
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-2.6.32.60-pax/Documentation/dontdiff linux-2.6.32.60/scripts/gcc-plugin.sh linux-2.6.32.60-pax/scripts/gcc-plugin.sh
 --- linux-2.6.32.60/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.32.60-pax/scripts/gcc-plugin.sh	2012-06-21 23:48:23.302475093 +0200
++++ linux-2.6.32.60-pax/scripts/gcc-plugin.sh	2013-02-18 00:10:32.675770964 +0100
 @@ -0,0 +1,17 @@
 +#!/bin/bash
-+plugincc=`$1 -x c -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
++plugincc=`$1 -E -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
 +#include "gcc-plugin.h"
 +#include "tree.h"
 +#include "tm.h"
