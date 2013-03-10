@@ -1,4 +1,8 @@
-- fixed some fallout after the last round of onstification changes, reported by several people
+- fixed a KERNEXEC false positive on arm reported by Gu1
+- fixed various compile errors reported by x14sg1 (http://forums.grsecurity.net/viewtopic.php?f=3&t=3340)
+- fixed too strict mmap parameter checking on i386, reported by browndav (http://forums.grsecurity.net/viewtopic.php?f=1&t=3339)
+- added fix from spender for some namespace breakage reported by zakalwe
+- small latent entropy improvement: pass pax_extra_latent_entropy to the kernel to extract entropy from RAM content during boot
 
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/alpha/include/asm/atomic.h linux-3.8.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.2/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -2217,6 +2221,25 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/kernel/m
  #endif
  
  int
+diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/kernel/patch.c linux-3.8.2-pax/arch/arm/kernel/patch.c
+--- linux-3.8.2/arch/arm/kernel/patch.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.2-pax/arch/arm/kernel/patch.c	2013-03-09 13:38:31.501578527 +0100
+@@ -18,6 +18,7 @@ void __kprobes __patch_text(void *addr,
+ 	bool thumb2 = IS_ENABLED(CONFIG_THUMB2_KERNEL);
+ 	int size;
+ 
++	pax_open_kernel();
+ 	if (thumb2 && __opcode_is_thumb16(insn)) {
+ 		*(u16 *)addr = __opcode_to_mem_thumb16(insn);
+ 		size = sizeof(u16);
+@@ -39,6 +40,7 @@ void __kprobes __patch_text(void *addr,
+ 		*(u32 *)addr = insn;
+ 		size = sizeof(u32);
+ 	}
++	pax_close_kernel();
+ 
+ 	flush_icache_range((uintptr_t)(addr),
+ 			   (uintptr_t)(addr) + size);
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/kernel/perf_event_cpu.c linux-3.8.2-pax/arch/arm/kernel/perf_event_cpu.c
 --- linux-3.8.2/arch/arm/kernel/perf_event_cpu.c	2013-02-19 01:12:35.841765788 +0100
 +++ linux-3.8.2-pax/arch/arm/kernel/perf_event_cpu.c	2013-02-20 01:05:14.886072225 +0100
@@ -20023,8 +20046,8 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/x86/kernel/s
  		switch (opcode[i]) {
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/x86/kernel/sys_i386_32.c linux-3.8.2-pax/arch/x86/kernel/sys_i386_32.c
 --- linux-3.8.2/arch/x86/kernel/sys_i386_32.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.8.2-pax/arch/x86/kernel/sys_i386_32.c	2013-02-19 01:14:43.201772705 +0100
-@@ -0,0 +1,247 @@
++++ linux-3.8.2-pax/arch/x86/kernel/sys_i386_32.c	2013-03-10 04:26:25.990734083 +0100
+@@ -0,0 +1,248 @@
 +/*
 + * This file contains various random system calls that
 + * have a non-standard calling sequence on the Linux/i386
@@ -20060,8 +20083,9 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/x86/kernel/s
 +		pax_task_size = SEGMEXEC_TASK_SIZE;
 +#endif
 +
-+	if (len > pax_task_size || addr > pax_task_size - len)
-+		return -EINVAL;
++	if (flags & MAP_FIXED)
++		if (len > pax_task_size || addr > pax_task_size - len)
++			return -EINVAL;
 +
 +	return 0;
 +}
@@ -28527,8 +28551,8 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/Documentation/don
  zoffset.h
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/Documentation/kernel-parameters.txt linux-3.8.2-pax/Documentation/kernel-parameters.txt
 --- linux-3.8.2/Documentation/kernel-parameters.txt	2013-03-07 04:10:19.371802322 +0100
-+++ linux-3.8.2-pax/Documentation/kernel-parameters.txt	2013-03-07 04:10:37.719801342 +0100
-@@ -2121,6 +2121,13 @@ bytes respectively. Such letter suffixes
++++ linux-3.8.2-pax/Documentation/kernel-parameters.txt	2013-03-10 02:37:24.919083325 +0100
+@@ -2121,6 +2121,18 @@ bytes respectively. Such letter suffixes
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
@@ -28538,6 +28562,11 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/Documentation/ker
 +			page table updates on X86-64.
 +
 +	pax_softmode=	0/1 to disable/enable PaX softmode on boot already.
++
++	pax_extra_latent_entropy
++			Enable a very simple form of latent entropy extraction
++			from the first 4GB of memory as the bootmem allocator
++			passes the memory pages to the buddy allocator.
 +
  	pcbit=		[HW,ISDN]
  
@@ -28592,7 +28621,16 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/drivers/acpi/bgrt
  	if (!bgrt_kobj)
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/drivers/acpi/blacklist.c linux-3.8.2-pax/drivers/acpi/blacklist.c
 --- linux-3.8.2/drivers/acpi/blacklist.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.2-pax/drivers/acpi/blacklist.c	2013-03-07 03:16:59.591973165 +0100
++++ linux-3.8.2-pax/drivers/acpi/blacklist.c	2013-03-09 17:49:31.068774463 +0100
+@@ -52,7 +52,7 @@ struct acpi_blacklist_item {
+ 	u32 is_critical_error;
+ };
+ 
+-static struct dmi_system_id acpi_osi_dmi_table[] __initdata;
++static const struct dmi_system_id acpi_osi_dmi_table[] __initconst;
+ 
+ /*
+  * POLICY: If *anything* doesn't work, put it on the blacklist.
 @@ -193,7 +193,7 @@ static int __init dmi_disable_osi_win7(c
  	return 0;
  }
@@ -40340,8 +40378,16 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/drivers/video/aty
  
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/drivers/video/aty/mach64_cursor.c linux-3.8.2-pax/drivers/video/aty/mach64_cursor.c
 --- linux-3.8.2/drivers/video/aty/mach64_cursor.c	2013-02-19 01:13:16.481767995 +0100
-+++ linux-3.8.2-pax/drivers/video/aty/mach64_cursor.c	2013-03-05 05:45:23.736440666 +0100
-@@ -208,7 +208,9 @@ int aty_init_cursor(struct fb_info *info
++++ linux-3.8.2-pax/drivers/video/aty/mach64_cursor.c	2013-03-09 14:13:50.577465385 +0100
+@@ -7,6 +7,7 @@
+ #include <linux/string.h>
+ 
+ #include <asm/io.h>
++#include <asm/pgtable.h>
+ 
+ #ifdef __sparc__
+ #include <asm/fbio.h>
+@@ -208,7 +209,9 @@ int aty_init_cursor(struct fb_info *info
  	info->sprite.buf_align = 16; 	/* and 64 lines tall. */
  	info->sprite.flags = FB_PIXMAP_IO;
  
@@ -51479,7 +51525,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/Kconfig linu
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux-3.8.2-pax/init/main.c
 --- linux-3.8.2/init/main.c	2013-02-19 01:13:21.921768291 +0100
-+++ linux-3.8.2-pax/init/main.c	2013-02-19 01:14:43.985772748 +0100
++++ linux-3.8.2-pax/init/main.c	2013-03-10 02:42:51.391065894 +0100
 @@ -149,6 +149,51 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -51560,18 +51606,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux
  	}
  
  	return ret;
-@@ -743,6 +789,10 @@ static char *initcall_level_names[] __in
- 	"late",
- };
- 
-+#ifdef CONFIG_PAX_LATENT_ENTROPY
-+u64 latent_entropy;
-+#endif
-+
- static void __init do_initcall_level(int level)
- {
- 	extern const struct kernel_param __start___param[], __stop___param[];
-@@ -755,8 +805,14 @@ static void __init do_initcall_level(int
+@@ -755,8 +801,14 @@ static void __init do_initcall_level(int
  		   level, level,
  		   &repair_env_string);
  
@@ -51587,7 +51622,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux
  }
  
  static void __init do_initcalls(void)
-@@ -790,8 +846,14 @@ static void __init do_pre_smp_initcalls(
+@@ -790,8 +842,14 @@ static void __init do_pre_smp_initcalls(
  {
  	initcall_t *fn;
  
@@ -51603,7 +51638,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux
  }
  
  static int run_init_process(const char *init_filename)
-@@ -877,7 +939,7 @@ static noinline void __init kernel_init_
+@@ -877,7 +935,7 @@ static noinline void __init kernel_init_
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -51612,7 +51647,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux
  		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -890,7 +952,7 @@ static noinline void __init kernel_init_
+@@ -890,7 +948,7 @@ static noinline void __init kernel_init_
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -54724,7 +54759,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/kernel/sched/fair
  	struct rq *this_rq = cpu_rq(this_cpu);
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/kernel/signal.c linux-3.8.2-pax/kernel/signal.c
 --- linux-3.8.2/kernel/signal.c	2013-02-19 01:13:22.549768325 +0100
-+++ linux-3.8.2-pax/kernel/signal.c	2013-03-08 21:41:41.754412389 +0100
++++ linux-3.8.2-pax/kernel/signal.c	2013-03-10 04:36:31.066701776 +0100
 @@ -50,12 +50,12 @@ static struct kmem_cache *sigqueue_cache
  
  int print_fatal_signals __read_mostly;
@@ -59008,8 +59043,16 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/nommu.c linux-
  
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/page_alloc.c linux-3.8.2-pax/mm/page_alloc.c
 --- linux-3.8.2/mm/page_alloc.c	2013-02-19 01:13:22.833768340 +0100
-+++ linux-3.8.2-pax/mm/page_alloc.c	2013-02-23 16:13:21.423277136 +0100
-@@ -338,7 +338,7 @@ out:
++++ linux-3.8.2-pax/mm/page_alloc.c	2013-03-10 04:08:17.134792219 +0100
+@@ -58,6 +58,7 @@
+ #include <linux/prefetch.h>
+ #include <linux/migrate.h>
+ #include <linux/page-debug-flags.h>
++#include <linux/random.h>
+ 
+ #include <asm/tlbflush.h>
+ #include <asm/div64.h>
+@@ -338,7 +339,7 @@ out:
   * This usage means that zero-order pages may not be compound.
   */
  
@@ -59018,7 +59061,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/page_alloc.c l
  {
  	__free_pages_ok(page, compound_order(page));
  }
-@@ -693,6 +693,10 @@ static bool free_pages_prepare(struct pa
+@@ -693,6 +694,10 @@ static bool free_pages_prepare(struct pa
  	int i;
  	int bad = 0;
  
@@ -59029,7 +59072,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/page_alloc.c l
  	trace_mm_page_free(page, order);
  	kmemcheck_free_shadow(page, order);
  
-@@ -708,6 +712,12 @@ static bool free_pages_prepare(struct pa
+@@ -708,6 +713,12 @@ static bool free_pages_prepare(struct pa
  		debug_check_no_obj_freed(page_address(page),
  					   PAGE_SIZE << order);
  	}
@@ -59042,7 +59085,47 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/page_alloc.c l
  	arch_free_page(page, order);
  	kernel_map_pages(page, 1 << order, 0);
  
-@@ -861,8 +871,10 @@ static int prep_new_page(struct page *pa
+@@ -730,6 +741,19 @@ static void __free_pages_ok(struct page
+ 	local_irq_restore(flags);
+ }
+ 
++#ifdef CONFIG_PAX_LATENT_ENTROPY
++bool __meminitdata extra_latent_entropy;
++
++static int __init setup_pax_extra_latent_entropy(char *str)
++{
++	extra_latent_entropy = true;
++	return 0;
++}
++early_param("pax_extra_latent_entropy", setup_pax_extra_latent_entropy);
++
++u64 latent_entropy;
++#endif
++
+ /*
+  * Read access to zone->managed_pages is safe because it's unsigned long,
+  * but we still need to serialize writers. Currently all callers of
+@@ -752,6 +776,19 @@ void __meminit __free_pages_bootmem(stru
+ 		set_page_count(p, 0);
+ 	}
+ 
++#ifdef CONFIG_PAX_LATENT_ENTROPY
++	if (extra_latent_entropy && !PageHighMem(page) && page_to_pfn(page) < 0x100000) {
++		u64 hash = 0;
++		size_t index, end = PAGE_SIZE * nr_pages / sizeof hash;
++		const u64 *data = lowmem_page_address(page);
++
++		for (index = 0; index < end; index++)
++			hash ^= hash + data[index];
++		latent_entropy ^= hash;
++		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++	}
++#endif
++
+ 	page_zone(page)->managed_pages += 1 << order;
+ 	set_page_refcounted(page);
+ 	__free_pages(page, order);
+@@ -861,8 +898,10 @@ static int prep_new_page(struct page *pa
  	arch_alloc_page(page, order);
  	kernel_map_pages(page, 1 << order, 1);
  
@@ -61790,7 +61873,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/net/ipv4/ipconfig
  }
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/net/ipv4/ip_fragment.c linux-3.8.2-pax/net/ipv4/ip_fragment.c
 --- linux-3.8.2/net/ipv4/ip_fragment.c	2013-02-19 01:13:23.153768358 +0100
-+++ linux-3.8.2-pax/net/ipv4/ip_fragment.c	2013-03-08 16:21:29.230351933 +0100
++++ linux-3.8.2-pax/net/ipv4/ip_fragment.c	2013-03-09 04:14:20.995385882 +0100
 @@ -322,7 +322,7 @@ static inline int ip_frag_too_far(struct
  		return 0;
  
@@ -61819,8 +61902,9 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/net/ipv4/ip_fragm
  		/* Don't export sysctls to unprivileged users */
  		if (net->user_ns != &init_user_ns)
  			table[0].procname = NULL;
+-	}
 +		hdr = register_net_sysctl(net, "net/ipv4", table);
- 	}
++	} else
 +		hdr = register_net_sysctl(net, "net/ipv4", ip4_frags_ns_ctl_table);
  
 -	hdr = register_net_sysctl(net, "net/ipv4", table);
@@ -65269,8 +65353,8 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/security/integrit
  	return 0;
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/security/Kconfig linux-3.8.2-pax/security/Kconfig
 --- linux-3.8.2/security/Kconfig	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.2-pax/security/Kconfig	2013-03-05 18:16:55.870033096 +0100
-@@ -4,6 +4,658 @@
++++ linux-3.8.2-pax/security/Kconfig	2013-03-10 02:36:54.095084971 +0100
+@@ -4,6 +4,663 @@
  
  menu "Security options"
  
@@ -65915,6 +65999,11 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/security/Kconfig 
 +	  there is little 'natural' source of entropy normally.  The cost
 +	  is some slowdown of the boot process.
 +
++	  When pax_extra_latent_entropy is passed on the kernel command line,
++	  entropy will be extracted from up to the first 4GB of RAM while the
++	  runtime memory allocator is being initialized.  This costs even more
++	  slowdown of the boot process.
++
 +	  Note that the implementation requires a gcc with plugin support,
 +	  i.e., gcc 4.5 or newer.  You may need to install the supporting
 +	  headers explicitly in addition to the normal gcc package.
@@ -65929,7 +66018,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/security/Kconfig 
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +755,7 @@ config INTEL_TXT
+@@ -103,7 +760,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -68288,8 +68377,8 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/kernexe
 +}
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_entropy_plugin.c linux-3.8.2-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.8.2/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.8.2-pax/tools/gcc/latent_entropy_plugin.c	2013-02-19 01:14:44.873772796 +0100
-@@ -0,0 +1,321 @@
++++ linux-3.8.2-pax/tools/gcc/latent_entropy_plugin.c	2013-03-10 04:09:43.830787590 +0100
+@@ -0,0 +1,324 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -68330,6 +68419,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_
 +#include "rtl.h"
 +#include "emit-rtl.h"
 +#include "tree-flow.h"
++#include "langhooks.h"
 +
 +#if BUILDING_GCC_VERSION >= 4008
 +#define TODO_dump_func 0
@@ -68340,7 +68430,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201302112000",
++	.version	= "201303092140",
 +	.help		= NULL
 +};
 +
@@ -68575,7 +68665,8 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_
 +		return;
 +
 +	// extern u64 latent_entropy
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), unsigned_intDI_type_node);
++	gcc_assert(TYPE_PRECISION(long_long_unsigned_type_node) == 64);
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), long_long_unsigned_type_node);
 +
 +	TREE_STATIC(latent_entropy_decl) = 1;
 +	TREE_PUBLIC(latent_entropy_decl) = 1;
@@ -68584,6 +68675,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
 +	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
 +	DECL_INITIAL(latent_entropy_decl) = NULL;
++	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
 +//	varpool_finalize_decl(latent_entropy_decl);
 +//	varpool_mark_needed_node(latent_entropy_decl);
