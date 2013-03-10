@@ -1,8 +1,5 @@
-- fixed a KERNEXEC false positive on arm reported by Gu1
-- fixed various compile errors reported by x14sg1 (http://forums.grsecurity.net/viewtopic.php?f=3&t=3340)
-- fixed too strict mmap parameter checking on i386, reported by browndav (http://forums.grsecurity.net/viewtopic.php?f=1&t=3339)
-- added fix from spender for some namespace breakage reported by zakalwe
-- small latent entropy improvement: pass pax_extra_latent_entropy to the kernel to extract entropy from RAM content during boot
+- fixed gcc asserts reported by KDE (http://forums.grsecurity.net/viewtopic.php?f=3&t=3342)
+- adjusted RLIMIT_AS accounting for the extra ASLR gap mappings, reported by Alexander Stoll (https://bugs.gentoo.org/show_bug.cgi?id=459268)
 
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/alpha/include/asm/atomic.h linux-3.8.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.2/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -30626,7 +30623,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/drivers/char/pcmc
  	if (cmd != SIOCWANDEV)
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/drivers/char/random.c linux-3.8.2-pax/drivers/char/random.c
 --- linux-3.8.2/drivers/char/random.c	2013-02-19 01:12:53.925766770 +0100
-+++ linux-3.8.2-pax/drivers/char/random.c	2013-02-23 17:16:16.775075561 +0100
++++ linux-3.8.2-pax/drivers/char/random.c	2013-03-11 00:38:15.036286951 +0100
 @@ -524,8 +524,8 @@ static void _mix_pool_bytes(struct entro
  		input_rotate += i ? 7 : 14;
  	}
@@ -41059,7 +41056,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_aout.c 
  		if (error != N_DATADDR(ex)) {
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c linux-3.8.2-pax/fs/binfmt_elf.c
 --- linux-3.8.2/fs/binfmt_elf.c	2013-02-19 01:13:17.249768037 +0100
-+++ linux-3.8.2-pax/fs/binfmt_elf.c	2013-02-19 01:14:43.777772737 +0100
++++ linux-3.8.2-pax/fs/binfmt_elf.c	2013-03-10 17:36:35.973637725 +0100
 @@ -33,6 +33,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -41554,7 +41551,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -715,11 +1050,81 @@ static int load_elf_binary(struct linux_
+@@ -715,11 +1050,82 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  
  	/* OK, This is the point of no return */
@@ -41575,6 +41572,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
 +#ifdef CONFIG_PAX_ASLR
 +	current->mm->delta_mmap = 0UL;
 +	current->mm->delta_stack = 0UL;
++	current->mm->aslr_gap = 0UL;
 +#endif
 +
 +	current->mm->def_flags = 0;
@@ -41637,7 +41635,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -810,6 +1215,20 @@ static int load_elf_binary(struct linux_
+@@ -810,6 +1216,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -41658,7 +41656,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -842,9 +1261,9 @@ static int load_elf_binary(struct linux_
+@@ -842,9 +1262,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -41671,7 +41669,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -883,17 +1302,44 @@ static int load_elf_binary(struct linux_
+@@ -883,17 +1303,44 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -41699,7 +41697,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
 +			unsigned long prot = PROT_NONE;
 +
 +			up_read(&current->mm->mmap_sem);
-+			current->mm->brk_gap = PAGE_ALIGN(size) >> PAGE_SHIFT;
++			current->mm->aslr_gap += PAGE_ALIGN(size) >> PAGE_SHIFT;
 +//			if (current->personality & ADDR_NO_RANDOMIZE)
 +//				prot = PROT_READ;
 +			start = vm_mmap(NULL, start, size, prot, MAP_ANONYMOUS | MAP_FIXED | MAP_PRIVATE, 0);
@@ -41722,7 +41720,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1115,7 +1561,7 @@ static bool always_dump_vma(struct vm_ar
+@@ -1115,7 +1562,7 @@ static bool always_dump_vma(struct vm_ar
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -41731,7 +41729,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1152,7 +1598,7 @@ static unsigned long vma_dump_size(struc
+@@ -1152,7 +1599,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -41740,7 +41738,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  		goto whole;
  
  	/*
-@@ -1374,9 +1820,9 @@ static void fill_auxv_note(struct memelf
+@@ -1374,9 +1821,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -41752,7 +41750,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -2006,14 +2452,14 @@ static void fill_extnum_info(struct elfh
+@@ -2006,14 +2453,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -41769,7 +41767,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  	return size;
  }
  
-@@ -2107,7 +2553,7 @@ static int elf_core_dump(struct coredump
+@@ -2107,7 +2554,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -41778,7 +41776,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -2138,7 +2584,7 @@ static int elf_core_dump(struct coredump
+@@ -2138,7 +2585,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -41787,7 +41785,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2173,7 +2619,7 @@ static int elf_core_dump(struct coredump
+@@ -2173,7 +2620,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -41796,7 +41794,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/binfmt_elf.c l
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2219,6 +2665,96 @@ out:
+@@ -2219,6 +2666,96 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -42916,7 +42914,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/ecryptfs/read_
  }
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/exec.c linux-3.8.2-pax/fs/exec.c
 --- linux-3.8.2/fs/exec.c	2013-02-19 01:13:18.513768106 +0100
-+++ linux-3.8.2-pax/fs/exec.c	2013-03-07 02:27:08.155849617 +0100
++++ linux-3.8.2-pax/fs/exec.c	2013-03-10 17:39:15.313629217 +0100
 @@ -55,6 +55,15 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -43138,7 +43136,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/exec.c linux-3
  	/* mprotect_fixup is overkill to remove the temporary stack flags */
  	vma->vm_flags &= ~VM_STACK_INCOMPLETE_SETUP;
  
-@@ -737,6 +775,27 @@ int setup_arg_pages(struct linux_binprm
+@@ -737,6 +775,30 @@ int setup_arg_pages(struct linux_binprm
  #endif
  	current->mm->start_stack = bprm->p;
  	ret = expand_stack(vma, stack_base);
@@ -43155,8 +43153,11 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/exec.c linux-3
 +
 +#ifdef CONFIG_X86
 +		if (!ret) {
++			current->mm->aslr_gap += size >> PAGE_SHIFT;
 +			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
 +			ret = 0 != mmap_region(NULL, 0, size, flags, vm_flags, 0);
++			if (!ret)
++				current->mm->aslr_gap += size >> PAGE_SHIFT;
 +		}
 +#endif
 +
@@ -43166,7 +43167,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/exec.c linux-3
  	if (ret)
  		ret = -EFAULT;
  
-@@ -795,7 +854,7 @@ int kernel_read(struct file *file, loff_
+@@ -795,7 +857,7 @@ int kernel_read(struct file *file, loff_
  	old_fs = get_fs();
  	set_fs(get_ds());
  	/* The cast to a user pointer is valid due to the set_fs() */
@@ -43175,7 +43176,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/exec.c linux-3
  	set_fs(old_fs);
  	return result;
  }
-@@ -1247,7 +1306,7 @@ static int check_unsafe_exec(struct linu
+@@ -1247,7 +1309,7 @@ static int check_unsafe_exec(struct linu
  	}
  	rcu_read_unlock();
  
@@ -43184,7 +43185,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/fs/exec.c linux-3
  		bprm->unsafe |= LSM_UNSAFE_SHARE;
  	} else {
  		res = -EAGAIN;
-@@ -1697,3 +1756,240 @@ asmlinkage long compat_sys_execve(const
+@@ -1697,3 +1759,240 @@ asmlinkage long compat_sys_execve(const
  	return error;
  }
  #endif
@@ -48554,7 +48555,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/include/linux/mmi
  
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/include/linux/mm_types.h linux-3.8.2-pax/include/linux/mm_types.h
 --- linux-3.8.2/include/linux/mm_types.h	2013-02-19 01:13:21.005768241 +0100
-+++ linux-3.8.2-pax/include/linux/mm_types.h	2013-02-19 01:14:43.901772743 +0100
++++ linux-3.8.2-pax/include/linux/mm_types.h	2013-03-10 17:35:16.669641959 +0100
 @@ -288,6 +288,8 @@ struct vm_area_struct {
  #ifdef CONFIG_NUMA
  	struct mempolicy *vm_policy;	/* NUMA policy for the VMA */
@@ -48569,7 +48570,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/include/linux/mm_
  	unsigned long nr_ptes;		/* Page table pages */
  	unsigned long start_code, end_code, start_data, end_data;
 -	unsigned long start_brk, brk, start_stack;
-+	unsigned long brk_gap, start_brk, brk, start_stack;
++	unsigned long aslr_gap, start_brk, brk, start_stack;
  	unsigned long arg_start, arg_end, env_start, env_end;
  
  	unsigned long saved_auxv[AT_VECTOR_SIZE]; /* for /proc/PID/auxv */
@@ -49132,7 +49133,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/include/linux/ppp
   * The return value from decompress routine is the length of the
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/include/linux/random.h linux-3.8.2-pax/include/linux/random.h
 --- linux-3.8.2/include/linux/random.h	2013-02-19 01:13:21.209768252 +0100
-+++ linux-3.8.2-pax/include/linux/random.h	2013-02-19 01:14:43.913772744 +0100
++++ linux-3.8.2-pax/include/linux/random.h	2013-03-11 00:38:26.680286329 +0100
 @@ -39,6 +39,11 @@ void prandom_seed(u32 seed);
  u32 prandom_u32_state(struct rnd_state *);
  void prandom_bytes_state(struct rnd_state *state, void *buf, int nbytes);
@@ -51525,7 +51526,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/Kconfig linu
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux-3.8.2-pax/init/main.c
 --- linux-3.8.2/init/main.c	2013-02-19 01:13:21.921768291 +0100
-+++ linux-3.8.2-pax/init/main.c	2013-03-10 02:42:51.391065894 +0100
++++ linux-3.8.2-pax/init/main.c	2013-03-11 00:39:04.276284322 +0100
 @@ -149,6 +149,51 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -51615,7 +51616,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux
  		do_one_initcall(*fn);
 +
 +#ifdef CONFIG_PAX_LATENT_ENTROPY
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
 +	}
@@ -51631,7 +51632,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/init/main.c linux
  		do_one_initcall(*fn);
 +
 +#ifdef CONFIG_PAX_LATENT_ENTROPY
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +#endif
 +
 +	}
@@ -54759,7 +54760,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/kernel/sched/fair
  	struct rq *this_rq = cpu_rq(this_cpu);
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/kernel/signal.c linux-3.8.2-pax/kernel/signal.c
 --- linux-3.8.2/kernel/signal.c	2013-02-19 01:13:22.549768325 +0100
-+++ linux-3.8.2-pax/kernel/signal.c	2013-03-10 04:36:31.066701776 +0100
++++ linux-3.8.2-pax/kernel/signal.c	2013-03-11 00:46:17.128261211 +0100
 @@ -50,12 +50,12 @@ static struct kmem_cache *sigqueue_cache
  
  int print_fatal_signals __read_mostly;
@@ -57598,7 +57599,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/mlock.c linux-
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/mmap.c linux-3.8.2-pax/mm/mmap.c
 --- linux-3.8.2/mm/mmap.c	2013-03-07 04:10:20.063802285 +0100
-+++ linux-3.8.2-pax/mm/mmap.c	2013-03-07 04:10:37.843801335 +0100
++++ linux-3.8.2-pax/mm/mmap.c	2013-03-10 17:35:24.781641526 +0100
 @@ -48,6 +48,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -58661,7 +58662,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/mmap.c linux-3
  
 +#ifdef CONFIG_PAX_RANDMMAP
 +	if (mm->pax_flags & MF_PAX_RANDMMAP)
-+		cur -= mm->brk_gap;
++		cur -= mm->aslr_gap;
 +#endif
 +
  	if (cur + npages > lim)
@@ -59043,7 +59044,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/nommu.c linux-
  
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/page_alloc.c linux-3.8.2-pax/mm/page_alloc.c
 --- linux-3.8.2/mm/page_alloc.c	2013-02-19 01:13:22.833768340 +0100
-+++ linux-3.8.2-pax/mm/page_alloc.c	2013-03-10 04:08:17.134792219 +0100
++++ linux-3.8.2-pax/mm/page_alloc.c	2013-03-11 00:39:07.848284131 +0100
 @@ -58,6 +58,7 @@
  #include <linux/prefetch.h>
  #include <linux/migrate.h>
@@ -59099,7 +59100,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/page_alloc.c l
 +}
 +early_param("pax_extra_latent_entropy", setup_pax_extra_latent_entropy);
 +
-+u64 latent_entropy;
++volatile u64 latent_entropy;
 +#endif
 +
  /*
@@ -59118,7 +59119,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/mm/page_alloc.c l
 +		for (index = 0; index < end; index++)
 +			hash ^= hash + data[index];
 +		latent_entropy ^= hash;
-+		add_device_randomness(&latent_entropy, sizeof(latent_entropy));
++		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
 +	}
 +#endif
 +
@@ -68377,8 +68378,8 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/kernexe
 +}
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_entropy_plugin.c linux-3.8.2-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.8.2/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.8.2-pax/tools/gcc/latent_entropy_plugin.c	2013-03-10 04:09:43.830787590 +0100
-@@ -0,0 +1,324 @@
++++ linux-3.8.2-pax/tools/gcc/latent_entropy_plugin.c	2013-03-11 00:24:57.736329521 +0100
+@@ -0,0 +1,327 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -68430,7 +68431,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201303092140",
++	.version	= "201303102320",
 +	.help		= NULL
 +};
 +
@@ -68654,6 +68655,8 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_
 +
 +static void start_unit_callback(void *gcc_data, void *user_data)
 +{
++	tree latent_entropy_type;
++
 +#if BUILDING_GCC_VERSION >= 4007
 +	seed = get_random_seed(false);
 +#else
@@ -68664,16 +68667,17 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/tools/gcc/latent_
 +	if (in_lto_p)
 +		return;
 +
-+	// extern u64 latent_entropy
++	// extern volatile u64 latent_entropy
 +	gcc_assert(TYPE_PRECISION(long_long_unsigned_type_node) == 64);
-+	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), long_long_unsigned_type_node);
++	latent_entropy_type = build_qualified_type(long_long_unsigned_type_node, TYPE_QUALS(long_long_unsigned_type_node) | TYPE_QUAL_VOLATILE);
++	latent_entropy_decl = build_decl(UNKNOWN_LOCATION, VAR_DECL, get_identifier("latent_entropy"), latent_entropy_type);
 +
 +	TREE_STATIC(latent_entropy_decl) = 1;
 +	TREE_PUBLIC(latent_entropy_decl) = 1;
 +	TREE_USED(latent_entropy_decl) = 1;
 +	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
-+	DECL_ARTIFICIAL(latent_entropy_decl) = 0;
++	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
 +	DECL_INITIAL(latent_entropy_decl) = NULL;
 +	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
