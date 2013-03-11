@@ -1,5 +1,4 @@
-- fixed gcc asserts reported by KDE (http://forums.grsecurity.net/viewtopic.php?f=3&t=3342)
-- adjusted RLIMIT_AS accounting for the extra ASLR gap mappings, reported by Alexander Stoll (https://bugs.gentoo.org/show_bug.cgi?id=459268)
+- arm constification fixes reported by Michael Tremer
 
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/alpha/include/asm/atomic.h linux-3.8.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.2/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -946,17 +945,20 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/include/
   * Select the calling method
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/include/asm/cache.h linux-3.8.2-pax/arch/arm/include/asm/cache.h
 --- linux-3.8.2/arch/arm/include/asm/cache.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.2-pax/arch/arm/include/asm/cache.h	2013-02-19 01:14:42.913772690 +0100
-@@ -5,7 +5,7 @@
++++ linux-3.8.2-pax/arch/arm/include/asm/cache.h	2013-03-11 15:56:35.477106648 +0100
+@@ -4,8 +4,10 @@
+ #ifndef __ASMARM_CACHE_H
  #define __ASMARM_CACHE_H
  
++#include <linux/const.h>
++
  #define L1_CACHE_SHIFT		CONFIG_ARM_L1_CACHE_SHIFT
 -#define L1_CACHE_BYTES		(1 << L1_CACHE_SHIFT)
 +#define L1_CACHE_BYTES		(_AC(1,UL) << L1_CACHE_SHIFT)
  
  /*
   * Memory returned by kmalloc() may be used for DMA, so we must make
-@@ -24,5 +24,6 @@
+@@ -24,5 +26,6 @@
  #endif
  
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
@@ -2638,6 +2640,93 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/mach-oma
  	.late_init = n8x0_menelaus_late_init,
  };
  
+diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/mach-omap2/gpmc.c linux-3.8.2-pax/arch/arm/mach-omap2/gpmc.c
+--- linux-3.8.2/arch/arm/mach-omap2/gpmc.c	2013-02-19 01:12:37.229765863 +0100
++++ linux-3.8.2-pax/arch/arm/mach-omap2/gpmc.c	2013-03-11 14:59:17.829290192 +0100
+@@ -139,7 +139,6 @@ struct omap3_gpmc_regs {
+ };
+ 
+ static struct gpmc_client_irq gpmc_client_irq[GPMC_NR_IRQ];
+-static struct irq_chip gpmc_irq_chip;
+ static unsigned gpmc_irq_start;
+ 
+ static struct resource	gpmc_mem_root;
+@@ -700,6 +699,18 @@ static void gpmc_irq_noop(struct irq_dat
+ 
+ static unsigned int gpmc_irq_noop_ret(struct irq_data *data) { return 0; }
+ 
++static struct irq_chip gpmc_irq_chip = {
++	.name = "gpmc",
++	.irq_startup = gpmc_irq_noop_ret,
++	.irq_enable = gpmc_irq_enable,
++	.irq_disable = gpmc_irq_disable,
++	.irq_shutdown = gpmc_irq_noop,
++	.irq_ack = gpmc_irq_noop,
++	.irq_mask = gpmc_irq_noop,
++	.irq_unmask = gpmc_irq_noop,
++
++};
++
+ static int gpmc_setup_irq(void)
+ {
+ 	int i;
+@@ -714,15 +725,6 @@ static int gpmc_setup_irq(void)
+ 		return gpmc_irq_start;
+ 	}
+ 
+-	gpmc_irq_chip.name = "gpmc";
+-	gpmc_irq_chip.irq_startup = gpmc_irq_noop_ret;
+-	gpmc_irq_chip.irq_enable = gpmc_irq_enable;
+-	gpmc_irq_chip.irq_disable = gpmc_irq_disable;
+-	gpmc_irq_chip.irq_shutdown = gpmc_irq_noop;
+-	gpmc_irq_chip.irq_ack = gpmc_irq_noop;
+-	gpmc_irq_chip.irq_mask = gpmc_irq_noop;
+-	gpmc_irq_chip.irq_unmask = gpmc_irq_noop;
+-
+ 	gpmc_client_irq[0].bitmask = GPMC_IRQ_FIFOEVENTENABLE;
+ 	gpmc_client_irq[1].bitmask = GPMC_IRQ_COUNT_EVENT;
+ 
+diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/mach-omap2/omap_device.c linux-3.8.2-pax/arch/arm/mach-omap2/omap_device.c
+--- linux-3.8.2/arch/arm/mach-omap2/omap_device.c	2013-02-19 01:12:37.301765867 +0100
++++ linux-3.8.2-pax/arch/arm/mach-omap2/omap_device.c	2013-03-11 15:17:11.261232879 +0100
+@@ -686,7 +686,7 @@ void omap_device_delete(struct omap_devi
+  * passes along the return value of omap_device_build_ss().
+  */
+ struct platform_device __init *omap_device_build(const char *pdev_name, int pdev_id,
+-				      struct omap_hwmod *oh, void *pdata,
++				      struct omap_hwmod *oh, const void *pdata,
+ 				      int pdata_len,
+ 				      struct omap_device_pm_latency *pm_lats,
+ 				      int pm_lats_cnt, int is_early_device)
+@@ -720,7 +720,7 @@ struct platform_device __init *omap_devi
+  */
+ struct platform_device __init *omap_device_build_ss(const char *pdev_name, int pdev_id,
+ 					 struct omap_hwmod **ohs, int oh_cnt,
+-					 void *pdata, int pdata_len,
++					 const void *pdata, int pdata_len,
+ 					 struct omap_device_pm_latency *pm_lats,
+ 					 int pm_lats_cnt, int is_early_device)
+ {
+diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/mach-omap2/omap_device.h linux-3.8.2-pax/arch/arm/mach-omap2/omap_device.h
+--- linux-3.8.2/arch/arm/mach-omap2/omap_device.h	2013-02-19 01:12:37.301765867 +0100
++++ linux-3.8.2-pax/arch/arm/mach-omap2/omap_device.h	2013-03-11 15:17:43.277231169 +0100
+@@ -91,14 +91,14 @@ int omap_device_shutdown(struct platform
+ /* Core code interface */
+ 
+ struct platform_device *omap_device_build(const char *pdev_name, int pdev_id,
+-				      struct omap_hwmod *oh, void *pdata,
++				      struct omap_hwmod *oh, const void *pdata,
+ 				      int pdata_len,
+ 				      struct omap_device_pm_latency *pm_lats,
+ 				      int pm_lats_cnt, int is_early_device);
+ 
+ struct platform_device *omap_device_build_ss(const char *pdev_name, int pdev_id,
+ 					 struct omap_hwmod **oh, int oh_cnt,
+-					 void *pdata, int pdata_len,
++					 const void *pdata, int pdata_len,
+ 					 struct omap_device_pm_latency *pm_lats,
+ 					 int pm_lats_cnt, int is_early_device);
+ 
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/mach-omap2/omap_hwmod.c linux-3.8.2-pax/arch/arm/mach-omap2/omap_hwmod.c
 --- linux-3.8.2/arch/arm/mach-omap2/omap_hwmod.c	2013-02-19 01:12:37.305765868 +0100
 +++ linux-3.8.2-pax/arch/arm/mach-omap2/omap_hwmod.c	2013-02-19 01:14:42.941772691 +0100
@@ -3412,18 +3501,6 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/plat-oma
  		  omap_sram_size - omap_sram_skip);
 +	pax_close_kernel();
  }
-diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/plat-orion/include/plat/addr-map.h linux-3.8.2-pax/arch/arm/plat-orion/include/plat/addr-map.h
---- linux-3.8.2/arch/arm/plat-orion/include/plat/addr-map.h	2013-02-19 01:12:38.501765932 +0100
-+++ linux-3.8.2-pax/arch/arm/plat-orion/include/plat/addr-map.h	2013-02-19 01:14:42.945772691 +0100
-@@ -27,7 +27,7 @@ struct orion_addr_map_cfg {
- 	   value in bridge_virt_base */
- 	void __iomem *(*win_cfg_base) (const struct orion_addr_map_cfg *cfg,
- 				 const int win);
--};
-+} __no_const;
- 
- /*
-  * Information needed to setup one address mapping.
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/arch/arm/plat-samsung/include/plat/dma-ops.h linux-3.8.2-pax/arch/arm/plat-samsung/include/plat/dma-ops.h
 --- linux-3.8.2/arch/arm/plat-samsung/include/plat/dma-ops.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.8.2-pax/arch/arm/plat-samsung/include/plat/dma-ops.h	2013-02-19 01:14:42.945772691 +0100
@@ -54760,7 +54837,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/kernel/sched/fair
  	struct rq *this_rq = cpu_rq(this_cpu);
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/kernel/signal.c linux-3.8.2-pax/kernel/signal.c
 --- linux-3.8.2/kernel/signal.c	2013-02-19 01:13:22.549768325 +0100
-+++ linux-3.8.2-pax/kernel/signal.c	2013-03-11 00:46:17.128261211 +0100
++++ linux-3.8.2-pax/kernel/signal.c	2013-03-11 16:52:00.008929144 +0100
 @@ -50,12 +50,12 @@ static struct kmem_cache *sigqueue_cache
  
  int print_fatal_signals __read_mostly;
@@ -65354,7 +65431,7 @@ diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/security/integrit
  	return 0;
 diff -NurpX linux-3.8.2-pax/Documentation/dontdiff linux-3.8.2/security/Kconfig linux-3.8.2-pax/security/Kconfig
 --- linux-3.8.2/security/Kconfig	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.2-pax/security/Kconfig	2013-03-10 02:36:54.095084971 +0100
++++ linux-3.8.2-pax/security/Kconfig	2013-03-11 02:41:51.875652583 +0100
 @@ -4,6 +4,663 @@
  
  menu "Security options"
