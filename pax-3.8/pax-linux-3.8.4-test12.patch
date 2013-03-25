@@ -1,4 +1,6 @@
-- forward port to 3.8.4
+- fixed perf compilation reported by Michael Tremer
+- fixed USERCOPY reports triggered by SCTP, reported by mcp
+- last fix for aslr gap accounting, promise (thanks to spender)
 
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/alpha/include/asm/atomic.h linux-3.8.4-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.4/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -9523,7 +9525,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/ia32/ia3
  
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/ia32/ia32_signal.c linux-3.8.4-pax/arch/x86/ia32/ia32_signal.c
 --- linux-3.8.4/arch/x86/ia32/ia32_signal.c	2013-02-19 01:12:51.525766640 +0100
-+++ linux-3.8.4-pax/arch/x86/ia32/ia32_signal.c	2013-02-19 01:14:43.045772697 +0100
++++ linux-3.8.4-pax/arch/x86/ia32/ia32_signal.c	2013-03-23 17:26:23.574765536 +0100
 @@ -348,7 +348,7 @@ static void __user *get_sigframe(struct
  	sp -= frame_size;
  	/* Align the stack pointer according to the i386 ABI,
@@ -20203,7 +20205,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/kernel/s
  		 * area.  Reload any changed state for the boot CPU.
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/kernel/signal.c linux-3.8.4-pax/arch/x86/kernel/signal.c
 --- linux-3.8.4/arch/x86/kernel/signal.c	2013-02-19 01:12:52.045766668 +0100
-+++ linux-3.8.4-pax/arch/x86/kernel/signal.c	2013-03-22 02:57:55.190081220 +0100
++++ linux-3.8.4-pax/arch/x86/kernel/signal.c	2013-03-25 23:07:59.478237332 +0100
 @@ -196,7 +196,7 @@ static unsigned long align_sigframe(unsi
  	 * Align the stack pointer according to the i386 ABI,
  	 * i.e. so that on function entry ((sp + 4) & 15) == 0.
@@ -25978,7 +25980,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/iomap
  	return (void *)vaddr;
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/ioremap.c linux-3.8.4-pax/arch/x86/mm/ioremap.c
 --- linux-3.8.4/arch/x86/mm/ioremap.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.4-pax/arch/x86/mm/ioremap.c	2013-02-19 01:14:43.237772707 +0100
++++ linux-3.8.4-pax/arch/x86/mm/ioremap.c	2013-03-22 03:55:20.053897291 +0100
 @@ -97,7 +97,7 @@ static void __iomem *__ioremap_caller(re
  	for (pfn = phys_addr >> PAGE_SHIFT; pfn <= last_pfn; pfn++) {
  		int is_ram = page_is_ram(pfn);
@@ -26007,7 +26009,17 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/iorem
  		return __va(phys);
  
  	addr = (void __force *)ioremap_cache(start, PAGE_SIZE);
-@@ -344,7 +347,7 @@ static int __init early_ioremap_debug_se
+@@ -327,6 +330,9 @@ void *xlate_dev_mem_ptr(unsigned long ph
+ void unxlate_dev_mem_ptr(unsigned long phys, void *addr)
+ {
+ 	if (page_is_ram(phys >> PAGE_SHIFT))
++#ifdef CONFIG_HIGHMEM
++	if ((start >> PAGE_SHIFT) < max_low_pfn)
++#endif
+ 		return;
+ 
+ 	iounmap((void __iomem *)((unsigned long)addr & PAGE_MASK));
+@@ -344,7 +350,7 @@ static int __init early_ioremap_debug_se
  early_param("early_ioremap_debug", early_ioremap_debug_setup);
  
  static __initdata int after_paging_init;
@@ -26016,7 +26028,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/iorem
  
  static inline pmd_t * __init early_ioremap_pmd(unsigned long addr)
  {
-@@ -381,8 +384,7 @@ void __init early_ioremap_init(void)
+@@ -381,8 +387,7 @@ void __init early_ioremap_init(void)
  		slot_virt[i] = __fix_to_virt(FIX_BTMAP_BEGIN - NR_FIX_BTMAPS*i);
  
  	pmd = early_ioremap_pmd(fix_to_virt(FIX_BTMAP_BEGIN));
@@ -41507,7 +41519,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_aout.c 
  		if (error != N_DATADDR(ex)) {
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c linux-3.8.4-pax/fs/binfmt_elf.c
 --- linux-3.8.4/fs/binfmt_elf.c	2013-02-19 01:13:17.249768037 +0100
-+++ linux-3.8.4-pax/fs/binfmt_elf.c	2013-03-22 02:37:13.434147520 +0100
++++ linux-3.8.4-pax/fs/binfmt_elf.c	2013-03-22 03:22:21.578002926 +0100
 @@ -33,6 +33,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -42119,7 +42131,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -883,17 +1302,45 @@ static int load_elf_binary(struct linux_
+@@ -883,17 +1302,44 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -42151,10 +42163,9 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
 +//			if (current->personality & ADDR_NO_RANDOMIZE)
 +//				vm_flags |= VM_READ | VM_MAYREAD;
 +			start = mmap_region(NULL, start, PAGE_ALIGN(size), flags, vm_flags, 0);
-+			up_write(&current->mm->mmap_sem);
 +			retval = IS_ERR_VALUE(start) ? start : 0;
-+		} else
-+			up_write(&current->mm->mmap_sem);
++		}
++		up_write(&current->mm->mmap_sem);
 +		if (retval == 0)
 +			retval = set_brk(start + size, start + size + PAGE_SIZE);
 +		if (retval < 0) {
@@ -42171,7 +42182,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1115,7 +1562,7 @@ static bool always_dump_vma(struct vm_ar
+@@ -1115,7 +1561,7 @@ static bool always_dump_vma(struct vm_ar
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -42180,7 +42191,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1152,7 +1599,7 @@ static unsigned long vma_dump_size(struc
+@@ -1152,7 +1598,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -42189,7 +42200,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  		goto whole;
  
  	/*
-@@ -1374,9 +1821,9 @@ static void fill_auxv_note(struct memelf
+@@ -1374,9 +1820,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -42201,7 +42212,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -2006,14 +2453,14 @@ static void fill_extnum_info(struct elfh
+@@ -2006,14 +2452,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -42218,7 +42229,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  	return size;
  }
  
-@@ -2107,7 +2554,7 @@ static int elf_core_dump(struct coredump
+@@ -2107,7 +2553,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -42227,7 +42238,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -2138,7 +2585,7 @@ static int elf_core_dump(struct coredump
+@@ -2138,7 +2584,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -42236,7 +42247,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2173,7 +2620,7 @@ static int elf_core_dump(struct coredump
+@@ -2173,7 +2619,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -42245,7 +42256,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2219,6 +2666,96 @@ out:
+@@ -2219,6 +2665,96 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -58456,7 +58467,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/mm/mlock.c linux-
  			newflags &= ~VM_LOCKED;
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/mm/mmap.c linux-3.8.4-pax/mm/mmap.c
 --- linux-3.8.4/mm/mmap.c	2013-03-07 04:10:20.063802285 +0100
-+++ linux-3.8.4-pax/mm/mmap.c	2013-03-22 02:44:17.778124863 +0100
++++ linux-3.8.4-pax/mm/mmap.c	2013-03-23 13:26:50.831532929 +0100
 @@ -48,6 +48,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -58743,7 +58754,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/mm/mmap.c linux-3
  	/* Check against address space limit. */
 +
 +#ifdef CONFIG_PAX_RANDMMAP
-+	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP) || (vm_flags & (VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)))
 +#endif
 +
  	if (!may_expand_vm(mm, len >> PAGE_SHIFT))
@@ -65080,8 +65091,77 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/net/sctp/sm_sidee
  	sctp_generate_t1_init_event,
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/net/sctp/socket.c linux-3.8.4-pax/net/sctp/socket.c
 --- linux-3.8.4/net/sctp/socket.c	2013-03-22 02:55:24.654089257 +0100
-+++ linux-3.8.4-pax/net/sctp/socket.c	2013-03-22 02:55:35.758088664 +0100
-@@ -4665,6 +4665,8 @@ static int sctp_getsockopt_peer_addrs(st
++++ linux-3.8.4-pax/net/sctp/socket.c	2013-03-25 22:44:23.862312915 +0100
+@@ -2166,11 +2166,13 @@ static int sctp_setsockopt_events(struct
+ {
+ 	struct sctp_association *asoc;
+ 	struct sctp_ulpevent *event;
++	struct sctp_event_subscribe subscribe;
+ 
+ 	if (optlen > sizeof(struct sctp_event_subscribe))
+ 		return -EINVAL;
+-	if (copy_from_user(&sctp_sk(sk)->subscribe, optval, optlen))
++	if (copy_from_user(&subscribe, optval, optlen))
+ 		return -EFAULT;
++	sctp_sk(sk)->subscribe = subscribe;
+ 
+ 	/*
+ 	 * At the time when a user app subscribes to SCTP_SENDER_DRY_EVENT,
+@@ -4215,13 +4217,16 @@ static int sctp_getsockopt_disable_fragm
+ static int sctp_getsockopt_events(struct sock *sk, int len, char __user *optval,
+ 				  int __user *optlen)
+ {
++	struct sctp_event_subscribe subscribe;
++
+ 	if (len <= 0)
+ 		return -EINVAL;
+ 	if (len > sizeof(struct sctp_event_subscribe))
+ 		len = sizeof(struct sctp_event_subscribe);
+ 	if (put_user(len, optlen))
+ 		return -EFAULT;
+-	if (copy_to_user(optval, &sctp_sk(sk)->subscribe, len))
++	subscribe = sctp_sk(sk)->subscribe;
++	if (copy_to_user(optval, &subscribe, len))
+ 		return -EFAULT;
+ 	return 0;
+ }
+@@ -4239,6 +4244,8 @@ static int sctp_getsockopt_events(struct
+  */
+ static int sctp_getsockopt_autoclose(struct sock *sk, int len, char __user *optval, int __user *optlen)
+ {
++	__u32 autoclose;
++
+ 	/* Applicable to UDP-style socket only */
+ 	if (sctp_style(sk, TCP))
+ 		return -EOPNOTSUPP;
+@@ -4247,7 +4254,8 @@ static int sctp_getsockopt_autoclose(str
+ 	len = sizeof(int);
+ 	if (put_user(len, optlen))
+ 		return -EFAULT;
+-	if (copy_to_user(optval, &sctp_sk(sk)->autoclose, sizeof(int)))
++	autoclose = sctp_sk(sk)->autoclose;
++	if (copy_to_user(optval, &autoclose, sizeof(int)))
+ 		return -EFAULT;
+ 	return 0;
+ }
+@@ -4619,12 +4627,15 @@ static int sctp_getsockopt_delayed_ack(s
+  */
+ static int sctp_getsockopt_initmsg(struct sock *sk, int len, char __user *optval, int __user *optlen)
+ {
++	struct sctp_initmsg initmsg;
++
+ 	if (len < sizeof(struct sctp_initmsg))
+ 		return -EINVAL;
+ 	len = sizeof(struct sctp_initmsg);
+ 	if (put_user(len, optlen))
+ 		return -EFAULT;
+-	if (copy_to_user(optval, &sctp_sk(sk)->initmsg, len))
++	initmsg = sctp_sk(sk)->initmsg;
++	if (copy_to_user(optval, &initmsg, len))
+ 		return -EFAULT;
+ 	return 0;
+ }
+@@ -4665,6 +4676,8 @@ static int sctp_getsockopt_peer_addrs(st
  		addrlen = sctp_get_af_specific(temp.sa.sa_family)->sockaddr_len;
  		if (space_left < addrlen)
  			return -ENOMEM;
@@ -77918,6 +77998,22 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/perf/util/i
  
 +	.macro pax_force_retaddr rip=0, reload=0
 +	.endm
++
+ #endif
+diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/perf/util/include/linux/compiler.h linux-3.8.4-pax/tools/perf/util/include/linux/compiler.h
+--- linux-3.8.4/tools/perf/util/include/linux/compiler.h	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.4-pax/tools/perf/util/include/linux/compiler.h	2013-03-24 02:14:34.185073503 +0100
+@@ -18,4 +18,12 @@
+ #define __force
+ #endif
+ 
++#ifndef __size_overflow
++# define __size_overflow(...)
++#endif
++
++#ifndef __intentional_overflow
++# define __intentional_overflow(...)
++#endif
 +
  #endif
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/virt/kvm/kvm_main.c linux-3.8.4-pax/virt/kvm/kvm_main.c
