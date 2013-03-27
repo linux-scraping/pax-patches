@@ -1,6 +1,5 @@
-- fixed perf compilation reported by Michael Tremer
-- fixed USERCOPY reports triggered by SCTP, reported by mcp
-- last fix for aslr gap accounting, promise (thanks to spender)
+- fixed bug with the old PAGEEXEC method and hugetlb, reported by Alex Efros (https://bugs.gentoo.org/show_bug.cgi?id=437722)
+- added a new gcc plugin to plug (pun intended) some of the kernel stack leaks to userland
 
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/alpha/include/asm/atomic.h linux-3.8.4-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.4/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -10811,6 +10810,18 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/include/
  #define __add(ptr, inc, lock)						\
  	({								\
  	        __typeof__ (*(ptr)) __ret = (inc);			\
+diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/include/asm/compat.h linux-3.8.4-pax/arch/x86/include/asm/compat.h
+--- linux-3.8.4/arch/x86/include/asm/compat.h	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.4-pax/arch/x86/include/asm/compat.h	2013-03-27 01:59:46.984962889 +0100
+@@ -41,7 +41,7 @@ typedef s64 __attribute__((aligned(4)))
+ typedef u32		compat_uint_t;
+ typedef u32		compat_ulong_t;
+ typedef u64 __attribute__((aligned(4))) compat_u64;
+-typedef u32		compat_uptr_t;
++typedef u32		__user compat_uptr_t;
+ 
+ struct compat_timespec {
+ 	compat_time_t	tv_sec;
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/include/asm/cpufeature.h linux-3.8.4-pax/arch/x86/include/asm/cpufeature.h
 --- linux-3.8.4/arch/x86/include/asm/cpufeature.h	2013-02-19 01:12:51.561766642 +0100
 +++ linux-3.8.4-pax/arch/x86/include/asm/cpufeature.h	2013-02-19 01:14:43.057772697 +0100
@@ -24565,7 +24576,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/extab
  
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault.c linux-3.8.4-pax/arch/x86/mm/fault.c
 --- linux-3.8.4/arch/x86/mm/fault.c	2013-02-19 01:12:52.193766676 +0100
-+++ linux-3.8.4-pax/arch/x86/mm/fault.c	2013-03-19 00:42:52.831507625 +0100
++++ linux-3.8.4-pax/arch/x86/mm/fault.c	2013-03-26 17:29:52.946596374 +0100
 @@ -13,12 +13,19 @@
  #include <linux/perf_event.h>		/* perf_sw_event		*/
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
@@ -24673,15 +24684,16 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
 +			pmd_t *ret;
 +#else
  		list_for_each_entry(page, &pgd_list, lru) {
-+			pgd_t *pgd = page_address(page);
++			pgd_t *pgd;
  			spinlock_t *pgt_lock;
  			pmd_t *ret;
  
-@@ -243,8 +296,13 @@ void vmalloc_sync_all(void)
+@@ -243,8 +296,14 @@ void vmalloc_sync_all(void)
  			pgt_lock = &pgd_page_get_mm(page)->page_table_lock;
  
  			spin_lock(pgt_lock);
 -			ret = vmalloc_sync_one(page_address(page), address);
++			pgd = page_address(page);
 +#endif
 +
 +			ret = vmalloc_sync_one(pgd, address);
@@ -24692,7 +24704,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  
  			if (!ret)
  				break;
-@@ -278,6 +336,11 @@ static noinline __kprobes int vmalloc_fa
+@@ -278,6 +337,11 @@ static noinline __kprobes int vmalloc_fa
  	 * an interrupt in the middle of a task switch..
  	 */
  	pgd_paddr = read_cr3();
@@ -24704,7 +24716,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  	pmd_k = vmalloc_sync_one(__va(pgd_paddr), address);
  	if (!pmd_k)
  		return -1;
-@@ -373,7 +436,14 @@ static noinline __kprobes int vmalloc_fa
+@@ -373,7 +437,14 @@ static noinline __kprobes int vmalloc_fa
  	 * happen within a race in page table update. In the later
  	 * case just flush:
  	 */
@@ -24719,7 +24731,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  	pgd_ref = pgd_offset_k(address);
  	if (pgd_none(*pgd_ref))
  		return -1;
-@@ -541,7 +611,7 @@ static int is_errata93(struct pt_regs *r
+@@ -541,7 +612,7 @@ static int is_errata93(struct pt_regs *r
  static int is_errata100(struct pt_regs *regs, unsigned long address)
  {
  #ifdef CONFIG_X86_64
@@ -24728,7 +24740,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  		return 1;
  #endif
  	return 0;
-@@ -568,7 +638,7 @@ static int is_f00f_bug(struct pt_regs *r
+@@ -568,7 +639,7 @@ static int is_f00f_bug(struct pt_regs *r
  }
  
  static const char nx_warning[] = KERN_CRIT
@@ -24737,7 +24749,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  
  static void
  show_fault_oops(struct pt_regs *regs, unsigned long error_code,
-@@ -577,15 +647,21 @@ show_fault_oops(struct pt_regs *regs, un
+@@ -577,15 +648,21 @@ show_fault_oops(struct pt_regs *regs, un
  	if (!oops_may_print())
  		return;
  
@@ -24761,7 +24773,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  	printk(KERN_ALERT "BUG: unable to handle kernel ");
  	if (address < PAGE_SIZE)
  		printk(KERN_CONT "NULL pointer dereference");
-@@ -748,6 +824,22 @@ __bad_area_nosemaphore(struct pt_regs *r
+@@ -748,6 +825,22 @@ __bad_area_nosemaphore(struct pt_regs *r
  				return;
  		}
  #endif
@@ -24784,7 +24796,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  		/* Kernel addresses are always protection faults: */
  		if (address >= TASK_SIZE)
  			error_code |= PF_PROT;
-@@ -833,7 +925,7 @@ do_sigbus(struct pt_regs *regs, unsigned
+@@ -833,7 +926,7 @@ do_sigbus(struct pt_regs *regs, unsigned
  	if (fault & (VM_FAULT_HWPOISON|VM_FAULT_HWPOISON_LARGE)) {
  		printk(KERN_ERR
  	"MCE: Killing %s:%d due to hardware memory corruption fault at %lx\n",
@@ -24793,7 +24805,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  		code = BUS_MCEERR_AR;
  	}
  #endif
-@@ -896,6 +988,99 @@ static int spurious_fault_check(unsigned
+@@ -896,6 +989,99 @@ static int spurious_fault_check(unsigned
  	return 1;
  }
  
@@ -24893,7 +24905,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  /*
   * Handle a spurious fault caused by a stale TLB entry.
   *
-@@ -968,6 +1153,9 @@ int show_unhandled_signals = 1;
+@@ -968,6 +1154,9 @@ int show_unhandled_signals = 1;
  static inline int
  access_error(unsigned long error_code, struct vm_area_struct *vma)
  {
@@ -24903,7 +24915,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  	if (error_code & PF_WRITE) {
  		/* write, present and write, not present: */
  		if (unlikely(!(vma->vm_flags & VM_WRITE)))
-@@ -996,7 +1184,7 @@ static inline bool smap_violation(int er
+@@ -996,7 +1185,7 @@ static inline bool smap_violation(int er
  	if (error_code & PF_USER)
  		return false;
  
@@ -24912,7 +24924,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  		return false;
  
  	return true;
-@@ -1012,19 +1200,34 @@ __do_page_fault(struct pt_regs *regs, un
+@@ -1012,19 +1201,34 @@ __do_page_fault(struct pt_regs *regs, un
  {
  	struct vm_area_struct *vma;
  	struct task_struct *tsk;
@@ -24951,7 +24963,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  	/*
  	 * Detect and handle instructions that would cause a page fault for
  	 * both a tracked kernel page and a userspace page.
-@@ -1084,7 +1287,7 @@ __do_page_fault(struct pt_regs *regs, un
+@@ -1084,7 +1288,7 @@ __do_page_fault(struct pt_regs *regs, un
  	 * User-mode registers count as a user access even for any
  	 * potential system fault or CPU buglet:
  	 */
@@ -24960,7 +24972,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  		local_irq_enable();
  		error_code |= PF_USER;
  	} else {
-@@ -1146,6 +1349,11 @@ retry:
+@@ -1146,6 +1350,11 @@ retry:
  		might_sleep();
  	}
  
@@ -24972,7 +24984,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  	vma = find_vma(mm, address);
  	if (unlikely(!vma)) {
  		bad_area(regs, error_code, address);
-@@ -1157,18 +1365,24 @@ retry:
+@@ -1157,18 +1366,24 @@ retry:
  		bad_area(regs, error_code, address);
  		return;
  	}
@@ -25008,7 +25020,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/fault
  	if (unlikely(expand_stack(vma, address))) {
  		bad_area(regs, error_code, address);
  		return;
-@@ -1232,3 +1446,292 @@ do_page_fault(struct pt_regs *regs, unsi
+@@ -1232,3 +1447,292 @@ do_page_fault(struct pt_regs *regs, unsi
  	__do_page_fault(regs, error_code);
  	exception_exit(regs);
  }
@@ -25980,7 +25992,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/iomap
  	return (void *)vaddr;
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/ioremap.c linux-3.8.4-pax/arch/x86/mm/ioremap.c
 --- linux-3.8.4/arch/x86/mm/ioremap.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.4-pax/arch/x86/mm/ioremap.c	2013-03-22 03:55:20.053897291 +0100
++++ linux-3.8.4-pax/arch/x86/mm/ioremap.c	2013-03-25 23:39:50.558135295 +0100
 @@ -97,7 +97,7 @@ static void __iomem *__ioremap_caller(re
  	for (pfn = phys_addr >> PAGE_SHIFT; pfn <= last_pfn; pfn++) {
  		int is_ram = page_is_ram(pfn);
@@ -26014,7 +26026,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/arch/x86/mm/iorem
  {
  	if (page_is_ram(phys >> PAGE_SHIFT))
 +#ifdef CONFIG_HIGHMEM
-+	if ((start >> PAGE_SHIFT) < max_low_pfn)
++	if ((phys >> PAGE_SHIFT) < max_low_pfn)
 +#endif
  		return;
  
@@ -41519,7 +41531,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_aout.c 
  		if (error != N_DATADDR(ex)) {
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c linux-3.8.4-pax/fs/binfmt_elf.c
 --- linux-3.8.4/fs/binfmt_elf.c	2013-02-19 01:13:17.249768037 +0100
-+++ linux-3.8.4-pax/fs/binfmt_elf.c	2013-03-22 03:22:21.578002926 +0100
++++ linux-3.8.4-pax/fs/binfmt_elf.c	2013-03-26 17:28:24.154601114 +0100
 @@ -33,6 +33,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -42056,7 +42068,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/fs/binfmt_elf.c l
 +#ifdef CONFIG_ARCH_TRACK_EXEC_LIMIT
 +	if ((current->mm->pax_flags & MF_PAX_PAGEEXEC) && !(__supported_pte_mask & _PAGE_NX)) {
 +		current->mm->context.user_cs_limit = PAGE_SIZE;
-+		current->mm->def_flags |= VM_PAGEEXEC;
++		current->mm->def_flags |= VM_PAGEEXEC | VM_NOHUGEPAGE;
 +	}
 +#endif
 +
@@ -47984,7 +47996,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/com
  #if __GNUC_MINOR__ >= 6
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/compiler.h linux-3.8.4-pax/include/linux/compiler.h
 --- linux-3.8.4/include/linux/compiler.h	2013-02-19 01:13:19.889768180 +0100
-+++ linux-3.8.4-pax/include/linux/compiler.h	2013-02-19 01:14:43.865772741 +0100
++++ linux-3.8.4-pax/include/linux/compiler.h	2013-03-27 02:14:42.684915066 +0100
 @@ -5,11 +5,14 @@
  
  #ifdef __CHECKER__
@@ -48000,7 +48012,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/com
  # define __must_hold(x)	__attribute__((context(x,1,1)))
  # define __acquires(x)	__attribute__((context(x,0,1)))
  # define __releases(x)	__attribute__((context(x,1,0)))
-@@ -17,20 +20,48 @@
+@@ -17,31 +20,49 @@
  # define __release(x)	__context__(x,-1)
  # define __cond_lock(x,c)	((c) ? ({ __acquire(x); 1; }) : 0)
  # define __percpu	__attribute__((noderef, address_space(3)))
@@ -48014,33 +48026,24 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/com
  #endif
  extern void __chk_user_ptr(const volatile void __user *);
  extern void __chk_io_ptr(const volatile void __iomem *);
-+#elif defined(CHECKER_PLUGIN)
-+//# define __user
-+//# define __force_user
-+//# define __kernel
-+//# define __force_kernel
-+# define __safe
-+# define __force
-+# define __nocast
-+# define __iomem
-+# define __force_iomem
-+# define __chk_user_ptr(x) (void)0
-+# define __chk_io_ptr(x) (void)0
-+# define __builtin_warning(x, y...) (1)
-+# define __acquires(x)
-+# define __releases(x)
-+# define __acquire(x) (void)0
-+# define __release(x) (void)0
-+# define __cond_lock(x,c) (c)
-+# define __percpu
-+# define __force_percpu
-+# define __rcu
-+# define __force_rcu
  #else
- # define __user
-+# define __force_user
- # define __kernel
-+# define __force_kernel
+-# define __user
+-# define __kernel
++# ifdef CHECKER_PLUGIN
++//#  define __user
++//#  define __force_user
++//#  define __kernel
++//#  define __force_kernel
++# else
++#  ifdef STRUCTLEAK_PLUGIN
++#   define __user __attribute__((user))
++#  else
++#   define __user
++#  endif
++#  define __force_user
++#  define __kernel
++#  define __force_kernel
++# endif
  # define __safe
  # define __force
  # define __nocast
@@ -48049,7 +48052,10 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/com
  # define __chk_user_ptr(x) (void)0
  # define __chk_io_ptr(x) (void)0
  # define __builtin_warning(x, y...) (1)
-@@ -41,7 +72,9 @@ extern void __chk_io_ptr(const volatile
+-# define __must_hold(x)
+ # define __acquires(x)
+ # define __releases(x)
+ # define __acquire(x) (void)0
  # define __release(x) (void)0
  # define __cond_lock(x,c) (c)
  # define __percpu
@@ -48059,7 +48065,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/com
  #endif
  
  /* Indirect macros required for expanded argument pasting, eg. __LINE__. */
-@@ -275,6 +308,26 @@ void ftrace_likely_update(struct ftrace_
+@@ -275,6 +296,26 @@ void ftrace_likely_update(struct ftrace_
  # define __attribute_const__	/* unimplemented */
  #endif
  
@@ -48086,7 +48092,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/com
  /*
   * Tell gcc if a function is cold. The compiler will assume any path
   * directly leading to the call is unlikely.
-@@ -284,6 +337,22 @@ void ftrace_likely_update(struct ftrace_
+@@ -284,6 +325,22 @@ void ftrace_likely_update(struct ftrace_
  #define __cold
  #endif
  
@@ -48109,7 +48115,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/include/linux/com
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -323,6 +392,7 @@ void ftrace_likely_update(struct ftrace_
+@@ -323,6 +380,7 @@ void ftrace_likely_update(struct ftrace_
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -57116,7 +57122,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/lib/vsprintf.c li
  
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.8.4-pax/Makefile
 --- linux-3.8.4/Makefile	2013-03-22 02:55:24.086089287 +0100
-+++ linux-3.8.4-pax/Makefile	2013-03-22 02:55:35.618088672 +0100
++++ linux-3.8.4-pax/Makefile	2013-03-27 02:06:11.708942348 +0100
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -57140,7 +57146,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -575,6 +576,60 @@ else
+@@ -575,6 +576,63 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
@@ -57177,9 +57183,12 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
 +ifdef CONFIG_PAX_LATENT_ENTROPY
 +LATENT_ENTROPY_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/latent_entropy_plugin.so -DLATENT_ENTROPY_PLUGIN
 +endif
++ifdef CONFIG_PAX_MEMORY_STRUCTLEAK
++STRUCTLEAK_PLUGIN_CFLAGS := -fplugin=$(objtree)/tools/gcc/structleak_plugin.so -DSTRUCTLEAK_PLUGIN
++endif
 +GCC_PLUGINS_CFLAGS := $(CONSTIFY_PLUGIN_CFLAGS) $(STACKLEAK_PLUGIN_CFLAGS) $(KALLOCSTAT_PLUGIN_CFLAGS)
 +GCC_PLUGINS_CFLAGS += $(KERNEXEC_PLUGIN_CFLAGS) $(CHECKER_PLUGIN_CFLAGS) $(COLORIZE_PLUGIN_CFLAGS)
-+GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS)
++GCC_PLUGINS_CFLAGS += $(SIZE_OVERFLOW_PLUGIN_CFLAGS) $(LATENT_ENTROPY_PLUGIN_CFLAGS) $(STRUCTLEAK_PLUGIN_CFLAGS)
 +GCC_PLUGINS_AFLAGS := $(KERNEXEC_PLUGIN_AFLAGS)
 +export PLUGINCC GCC_PLUGINS_CFLAGS GCC_PLUGINS_AFLAGS CONSTIFY_PLUGIN
 +ifeq ($(KBUILD_EXTMOD),)
@@ -57201,7 +57210,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifdef CONFIG_READABLE_ASM
-@@ -778,6 +833,8 @@ endif
+@@ -778,6 +836,8 @@ endif
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -57210,7 +57219,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  $(sort $(vmlinux-deps)): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -787,7 +844,7 @@ $(sort $(vmlinux-deps)): $(vmlinux-dirs)
+@@ -787,7 +847,7 @@ $(sort $(vmlinux-deps)): $(vmlinux-dirs)
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -57219,7 +57228,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=$@
  
  # Store (new) KERNELRELASE string in include/config/kernel.release
-@@ -831,6 +888,7 @@ prepare0: archprepare FORCE
+@@ -831,6 +891,7 @@ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=.
  
  # All the preparing..
@@ -57227,7 +57236,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  prepare: prepare0
  
  # Generate some files
-@@ -938,6 +996,8 @@ all: modules
+@@ -938,6 +999,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -57236,7 +57245,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -953,7 +1013,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
+@@ -953,7 +1016,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -57245,7 +57254,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  
  # Target to install modules
  PHONY += modules_install
-@@ -1019,7 +1079,7 @@ MRPROPER_FILES += .config .config.old .v
+@@ -1019,7 +1082,7 @@ MRPROPER_FILES += .config .config.old .v
  		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS \
  		  signing_key.priv signing_key.x509 x509.genkey		\
  		  extra_certificates signing_key.x509.keyid		\
@@ -57254,7 +57263,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1059,6 +1119,7 @@ distclean: mrproper
+@@ -1059,6 +1122,7 @@ distclean: mrproper
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
  		-o -name '.*.rej' \
@@ -57262,7 +57271,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1219,6 +1280,8 @@ PHONY += $(module-dirs) modules
+@@ -1219,6 +1283,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -57271,7 +57280,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1355,17 +1418,21 @@ else
+@@ -1355,17 +1421,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -57297,7 +57306,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/Makefile linux-3.
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1375,11 +1442,15 @@ endif
+@@ -1375,11 +1445,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -66338,8 +66347,8 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/security/integrit
  	return 0;
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/security/Kconfig linux-3.8.4-pax/security/Kconfig
 --- linux-3.8.4/security/Kconfig	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.4-pax/security/Kconfig	2013-03-11 02:41:51.875652583 +0100
-@@ -4,6 +4,663 @@
++++ linux-3.8.4-pax/security/Kconfig	2013-03-27 02:11:46.368924479 +0100
+@@ -4,6 +4,679 @@
  
  menu "Security options"
  
@@ -66877,6 +66886,22 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/security/Kconfig 
 +	  frames may leave uninitialized memory behind that may be exposed
 +	  to a later syscall leaking the stack.
 +
++config PAX_MEMORY_STRUCTLEAK
++	bool "Forcibly initialize local variables copied to userland"
++	help
++	  By saying Y here the kernel will zero initialize some local
++	  variables that are going to be copied to userland.  This in
++	  turn prevents unintended information leakage from the kernel
++	  stack should later code forget to explicitly set all parts of
++	  the copied variable.
++
++	  The tradeoff is less performance impact than PAX_MEMORY_STACKLEAK
++	  at a much smaller coverage.
++
++	  Note that the implementation requires a gcc with plugin support,
++	  i.e., gcc 4.5 or newer.  You may need to install the supporting
++	  headers explicitly in addition to the normal gcc package.
++
 +config PAX_MEMORY_UDEREF
 +	bool "Prevent invalid userland pointer dereference"
 +	depends on (X86 || (ARM && (CPU_V6 || CPU_V7) && !ARM_LPAE)) && !UML_X86 && !XEN
@@ -67003,7 +67028,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/security/Kconfig 
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +760,7 @@ config INTEL_TXT
+@@ -103,7 +776,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -68100,8 +68125,8 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/coloriz
 +}
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/constify_plugin.c linux-3.8.4-pax/tools/gcc/constify_plugin.c
 --- linux-3.8.4/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.8.4-pax/tools/gcc/constify_plugin.c	2013-03-07 01:22:03.820058079 +0100
-@@ -0,0 +1,512 @@
++++ linux-3.8.4-pax/tools/gcc/constify_plugin.c	2013-03-27 04:05:03.820561548 +0100
+@@ -0,0 +1,517 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -68147,7 +68172,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/constif
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201303070020",
++	.version	= "201303270300",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -68602,6 +68627,11 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/constif
 +			continue;
 +		}
 +		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
++	}
++
++	if (strcmp(lang_hooks.name, "GNU C")) {
++		inform(UNKNOWN_LOCATION, G_("%s supports C only"), plugin_name);
++		constify = false;
 +	}
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &const_plugin_info);
@@ -69693,8 +69723,8 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/latent_
 +}
 diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/Makefile linux-3.8.4-pax/tools/gcc/Makefile
 --- linux-3.8.4/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.8.4-pax/tools/gcc/Makefile	2013-03-04 19:42:29.546372087 +0100
-@@ -0,0 +1,43 @@
++++ linux-3.8.4-pax/tools/gcc/Makefile	2013-03-27 01:10:52.621119561 +0100
+@@ -0,0 +1,45 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
 +#PLUGIN_OBJECT_FILES := $(patsubst %.c,%.o,$(PLUGIN_SOURCE_FILES))
@@ -69717,6 +69747,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/Makefil
 +$(HOSTLIBS)-y += colorize_plugin.so
 +$(HOSTLIBS)-$(CONFIG_PAX_SIZE_OVERFLOW) += size_overflow_plugin.so
 +$(HOSTLIBS)-$(CONFIG_PAX_LATENT_ENTROPY) += latent_entropy_plugin.so
++$(HOSTLIBS)-$(CONFIG_PAX_MEMORY_STRUCTLEAK) += structleak_plugin.so
 +
 +always := $($(HOSTLIBS)-y)
 +
@@ -69728,6 +69759,7 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/Makefil
 +colorize_plugin-objs := colorize_plugin.o
 +size_overflow_plugin-objs := size_overflow_plugin.o
 +latent_entropy_plugin-objs := latent_entropy_plugin.o
++structleak_plugin-objs := structleak_plugin.o
 +
 +$(obj)/size_overflow_plugin.o: $(objtree)/$(obj)/size_overflow_hash.h
 +
@@ -77986,6 +78018,280 @@ diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/stackle
 +
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_tree_instrument_pass_info);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_final_pass_info);
++
++	return 0;
++}
+diff -NurpX linux-3.8.4-pax/Documentation/dontdiff linux-3.8.4/tools/gcc/structleak_plugin.c linux-3.8.4-pax/tools/gcc/structleak_plugin.c
+--- linux-3.8.4/tools/gcc/structleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
++++ linux-3.8.4-pax/tools/gcc/structleak_plugin.c	2013-03-27 03:58:42.992581881 +0100
+@@ -0,0 +1,270 @@
++/*
++ * Copyright 2013 by PaX Team <pageexec@freemail.hu>
++ * Licensed under the GPL v2
++ *
++ * Note: the choice of the license means that the compilation process is
++ *       NOT 'eligible' as defined by gcc's library exception to the GPL v3,
++ *       but for the kernel it doesn't matter since it doesn't link against
++ *       any of the gcc libraries
++ *
++ * gcc plugin to forcibly initialize certain local variables that could
++ * otherwise leak kernel stack to userland if they aren't properly initialized
++ * by later code
++ *
++ * Homepage: http://pax.grsecurity.net/
++ *
++ * Usage:
++ * $ # for 4.5/4.6/C based 4.7
++ * $ gcc -I`gcc -print-file-name=plugin`/include -I`gcc -print-file-name=plugin`/include/c-family -fPIC -shared -O2 -o structleak_plugin.so structleak_plugin.c
++ * $ # for C++ based 4.7/4.8+
++ * $ g++ -I`g++ -print-file-name=plugin`/include -I`g++ -print-file-name=plugin`/include/c-family -fPIC -shared -O2 -o structleak_plugin.so structleak_plugin.c
++ * $ gcc -fplugin=./structleak_plugin.so test.c -O2
++ *
++ * TODO: eliminate redundant initializers
++ *       increase type coverage
++ */
++
++#include "gcc-plugin.h"
++#include "config.h"
++#include "system.h"
++#include "coretypes.h"
++#include "tree.h"
++#include "tree-pass.h"
++#include "intl.h"
++#include "plugin-version.h"
++#include "tm.h"
++#include "toplev.h"
++#include "function.h"
++#include "tree-flow.h"
++#include "plugin.h"
++#include "gimple.h"
++#include "diagnostic.h"
++#include "cfgloop.h"
++#include "langhooks.h"
++
++#if BUILDING_GCC_VERSION >= 4008
++#define TODO_dump_func 0
++#endif
++
++#define NAME(node) IDENTIFIER_POINTER(DECL_NAME(node))
++
++// unused type flag in all versions 4.5-4.8
++#define TYPE_USERSPACE(TYPE) TYPE_LANG_FLAG_3(TYPE)
++
++int plugin_is_GPL_compatible;
++void debug_gimple_stmt(gimple gs);
++
++static struct plugin_info structleak_plugin_info = {
++	.version	= "201303270300",
++	.help		= "disable\tdo not activate plugin\n",
++};
++
++static tree handle_user_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
++{
++	*no_add_attrs = true;
++
++	// check for types? for now accept everything linux has to offer
++	if (TREE_CODE(*node) != FIELD_DECL)
++		return NULL_TREE;
++
++	*no_add_attrs = false;
++	return NULL_TREE;
++}
++
++static struct attribute_spec user_attr = {
++	.name			= "user",
++	.min_length		= 0,
++	.max_length		= 0,
++	.decl_required		= false,
++	.type_required		= false,
++	.function_type_required	= false,
++	.handler		= handle_user_attribute,
++#if BUILDING_GCC_VERSION >= 4007
++	.affects_type_identity	= true
++#endif
++};
++
++static void register_attributes(void *event_data, void *data)
++{
++	register_attribute(&user_attr);
++//	register_attribute(&force_attr);
++}
++
++static tree get_field_type(tree field)
++{
++	return strip_array_types(TREE_TYPE(field));
++}
++
++static bool is_userspace_type(tree type)
++{
++	tree field;
++
++	for (field = TYPE_FIELDS(type); field; field = TREE_CHAIN(field)) {
++		tree fieldtype = get_field_type(field);
++		enum tree_code code = TREE_CODE(fieldtype);
++
++		if (code == RECORD_TYPE || code == UNION_TYPE)
++			if (is_userspace_type(fieldtype))
++				return true;
++
++		if (lookup_attribute("user", DECL_ATTRIBUTES(field)))
++			return true;
++	}
++	return false;
++}
++
++static void finish_type(void *event_data, void *data)
++{
++	tree type = (tree)event_data;
++
++	if (TYPE_USERSPACE(type))
++		return;
++
++	if (is_userspace_type(type))
++		TYPE_USERSPACE(type) = 1;
++}
++
++static void initialize(tree var)
++{
++	basic_block bb;
++	gimple_stmt_iterator gsi;
++	tree initializer;
++	gimple init_stmt;
++
++	// this is the original entry bb before the forced split
++	bb = ENTRY_BLOCK_PTR->next_bb->next_bb;
++
++	// first check if the variable is already initialized, warn otherwise
++	for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
++		gimple stmt = gsi_stmt(gsi);
++
++		// we're looking for an assignment...
++		if (!(is_gimple_assign(stmt)))
++			continue;
++		// ... of a single rhs (unary op)...
++		if (gimple_num_ops(stmt) != 2)
++			continue;
++		// ... to our variable...
++		if (gimple_get_lhs(stmt) != var)
++			continue;
++		// if it's an initializer then we're good
++		if (TREE_CODE(gimple_assign_rhs1(stmt)) == CONSTRUCTOR)
++			return;
++	}
++
++	// build the initializer expression
++	initializer = make_node(CONSTRUCTOR);
++	TREE_TYPE(initializer) = TREE_TYPE(var);
++
++	// build the initializer stmt
++	init_stmt = gimple_build_assign(var, initializer);
++	gsi = gsi_start_bb(ENTRY_BLOCK_PTR->next_bb);
++	gsi_insert_before(&gsi, init_stmt, GSI_NEW_STMT);
++	update_stmt(init_stmt);
++}
++
++static unsigned int handle_function(void)
++{
++	basic_block bb;
++	unsigned int ret = 0;
++	tree var;
++
++#if BUILDING_GCC_VERSION == 4005
++	tree vars;
++#else
++	unsigned int i;
++#endif
++
++	// split the first bb where we can put the forced initializers
++	bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
++	if (dom_info_available_p(CDI_DOMINATORS))
++		set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR);
++
++	// enumarate all local variables and forcibly initialize our targets
++#if BUILDING_GCC_VERSION == 4005
++	for (vars = cfun->local_decls; vars; vars = TREE_CHAIN(vars)) {
++		var = TREE_VALUE(vars);
++#else
++	FOR_EACH_LOCAL_DECL(cfun, i, var) {
++#endif
++		tree type = TREE_TYPE(var);
++
++		gcc_assert(DECL_P(var));
++		if (is_global_var(var))
++			continue;
++
++		// only care about structure types
++		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
++			continue;
++
++		// if the type is of interest, examine the variable
++		if (TYPE_USERSPACE(type))
++			initialize(var);
++	}
++
++	return ret;
++}
++
++static struct gimple_opt_pass structleak_pass = {
++	.pass = {
++		.type			= GIMPLE_PASS,
++		.name			= "structleak",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++		.gate			= NULL,
++		.execute		= handle_function,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++		.tv_id			= TV_NONE,
++		.properties_required	= PROP_cfg,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_remove_unused_locals | TODO_update_ssa | TODO_ggc_collect | TODO_verify_flow
++	}
++};
++
++int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
++{
++	int i;
++	const char * const plugin_name = plugin_info->base_name;
++	const int argc = plugin_info->argc;
++	const struct plugin_argument * const argv = plugin_info->argv;
++	bool enable = true;
++
++	struct register_pass_info structleak_pass_info = {
++		.pass				= &structleak_pass.pass,
++		.reference_pass_name		= "ssa",
++		.ref_pass_instance_number	= 1,
++		.pos_op				= PASS_POS_INSERT_AFTER
++	};
++
++	if (!plugin_default_version_check(version, &gcc_version)) {
++		error(G_("incompatible gcc/plugin versions"));
++		return 1;
++	}
++
++	if (strcmp(lang_hooks.name, "GNU C")) {
++		inform(UNKNOWN_LOCATION, G_("%s supports C only"), plugin_name);
++		enable = false;
++	}
++
++	for (i = 0; i < argc; ++i) {
++		if (!strcmp(argv[i].key, "disable")) {
++			enable = false;
++			continue;
++		}
++		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
++	}
++
++	register_callback(plugin_name, PLUGIN_INFO, NULL, &structleak_plugin_info);
++	if (enable) {
++		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &structleak_pass_info);
++		register_callback(plugin_name, PLUGIN_FINISH_TYPE, finish_type, NULL);
++	}
++	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
 +	return 0;
 +}
