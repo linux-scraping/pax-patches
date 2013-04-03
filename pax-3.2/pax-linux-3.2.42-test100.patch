@@ -1,4 +1,6 @@
-- removed some no longer necessary __size_overflow marks and updated the overflow plugin's hash table
+- fixed section mismatch error caused by CONSTIFY (http://forums.grsecurity.net/viewtopic.php?f=3&t=3388 and http://forums.grsecurity.net/viewtopic.php?f=3&t=3391)
+- fixed integer type mixup in the cx88 driver (http://forums.grsecurity.net/viewtopic.php?f=3&t=3394)
+- fixed arm compilation (http://forums.grsecurity.net/viewtopic.php?f=3&t=3395)
 
 diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/arch/alpha/include/asm/atomic.h linux-3.2.42-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.42/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -1357,8 +1359,42 @@ diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/arch/arm/mach-o
   * struct omap_sr_nvalue_table	- Smartreflex n-target value info
 diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/arch/arm/mm/fault.c linux-3.2.42-pax/arch/arm/mm/fault.c
 --- linux-3.2.42/arch/arm/mm/fault.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.42-pax/arch/arm/mm/fault.c	2013-01-16 23:52:35.762635183 +0100
-@@ -630,6 +630,20 @@ do_PrefetchAbort(unsigned long addr, uns
++++ linux-3.2.42-pax/arch/arm/mm/fault.c	2013-04-03 23:39:44.868174118 +0200
+@@ -386,6 +386,33 @@ do_page_fault(unsigned long addr, unsign
+ }
+ #endif					/* CONFIG_MMU */
+ 
++#ifdef CONFIG_PAX_PAGEEXEC
++void pax_report_insns(struct pt_regs *regs, void *pc, void *sp)
++{
++	long i;
++
++	printk(KERN_ERR "PAX: bytes at PC: ");
++	for (i = 0; i < 20; i++) {
++		unsigned char c;
++		if (get_user(c, (__force unsigned char __user *)pc+i))
++			printk(KERN_CONT "?? ");
++		else
++			printk(KERN_CONT "%02x ", c);
++	}
++	printk("\n");
++
++	printk(KERN_ERR "PAX: bytes at SP-4: ");
++	for (i = -1; i < 20; i++) {
++		unsigned long c;
++		if (get_user(c, (__force unsigned long __user *)sp+i))
++			printk(KERN_CONT "???????? ");
++		else
++			printk(KERN_CONT "%08lx ", c);
++	}
++	printk("\n");
++}
++#endif
++
+ /*
+  * First Level Translation Fault Handler
+  *
+@@ -630,6 +657,20 @@ do_PrefetchAbort(unsigned long addr, uns
  	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
  	struct siginfo info;
  
@@ -34039,6 +34075,22 @@ diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/drivers/media/v
  	{0x14f1,0x8801,PCI_ANY_ID,PCI_ANY_ID,0,0,0},
  	{0x14f1,0x8811,PCI_ANY_ID,PCI_ANY_ID,0,0,0},
  	{0, }
+diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/drivers/media/video/cx88/cx88-video.c linux-3.2.42-pax/drivers/media/video/cx88/cx88-video.c
+--- linux-3.2.42/drivers/media/video/cx88/cx88-video.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.42-pax/drivers/media/video/cx88/cx88-video.c	2013-04-03 23:43:03.816179968 +0200
+@@ -49,9 +49,9 @@ MODULE_VERSION(CX88_VERSION);
+ 
+ /* ------------------------------------------------------------------ */
+ 
+-static unsigned int video_nr[] = {[0 ... (CX88_MAXBOARDS - 1)] = UNSET };
+-static unsigned int vbi_nr[]   = {[0 ... (CX88_MAXBOARDS - 1)] = UNSET };
+-static unsigned int radio_nr[] = {[0 ... (CX88_MAXBOARDS - 1)] = UNSET };
++static int video_nr[] = {[0 ... (CX88_MAXBOARDS - 1)] = UNSET };
++static int vbi_nr[]   = {[0 ... (CX88_MAXBOARDS - 1)] = UNSET };
++static int radio_nr[] = {[0 ... (CX88_MAXBOARDS - 1)] = UNSET };
+ 
+ module_param_array(video_nr, int, NULL, 0444);
+ module_param_array(vbi_nr,   int, NULL, 0444);
 diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/drivers/media/video/omap/omap_vout.c linux-3.2.42-pax/drivers/media/video/omap/omap_vout.c
 --- linux-3.2.42/drivers/media/video/omap/omap_vout.c	2013-03-29 02:18:30.091676743 +0100
 +++ linux-3.2.42-pax/drivers/media/video/omap/omap_vout.c	2013-03-29 02:19:02.079675035 +0100
@@ -49524,8 +49576,8 @@ diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/include/net/net
  /**
 diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/include/net/net_namespace.h linux-3.2.42-pax/include/net/net_namespace.h
 --- linux-3.2.42/include/net/net_namespace.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.42-pax/include/net/net_namespace.h	2013-03-28 04:25:05.535884296 +0100
-@@ -240,10 +240,12 @@ static inline struct net *read_pnet(stru
++++ linux-3.2.42-pax/include/net/net_namespace.h	2013-04-03 01:34:26.676749506 +0200
+@@ -240,10 +240,16 @@ static inline struct net *read_pnet(stru
  #define __net_init
  #define __net_exit
  #define __net_initdata
@@ -49534,11 +49586,15 @@ diff -NurpX linux-3.2.42-pax/Documentation/dontdiff linux-3.2.42/include/net/net
  #define __net_init	__init
  #define __net_exit	__exit_refok
  #define __net_initdata	__initdata
++#ifdef CONSTIFY_PLUGIN
 +#define __net_initconst	__initconst
++#else
++#define __net_initconst	__initdata
++#endif
  #endif
  
  struct pernet_operations {
-@@ -253,7 +255,7 @@ struct pernet_operations {
+@@ -253,7 +259,7 @@ struct pernet_operations {
  	void (*exit_batch)(struct list_head *net_exit_list);
  	int *id;
  	size_t size;
