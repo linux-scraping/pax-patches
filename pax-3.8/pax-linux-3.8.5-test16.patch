@@ -1,5 +1,5 @@
-- fixed section mismatch error caused by CONSTIFY (http://forums.grsecurity.net/viewtopic.php?f=3&t=3388 and http://forums.grsecurity.net/viewtopic.php?f=3&t=3391)
-- fixed integer type mixup in the cx88 driver (http://forums.grsecurity.net/viewtopic.php?f=3&t=3394)
+- fixed some attribute leakage into userland headers, patch by Mathias Krause
+- fixed some of the access_*_vm related breakage that trigger size overflows, reported by Hunger
 
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/arch/alpha/include/asm/atomic.h linux-3.8.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.5/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -5818,6 +5818,21 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/arch/powerpc/mm/s
  	/* If hint, make sure it matches our alignment restrictions */
  	if (!fixed && addr) {
  		addr = _ALIGN_UP(addr, 1ul << pshift);
+diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/arch/powerpc/platforms/cell/spufs/file.c linux-3.8.5-pax/arch/powerpc/platforms/cell/spufs/file.c
+--- linux-3.8.5/arch/powerpc/platforms/cell/spufs/file.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.5-pax/arch/powerpc/platforms/cell/spufs/file.c	2013-04-04 21:32:11.854489420 +0200
+@@ -281,9 +281,9 @@ spufs_mem_mmap_fault(struct vm_area_stru
+ 	return VM_FAULT_NOPAGE;
+ }
+ 
+-static int spufs_mem_mmap_access(struct vm_area_struct *vma,
++static ssize_t spufs_mem_mmap_access(struct vm_area_struct *vma,
+ 				unsigned long address,
+-				void *buf, int len, int write)
++				void *buf, size_t len, int write)
+ {
+ 	struct spu_context *ctx = vma->vm_file->private_data;
+ 	unsigned long offset = address - vma->vm_start;
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/arch/powerpc/platforms/powermac/smp.c linux-3.8.5-pax/arch/powerpc/platforms/powermac/smp.c
 --- linux-3.8.5/arch/powerpc/platforms/powermac/smp.c	2013-02-19 01:12:43.501766204 +0100
 +++ linux-3.8.5-pax/arch/powerpc/platforms/powermac/smp.c	2013-02-20 01:04:03.630076030 +0100
@@ -46413,6 +46428,27 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/fs/proc/array.c l
  	return 0;
  }
  
+diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/fs/proc/base.c linux-3.8.5-pax/fs/proc/base.c
+--- linux-3.8.5/fs/proc/base.c	2013-02-19 01:13:19.269768147 +0100
++++ linux-3.8.5-pax/fs/proc/base.c	2013-04-05 02:43:19.523038282 +0200
+@@ -722,7 +722,7 @@ static ssize_t mem_rw(struct file *file,
+ 		goto free;
+ 
+ 	while (count > 0) {
+-		int this_len = min_t(int, count, PAGE_SIZE);
++		ssize_t this_len = min_t(ssize_t, count, PAGE_SIZE);
+ 
+ 		if (write && copy_from_user(page, buf, this_len)) {
+ 			copied = -EFAULT;
+@@ -823,7 +823,7 @@ static ssize_t environ_read(struct file
+ 		goto free;
+ 	while (count > 0) {
+ 		size_t this_len, max_len;
+-		int retval;
++		ssize_t retval;
+ 
+ 		if (src >= (mm->env_end - mm->env_start))
+ 			break;
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/fs/proc/kcore.c linux-3.8.5-pax/fs/proc/kcore.c
 --- linux-3.8.5/fs/proc/kcore.c	2013-02-19 01:13:19.289768148 +0100
 +++ linux-3.8.5-pax/fs/proc/kcore.c	2013-02-19 01:14:43.837772740 +0100
@@ -46938,6 +46974,38 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/fs/splice.c linux
  		ret = -EAGAIN;
  
  	pipe_unlock(ipipe);
+diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/fs/sysfs/bin.c linux-3.8.5-pax/fs/sysfs/bin.c
+--- linux-3.8.5/fs/sysfs/bin.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.5-pax/fs/sysfs/bin.c	2013-04-04 21:36:10.078496424 +0200
+@@ -235,13 +235,13 @@ static int bin_page_mkwrite(struct vm_ar
+ 	return ret;
+ }
+ 
+-static int bin_access(struct vm_area_struct *vma, unsigned long addr,
+-		  void *buf, int len, int write)
++static ssize_t bin_access(struct vm_area_struct *vma, unsigned long addr,
++		  void *buf, size_t len, int write)
+ {
+ 	struct file *file = vma->vm_file;
+ 	struct bin_buffer *bb = file->private_data;
+ 	struct sysfs_dirent *attr_sd = file->f_path.dentry->d_fsdata;
+-	int ret;
++	ssize_t ret;
+ 
+ 	if (!bb->vm_ops)
+ 		return -EINVAL;
+diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/fs/sysfs/dir.c linux-3.8.5-pax/fs/sysfs/dir.c
+--- linux-3.8.5/fs/sysfs/dir.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.5-pax/fs/sysfs/dir.c	2013-04-04 14:45:35.505772124 +0200
+@@ -40,7 +40,7 @@ static DEFINE_IDA(sysfs_ino_ida);
+  *
+  *	Returns 31 bit hash of ns + name (so it fits in an off_t )
+  */
+-static unsigned int sysfs_name_hash(const void *ns, const char *name)
++static unsigned int sysfs_name_hash(const void *ns, const unsigned char *name)
+ {
+ 	unsigned long hash = init_name_hash();
+ 	unsigned int len = strlen(name);
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/fs/sysfs/file.c linux-3.8.5-pax/fs/sysfs/file.c
 --- linux-3.8.5/fs/sysfs/file.c	2013-02-19 01:13:19.361768152 +0100
 +++ linux-3.8.5-pax/fs/sysfs/file.c	2013-02-19 01:14:43.845772740 +0100
@@ -49052,7 +49120,7 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/include/linux/mat
  	return div_u64_rem(dividend, divisor, &remainder);
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/include/linux/mm.h linux-3.8.5-pax/include/linux/mm.h
 --- linux-3.8.5/include/linux/mm.h	2013-02-19 01:13:21.005768241 +0100
-+++ linux-3.8.5-pax/include/linux/mm.h	2013-03-22 02:39:18.866140823 +0100
++++ linux-3.8.5-pax/include/linux/mm.h	2013-04-05 03:25:08.199112042 +0200
 @@ -101,6 +101,11 @@ extern unsigned int kobjsize(const void
  #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
  #define VM_NONLINEAR	0x00800000	/* Is non-linear (remap_file_pages) */
@@ -49065,6 +49133,17 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/include/linux/mm.
  #define VM_DONTDUMP	0x04000000	/* Do not include in the core dump */
  
  #define VM_MIXEDMAP	0x10000000	/* Can contain "struct page" and pure PFN pages */
+@@ -200,8 +205,8 @@ struct vm_operations_struct {
+ 	/* called by access_process_vm when get_user_pages() fails, typically
+ 	 * for use by special VMAs that can switch between memory and hardware
+ 	 */
+-	int (*access)(struct vm_area_struct *vma, unsigned long addr,
+-		      void *buf, int len, int write);
++	ssize_t (*access)(struct vm_area_struct *vma, unsigned long addr,
++		      void *buf, size_t len, int write);
+ #ifdef CONFIG_NUMA
+ 	/*
+ 	 * set_policy() op must add a reference to any non-NULL @new mempolicy
 @@ -231,6 +236,7 @@ struct vm_operations_struct {
  	int (*remap_pages)(struct vm_area_struct *vma, unsigned long addr,
  			   unsigned long size, pgoff_t pgoff);
@@ -49073,6 +49152,32 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/include/linux/mm.
  
  struct mmu_gather;
  struct inode;
+@@ -995,8 +1001,8 @@ int follow_pfn(struct vm_area_struct *vm
+ 	unsigned long *pfn);
+ int follow_phys(struct vm_area_struct *vma, unsigned long address,
+ 		unsigned int flags, unsigned long *prot, resource_size_t *phys);
+-int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
+-			void *buf, int len, int write);
++ssize_t generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
++			void *buf, size_t len, int write);
+ 
+ static inline void unmap_shared_mapping_range(struct address_space *mapping,
+ 		loff_t const holebegin, loff_t const holelen)
+@@ -1035,10 +1041,10 @@ static inline int fixup_user_fault(struc
+ }
+ #endif
+ 
+-extern int make_pages_present(unsigned long addr, unsigned long end);
+-extern int access_process_vm(struct task_struct *tsk, unsigned long addr, void *buf, int len, int write);
+-extern int access_remote_vm(struct mm_struct *mm, unsigned long addr,
+-		void *buf, int len, int write);
++extern ssize_t make_pages_present(unsigned long addr, unsigned long end);
++extern ssize_t access_process_vm(struct task_struct *tsk, unsigned long addr, void *buf, size_t len, int write);
++extern ssize_t access_remote_vm(struct mm_struct *mm, unsigned long addr,
++		void *buf, size_t len, int write);
+ 
+ int __get_user_pages(struct task_struct *tsk, struct mm_struct *mm,
+ 		     unsigned long start, int len, unsigned int foll_flags,
 @@ -1068,34 +1074,6 @@ int set_page_dirty(struct page *page);
  int set_page_dirty_lock(struct page *page);
  int clear_page_dirty_for_io(struct page *page);
@@ -57665,7 +57770,7 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/madvise.c linu
  		goto out;
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/memory.c linux-3.8.5-pax/mm/memory.c
 --- linux-3.8.5/mm/memory.c	2013-02-19 01:13:22.789768338 +0100
-+++ linux-3.8.5-pax/mm/memory.c	2013-02-19 01:14:44.069772752 +0100
++++ linux-3.8.5-pax/mm/memory.c	2013-04-05 02:40:31.647033347 +0200
 @@ -433,6 +433,7 @@ static inline void free_pmd_range(struct
  		free_pte_range(tlb, pmd, addr);
  	} while (pmd++, addr = next, addr != end);
@@ -58264,7 +58369,7 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/memory.c linux
  #endif /* __PAGETABLE_PUD_FOLDED */
  
  #ifndef __PAGETABLE_PMD_FOLDED
-@@ -3819,6 +4077,30 @@ int __pmd_alloc(struct mm_struct *mm, pu
+@@ -3819,11 +4077,35 @@ int __pmd_alloc(struct mm_struct *mm, pu
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -58294,7 +58399,14 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/memory.c linux
 +}
  #endif /* __PAGETABLE_PMD_FOLDED */
  
- int make_pages_present(unsigned long addr, unsigned long end)
+-int make_pages_present(unsigned long addr, unsigned long end)
++ssize_t make_pages_present(unsigned long addr, unsigned long end)
+ {
+-	int ret, len, write;
++	ssize_t ret, len, write;
+ 	struct vm_area_struct * vma;
+ 
+ 	vma = find_vma(current->mm, addr);
 @@ -3856,7 +4138,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
@@ -58304,6 +58416,63 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/memory.c linux
  
  	return 0;
  }
+@@ -3990,8 +4272,8 @@ out:
+ 	return ret;
+ }
+ 
+-int generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
+-			void *buf, int len, int write)
++ssize_t generic_access_phys(struct vm_area_struct *vma, unsigned long addr,
++			void *buf, size_t len, int write)
+ {
+ 	resource_size_t phys_addr;
+ 	unsigned long prot = 0;
+@@ -4016,8 +4298,8 @@ int generic_access_phys(struct vm_area_s
+  * Access another process' address space as given in mm.  If non-NULL, use the
+  * given task for page fault accounting.
+  */
+-static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+-		unsigned long addr, void *buf, int len, int write)
++static ssize_t __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
++		unsigned long addr, void *buf, size_t len, int write)
+ {
+ 	struct vm_area_struct *vma;
+ 	void *old_buf = buf;
+@@ -4025,7 +4307,7 @@ static int __access_remote_vm(struct tas
+ 	down_read(&mm->mmap_sem);
+ 	/* ignore errors, just check how much was successfully transferred */
+ 	while (len) {
+-		int bytes, ret, offset;
++		ssize_t bytes, ret, offset;
+ 		void *maddr;
+ 		struct page *page = NULL;
+ 
+@@ -4084,8 +4366,8 @@ static int __access_remote_vm(struct tas
+  *
+  * The caller must hold a reference on @mm.
+  */
+-int access_remote_vm(struct mm_struct *mm, unsigned long addr,
+-		void *buf, int len, int write)
++ssize_t access_remote_vm(struct mm_struct *mm, unsigned long addr,
++		void *buf, size_t len, int write)
+ {
+ 	return __access_remote_vm(NULL, mm, addr, buf, len, write);
+ }
+@@ -4095,11 +4377,11 @@ int access_remote_vm(struct mm_struct *m
+  * Source/target buffer must be kernel space,
+  * Do not walk the page table directly, use get_user_pages
+  */
+-int access_process_vm(struct task_struct *tsk, unsigned long addr,
+-		void *buf, int len, int write)
++ssize_t access_process_vm(struct task_struct *tsk, unsigned long addr,
++		void *buf, size_t len, int write)
+ {
+ 	struct mm_struct *mm;
+-	int ret;
++	ssize_t ret;
+ 
+ 	mm = get_task_mm(tsk);
+ 	if (!mm)
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/memory-failure.c linux-3.8.5-pax/mm/memory-failure.c
 --- linux-3.8.5/mm/memory-failure.c	2013-02-19 01:13:22.785768338 +0100
 +++ linux-3.8.5-pax/mm/memory-failure.c	2013-02-22 04:52:11.957122664 +0100
@@ -59909,7 +60078,7 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/mremap.c linux
  	if (ret & ~PAGE_MASK)
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/nommu.c linux-3.8.5-pax/mm/nommu.c
 --- linux-3.8.5/mm/nommu.c	2013-02-19 01:13:22.829768340 +0100
-+++ linux-3.8.5-pax/mm/nommu.c	2013-02-19 01:14:44.077772753 +0100
++++ linux-3.8.5-pax/mm/nommu.c	2013-04-05 02:39:07.295030866 +0200
 @@ -62,7 +62,6 @@ int sysctl_overcommit_memory = OVERCOMMI
  int sysctl_overcommit_ratio = 50; /* default is 50% */
  int sysctl_max_map_count = DEFAULT_MAX_MAP_COUNT;
@@ -59941,6 +60110,37 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/nommu.c linux-
 +	INIT_LIST_HEAD(&new->anon_vma_chain);
  	*region = *vma->vm_region;
  	new->vm_region = region;
+ 
+@@ -1975,8 +1966,8 @@ int generic_file_remap_pages(struct vm_a
+ }
+ EXPORT_SYMBOL(generic_file_remap_pages);
+ 
+-static int __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
+-		unsigned long addr, void *buf, int len, int write)
++static ssize_t __access_remote_vm(struct task_struct *tsk, struct mm_struct *mm,
++		unsigned long addr, void *buf, size_t len, int write)
+ {
+ 	struct vm_area_struct *vma;
+ 
+@@ -2017,8 +2008,8 @@ static int __access_remote_vm(struct tas
+  *
+  * The caller must hold a reference on @mm.
+  */
+-int access_remote_vm(struct mm_struct *mm, unsigned long addr,
+-		void *buf, int len, int write)
++ssize_t access_remote_vm(struct mm_struct *mm, unsigned long addr,
++		void *buf, size_t len, int write)
+ {
+ 	return __access_remote_vm(NULL, mm, addr, buf, len, write);
+ }
+@@ -2027,7 +2018,7 @@ int access_remote_vm(struct mm_struct *m
+  * Access another process' address space.
+  * - source/target buffer must be kernel space
+  */
+-int access_process_vm(struct task_struct *tsk, unsigned long addr, void *buf, int len, int write)
++ssize_t access_process_vm(struct task_struct *tsk, unsigned long addr, void *buf, size_t len, int write)
+ {
+ 	struct mm_struct *mm;
  
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/mm/page_alloc.c linux-3.8.5-pax/mm/page_alloc.c
 --- linux-3.8.5/mm/page_alloc.c	2013-02-19 01:13:22.833768340 +0100
@@ -65959,6 +66159,17 @@ diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/scripts/gcc-plugi
 +	[[ "$plugincc" =~ "$1" ]] && echo "$1"
 +	[[ "$plugincc" =~ "$2" ]] && echo "$2"
 +fi
+diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/scripts/headers_install.pl linux-3.8.5-pax/scripts/headers_install.pl
+--- linux-3.8.5/scripts/headers_install.pl	2013-02-19 01:13:25.325768476 +0100
++++ linux-3.8.5-pax/scripts/headers_install.pl	2013-04-04 14:24:44.017735328 +0200
+@@ -35,6 +35,7 @@ foreach my $filename (@files) {
+ 		$line =~ s/([\s(])__user\s/$1/g;
+ 		$line =~ s/([\s(])__force\s/$1/g;
+ 		$line =~ s/([\s(])__iomem\s/$1/g;
++		$line =~ s/(\s?)__intentional_overflow\([-\d\s,]*\)\s?/$1/g;
+ 		$line =~ s/\s__attribute_const__\s/ /g;
+ 		$line =~ s/\s__attribute_const__$//g;
+ 		$line =~ s/\b__packed\b/__attribute__((packed))/g;
 diff -NurpX linux-3.8.5-pax/Documentation/dontdiff linux-3.8.5/scripts/link-vmlinux.sh linux-3.8.5-pax/scripts/link-vmlinux.sh
 --- linux-3.8.5/scripts/link-vmlinux.sh	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.8.5-pax/scripts/link-vmlinux.sh	2013-02-19 01:14:44.669772785 +0100
