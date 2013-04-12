@@ -1,5 +1,5 @@
-- forward port to 3.2.43
-- fixed typo in Makefile reported by mlarm (https://forums.grsecurity.net/viewtopic.php?t=3411)
+- fixed STACKLEAK/XEN interference once again, reported by Jason A. Donenfeld
+- fixed the structleak plugin to compile for gcc 4.5-4.6 as well
 
 diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/arch/alpha/include/asm/atomic.h linux-3.2.43-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.43/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -26374,7 +26374,7 @@ diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/arch/x86/vdso/v
 -__setup("vdso=", vdso_setup);
 diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/arch/x86/xen/enlighten.c linux-3.2.43-pax/arch/x86/xen/enlighten.c
 --- linux-3.2.43/arch/x86/xen/enlighten.c	2012-10-31 13:04:03.475702835 +0100
-+++ linux-3.2.43-pax/arch/x86/xen/enlighten.c	2013-02-20 01:19:12.098027524 +0100
++++ linux-3.2.43-pax/arch/x86/xen/enlighten.c	2013-04-13 01:08:28.699116768 +0200
 @@ -86,8 +86,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -26400,10 +26400,19 @@ diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/arch/x86/xen/en
  	unsigned int size = dtr->size + 1;
 -	unsigned pages = (size + PAGE_SIZE - 1) / PAGE_SIZE;
 -	unsigned long frames[pages];
-+	unsigned long frames[65536 / PAGE_SIZE];
++	unsigned long frames[(GDT_SIZE + PAGE_SIZE - 1) / PAGE_SIZE];
  	int f;
  
  	/*
+@@ -425,7 +421,7 @@ static void __init xen_load_gdt_boot(con
+ 	 * 8-byte entries, or 16 4k pages..
+ 	 */
+ 
+-	BUG_ON(size > 65536);
++	BUG_ON(size > GDT_SIZE);
+ 	BUG_ON(va & ~PAGE_MASK);
+ 
+ 	for (f = 0; va < dtr->address + size; va += PAGE_SIZE, f++) {
 @@ -1057,30 +1053,30 @@ static const struct pv_apic_ops xen_apic
  #endif
  };
@@ -26461,22 +26470,20 @@ diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/arch/x86/xen/en
  
  	xen_setup_features();
  
-@@ -1210,14 +1216,7 @@ asmlinkage void __init xen_start_kernel(
- 		pv_mmu_ops.ptep_modify_prot_commit = xen_ptep_modify_prot_commit;
- 	}
+@@ -1212,13 +1218,6 @@ asmlinkage void __init xen_start_kernel(
  
--	machine_ops = xen_machine_ops;
--
+ 	machine_ops = xen_machine_ops;
+ 
 -	/*
 -	 * The only reliable way to retain the initial address of the
 -	 * percpu gdt_page is to remember it here, so we can go and
 -	 * mark it RW later, when the initial percpu area is freed.
 -	 */
 -	xen_initial_gdt = &per_cpu(gdt_page, 0);
-+	memcpy((void *)&machine_ops, &xen_machine_ops, sizeof machine_ops);
- 
+-
  	xen_smp_init();
  
+ #ifdef CONFIG_ACPI_NUMA
 @@ -1400,7 +1399,7 @@ static int __cpuinit xen_hvm_cpu_notify(
  	return NOTIFY_OK;
  }
@@ -75335,8 +75342,8 @@ diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/tools/gcc/stack
 +}
 diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/tools/gcc/structleak_plugin.c linux-3.2.43-pax/tools/gcc/structleak_plugin.c
 --- linux-3.2.43/tools/gcc/structleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.43-pax/tools/gcc/structleak_plugin.c	2013-04-09 01:05:28.445748689 +0200
-@@ -0,0 +1,271 @@
++++ linux-3.2.43-pax/tools/gcc/structleak_plugin.c	2013-04-13 01:08:28.699116768 +0200
+@@ -0,0 +1,272 @@
 +/*
 + * Copyright 2013 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -75481,9 +75488,11 @@ diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/tools/gcc/struc
 +		// we're looking for an assignment of a single rhs...
 +		if (!gimple_assign_single_p(stmt))
 +			continue;
++#if BUILDING_GCC_VERSION >= 4007
 +		// ... of a non-clobbering expression...
 +		if (TREE_CLOBBER_P(rhs1))
 +			continue;
++#endif
 +		// ... to our variable...
 +		if (gimple_get_lhs(stmt) != var)
 +			continue;
@@ -75493,8 +75502,7 @@ diff -NurpX linux-3.2.43-pax/Documentation/dontdiff linux-3.2.43/tools/gcc/struc
 +	}
 +
 +	// build the initializer expression
-+	initializer = make_node(CONSTRUCTOR);
-+	TREE_TYPE(initializer) = TREE_TYPE(var);
++	initializer = build_constructor(TREE_TYPE(var), NULL);
 +
 +	// build the initializer stmt
 +	init_stmt = gimple_build_assign(var, initializer);
