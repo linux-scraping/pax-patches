@@ -1,4 +1,7 @@
-- forward port to 3.8.7
+- fixed KERNEXEC and NMI nesting problem reported by stef&hunger
+- changed PHYSICAL_ALIGN/START to fix http://forums.grsecurity.net/viewtopic.php?f=3&t=3414
+- CONSTIFY depends on KERNEXEC (for the kernel open/close feature)
+- fixed CONSTIFY and powerpc interference, reported by  John Hardin (https://bugs.gentoo.org/show_bug.cgi?id=456364)
 
 diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/alpha/include/asm/atomic.h linux-3.8.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -5170,6 +5173,18 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/powerpc/incl
  #define   DSISR_PROTFAULT	0x08000000	/* protection fault */
  #define   DSISR_ISSTORE		0x02000000	/* access was a store */
  #define   DSISR_DABRMATCH	0x00400000	/* hit data breakpoint */
+diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/powerpc/include/asm/smp.h linux-3.8.7-pax/arch/powerpc/include/asm/smp.h
+--- linux-3.8.7/arch/powerpc/include/asm/smp.h	2013-02-19 01:12:42.905766172 +0100
++++ linux-3.8.7-pax/arch/powerpc/include/asm/smp.h	2013-04-14 01:20:09.418970575 +0200
+@@ -50,7 +50,7 @@ struct smp_ops_t {
+ 	int   (*cpu_disable)(void);
+ 	void  (*cpu_die)(unsigned int nr);
+ 	int   (*cpu_bootable)(unsigned int nr);
+-};
++} __no_const;
+ 
+ extern void smp_send_debugger_break(void);
+ extern void start_secondary_resume(void);
 diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/powerpc/include/asm/uaccess.h linux-3.8.7-pax/arch/powerpc/include/asm/uaccess.h
 --- linux-3.8.7/arch/powerpc/include/asm/uaccess.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.8.7-pax/arch/powerpc/include/asm/uaccess.h	2013-04-07 15:04:49.931304005 +0200
@@ -14289,7 +14304,7 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/x86/include/
  #define BIOS_ROM_BASE		0xffe00000
 diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/x86/Kconfig linux-3.8.7-pax/arch/x86/Kconfig
 --- linux-3.8.7/arch/x86/Kconfig	2013-03-07 04:10:19.703802304 +0100
-+++ linux-3.8.7-pax/arch/x86/Kconfig	2013-03-07 04:10:37.731801341 +0100
++++ linux-3.8.7-pax/arch/x86/Kconfig	2013-04-15 03:05:47.640879936 +0200
 @@ -238,7 +238,7 @@ config X86_HT
  
  config X86_32_LAZY_GS
@@ -14316,19 +14331,12 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/x86/Kconfig 
  	---help---
  	  This option turns on the -fstack-protector GCC feature. This
  	  feature puts, at the beginning of functions, a canary value on
-@@ -1599,6 +1600,7 @@ config KEXEC_JUMP
- config PHYSICAL_START
- 	hex "Physical address where the kernel is loaded" if (EXPERT || CRASH_DUMP)
- 	default "0x1000000"
-+	range 0x400000 0x40000000
- 	---help---
- 	  This gives the physical address where the kernel is loaded.
- 
-@@ -1662,6 +1664,7 @@ config X86_NEED_RELOCS
+@@ -1662,6 +1663,8 @@ config X86_NEED_RELOCS
  config PHYSICAL_ALIGN
  	hex "Alignment value to which kernel should be aligned" if X86_32
  	default "0x1000000"
-+	range 0x400000 0x1000000 if PAX_KERNEXEC
++	range 0x200000 0x1000000 if PAX_KERNEXEC && X86_PAE
++	range 0x400000 0x1000000 if PAX_KERNEXEC && !X86_PAE
  	range 0x2000 0x1000000
  	---help---
  	  This value puts the alignment restrictions on physical address
@@ -16751,7 +16759,7 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/x86/kernel/e
  /*
 diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/x86/kernel/entry_64.S linux-3.8.7-pax/arch/x86/kernel/entry_64.S
 --- linux-3.8.7/arch/x86/kernel/entry_64.S	2013-02-19 01:12:51.953766663 +0100
-+++ linux-3.8.7-pax/arch/x86/kernel/entry_64.S	2013-02-19 03:31:15.896008322 +0100
++++ linux-3.8.7-pax/arch/x86/kernel/entry_64.S	2013-04-15 02:57:34.832906248 +0200
 @@ -59,6 +59,8 @@
  #include <asm/context_tracking.h>
  #include <asm/smap.h>
@@ -16891,7 +16899,7 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/x86/kernel/e
 +	pax_force_retaddr
 +	retq
 +
-+2:	ljmpq __KERNEL_CS,1f
++2:	ljmpq __KERNEL_CS,1b
 +3:	ljmpq __KERNEXEC_KERNEL_CS,4f
 +4:	SET_RDI_INTO_CR0
 +	jmp 1b
@@ -17692,6 +17700,31 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/arch/x86/kernel/e
  	/*
  	 * Check the special variable on the stack to see if NMIs are
  	 * executing.
+@@ -1712,14 +2102,13 @@ nested_nmi:
+ 
+ 1:
+ 	/* Set up the interrupted NMIs stack to jump to repeat_nmi */
+-	leaq -1*8(%rsp), %rdx
+-	movq %rdx, %rsp
++	subq $8, %rsp
+ 	CFI_ADJUST_CFA_OFFSET 1*8
+ 	leaq -10*8(%rsp), %rdx
+ 	pushq_cfi $__KERNEL_DS
+ 	pushq_cfi %rdx
+ 	pushfq_cfi
+-	pushq_cfi $__KERNEL_CS
++	pushq_cfi 6*8(%rsp)
+ 	pushq_cfi $repeat_nmi
+ 
+ 	/* Put stack back */
+@@ -1731,6 +2120,7 @@ nested_nmi_out:
+ 	CFI_RESTORE rdx
+ 
+ 	/* No need to check faults here */
++	pax_force_retaddr_bts
+ 	INTERRUPT_RETURN
+ 
+ 	CFI_RESTORE_STATE
 @@ -1847,6 +2237,17 @@ end_repeat_nmi:
  	 */
  	movq %cr2, %r12
@@ -66683,7 +66716,7 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/security/integrit
  	return 0;
 diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/security/Kconfig linux-3.8.7-pax/security/Kconfig
 --- linux-3.8.7/security/Kconfig	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.7-pax/security/Kconfig	2013-03-27 02:11:46.368924479 +0100
++++ linux-3.8.7-pax/security/Kconfig	2013-04-13 17:27:34.029256491 +0200
 @@ -4,6 +4,679 @@
  
  menu "Security options"
@@ -67304,7 +67337,7 @@ diff -NurpX linux-3.8.7-pax/Documentation/dontdiff linux-3.8.7/security/Kconfig 
 +
 +config PAX_CONSTIFY_PLUGIN
 +	bool "Automatically constify eligible structures"
-+	depends on !UML
++	depends on !UML && PAX_KERNEXEC
 +	help
 +	  By saying Y here the compiler will automatically constify a class
 +	  of types that contain only function pointers.  This reduces the
