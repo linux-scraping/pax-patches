@@ -1,4 +1,7 @@
-- forward port to 3.8.10
+- backported some bits from grsecurity
+- another fix for kprobes under KERNEXEC
+- enabled user.pax.flags access for non-readable executables, fixes https://bugs.gentoo.org/show_bug.cgi?id=463170#c21
+- fixed some size overflow false positives, including the one ni nfsd_cache_update
 
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/alpha/include/asm/atomic.h linux-3.8.10-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.10/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -2409,7 +2412,7 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/arm/kernel
  }
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/arm/kernel/vmlinux.lds.S linux-3.8.10-pax/arch/arm/kernel/vmlinux.lds.S
 --- linux-3.8.10/arch/arm/kernel/vmlinux.lds.S	2013-02-19 01:12:35.893765791 +0100
-+++ linux-3.8.10-pax/arch/arm/kernel/vmlinux.lds.S	2013-02-19 01:14:42.933772691 +0100
++++ linux-3.8.10-pax/arch/arm/kernel/vmlinux.lds.S	2013-05-01 23:21:25.581177795 +0200
 @@ -8,7 +8,11 @@
  #include <asm/thread_info.h>
  #include <asm/memory.h>
@@ -2435,17 +2438,26 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/arm/kernel
  	.text : {			/* Real text segment		*/
  		_stext = .;		/* Text and read-only data	*/
  			__exception_text_start = .;
-@@ -144,6 +153,10 @@ SECTIONS
+@@ -112,6 +121,8 @@ SECTIONS
+ 			ARM_CPU_KEEP(PROC_INFO)
+ 	}
  
- 	_etext = .;			/* End of text and rodata section */
++	_etext = .;			/* End of text section */
++
+ 	RO_DATA(PAGE_SIZE)
  
+ 	. = ALIGN(4);
+@@ -142,7 +153,9 @@ SECTIONS
+ 
+ 	NOTES
+ 
+-	_etext = .;			/* End of text and rodata section */
 +#ifdef CONFIG_PAX_KERNEXEC
 +	. = ALIGN(1<<SECTION_SHIFT);
 +#endif
-+
+ 
  #ifndef CONFIG_XIP_KERNEL
  	. = ALIGN(PAGE_SIZE);
- 	__init_begin = .;
 @@ -203,6 +216,11 @@ SECTIONS
  	. = PAGE_OFFSET + TEXT_OFFSET;
  #else
@@ -19062,8 +19074,24 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/x86/kernel
  	switch (val) {
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/x86/kernel/kprobes-opt.c linux-3.8.10-pax/arch/x86/kernel/kprobes-opt.c
 --- linux-3.8.10/arch/x86/kernel/kprobes-opt.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.10-pax/arch/x86/kernel/kprobes-opt.c	2013-02-19 01:14:43.173772704 +0100
-@@ -338,7 +338,7 @@ int __kprobes arch_prepare_optimized_kpr
++++ linux-3.8.10-pax/arch/x86/kernel/kprobes-opt.c	2013-04-30 10:21:51.208032259 +0200
+@@ -79,6 +79,7 @@ found:
+ /* Insert a move instruction which sets a pointer to eax/rdi (1st arg). */
+ static void __kprobes synthesize_set_arg1(kprobe_opcode_t *addr, unsigned long val)
+ {
++	pax_open_kernel();
+ #ifdef CONFIG_X86_64
+ 	*addr++ = 0x48;
+ 	*addr++ = 0xbf;
+@@ -86,6 +87,7 @@ static void __kprobes synthesize_set_arg
+ 	*addr++ = 0xb8;
+ #endif
+ 	*(unsigned long *)addr = val;
++	pax_close_kernel();
+ }
+ 
+ static void __used __kprobes kprobes_optinsn_template_holder(void)
+@@ -338,7 +340,7 @@ int __kprobes arch_prepare_optimized_kpr
  	 * Verify if the address gap is in 2GB range, because this uses
  	 * a relative jump.
  	 */
@@ -19072,12 +19100,14 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/x86/kernel
  	if (abs(rel) > 0x7fffffff)
  		return -ERANGE;
  
-@@ -353,16 +353,16 @@ int __kprobes arch_prepare_optimized_kpr
+@@ -353,16 +355,18 @@ int __kprobes arch_prepare_optimized_kpr
  	op->optinsn.size = ret;
  
  	/* Copy arch-dep-instance from template */
 -	memcpy(buf, &optprobe_template_entry, TMPL_END_IDX);
++	pax_open_kernel();
 +	memcpy(buf, ktla_ktva(&optprobe_template_entry), TMPL_END_IDX);
++	pax_close_kernel();
  
  	/* Set probe information */
  	synthesize_set_arg1(buf + TMPL_MOVE_IDX, (unsigned long)op);
@@ -19092,7 +19122,7 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/x86/kernel
  			   (u8 *)op->kp.addr + op->optinsn.size);
  
  	flush_icache_range((unsigned long) buf,
-@@ -385,7 +385,7 @@ static void __kprobes setup_optimize_kpr
+@@ -385,7 +389,7 @@ static void __kprobes setup_optimize_kpr
  			((long)op->kp.addr + RELATIVEJUMP_SIZE));
  
  	/* Backup instructions which will be replaced by jump address */
@@ -19101,7 +19131,7 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/arch/x86/kernel
  	       RELATIVE_ADDR_SIZE);
  
  	insn_buf[0] = RELATIVEJUMP_OPCODE;
-@@ -483,7 +483,7 @@ setup_detour_execution(struct kprobe *p,
+@@ -483,7 +487,7 @@ setup_detour_execution(struct kprobe *p,
  		/* This kprobe is really able to run optimized path. */
  		op = container_of(p, struct optimized_kprobe, kp);
  		/* Detour through copied instructions */
@@ -41683,7 +41713,7 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/binfmt_aout.
  		if (error != N_DATADDR(ex)) {
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/binfmt_elf.c linux-3.8.10-pax/fs/binfmt_elf.c
 --- linux-3.8.10/fs/binfmt_elf.c	2013-04-30 00:04:57.259843279 +0200
-+++ linux-3.8.10-pax/fs/binfmt_elf.c	2013-04-30 00:05:40.683840961 +0200
++++ linux-3.8.10-pax/fs/binfmt_elf.c	2013-04-30 22:43:47.655825105 +0200
 @@ -33,6 +33,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -42057,11 +42087,11 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/binfmt_elf.c
 +
 +#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
 +	ssize_t xattr_size, i;
-+	unsigned char xattr_value[5];
++	unsigned char xattr_value[sizeof("pemrs") - 1];
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
-+	xattr_size = vfs_getxattr(file->f_path.dentry, XATTR_NAME_PAX_FLAGS, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0 || xattr_size > 5)
++	xattr_size = pax_getxattr(file->f_path.dentry, xattr_value, sizeof xattr_value);
++	if (xattr_size <= 0 || xattr_size > sizeof xattr_value)
 +		return ~0UL;
 +
 +	for (i = 0; i < xattr_size; i++)
@@ -46114,8 +46144,14 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/nfsd/nfs4xdr
  
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/nfsd/nfscache.c linux-3.8.10-pax/fs/nfsd/nfscache.c
 --- linux-3.8.10/fs/nfsd/nfscache.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.10-pax/fs/nfsd/nfscache.c	2013-04-19 21:48:56.172112202 +0200
-@@ -264,8 +264,10 @@ nfsd_cache_update(struct svc_rqst *rqstp
++++ linux-3.8.10-pax/fs/nfsd/nfscache.c	2013-05-01 23:01:56.949143436 +0200
+@@ -259,13 +259,15 @@ nfsd_cache_update(struct svc_rqst *rqstp
+ {
+ 	struct svc_cacherep *rp;
+ 	struct kvec	*resv = &rqstp->rq_res.head[0], *cachv;
+-	int		len;
++	long		len;
+ 
  	if (!(rp = rqstp->rq_cacherep) || cache_disabled)
  		return;
  
@@ -47286,6 +47322,37 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/xattr_acl.c 
  	int count;
  	struct posix_acl *acl;
  	struct posix_acl_entry *acl_e;
+diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/xattr.c linux-3.8.10-pax/fs/xattr.c
+--- linux-3.8.10/fs/xattr.c	2013-02-19 01:13:19.405768154 +0100
++++ linux-3.8.10-pax/fs/xattr.c	2013-04-30 23:48:04.115619200 +0200
+@@ -227,6 +227,27 @@ int vfs_xattr_cmp(struct dentry *dentry,
+ 	return rc;
+ }
+ 
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++ssize_t
++pax_getxattr(struct dentry *dentry, void *value, size_t size)
++{
++	struct inode *inode = dentry->d_inode;
++	ssize_t error;
++
++	error = inode_permission(inode, MAY_EXEC);
++	if (error)
++		return error;
++
++	if (inode->i_op->getxattr)
++		error = inode->i_op->getxattr(dentry, XATTR_NAME_PAX_FLAGS, value, size);
++	else
++		error = -EOPNOTSUPP;
++
++	return error;
++}
++EXPORT_SYMBOL(pax_getxattr);
++#endif
++
+ ssize_t
+ vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
+ {
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/fs/xfs/xfs_bmap.c linux-3.8.10-pax/fs/xfs/xfs_bmap.c
 --- linux-3.8.10/fs/xfs/xfs_bmap.c	2013-03-07 04:10:20.015802287 +0100
 +++ linux-3.8.10-pax/fs/xfs/xfs_bmap.c	2013-03-07 04:10:37.827801336 +0100
@@ -50858,6 +50925,18 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/include/linux/s
  
  extern dma_addr_t swiotlb_map_page(struct device *dev, struct page *page,
  				   unsigned long offset, size_t size,
+diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/include/linux/syscalls.h linux-3.8.10-pax/include/linux/syscalls.h
+--- linux-3.8.10/include/linux/syscalls.h	2013-02-19 01:13:21.289768256 +0100
++++ linux-3.8.10-pax/include/linux/syscalls.h	2013-04-30 13:10:56.524283477 +0200
+@@ -615,7 +615,7 @@ asmlinkage long sys_getsockname(int, str
+ asmlinkage long sys_getpeername(int, struct sockaddr __user *, int __user *);
+ asmlinkage long sys_send(int, void __user *, size_t, unsigned);
+ asmlinkage long sys_sendto(int, void __user *, size_t, unsigned,
+-				struct sockaddr __user *, int);
++				struct sockaddr __user *, int) __intentional_overflow(0);
+ asmlinkage long sys_sendmsg(int fd, struct msghdr __user *msg, unsigned flags);
+ asmlinkage long sys_sendmmsg(int fd, struct mmsghdr __user *msg,
+ 			     unsigned int vlen, unsigned flags);
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/include/linux/syscore_ops.h linux-3.8.10-pax/include/linux/syscore_ops.h
 --- linux-3.8.10/include/linux/syscore_ops.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.8.10-pax/include/linux/syscore_ops.h	2013-02-22 04:34:38.813178894 +0100
@@ -51276,7 +51355,7 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/include/linux/v
  static inline void __dec_zone_page_state(struct page *page,
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/include/linux/xattr.h linux-3.8.10-pax/include/linux/xattr.h
 --- linux-3.8.10/include/linux/xattr.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.10-pax/include/linux/xattr.h	2013-03-06 05:00:54.175970110 +0100
++++ linux-3.8.10-pax/include/linux/xattr.h	2013-04-30 22:32:18.939861877 +0200
 @@ -28,7 +28,7 @@ struct xattr_handler {
  		   size_t size, int handler_flags);
  	int (*set)(struct dentry *dentry, const char *name, const void *buffer,
@@ -51286,6 +51365,16 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/include/linux/x
  
  struct xattr {
  	char *name;
+@@ -37,6 +37,9 @@ struct xattr {
+ };
+ 
+ ssize_t xattr_getsecurity(struct inode *, const char *, void *, size_t);
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++ssize_t pax_getxattr(struct dentry *, void *, size_t);
++#endif
+ ssize_t vfs_getxattr(struct dentry *, const char *, void *, size_t);
+ ssize_t vfs_listxattr(struct dentry *d, char *list, size_t size);
+ int __vfs_setxattr_noperm(struct dentry *, const char *, const void *, size_t, int);
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/include/linux/zlib.h linux-3.8.10-pax/include/linux/zlib.h
 --- linux-3.8.10/include/linux/zlib.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.8.10-pax/include/linux/zlib.h	2013-03-19 23:12:46.758267808 +0100
@@ -53617,6 +53706,18 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/kernel/futex.c 
  
  	for (i = 0; i < ARRAY_SIZE(futex_queues); i++) {
  		plist_head_init(&futex_queues[i].chain);
+diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/kernel/futex_compat.c linux-3.8.10-pax/kernel/futex_compat.c
+--- linux-3.8.10/kernel/futex_compat.c	2013-03-07 04:10:20.035802286 +0100
++++ linux-3.8.10-pax/kernel/futex_compat.c	2013-04-30 12:14:18.264183563 +0200
+@@ -31,7 +31,7 @@ fetch_robust_entry(compat_uptr_t *uentry
+ 	return 0;
+ }
+ 
+-static void __user *futex_uaddr(struct robust_list __user *entry,
++static void __user __intentional_overflow(-1) *futex_uaddr(struct robust_list __user *entry,
+ 				compat_long_t futex_offset)
+ {
+ 	compat_uptr_t base = ptr_to_compat(entry);
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/kernel/gcov/base.c linux-3.8.10-pax/kernel/gcov/base.c
 --- linux-3.8.10/kernel/gcov/base.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.8.10-pax/kernel/gcov/base.c	2013-02-19 01:14:44.001772749 +0100
@@ -56817,6 +56918,18 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/kernel/trace/tr
  	}
  }
  
+diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/kernel/trace/trace.h linux-3.8.10-pax/kernel/trace/trace.h
+--- linux-3.8.10/kernel/trace/trace.h	2013-04-05 19:44:23.492879409 +0200
++++ linux-3.8.10-pax/kernel/trace/trace.h	2013-04-30 00:39:58.611731083 +0200
+@@ -840,7 +840,7 @@ extern const char *__stop___trace_bprint
+ void trace_printk_init_buffers(void);
+ void trace_printk_start_comm(void);
+ int trace_keep_overwrite(struct tracer *tracer, u32 mask, int set);
+-int set_tracer_flag(unsigned int mask, int enabled);
++int set_tracer_flag(unsigned long mask, int enabled);
+ 
+ #undef FTRACE_ENTRY
+ #define FTRACE_ENTRY(call, struct_name, id, tstruct, print, filter)	\
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/kernel/trace/trace_mmiotrace.c linux-3.8.10-pax/kernel/trace/trace_mmiotrace.c
 --- linux-3.8.10/kernel/trace/trace_mmiotrace.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.8.10-pax/kernel/trace/trace_mmiotrace.c	2013-02-19 01:14:44.049772751 +0100
@@ -65596,12 +65709,12 @@ diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/net/sctp/sysctl
  	table = kmemdup(sctp_net_table, sizeof(sctp_net_table), GFP_KERNEL);
 diff -NurpX linux-3.8.10-pax/Documentation/dontdiff linux-3.8.10/net/socket.c linux-3.8.10-pax/net/socket.c
 --- linux-3.8.10/net/socket.c	2013-02-19 01:13:24.753768445 +0100
-+++ linux-3.8.10-pax/net/socket.c	2013-03-17 01:11:23.202256756 +0100
++++ linux-3.8.10-pax/net/socket.c	2013-04-30 13:10:44.260283117 +0200
 @@ -1774,6 +1774,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, st
   *	the protocol.
   */
  
-+asmlinkage long sys_sendto(int, void *, size_t, unsigned, struct sockaddr *, int) __intentional_overflow(0);
++asmlinkage long sys_sendto(int, void *, size_t, unsigned, struct sockaddr *, int);
 +
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned int, flags, struct sockaddr __user *, addr,
