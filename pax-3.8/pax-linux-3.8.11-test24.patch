@@ -1,4 +1,6 @@
-- removed KERNEXEC/CONSTIFY dependency on the no longer existing X86_WP_WORKS_OK config option
+- fixed sparc/constification conpile error, reported by blake
+- UDEREF/amd64 should be a bit more efficient when disabled at boot time
+- fixed some unnecessary integer truncations that could trip up the size overflow plugin
 
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/alpha/include/asm/atomic.h linux-3.8.11-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.8.11/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -6915,7 +6917,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/sparc/kern
  	sprintf (buffer, "Bad trap %lx at tl>0", lvl);
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/sparc/kernel/us3_cpufreq.c linux-3.8.11-pax/arch/sparc/kernel/us3_cpufreq.c
 --- linux-3.8.11/arch/sparc/kernel/us3_cpufreq.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.11-pax/arch/sparc/kernel/us3_cpufreq.c	2013-04-07 22:54:43.780132954 +0200
++++ linux-3.8.11-pax/arch/sparc/kernel/us3_cpufreq.c	2013-05-10 01:15:01.023929132 +0200
 @@ -18,14 +18,12 @@
  #include <asm/head.h>
  #include <asm/timer.h>
@@ -7003,7 +7005,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/sparc/kern
 -		return ret;
 -	}
 +	     impl == PANTHER_IMPL))
-+		return cpufreq_register_driver(cpufreq_us3_driver);
++		return cpufreq_register_driver(&cpufreq_us3_driver);
  
  	return -ENODEV;
  }
@@ -7017,7 +7019,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/sparc/kern
 -		kfree(us3_freq_table);
 -		us3_freq_table = NULL;
 -	}
-+	cpufreq_unregister_driver(cpufreq_us3_driver);
++	cpufreq_unregister_driver(&cpufreq_us3_driver);
  }
  
  MODULE_AUTHOR("David S. Miller <davem@redhat.com>");
@@ -9283,7 +9285,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/crypto
  	ret
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/ia32/ia32entry.S linux-3.8.11-pax/arch/x86/ia32/ia32entry.S
 --- linux-3.8.11/arch/x86/ia32/ia32entry.S	2013-02-19 01:12:51.529766640 +0100
-+++ linux-3.8.11-pax/arch/x86/ia32/ia32entry.S	2013-02-19 01:14:43.045772697 +0100
++++ linux-3.8.11-pax/arch/x86/ia32/ia32entry.S	2013-05-06 00:17:45.964737776 +0200
 @@ -15,8 +15,10 @@
  #include <asm/irqflags.h>
  #include <asm/asm.h>
@@ -9375,7 +9377,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/ia32/i
   	   32bit zero extended */ 
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%r11
++	mov pax_user_shadow_base,%r11
 +	add %r11,%rbp
 +#endif
 +
@@ -9495,7 +9497,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/ia32/i
  	/* hardware stack frame is complete now */	
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%r11
++	mov pax_user_shadow_base,%r11
 +	add %r11,%r8
 +#endif
 +
@@ -12271,7 +12273,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/includ
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/include/asm/pgtable.h linux-3.8.11-pax/arch/x86/include/asm/pgtable.h
 --- linux-3.8.11/arch/x86/include/asm/pgtable.h	2013-02-19 01:12:51.669766648 +0100
-+++ linux-3.8.11-pax/arch/x86/include/asm/pgtable.h	2013-02-19 01:14:43.101772700 +0100
++++ linux-3.8.11-pax/arch/x86/include/asm/pgtable.h	2013-05-06 00:17:09.188739739 +0200
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -12402,7 +12404,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/includ
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -617,6 +691,20 @@ static inline int pgd_none(pgd_t pgd)
+@@ -617,6 +691,22 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -12413,9 +12415,11 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/includ
 +#define USER_PGD_PTRS		(_AC(1,UL) << (TASK_SIZE_MAX_SHIFT - PGDIR_SHIFT))
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+#define PAX_USER_SHADOW_BASE	(_AC(1,UL) << TASK_SIZE_MAX_SHIFT)
++#ifdef __ASSEMBLY__
++#define pax_user_shadow_base	pax_user_shadow_base(%rip)
 +#else
-+#define PAX_USER_SHADOW_BASE	(_AC(0,UL))
++extern unsigned long pax_user_shadow_base;
++#endif
 +#endif
 +
 +#endif
@@ -12423,7 +12427,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/includ
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -781,11 +869,23 @@ static inline void pmdp_set_wrprotect(st
+@@ -781,11 +871,23 @@ static inline void pmdp_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -13921,7 +13925,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/includ
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/include/asm/uaccess.h linux-3.8.11-pax/arch/x86/include/asm/uaccess.h
 --- linux-3.8.11/arch/x86/include/asm/uaccess.h	2013-02-19 01:12:51.733766651 +0100
-+++ linux-3.8.11-pax/arch/x86/include/asm/uaccess.h	2013-02-19 01:14:43.113772700 +0100
++++ linux-3.8.11-pax/arch/x86/include/asm/uaccess.h	2013-05-06 09:59:06.685055829 +0200
 @@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
@@ -14067,9 +14071,9 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/includ
 +#define ____m(x)					\
 +({							\
 +	unsigned long ____x = (unsigned long)(x);	\
-+	if (____x < PAX_USER_SHADOW_BASE)		\
-+		____x += PAX_USER_SHADOW_BASE;		\
-+	(void __user *)____x;				\
++	if (____x < pax_user_shadow_base)		\
++		____x += pax_user_shadow_base;		\
++	(typeof(x))____x;				\
 +})
 +#else
 +#define ____m(x) (x)
@@ -22787,7 +22791,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/co
  	.section .fixup,"ax"
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/copy_user_nocache_64.S linux-3.8.11-pax/arch/x86/lib/copy_user_nocache_64.S
 --- linux-3.8.11/arch/x86/lib/copy_user_nocache_64.S	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.11-pax/arch/x86/lib/copy_user_nocache_64.S	2013-02-19 01:14:43.221772706 +0100
++++ linux-3.8.11-pax/arch/x86/lib/copy_user_nocache_64.S	2013-05-06 00:17:42.628737954 +0200
 @@ -8,6 +8,7 @@
  
  #include <linux/linkage.h>
@@ -22810,7 +22814,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/co
  	CFI_STARTPROC
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%rcx
++	mov pax_user_shadow_base,%rcx
 +	cmp %rcx,%rsi
 +	jae 1f
 +	add %rcx,%rsi
@@ -22894,7 +22898,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/cs
  EXPORT_SYMBOL(csum_partial_copy_to_user);
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/getuser.S linux-3.8.11-pax/arch/x86/lib/getuser.S
 --- linux-3.8.11/arch/x86/lib/getuser.S	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.11-pax/arch/x86/lib/getuser.S	2013-02-19 01:14:43.225772707 +0100
++++ linux-3.8.11-pax/arch/x86/lib/getuser.S	2013-05-06 00:18:18.840736020 +0200
 @@ -34,17 +34,40 @@
  #include <asm/thread_info.h>
  #include <asm/asm.h>
@@ -22921,7 +22925,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/ge
 -1:	movzb (%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -22951,7 +22955,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/ge
 -2:	movzwl -1(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -22981,7 +22985,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/ge
 -3:	mov -3(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -23003,7 +23007,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/ge
  	jae	bad_get_user
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -23694,7 +23698,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/ms
  	CFI_RESTORE_STATE
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/putuser.S linux-3.8.11-pax/arch/x86/lib/putuser.S
 --- linux-3.8.11/arch/x86/lib/putuser.S	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.8.11-pax/arch/x86/lib/putuser.S	2013-02-19 01:14:43.229772707 +0100
++++ linux-3.8.11-pax/arch/x86/lib/putuser.S	2013-05-06 00:17:39.144738140 +0200
 @@ -16,7 +16,9 @@
  #include <asm/errno.h>
  #include <asm/asm.h>
@@ -23744,7 +23748,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/pu
 -1:	movb %al,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -23771,7 +23775,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/pu
 -2:	movw %ax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -23798,7 +23802,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/pu
 -3:	movl %eax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -23825,7 +23829,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/lib/pu
 -4:	mov %_ASM_AX,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -24720,7 +24724,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/mm/ext
  
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/mm/fault.c linux-3.8.11-pax/arch/x86/mm/fault.c
 --- linux-3.8.11/arch/x86/mm/fault.c	2013-04-30 00:04:53.391843486 +0200
-+++ linux-3.8.11-pax/arch/x86/mm/fault.c	2013-04-30 00:05:07.715842721 +0200
++++ linux-3.8.11-pax/arch/x86/mm/fault.c	2013-05-06 00:18:31.432735348 +0200
 @@ -13,12 +13,19 @@
  #include <linux/perf_event.h>		/* perf_sw_event		*/
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
@@ -25083,18 +25087,18 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/arch/x86/mm/fau
 +	unsigned long address = read_cr2();
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if (!user_mode(regs) && address < 2 * PAX_USER_SHADOW_BASE) {
++	if (!user_mode(regs) && address < 2 * pax_user_shadow_base) {
 +		if (!search_exception_tables(regs->ip)) {
 +			printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
 +			bad_area_nosemaphore(regs, error_code, address);
 +			return;
 +		}
-+		if (address < PAX_USER_SHADOW_BASE) {
++		if (address < pax_user_shadow_base) {
 +			printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
 +			printk(KERN_ERR "PAX: faulting IP: %pS\n", (void *)regs->ip);
 +			show_trace_log_lvl(NULL, NULL, (void *)regs->sp, regs->bp, KERN_ERR);
 +		} else
-+			address -= PAX_USER_SHADOW_BASE;
++			address -= pax_user_shadow_base;
 +	}
 +#endif
 +
@@ -36560,6 +36564,18 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/drivers/net/ppp
  			break;
  		err = 0;
  		break;
+diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/drivers/net/slip/slhc.c linux-3.8.11-pax/drivers/net/slip/slhc.c
+--- linux-3.8.11/drivers/net/slip/slhc.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.11-pax/drivers/net/slip/slhc.c	2013-05-06 22:26:56.461678426 +0200
+@@ -488,7 +488,7 @@ slhc_uncompress(struct slcompress *comp,
+ 	register struct tcphdr *thp;
+ 	register struct iphdr *ip;
+ 	register struct cstate *cs;
+-	int len, hdrlen;
++	long len, hdrlen;
+ 	unsigned char *cp = icp;
+ 
+ 	/* We've got a compressed packet; read the change byte */
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/drivers/net/team/team.c linux-3.8.11-pax/drivers/net/team/team.c
 --- linux-3.8.11/drivers/net/team/team.c	2013-03-22 02:55:24.426089269 +0100
 +++ linux-3.8.11-pax/drivers/net/team/team.c	2013-03-22 02:55:35.734088665 +0100
@@ -38959,6 +38975,18 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/drivers/staging
  	int ret, i;
  	int in_i = 1, temp_i = 1, curr_i = 1;
  	enum iio_chan_type type;
+diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/drivers/staging/iio/ring_sw.c linux-3.8.11-pax/drivers/staging/iio/ring_sw.c
+--- linux-3.8.11/drivers/staging/iio/ring_sw.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.8.11-pax/drivers/staging/iio/ring_sw.c	2013-05-06 16:21:50.550848032 +0200
+@@ -143,7 +143,7 @@ static int iio_read_first_n_sw_rb(struct
+ 
+ 	u8 *initial_read_p, *initial_write_p, *current_read_p, *end_read_p;
+ 	u8 *data;
+-	int ret, max_copied, bytes_to_rip, dead_offset;
++	long ret, max_copied, bytes_to_rip, dead_offset;
+ 	size_t data_available, buffer_size;
+ 
+ 	/* A userspace program has probably made an error if it tries to
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/drivers/staging/octeon/ethernet.c linux-3.8.11-pax/drivers/staging/octeon/ethernet.c
 --- linux-3.8.11/drivers/staging/octeon/ethernet.c	2013-02-19 01:13:13.729767846 +0100
 +++ linux-3.8.11-pax/drivers/staging/octeon/ethernet.c	2013-02-19 01:14:43.709772733 +0100
@@ -52684,12 +52712,14 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/Kconfig li
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c linux-3.8.11-pax/init/main.c
 --- linux-3.8.11/init/main.c	2013-02-19 01:13:21.921768291 +0100
-+++ linux-3.8.11-pax/init/main.c	2013-04-29 23:36:35.831934122 +0200
-@@ -149,6 +149,51 @@ static int __init set_reset_devices(char
++++ linux-3.8.11-pax/init/main.c	2013-05-06 09:57:13.617052505 +0200
+@@ -149,6 +149,54 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
  
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++unsigned long pax_user_shadow_base __read_only = 1UL << TASK_SIZE_MAX_SHIFT;
++EXPORT_SYMBOL(pax_user_shadow_base);
 +extern char pax_enter_kernel_user[];
 +extern char pax_exit_kernel_user[];
 +extern pgdval_t clone_pgd_mask;
@@ -52716,6 +52746,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c lin
 +	memcpy(pax_enter_kernel_user, (unsigned char []){0xc3}, 1);
 +	memcpy(pax_exit_kernel_user, (unsigned char []){0xc3}, 1);
 +	clone_pgd_mask = ~(pgdval_t)0UL;
++	pax_user_shadow_base = 0UL;
 +#endif
 +
 +	return 0;
@@ -52737,7 +52768,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c lin
  static const char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  const char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -681,6 +726,7 @@ int __init_or_module do_one_initcall(ini
+@@ -681,6 +729,7 @@ int __init_or_module do_one_initcall(ini
  {
  	int count = preempt_count();
  	int ret;
@@ -52745,7 +52776,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c lin
  
  	if (initcall_debug)
  		ret = do_one_initcall_debug(fn);
-@@ -693,15 +739,15 @@ int __init_or_module do_one_initcall(ini
+@@ -693,15 +742,15 @@ int __init_or_module do_one_initcall(ini
  		sprintf(msgbuf, "error code %d ", ret);
  
  	if (preempt_count() != count) {
@@ -52765,7 +52796,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c lin
  	}
  
  	return ret;
-@@ -755,8 +801,14 @@ static void __init do_initcall_level(int
+@@ -755,8 +804,14 @@ static void __init do_initcall_level(int
  		   level, level,
  		   &repair_env_string);
  
@@ -52781,7 +52812,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c lin
  }
  
  static void __init do_initcalls(void)
-@@ -790,8 +842,14 @@ static void __init do_pre_smp_initcalls(
+@@ -790,8 +845,14 @@ static void __init do_pre_smp_initcalls(
  {
  	initcall_t *fn;
  
@@ -52797,7 +52828,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c lin
  }
  
  static int run_init_process(const char *init_filename)
-@@ -877,7 +935,7 @@ static noinline void __init kernel_init_
+@@ -877,7 +938,7 @@ static noinline void __init kernel_init_
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -52806,7 +52837,7 @@ diff -NurpX linux-3.8.11-pax/Documentation/dontdiff linux-3.8.11/init/main.c lin
  		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -890,7 +948,7 @@ static noinline void __init kernel_init_
+@@ -890,7 +951,7 @@ static noinline void __init kernel_init_
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
