@@ -1,4 +1,9 @@
-- forward port to 3.2.44
+- another fix for kprobes under KERNEXEC
+- enabled user.pax.flags access for non-readable executables, fixes https://bugs.gentoo.org/show_bug.cgi?id=463170#c21
+- fixed some size overflow false positives, including the one in nfsd_cache_update
+- fixed sparc/constification conpile error, reported by blake
+- UDEREF/amd64 should be a bit more efficient when disabled at boot time
+- fixed some unnecessary integer truncations that could trip up the size overflow plugin
 
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/alpha/include/asm/atomic.h linux-3.2.44-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.44/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -4989,7 +4994,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/sparc/kern
  	sprintf (buffer, "Bad trap %lx at tl>0", lvl);
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/sparc/kernel/us3_cpufreq.c linux-3.2.44-pax/arch/sparc/kernel/us3_cpufreq.c
 --- linux-3.2.44/arch/sparc/kernel/us3_cpufreq.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/arch/sparc/kernel/us3_cpufreq.c	2013-04-09 01:05:28.449748689 +0200
++++ linux-3.2.44-pax/arch/sparc/kernel/us3_cpufreq.c	2013-05-10 01:14:35.699930484 +0200
 @@ -18,14 +18,12 @@
  #include <asm/head.h>
  #include <asm/timer.h>
@@ -5077,7 +5082,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/sparc/kern
 -		return ret;
 -	}
 +	     impl == PANTHER_IMPL))
-+		return cpufreq_register_driver(cpufreq_us3_driver);
++		return cpufreq_register_driver(&cpufreq_us3_driver);
  
  	return -ENODEV;
  }
@@ -5091,7 +5096,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/sparc/kern
 -		kfree(us3_freq_table);
 -		us3_freq_table = NULL;
 -	}
-+	cpufreq_unregister_driver(cpufreq_us3_driver);
++	cpufreq_unregister_driver(&cpufreq_us3_driver);
  }
  
  MODULE_AUTHOR("David S. Miller <davem@redhat.com>");
@@ -7101,7 +7106,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/crypto
  	ret
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/ia32/ia32entry.S linux-3.2.44-pax/arch/x86/ia32/ia32entry.S
 --- linux-3.2.44/arch/x86/ia32/ia32entry.S	2013-02-20 12:30:42.036171944 +0100
-+++ linux-3.2.44-pax/arch/x86/ia32/ia32entry.S	2013-02-20 12:34:07.552160971 +0100
++++ linux-3.2.44-pax/arch/x86/ia32/ia32entry.S	2013-05-13 13:23:53.215740075 +0200
 @@ -13,7 +13,9 @@
  #include <asm/thread_info.h>	
  #include <asm/segment.h>
@@ -7192,7 +7197,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/ia32/i
   	   32bit zero extended */ 
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%r11
++	mov pax_user_shadow_base,%r11
 +	add %r11,%rbp
 +#endif
 +
@@ -7315,7 +7320,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/ia32/i
  	/* hardware stack frame is complete now */	
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%r11
++	mov pax_user_shadow_base,%r11
 +	add %r11,%r8
 +#endif
 +
@@ -10187,7 +10192,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/includ
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/include/asm/pgtable.h linux-3.2.44-pax/arch/x86/include/asm/pgtable.h
 --- linux-3.2.44/arch/x86/include/asm/pgtable.h	2013-03-29 02:18:30.015676747 +0100
-+++ linux-3.2.44-pax/arch/x86/include/asm/pgtable.h	2013-03-29 02:19:02.059675036 +0100
++++ linux-3.2.44-pax/arch/x86/include/asm/pgtable.h	2013-05-13 13:23:53.219740074 +0200
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -10318,7 +10323,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/includ
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -604,6 +678,20 @@ static inline int pgd_none(pgd_t pgd)
+@@ -604,6 +678,22 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -10329,9 +10334,11 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/includ
 +#define USER_PGD_PTRS		(_AC(1,UL) << (TASK_SIZE_MAX_SHIFT - PGDIR_SHIFT))
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+#define PAX_USER_SHADOW_BASE	(_AC(1,UL) << TASK_SIZE_MAX_SHIFT)
++#ifdef __ASSEMBLY__
++#define pax_user_shadow_base	pax_user_shadow_base(%rip)
 +#else
-+#define PAX_USER_SHADOW_BASE	(_AC(0,UL))
++extern unsigned long pax_user_shadow_base;
++#endif
 +#endif
 +
 +#endif
@@ -10339,7 +10346,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/includ
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -768,11 +856,23 @@ static inline void pmdp_set_wrprotect(st
+@@ -768,11 +858,23 @@ static inline void pmdp_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -11827,7 +11834,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/includ
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/include/asm/uaccess.h linux-3.2.44-pax/arch/x86/include/asm/uaccess.h
 --- linux-3.2.44/arch/x86/include/asm/uaccess.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/arch/x86/include/asm/uaccess.h	2013-02-09 00:41:36.516727473 +0100
++++ linux-3.2.44-pax/arch/x86/include/asm/uaccess.h	2013-05-13 13:23:53.223740074 +0200
 @@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
@@ -11971,9 +11978,9 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/includ
 +#define ____m(x)					\
 +({							\
 +	unsigned long ____x = (unsigned long)(x);	\
-+	if (____x < PAX_USER_SHADOW_BASE)		\
-+		____x += PAX_USER_SHADOW_BASE;		\
-+	(void __user *)____x;				\
++	if (____x < pax_user_shadow_base)		\
++		____x += pax_user_shadow_base;		\
++	(typeof(x))____x;				\
 +})
 +#else
 +#define ____m(x) (x)
@@ -16755,7 +16762,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/kernel
  
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/kernel/kprobes.c linux-3.2.44-pax/arch/x86/kernel/kprobes.c
 --- linux-3.2.44/arch/x86/kernel/kprobes.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/arch/x86/kernel/kprobes.c	2013-03-09 23:39:47.403652354 +0100
++++ linux-3.2.44-pax/arch/x86/kernel/kprobes.c	2013-05-13 13:21:36.959747350 +0200
 @@ -117,9 +117,12 @@ static void __kprobes __synthesize_relat
  		s32 raddr;
  	} __attribute__((packed)) *insn;
@@ -16895,7 +16902,23 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/kernel
  		return ret;
  
  	switch (val) {
-@@ -1307,7 +1317,7 @@ static int __kprobes can_optimize(unsign
+@@ -1120,6 +1130,7 @@ static void __kprobes synthesize_relcall
+ static void __kprobes synthesize_set_arg1(kprobe_opcode_t *addr,
+ 					  unsigned long val)
+ {
++	pax_open_kernel();
+ #ifdef CONFIG_X86_64
+ 	*addr++ = 0x48;
+ 	*addr++ = 0xbf;
+@@ -1127,6 +1138,7 @@ static void __kprobes synthesize_set_arg
+ 	*addr++ = 0xb8;
+ #endif
+ 	*(unsigned long *)addr = val;
++	pax_close_kernel();
+ }
+ 
+ static void __used __kprobes kprobes_optinsn_template_holder(void)
+@@ -1307,7 +1319,7 @@ static int __kprobes can_optimize(unsign
  			ret = recover_probed_instruction(buf, addr);
  			if (ret)
  				return 0;
@@ -16904,7 +16927,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/kernel
  		}
  		insn_get_length(&insn);
  		/* Recover address */
-@@ -1384,7 +1394,7 @@ int __kprobes arch_prepare_optimized_kpr
+@@ -1384,7 +1396,7 @@ int __kprobes arch_prepare_optimized_kpr
  	 * Verify if the address gap is in 2GB range, because this uses
  	 * a relative jump.
  	 */
@@ -16913,12 +16936,14 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/kernel
  	if (abs(rel) > 0x7fffffff)
  		return -ERANGE;
  
-@@ -1399,16 +1409,16 @@ int __kprobes arch_prepare_optimized_kpr
+@@ -1399,16 +1411,18 @@ int __kprobes arch_prepare_optimized_kpr
  	op->optinsn.size = ret;
  
  	/* Copy arch-dep-instance from template */
 -	memcpy(buf, &optprobe_template_entry, TMPL_END_IDX);
++	pax_open_kernel();
 +	memcpy(buf, ktla_ktva(&optprobe_template_entry), TMPL_END_IDX);
++	pax_close_kernel();
  
  	/* Set probe information */
  	synthesize_set_arg1(buf + TMPL_MOVE_IDX, (unsigned long)op);
@@ -16933,7 +16958,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/kernel
  			   (u8 *)op->kp.addr + op->optinsn.size);
  
  	flush_icache_range((unsigned long) buf,
-@@ -1431,7 +1441,7 @@ static void __kprobes setup_optimize_kpr
+@@ -1431,7 +1445,7 @@ static void __kprobes setup_optimize_kpr
  			((long)op->kp.addr + RELATIVEJUMP_SIZE));
  
  	/* Backup instructions which will be replaced by jump address */
@@ -16942,7 +16967,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/kernel
  	       RELATIVE_ADDR_SIZE);
  
  	insn_buf[0] = RELATIVEJUMP_OPCODE;
-@@ -1530,7 +1540,7 @@ static int  __kprobes setup_detour_execu
+@@ -1530,7 +1544,7 @@ static int  __kprobes setup_detour_execu
  		/* This kprobe is really able to run optimized path. */
  		op = container_of(p, struct optimized_kprobe, kp);
  		/* Detour through copied instructions */
@@ -20838,7 +20863,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/co
  	.section .fixup,"ax"
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/copy_user_nocache_64.S linux-3.2.44-pax/arch/x86/lib/copy_user_nocache_64.S
 --- linux-3.2.44/arch/x86/lib/copy_user_nocache_64.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/arch/x86/lib/copy_user_nocache_64.S	2012-07-04 19:24:47.624063004 +0200
++++ linux-3.2.44-pax/arch/x86/lib/copy_user_nocache_64.S	2013-05-13 13:23:53.227740074 +0200
 @@ -8,12 +8,14 @@
  
  #include <linux/linkage.h>
@@ -20860,7 +20885,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/co
  	CFI_STARTPROC
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%rcx
++	mov pax_user_shadow_base,%rcx
 +	cmp %rcx,%rsi
 +	jae 1f
 +	add %rcx,%rsi
@@ -20944,7 +20969,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/cs
  EXPORT_SYMBOL(csum_partial_copy_to_user);
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/getuser.S linux-3.2.44-pax/arch/x86/lib/getuser.S
 --- linux-3.2.44/arch/x86/lib/getuser.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/arch/x86/lib/getuser.S	2012-07-04 19:24:47.624063004 +0200
++++ linux-3.2.44-pax/arch/x86/lib/getuser.S	2013-05-13 13:25:07.967736083 +0200
 @@ -33,15 +33,38 @@
  #include <asm/asm-offsets.h>
  #include <asm/thread_info.h>
@@ -20970,7 +20995,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/ge
 -1:	movzb (%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -20998,7 +21023,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/ge
 -2:	movzwl -1(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -21026,7 +21051,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/ge
 -3:	mov -3(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -21047,7 +21072,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/ge
  	jae	bad_get_user
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_DX
++	mov pax_user_shadow_base,%_ASM_DX
 +	cmp %_ASM_DX,%_ASM_AX
 +	jae 1234f
 +	add %_ASM_DX,%_ASM_AX
@@ -21743,7 +21768,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/ms
  	CFI_RESTORE_STATE
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/putuser.S linux-3.2.44-pax/arch/x86/lib/putuser.S
 --- linux-3.2.44/arch/x86/lib/putuser.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/arch/x86/lib/putuser.S	2012-07-04 19:24:47.628063005 +0200
++++ linux-3.2.44-pax/arch/x86/lib/putuser.S	2013-05-13 13:26:15.647732470 +0200
 @@ -15,7 +15,9 @@
  #include <asm/thread_info.h>
  #include <asm/errno.h>
@@ -21789,7 +21814,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/pu
 -1:	movb %al,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -21815,7 +21840,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/pu
 -2:	movw %ax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -21841,7 +21866,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/pu
 -3:	movl %eax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -21867,7 +21892,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/lib/pu
 -4:	mov %_ASM_AX,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	mov $PAX_USER_SHADOW_BASE,%_ASM_BX
++	mov pax_user_shadow_base,%_ASM_BX
 +	cmp %_ASM_BX,%_ASM_CX
 +	jb 1234f
 +	xor %ebx,%ebx
@@ -22760,7 +22785,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/mm/ext
  		pnp_bios_is_utter_crap = 1;
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/mm/fault.c linux-3.2.44-pax/arch/x86/mm/fault.c
 --- linux-3.2.44/arch/x86/mm/fault.c	2013-04-30 00:45:09.443714487 +0200
-+++ linux-3.2.44-pax/arch/x86/mm/fault.c	2013-04-30 00:45:13.143714290 +0200
++++ linux-3.2.44-pax/arch/x86/mm/fault.c	2013-05-13 13:24:41.195737513 +0200
 @@ -13,11 +13,18 @@
  #include <linux/perf_event.h>		/* perf_sw_event		*/
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
@@ -23113,17 +23138,17 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/arch/x86/mm/fau
 +	unsigned long address = read_cr2();
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if (!user_mode(regs) && address < 2 * PAX_USER_SHADOW_BASE) {
++	if (!user_mode(regs) && address < 2 * pax_user_shadow_base) {
 +		if (!search_exception_tables(regs->ip)) {
 +			bad_area_nosemaphore(regs, error_code, address);
 +			return;
 +		}
-+		if (address < PAX_USER_SHADOW_BASE) {
++		if (address < pax_user_shadow_base) {
 +			printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
 +			printk(KERN_ERR "PAX: faulting IP: %pS\n", (void *)regs->ip);
 +			show_trace_log_lvl(NULL, NULL, (void *)regs->sp, regs->bp, KERN_ERR);
 +		} else
-+			address -= PAX_USER_SHADOW_BASE;
++			address -= pax_user_shadow_base;
 +	}
 +#endif
 +
@@ -35563,6 +35588,18 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/drivers/net/ppp
  			break;
  		err = 0;
  		break;
+diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/drivers/net/slip/slhc.c linux-3.2.44-pax/drivers/net/slip/slhc.c
+--- linux-3.2.44/drivers/net/slip/slhc.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.44-pax/drivers/net/slip/slhc.c	2013-05-13 13:23:53.323740069 +0200
+@@ -489,7 +489,7 @@ slhc_uncompress(struct slcompress *comp,
+ 	register struct tcphdr *thp;
+ 	register struct iphdr *ip;
+ 	register struct cstate *cs;
+-	int len, hdrlen;
++	long len, hdrlen;
+ 	unsigned char *cp = icp;
+ 
+ 	/* We've got a compressed packet; read the change byte */
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/drivers/net/tokenring/abyss.c linux-3.2.44-pax/drivers/net/tokenring/abyss.c
 --- linux-3.2.44/drivers/net/tokenring/abyss.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.44-pax/drivers/net/tokenring/abyss.c	2012-07-04 19:24:48.560063007 +0200
@@ -37983,6 +38020,18 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/drivers/staging
  			   const char *postfix,
  			   struct iio_chan_spec const *chan,
  			   ssize_t (*readfunc)(struct device *dev,
+diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/drivers/staging/iio/ring_sw.c linux-3.2.44-pax/drivers/staging/iio/ring_sw.c
+--- linux-3.2.44/drivers/staging/iio/ring_sw.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.44-pax/drivers/staging/iio/ring_sw.c	2013-05-13 13:25:29.567734930 +0200
+@@ -173,7 +173,7 @@ static int iio_read_first_n_sw_rb(struct
+ 
+ 	u8 *initial_read_p, *initial_write_p, *current_read_p, *end_read_p;
+ 	u8 *data;
+-	int ret, max_copied, bytes_to_rip, dead_offset;
++	long ret, max_copied, bytes_to_rip, dead_offset;
+ 
+ 	/* A userspace program has probably made an error if it tries to
+ 	 *  read something that is not a whole number of bpds.
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/drivers/staging/octeon/ethernet.c linux-3.2.44-pax/drivers/staging/octeon/ethernet.c
 --- linux-3.2.44/drivers/staging/octeon/ethernet.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.44-pax/drivers/staging/octeon/ethernet.c	2012-07-04 19:24:48.624063007 +0200
@@ -40050,7 +40099,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/binfmt_elf.c linux-3.2.44-pax/fs/binfmt_elf.c
 --- linux-3.2.44/fs/binfmt_elf.c	2012-10-24 01:05:57.304814639 +0200
-+++ linux-3.2.44-pax/fs/binfmt_elf.c	2013-03-28 05:09:48.355741054 +0100
++++ linux-3.2.44-pax/fs/binfmt_elf.c	2013-05-13 13:19:36.619753775 +0200
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -40424,11 +40473,11 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/binfmt_elf.c
 +
 +#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
 +	ssize_t xattr_size, i;
-+	unsigned char xattr_value[5];
++	unsigned char xattr_value[sizeof("pemrs") - 1];
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
-+	xattr_size = vfs_getxattr(file->f_path.dentry, XATTR_NAME_PAX_FLAGS, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0 || xattr_size > 5)
++	xattr_size = pax_getxattr(file->f_path.dentry, xattr_value, sizeof xattr_value);
++	if (xattr_size <= 0 || xattr_size > sizeof xattr_value)
 +		return ~0UL;
 +
 +	for (i = 0; i < xattr_size; i++)
@@ -44273,8 +44322,14 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/nfsd/nfs4xdr
  
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/nfsd/nfscache.c linux-3.2.44-pax/fs/nfsd/nfscache.c
 --- linux-3.2.44/fs/nfsd/nfscache.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/fs/nfsd/nfscache.c	2013-04-30 00:31:30.007758239 +0200
-@@ -264,8 +264,10 @@ nfsd_cache_update(struct svc_rqst *rqstp
++++ linux-3.2.44-pax/fs/nfsd/nfscache.c	2013-05-13 13:19:36.627753774 +0200
+@@ -259,13 +259,15 @@ nfsd_cache_update(struct svc_rqst *rqstp
+ {
+ 	struct svc_cacherep *rp;
+ 	struct kvec	*resv = &rqstp->rq_res.head[0], *cachv;
+-	int		len;
++	long		len;
+ 
  	if (!(rp = rqstp->rq_cacherep) || cache_disabled)
  		return;
  
@@ -45370,6 +45425,37 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/xattr_acl.c 
  	int count;
  	struct posix_acl *acl;
  	struct posix_acl_entry *acl_e;
+diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/xattr.c linux-3.2.44-pax/fs/xattr.c
+--- linux-3.2.44/fs/xattr.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.44-pax/fs/xattr.c	2013-05-13 13:19:36.659753773 +0200
+@@ -225,6 +225,27 @@ int vfs_xattr_cmp(struct dentry *dentry,
+ 	return rc;
+ }
+ 
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++ssize_t
++pax_getxattr(struct dentry *dentry, void *value, size_t size)
++{
++	struct inode *inode = dentry->d_inode;
++	ssize_t error;
++
++	error = inode_permission(inode, MAY_EXEC);
++	if (error)
++		return error;
++
++	if (inode->i_op->getxattr)
++		error = inode->i_op->getxattr(dentry, XATTR_NAME_PAX_FLAGS, value, size);
++	else
++		error = -EOPNOTSUPP;
++
++	return error;
++}
++EXPORT_SYMBOL(pax_getxattr);
++#endif
++
+ ssize_t
+ vfs_getxattr(struct dentry *dentry, const char *name, void *value, size_t size)
+ {
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/fs/xfs/xfs_bmap.c linux-3.2.44-pax/fs/xfs/xfs_bmap.c
 --- linux-3.2.44/fs/xfs/xfs_bmap.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.44-pax/fs/xfs/xfs_bmap.c	2012-07-04 19:24:48.736063008 +0200
@@ -49045,6 +49131,18 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/include/linux/s
  {
  #ifdef __arch_swab64
  	return __arch_swab64(val);
+diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/include/linux/syscalls.h linux-3.2.44-pax/include/linux/syscalls.h
+--- linux-3.2.44/include/linux/syscalls.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.44-pax/include/linux/syscalls.h	2013-05-13 13:19:36.663753772 +0200
+@@ -608,7 +608,7 @@ asmlinkage long sys_getsockname(int, str
+ asmlinkage long sys_getpeername(int, struct sockaddr __user *, int __user *);
+ asmlinkage long sys_send(int, void __user *, size_t, unsigned);
+ asmlinkage long sys_sendto(int, void __user *, size_t, unsigned,
+-				struct sockaddr __user *, int);
++				struct sockaddr __user *, int) __intentional_overflow(0);
+ asmlinkage long sys_sendmsg(int fd, struct msghdr __user *msg, unsigned flags);
+ asmlinkage long sys_sendmmsg(int fd, struct mmsghdr __user *msg,
+ 			     unsigned int vlen, unsigned flags);
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/include/linux/syscore_ops.h linux-3.2.44-pax/include/linux/syscore_ops.h
 --- linux-3.2.44/include/linux/syscore_ops.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.44-pax/include/linux/syscore_ops.h	2013-03-28 01:35:23.460427940 +0100
@@ -49476,7 +49574,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/include/linux/v
  static inline void __dec_zone_page_state(struct page *page,
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/include/linux/xattr.h linux-3.2.44-pax/include/linux/xattr.h
 --- linux-3.2.44/include/linux/xattr.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.44-pax/include/linux/xattr.h	2013-03-28 01:35:23.476427939 +0100
++++ linux-3.2.44-pax/include/linux/xattr.h	2013-05-13 13:19:36.639753774 +0200
 @@ -57,6 +57,11 @@
  #define XATTR_POSIX_ACL_DEFAULT  "posix_acl_default"
  #define XATTR_NAME_POSIX_ACL_DEFAULT XATTR_SYSTEM_PREFIX XATTR_POSIX_ACL_DEFAULT
@@ -49498,6 +49596,16 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/include/linux/x
  
  struct xattr {
  	char *name;
+@@ -82,6 +87,9 @@ struct xattr {
+ };
+ 
+ ssize_t xattr_getsecurity(struct inode *, const char *, void *, size_t);
++#ifdef CONFIG_PAX_XATTR_PAX_FLAGS
++ssize_t pax_getxattr(struct dentry *, void *, size_t);
++#endif
+ ssize_t vfs_getxattr(struct dentry *, const char *, void *, size_t);
+ ssize_t vfs_listxattr(struct dentry *d, char *list, size_t size);
+ int __vfs_setxattr_noperm(struct dentry *, const char *, const void *, size_t, int);
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/include/linux/zlib.h linux-3.2.44-pax/include/linux/zlib.h
 --- linux-3.2.44/include/linux/zlib.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.44-pax/include/linux/zlib.h	2013-03-28 04:10:58.231929535 +0100
@@ -50569,12 +50677,14 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/Kconfig li
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c linux-3.2.44-pax/init/main.c
 --- linux-3.2.44/init/main.c	2013-02-09 01:12:40.776782286 +0100
-+++ linux-3.2.44-pax/init/main.c	2013-03-28 04:52:14.439797325 +0100
-@@ -149,6 +149,51 @@ static int __init set_reset_devices(char
++++ linux-3.2.44-pax/init/main.c	2013-05-13 13:23:53.303740070 +0200
+@@ -149,6 +149,54 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
  
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++unsigned long pax_user_shadow_base __read_only = 1UL << TASK_SIZE_MAX_SHIFT;
++EXPORT_SYMBOL(pax_user_shadow_base);
 +extern char pax_enter_kernel_user[];
 +extern char pax_exit_kernel_user[];
 +extern pgdval_t clone_pgd_mask;
@@ -50601,6 +50711,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c lin
 +	memcpy(pax_enter_kernel_user, (unsigned char []){0xc3}, 1);
 +	memcpy(pax_exit_kernel_user, (unsigned char []){0xc3}, 1);
 +	clone_pgd_mask = ~(pgdval_t)0UL;
++	pax_user_shadow_base = 0UL;
 +#endif
 +
 +	return 0;
@@ -50622,7 +50733,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c lin
  static const char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  const char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -678,6 +723,7 @@ int __init_or_module do_one_initcall(ini
+@@ -678,6 +726,7 @@ int __init_or_module do_one_initcall(ini
  {
  	int count = preempt_count();
  	int ret;
@@ -50630,7 +50741,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c lin
  
  	if (initcall_debug)
  		ret = do_one_initcall_debug(fn);
-@@ -690,15 +736,15 @@ int __init_or_module do_one_initcall(ini
+@@ -690,15 +739,15 @@ int __init_or_module do_one_initcall(ini
  		sprintf(msgbuf, "error code %d ", ret);
  
  	if (preempt_count() != count) {
@@ -50650,7 +50761,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c lin
  	}
  
  	return ret;
-@@ -711,8 +757,14 @@ static void __init do_initcalls(void)
+@@ -711,8 +760,14 @@ static void __init do_initcalls(void)
  {
  	initcall_t *fn;
  
@@ -50666,7 +50777,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c lin
  }
  
  /*
-@@ -738,8 +790,14 @@ static void __init do_pre_smp_initcalls(
+@@ -738,8 +793,14 @@ static void __init do_pre_smp_initcalls(
  {
  	initcall_t *fn;
  
@@ -50682,7 +50793,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c lin
  }
  
  static void run_init_process(const char *init_filename)
-@@ -821,7 +879,7 @@ static int __init kernel_init(void * unu
+@@ -821,7 +882,7 @@ static int __init kernel_init(void * unu
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -50691,7 +50802,7 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/init/main.c lin
  		printk(KERN_WARNING "Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -834,7 +892,7 @@ static int __init kernel_init(void * unu
+@@ -834,7 +895,7 @@ static int __init kernel_init(void * unu
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -51590,6 +51701,18 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/kernel/futex.c 
  
  	for (i = 0; i < ARRAY_SIZE(futex_queues); i++) {
  		plist_head_init(&futex_queues[i].chain);
+diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/kernel/futex_compat.c linux-3.2.44-pax/kernel/futex_compat.c
+--- linux-3.2.44/kernel/futex_compat.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.44-pax/kernel/futex_compat.c	2013-05-13 13:19:36.671753772 +0200
+@@ -31,7 +31,7 @@ fetch_robust_entry(compat_uptr_t *uentry
+ 	return 0;
+ }
+ 
+-static void __user *futex_uaddr(struct robust_list __user *entry,
++static void __user __intentional_overflow(-1) *futex_uaddr(struct robust_list __user *entry,
+ 				compat_long_t futex_offset)
+ {
+ 	compat_uptr_t base = ptr_to_compat(entry);
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/kernel/gcov/base.c linux-3.2.44-pax/kernel/gcov/base.c
 --- linux-3.2.44/kernel/gcov/base.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.44-pax/kernel/gcov/base.c	2012-07-04 19:24:48.844063008 +0200
@@ -63645,12 +63768,12 @@ diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/net/sctp/socket
  		to += addrlen;
 diff -NurpX linux-3.2.44-pax/Documentation/dontdiff linux-3.2.44/net/socket.c linux-3.2.44-pax/net/socket.c
 --- linux-3.2.44/net/socket.c	2012-09-20 01:42:17.526672775 +0200
-+++ linux-3.2.44-pax/net/socket.c	2013-03-27 23:18:26.772866647 +0100
++++ linux-3.2.44-pax/net/socket.c	2013-05-13 13:22:18.487745132 +0200
 @@ -1670,6 +1670,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, st
   *	the protocol.
   */
  
-+asmlinkage long sys_sendto(int, void *, size_t, unsigned, struct sockaddr *, int) __intentional_overflow(0);
++asmlinkage long sys_sendto(int, void *, size_t, unsigned, struct sockaddr *, int);
 +
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned, flags, struct sockaddr __user *, addr,
