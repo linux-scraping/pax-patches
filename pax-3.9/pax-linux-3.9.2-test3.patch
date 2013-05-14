@@ -1,4 +1,5 @@
-- fixed futex_cmpxchg_enabled detection
+- fixed !EFI boot problem, reported by spender
+- fixed a few compile warnings
 
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/alpha/include/asm/atomic.h linux-3.9.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.9.2/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -20164,7 +20165,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/s
  	err |= copy_siginfo_to_user(&frame->info, &ksig->info);
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/smpboot.c linux-3.9.2-pax/arch/x86/kernel/smpboot.c
 --- linux-3.9.2/arch/x86/kernel/smpboot.c	2013-04-30 01:25:06.287586515 +0200
-+++ linux-3.9.2-pax/arch/x86/kernel/smpboot.c	2013-05-08 22:44:27.693024532 +0200
++++ linux-3.9.2-pax/arch/x86/kernel/smpboot.c	2013-05-13 20:54:03.910297913 +0200
 @@ -748,6 +748,7 @@ static int __cpuinit do_boot_cpu(int api
  	idle->thread.sp = (unsigned long) (((struct pt_regs *)
  			  (THREAD_SIZE +  task_stack_page(idle))) - 1);
@@ -20505,7 +20506,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/s
 +}
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/sys_x86_64.c linux-3.9.2-pax/arch/x86/kernel/sys_x86_64.c
 --- linux-3.9.2/arch/x86/kernel/sys_x86_64.c	2013-04-30 01:25:06.291586514 +0200
-+++ linux-3.9.2-pax/arch/x86/kernel/sys_x86_64.c	2013-04-30 01:26:50.775580936 +0200
++++ linux-3.9.2-pax/arch/x86/kernel/sys_x86_64.c	2013-05-13 16:32:36.975135474 +0200
 @@ -81,8 +81,8 @@ out:
  	return error;
  }
@@ -20549,7 +20550,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/s
  			return addr;
  	}
  
-@@ -161,6 +164,10 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -161,12 +164,15 @@ arch_get_unmapped_area_topdown(struct fi
  	if (!test_thread_flag(TIF_ADDR32) && (flags & MAP_32BIT))
  		goto bottomup;
  
@@ -20560,6 +20561,13 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/s
  	/* requesting a specific address */
  	if (addr) {
  		addr = PAGE_ALIGN(addr);
+ 		vma = find_vma(mm, addr);
+-		if (TASK_SIZE - len >= addr &&
+-				(!vma || addr + len <= vma->vm_start))
++		if (TASK_SIZE - len >= addr && check_heap_stack_gap(vma, addr, len))
+ 			return addr;
+ 	}
+ 
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/tboot.c linux-3.9.2-pax/arch/x86/kernel/tboot.c
 --- linux-3.9.2/arch/x86/kernel/tboot.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.9.2-pax/arch/x86/kernel/tboot.c	2013-04-30 01:26:50.775580936 +0200
@@ -27645,7 +27653,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/power/cp
  	load_TR_desc();				/* This does ltr */
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/realmode/init.c linux-3.9.2-pax/arch/x86/realmode/init.c
 --- linux-3.9.2/arch/x86/realmode/init.c	2013-04-30 01:25:06.311586513 +0200
-+++ linux-3.9.2-pax/arch/x86/realmode/init.c	2013-04-30 01:26:50.819580933 +0200
++++ linux-3.9.2-pax/arch/x86/realmode/init.c	2013-05-13 21:30:21.926181624 +0200
 @@ -70,7 +70,13 @@ void __init setup_real_mode(void)
  		__va(real_mode_header->trampoline_header);
  
@@ -27661,6 +27669,15 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/realmode
  	trampoline_header->gdt_limit = __BOOT_DS + 7;
  	trampoline_header->gdt_base = __pa_symbol(boot_gdt);
  #else
+@@ -86,7 +92,7 @@ void __init setup_real_mode(void)
+ 	*trampoline_cr4_features = read_cr4();
+ 
+ 	trampoline_pgd = (u64 *) __va(real_mode_header->trampoline_pgd);
+-	trampoline_pgd[0] = init_level4_pgt[pgd_index(__PAGE_OFFSET)].pgd;
++	trampoline_pgd[0] = init_level4_pgt[pgd_index(__PAGE_OFFSET)].pgd & ~_PAGE_NX;
+ 	trampoline_pgd[511] = init_level4_pgt[511].pgd;
+ #endif
+ }
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/realmode/rm/header.S linux-3.9.2-pax/arch/x86/realmode/rm/header.S
 --- linux-3.9.2/arch/x86/realmode/rm/header.S	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.9.2-pax/arch/x86/realmode/rm/header.S	2013-04-30 01:26:50.819580933 +0200
@@ -33061,6 +33078,54 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/drivers/hwmon/ibm
  	int err;
  
  	/* Set up read-only sensors */
+diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/drivers/hwmon/pmbus/pmbus_core.c linux-3.9.2-pax/drivers/hwmon/pmbus/pmbus_core.c
+--- linux-3.9.2/drivers/hwmon/pmbus/pmbus_core.c	2013-04-30 01:25:10.931586267 +0200
++++ linux-3.9.2-pax/drivers/hwmon/pmbus/pmbus_core.c	2013-05-14 22:48:16.802508982 +0200
+@@ -781,7 +781,7 @@ static int pmbus_add_attribute(struct pm
+ 	return 0;
+ }
+ 
+-static void pmbus_dev_attr_init(struct device_attribute *dev_attr,
++static void pmbus_dev_attr_init(device_attribute_no_const *dev_attr,
+ 				const char *name,
+ 				umode_t mode,
+ 				ssize_t (*show)(struct device *dev,
+@@ -798,7 +798,7 @@ static void pmbus_dev_attr_init(struct d
+ 	dev_attr->store = store;
+ }
+ 
+-static void pmbus_attr_init(struct sensor_device_attribute *a,
++static void pmbus_attr_init(sensor_device_attribute_no_const *a,
+ 			    const char *name,
+ 			    umode_t mode,
+ 			    ssize_t (*show)(struct device *dev,
+@@ -820,7 +820,7 @@ static int pmbus_add_boolean(struct pmbu
+ 			     u16 reg, u8 mask)
+ {
+ 	struct pmbus_boolean *boolean;
+-	struct sensor_device_attribute *a;
++	sensor_device_attribute_no_const *a;
+ 
+ 	boolean = devm_kzalloc(data->dev, sizeof(*boolean), GFP_KERNEL);
+ 	if (!boolean)
+@@ -845,7 +845,7 @@ static struct pmbus_sensor *pmbus_add_se
+ 					     bool update, bool readonly)
+ {
+ 	struct pmbus_sensor *sensor;
+-	struct device_attribute *a;
++	device_attribute_no_const *a;
+ 
+ 	sensor = devm_kzalloc(data->dev, sizeof(*sensor), GFP_KERNEL);
+ 	if (!sensor)
+@@ -876,7 +876,7 @@ static int pmbus_add_label(struct pmbus_
+ 			   const char *lstring, int index)
+ {
+ 	struct pmbus_label *label;
+-	struct device_attribute *a;
++	device_attribute_no_const *a;
+ 
+ 	label = devm_kzalloc(data->dev, sizeof(*label), GFP_KERNEL);
+ 	if (!label)
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/drivers/hwmon/sht15.c linux-3.9.2-pax/drivers/hwmon/sht15.c
 --- linux-3.9.2/drivers/hwmon/sht15.c	2013-04-30 01:25:10.931586267 +0200
 +++ linux-3.9.2-pax/drivers/hwmon/sht15.c	2013-04-30 01:26:50.939580927 +0200
@@ -45382,25 +45447,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/fs/jffs2/wbuf.c l
  /*
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/fs/jfs/super.c linux-3.9.2-pax/fs/jfs/super.c
 --- linux-3.9.2/fs/jfs/super.c	2013-04-30 01:25:26.659585427 +0200
-+++ linux-3.9.2-pax/fs/jfs/super.c	2013-04-30 01:26:51.191580914 +0200
-@@ -225,7 +225,7 @@ static const match_table_t tokens = {
- static int parse_options(char *options, struct super_block *sb, s64 *newLVSize,
- 			 int *flag)
- {
--	void *nls_map = (void *)-1;	/* -1: no change;  NULL: none */
-+	const void *nls_map = (const void *)-1;	/* -1: no change;  NULL: none */
- 	char *p;
- 	struct jfs_sb_info *sbi = JFS_SBI(sb);
- 
-@@ -253,7 +253,7 @@ static int parse_options(char *options,
- 			/* Don't do anything ;-) */
- 			break;
- 		case Opt_iocharset:
--			if (nls_map && nls_map != (void *) -1)
-+			if (nls_map && nls_map != (const void *) -1)
- 				unload_nls(nls_map);
- 			if (!strcmp(args[0].from, "none"))
- 				nls_map = NULL;
++++ linux-3.9.2-pax/fs/jfs/super.c	2013-05-14 23:10:35.938437483 +0200
 @@ -856,7 +856,7 @@ static int __init init_jfs_fs(void)
  
  	jfs_inode_cachep =
@@ -63895,7 +63942,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/net/key/af_key.c 
  }
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/net/mac80211/cfg.c linux-3.9.2-pax/net/mac80211/cfg.c
 --- linux-3.9.2/net/mac80211/cfg.c	2013-05-13 03:17:35.241697203 +0200
-+++ linux-3.9.2-pax/net/mac80211/cfg.c	2013-05-13 03:17:42.489696816 +0200
++++ linux-3.9.2-pax/net/mac80211/cfg.c	2013-05-14 23:07:26.542447595 +0200
 @@ -799,7 +799,7 @@ static int ieee80211_set_monitor_channel
  			ret = ieee80211_vif_use_channel(sdata, chandef,
  					IEEE80211_CHANCTX_EXCLUSIVE);
@@ -63920,8 +63967,8 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/net/mac80211/cfg.
  		ret = 0;
 -	} else if (local->open_count > 0 &&
 -		   local->open_count == local->monitors &&
-+	} else if (atomic_read(&local->open_count) > 0 &&
-+		   atomic_read(&local->open_count) == local->monitors &&
++	} else if (local_read(&local->open_count) > 0 &&
++		   local_read(&local->open_count) == local->monitors &&
  		   sdata->vif.type == NL80211_IFTYPE_MONITOR) {
  		if (local->use_chanctx)
  			*chandef = local->monitor_chandef;
