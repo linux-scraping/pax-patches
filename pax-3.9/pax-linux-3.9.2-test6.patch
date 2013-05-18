@@ -1,4 +1,5 @@
-- fixed some arm fallout, reported by Michael Tremer
+- fixed a gcc assert in the structleak plugin, reported by Emese Revfy
+- fixed pfn extraction from pud/pgd entries, reported by ousado
 
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/alpha/include/asm/atomic.h linux-3.9.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.9.2/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -12143,7 +12144,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/
  
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/asm/pgtable.h linux-3.9.2-pax/arch/x86/include/asm/pgtable.h
 --- linux-3.9.2/arch/x86/include/asm/pgtable.h	2013-04-30 01:25:06.247586517 +0200
-+++ linux-3.9.2-pax/arch/x86/include/asm/pgtable.h	2013-05-13 02:43:40.765805828 +0200
++++ linux-3.9.2-pax/arch/x86/include/asm/pgtable.h	2013-05-18 03:35:27.557330838 +0200
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -12204,7 +12205,19 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/
  static inline int pte_dirty(pte_t pte)
  {
  	return pte_flags(pte) & _PAGE_DIRTY;
-@@ -200,9 +240,29 @@ static inline pte_t pte_wrprotect(pte_t
+@@ -147,6 +187,11 @@ static inline unsigned long pud_pfn(pud_
+ 	return (pud_val(pud) & PTE_PFN_MASK) >> PAGE_SHIFT;
+ }
+ 
++static inline unsigned long pgd_pfn(pgd_t pgd)
++{
++	return (pgd_val(pgd) & PTE_PFN_MASK) >> PAGE_SHIFT;
++}
++
+ #define pte_page(pte)	pfn_to_page(pte_pfn(pte))
+ 
+ static inline int pmd_large(pmd_t pte)
+@@ -200,9 +245,29 @@ static inline pte_t pte_wrprotect(pte_t
  	return pte_clear_flags(pte, _PAGE_RW);
  }
  
@@ -12235,7 +12248,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -394,6 +454,15 @@ pte_t *populate_extra_pte(unsigned long
+@@ -394,6 +459,15 @@ pte_t *populate_extra_pte(unsigned long
  #endif
  
  #ifndef __ASSEMBLY__
@@ -12251,7 +12264,25 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/
  #include <linux/mm_types.h>
  #include <linux/log2.h>
  
-@@ -584,7 +653,7 @@ static inline pud_t *pud_offset(pgd_t *p
+@@ -529,7 +603,7 @@ static inline unsigned long pud_page_vad
+  * Currently stuck as a macro due to indirect forward reference to
+  * linux/mmzone.h's __section_mem_map_addr() definition:
+  */
+-#define pud_page(pud)		pfn_to_page(pud_val(pud) >> PAGE_SHIFT)
++#define pud_page(pud)		pfn_to_page((pud_val(pud) & PTE_PFN_MASK) >> PAGE_SHIFT)
+ 
+ /* Find an entry in the second-level page table.. */
+ static inline pmd_t *pmd_offset(pud_t *pud, unsigned long address)
+@@ -569,7 +643,7 @@ static inline unsigned long pgd_page_vad
+  * Currently stuck as a macro due to indirect forward reference to
+  * linux/mmzone.h's __section_mem_map_addr() definition:
+  */
+-#define pgd_page(pgd)		pfn_to_page(pgd_val(pgd) >> PAGE_SHIFT)
++#define pgd_page(pgd)		pfn_to_page((pgd_val(pgd) & PTE_PFN_MASK) >> PAGE_SHIFT)
+ 
+ /* to find an entry in a page-table-directory. */
+ static inline unsigned long pud_index(unsigned long address)
+@@ -584,7 +658,7 @@ static inline pud_t *pud_offset(pgd_t *p
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -12260,7 +12291,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -607,7 +676,12 @@ static inline int pgd_none(pgd_t pgd)
+@@ -607,7 +681,12 @@ static inline int pgd_none(pgd_t pgd)
   * pgd_offset() returns a (pgd_t *)
   * pgd_index() is used get the offset into the pgd page's array of pgd_t's;
   */
@@ -12274,7 +12305,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -618,6 +692,22 @@ static inline int pgd_none(pgd_t pgd)
+@@ -618,6 +697,22 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -12297,7 +12328,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/include/
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -784,11 +874,24 @@ static inline void pmdp_set_wrprotect(st
+@@ -784,11 +879,24 @@ static inline void pmdp_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -15628,7 +15659,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/d
 +#endif
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/kernel/dumpstack.c linux-3.9.2-pax/arch/x86/kernel/dumpstack.c
 --- linux-3.9.2/arch/x86/kernel/dumpstack.c	2013-04-30 01:25:06.275586515 +0200
-+++ linux-3.9.2-pax/arch/x86/kernel/dumpstack.c	2013-04-30 01:26:50.747580937 +0200
++++ linux-3.9.2-pax/arch/x86/kernel/dumpstack.c	2013-05-18 03:22:03.677373759 +0200
 @@ -35,16 +35,14 @@ void printk_address(unsigned long addres
  static void
  print_ftrace_graph_addr(unsigned long addr, void *data,
@@ -25655,7 +25686,7 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/mm/init_
  		size >> 10);
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/arch/x86/mm/init_64.c linux-3.9.2-pax/arch/x86/mm/init_64.c
 --- linux-3.9.2/arch/x86/mm/init_64.c	2013-04-30 01:25:06.303586514 +0200
-+++ linux-3.9.2-pax/arch/x86/mm/init_64.c	2013-05-13 02:29:57.497849784 +0200
++++ linux-3.9.2-pax/arch/x86/mm/init_64.c	2013-05-18 03:43:28.489305160 +0200
 @@ -150,7 +150,7 @@ early_param("gbpages", parse_direct_gbpa
   * around without checking the pgd every time.
   */
@@ -78260,8 +78291,8 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/tools/gcc/stackle
 +}
 diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/tools/gcc/structleak_plugin.c linux-3.9.2-pax/tools/gcc/structleak_plugin.c
 --- linux-3.9.2/tools/gcc/structleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.9.2-pax/tools/gcc/structleak_plugin.c	2013-04-30 01:26:51.603580892 +0200
-@@ -0,0 +1,276 @@
++++ linux-3.9.2-pax/tools/gcc/structleak_plugin.c	2013-05-17 22:09:35.198374782 +0200
+@@ -0,0 +1,277 @@
 +/*
 + * Copyright 2013 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -78402,11 +78433,12 @@ diff -NurpX linux-3.9.2-pax/Documentation/dontdiff linux-3.9.2/tools/gcc/structl
 +	// first check if the variable is already initialized, warn otherwise
 +	for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +		gimple stmt = gsi_stmt(gsi);
-+		tree rhs1 = gimple_assign_rhs1(stmt);
++		tree rhs1;
 +
 +		// we're looking for an assignment of a single rhs...
 +		if (!gimple_assign_single_p(stmt))
 +			continue;
++		rhs1 = gimple_assign_rhs1(stmt);
 +#if BUILDING_GCC_VERSION >= 4007
 +		// ... of a non-clobbering expression...
 +		if (TREE_CLOBBER_P(rhs1))
