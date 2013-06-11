@@ -1,4 +1,5 @@
-- fixed some fallout detected by the checker plugin
+- fixed a KERNEXEC regression resulting in unusable RAM regions (http://forums.grsecurity.net/viewtopic.php?f=3&t=3506)
+- removed a user-triggerable BUG_ON, fixing it properly wasn't worth the effort
 
 diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/arch/alpha/include/asm/atomic.h linux-3.9.4-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.9.4/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -20042,7 +20043,7 @@ diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/arch/x86/kernel/r
  1:
 diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/arch/x86/kernel/setup.c linux-3.9.4-pax/arch/x86/kernel/setup.c
 --- linux-3.9.4/arch/x86/kernel/setup.c	2013-04-30 01:25:06.287586515 +0200
-+++ linux-3.9.4-pax/arch/x86/kernel/setup.c	2013-05-09 22:54:09.592380373 +0200
++++ linux-3.9.4-pax/arch/x86/kernel/setup.c	2013-06-11 12:15:49.639972148 +0200
 @@ -111,6 +111,7 @@
  #include <asm/mce.h>
  #include <asm/alternative.h>
@@ -20069,6 +20070,15 @@ diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/arch/x86/kernel/s
  
  	sanitize_e820_map(e820.map, ARRAY_SIZE(e820.map), &e820.nr_map);
  }
+@@ -782,7 +783,7 @@ static void __init trim_bios_range(void)
+ /* called before trim_bios_range() to spare extra sanitize */
+ static void __init e820_add_kernel_range(void)
+ {
+-	u64 start = __pa_symbol(_text);
++	u64 start = __pa_symbol(ktla_ktva(_text));
+ 	u64 size = __pa_symbol(_end) - start;
+ 
+ 	/*
 @@ -844,8 +845,12 @@ static void __init trim_low_memory_range
  
  void __init setup_arch(char **cmdline_p)
@@ -57504,7 +57514,7 @@ diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/lib/vsprintf.c li
  
 diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/Makefile linux-3.9.4-pax/Makefile
 --- linux-3.9.4/Makefile	2013-05-28 01:54:11.734770123 +0200
-+++ linux-3.9.4-pax/Makefile	2013-05-28 01:54:17.346769824 +0200
++++ linux-3.9.4-pax/Makefile	2013-05-30 00:28:32.584660382 +0200
 @@ -241,8 +241,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -58891,7 +58901,7 @@ diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/mm/mempolicy.c li
  
 diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/mm/mlock.c linux-3.9.4-pax/mm/mlock.c
 --- linux-3.9.4/mm/mlock.c	2013-04-30 01:25:29.271585287 +0200
-+++ linux-3.9.4-pax/mm/mlock.c	2013-04-30 01:26:51.439580900 +0200
++++ linux-3.9.4-pax/mm/mlock.c	2013-06-01 23:19:58.166431479 +0200
 @@ -334,7 +334,7 @@ static int do_mlock(unsigned long start,
  {
  	unsigned long nstart, end, tmp;
@@ -58923,7 +58933,7 @@ diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/mm/mlock.c linux-
  		/* Here we know that  vma->vm_start <= nstart < vma->vm_end. */
  
  		newflags = vma->vm_flags & ~VM_LOCKED;
-@@ -500,6 +508,12 @@ static int do_mlockall(int flags)
+@@ -500,6 +508,11 @@ static int do_mlockall(int flags)
  	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
  		vm_flags_t newflags;
  
@@ -58932,7 +58942,6 @@ diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/mm/mlock.c linux-
 +			break;
 +#endif
 +
-+		BUG_ON(vma->vm_end > TASK_SIZE);
  		newflags = vma->vm_flags & ~VM_LOCKED;
  		if (flags & MCL_CURRENT)
  			newflags |= VM_LOCKED;
@@ -66466,7 +66475,7 @@ diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/scripts/basic/fix
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.9.4-pax/Documentation/dontdiff linux-3.9.4/scripts/gcc-plugin.sh linux-3.9.4-pax/scripts/gcc-plugin.sh
 --- linux-3.9.4/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.9.4-pax/scripts/gcc-plugin.sh	2013-04-30 01:26:51.567580893 +0200
++++ linux-3.9.4-pax/scripts/gcc-plugin.sh	2013-05-29 23:11:59.440905621 +0200
 @@ -0,0 +1,17 @@
 +#!/bin/bash
 +plugincc=`$1 -E -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
