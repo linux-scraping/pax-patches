@@ -1,4 +1,8 @@
-- forward port to 3.9.7
+- fixed some fallout from the recent executable vmalloc changes (http://forums.grsecurity.net/viewtopic.php?t=3562#p13111)
+- moved the PaX specific heap-stack gap check code over to the vm_unmapped_area_info based infrastructure
+- fixed the recent nested nmi related fixes some more
+- fixed a regression in kernel memory initialization on relocatable i386 kernels
+- empty_zero_page can be read-only on amd64 as well
 
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/alpha/include/asm/atomic.h linux-3.9.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.9.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -3097,7 +3101,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/mm/Kconf
  	  via the set_fs() function.
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/mm/mmap.c linux-3.9.7-pax/arch/arm/mm/mmap.c
 --- linux-3.9.7/arch/arm/mm/mmap.c	2013-02-19 01:12:38.149765913 +0100
-+++ linux-3.9.7-pax/arch/arm/mm/mmap.c	2013-04-30 01:26:50.591580946 +0200
++++ linux-3.9.7-pax/arch/arm/mm/mmap.c	2013-06-25 01:54:56.979639014 +0200
 @@ -81,6 +81,10 @@ arch_get_unmapped_area(struct file *filp
  	if (len > TASK_SIZE)
  		return -ENOMEM;
@@ -3140,20 +3144,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/mm/mmap.
  			return addr;
  	}
  
-@@ -162,6 +168,12 @@ arch_get_unmapped_area_topdown(struct fi
- 		VM_BUG_ON(addr != -ENOMEM);
- 		info.flags = 0;
- 		info.low_limit = mm->mmap_base;
-+
-+#ifdef CONFIG_PAX_RANDMMAP
-+		if (mm->pax_flags & MF_PAX_RANDMMAP)
-+			info.low_limit += mm->delta_mmap;
-+#endif
-+
- 		info.high_limit = TASK_SIZE;
- 		addr = vm_unmapped_area(&info);
- 	}
-@@ -173,6 +185,10 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -173,6 +179,10 @@ void arch_pick_mmap_layout(struct mm_str
  {
  	unsigned long random_factor = 0UL;
  
@@ -3164,7 +3155,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/mm/mmap.
  	/* 8 bits of randomness in 20 address space bits */
  	if ((current->flags & PF_RANDOMIZE) &&
  	    !(current->personality & ADDR_NO_RANDOMIZE))
-@@ -180,10 +196,22 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -180,10 +190,22 @@ void arch_pick_mmap_layout(struct mm_str
  
  	if (mmap_is_legacy()) {
  		mm->mmap_base = TASK_UNMAPPED_BASE + random_factor;
@@ -16638,7 +16629,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  /*
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/entry_64.S linux-3.9.7-pax/arch/x86/kernel/entry_64.S
 --- linux-3.9.7/arch/x86/kernel/entry_64.S	2013-04-30 01:25:06.279586515 +0200
-+++ linux-3.9.7-pax/arch/x86/kernel/entry_64.S	2013-06-21 02:03:34.849960785 +0200
++++ linux-3.9.7-pax/arch/x86/kernel/entry_64.S	2013-06-25 12:51:59.334041635 +0200
 @@ -59,6 +59,8 @@
  #include <asm/context_tracking.h>
  #include <asm/smap.h>
@@ -16723,7 +16714,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  #endif
  
  
-@@ -284,6 +293,311 @@ ENTRY(native_usergs_sysret64)
+@@ -284,6 +293,309 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -16916,7 +16907,6 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
 +	sub phys_base(%rip),%rbx
 +
 +#ifdef CONFIG_PARAVIRT
-+	pushq %rdi
 +	cmpl $0, pv_info+PARAVIRT_enabled
 +	jz 1f
 +	i = 0
@@ -16927,7 +16917,6 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
 +	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set_pgd_batched)
 +	i = i + 1
 +	.endr
-+	popq %rdi
 +	PV_RESTORE_REGS(CLBR_RDI)
 +	jmp 2f
 +1:
@@ -16958,8 +16947,8 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
 +#ifdef CONFIG_PAX_KERNEXEC
 +	GET_CR0_INTO_RDI
 +	bts $16,%rdi
-+	SET_RDI_INTO_CR0
 +	jc 110f
++	SET_RDI_INTO_CR0
 +	or $2,%ebx
 +110:
 +#endif
@@ -16967,8 +16956,8 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
 +
 +	.macro pax_exit_kernel_nmi
 +#ifdef CONFIG_PAX_KERNEXEC
-+	test $2,%ebx
-+	jz 110f
++	btr $1,%ebx
++	jnc 110f
 +	GET_CR0_INTO_RDI
 +	btr $16,%rdi
 +	SET_RDI_INTO_CR0
@@ -17035,7 +17024,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -375,8 +689,8 @@ ENDPROC(native_usergs_sysret64)
+@@ -375,8 +687,8 @@ ENDPROC(native_usergs_sysret64)
  	.endm
  
  	.macro UNFAKE_STACK_FRAME
@@ -17046,7 +17035,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	.endm
  
  /*
-@@ -463,7 +777,7 @@ ENDPROC(native_usergs_sysret64)
+@@ -463,7 +775,7 @@ ENDPROC(native_usergs_sysret64)
  	movq %rsp, %rsi
  
  	leaq -RBP(%rsp),%rdi	/* arg1 for handler */
@@ -17055,7 +17044,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	je 1f
  	SWAPGS
  	/*
-@@ -498,9 +812,10 @@ ENTRY(save_rest)
+@@ -498,9 +810,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
@@ -17067,7 +17056,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -529,9 +844,10 @@ ENTRY(save_paranoid)
+@@ -529,9 +842,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -17080,7 +17069,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	.popsection
  
  /*
-@@ -553,7 +869,7 @@ ENTRY(ret_from_fork)
+@@ -553,7 +867,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -17089,7 +17078,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	jz   1f
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -571,7 +887,7 @@ ENTRY(ret_from_fork)
+@@ -571,7 +885,7 @@ ENTRY(ret_from_fork)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -17098,7 +17087,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  /*
   * System call entry. Up to 6 arguments in registers are supported.
-@@ -608,7 +924,7 @@ END(ret_from_fork)
+@@ -608,7 +922,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -17107,7 +17096,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -621,16 +937,23 @@ GLOBAL(system_call_after_swapgs)
+@@ -621,16 +935,23 @@ GLOBAL(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -17133,7 +17122,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	jnz tracesys
  system_call_fastpath:
  #if __SYSCALL_MASK == ~0
-@@ -640,7 +963,7 @@ system_call_fastpath:
+@@ -640,7 +961,7 @@ system_call_fastpath:
  	cmpl $__NR_syscall_max,%eax
  #endif
  	ja badsys
@@ -17142,7 +17131,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	call *sys_call_table(,%rax,8)  # XXX:	 rip relative
  	movq %rax,RAX-ARGOFFSET(%rsp)
  /*
-@@ -654,10 +977,13 @@ sysret_check:
+@@ -654,10 +975,13 @@ sysret_check:
  	LOCKDEP_SYS_EXIT
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -17157,7 +17146,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -709,14 +1035,18 @@ badsys:
+@@ -709,14 +1033,18 @@ badsys:
  	 * jump back to the normal fast path.
  	 */
  auditsys:
@@ -17177,7 +17166,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	jmp system_call_fastpath
  
  	/*
-@@ -737,7 +1067,7 @@ sysret_audit:
+@@ -737,7 +1065,7 @@ sysret_audit:
  	/* Do syscall tracing */
  tracesys:
  #ifdef CONFIG_AUDITSYSCALL
@@ -17186,7 +17175,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	jz auditsys
  #endif
  	SAVE_REST
-@@ -745,12 +1075,16 @@ tracesys:
+@@ -745,12 +1073,16 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -17203,7 +17192,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	RESTORE_REST
  #if __SYSCALL_MASK == ~0
  	cmpq $__NR_syscall_max,%rax
-@@ -759,7 +1093,7 @@ tracesys:
+@@ -759,7 +1091,7 @@ tracesys:
  	cmpl $__NR_syscall_max,%eax
  #endif
  	ja   int_ret_from_sys_call	/* RAX(%rsp) set to -ENOSYS above */
@@ -17212,7 +17201,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	call *sys_call_table(,%rax,8)
  	movq %rax,RAX-ARGOFFSET(%rsp)
  	/* Use IRET because user could have changed frame */
-@@ -780,7 +1114,9 @@ GLOBAL(int_with_check)
+@@ -780,7 +1112,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -17223,7 +17212,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -826,7 +1162,7 @@ int_restore_rest:
+@@ -826,7 +1160,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -17232,7 +17221,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  	.macro FORK_LIKE func
  ENTRY(stub_\func)
-@@ -839,9 +1175,10 @@ ENTRY(stub_\func)
+@@ -839,9 +1173,10 @@ ENTRY(stub_\func)
  	DEFAULT_FRAME 0 8		/* offset 8: return address */
  	call sys_\func
  	RESTORE_TOP_OF_STACK %r11, 8
@@ -17244,7 +17233,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	.endm
  
  	.macro FIXED_FRAME label,func
-@@ -851,9 +1188,10 @@ ENTRY(\label)
+@@ -851,9 +1186,10 @@ ENTRY(\label)
  	FIXUP_TOP_OF_STACK %r11, 8-ARGOFFSET
  	call \func
  	RESTORE_TOP_OF_STACK %r11, 8-ARGOFFSET
@@ -17256,7 +17245,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	.endm
  
  	FORK_LIKE  clone
-@@ -870,9 +1208,10 @@ ENTRY(ptregscall_common)
+@@ -870,9 +1206,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
@@ -17268,7 +17257,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -885,7 +1224,7 @@ ENTRY(stub_execve)
+@@ -885,7 +1222,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -17277,7 +17266,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -902,7 +1241,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -902,7 +1239,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -17286,7 +17275,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  #ifdef CONFIG_X86_X32_ABI
  ENTRY(stub_x32_rt_sigreturn)
-@@ -916,7 +1255,7 @@ ENTRY(stub_x32_rt_sigreturn)
+@@ -916,7 +1253,7 @@ ENTRY(stub_x32_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -17295,7 +17284,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  ENTRY(stub_x32_execve)
  	CFI_STARTPROC
-@@ -930,7 +1269,7 @@ ENTRY(stub_x32_execve)
+@@ -930,7 +1267,7 @@ ENTRY(stub_x32_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -17304,7 +17293,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  #endif
  
-@@ -967,7 +1306,7 @@ vector=vector+1
+@@ -967,7 +1304,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -17313,7 +17302,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  .previous
  END(interrupt)
-@@ -987,6 +1326,16 @@ END(interrupt)
+@@ -987,6 +1324,16 @@ END(interrupt)
  	subq $ORIG_RAX-RBP, %rsp
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-RBP
  	SAVE_ARGS_IRQ
@@ -17330,7 +17319,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	call \func
  	.endm
  
-@@ -1019,7 +1368,7 @@ ret_from_intr:
+@@ -1019,7 +1366,7 @@ ret_from_intr:
  
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -17339,7 +17328,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -1041,12 +1390,16 @@ retint_swapgs:		/* return to user-space
+@@ -1041,12 +1388,16 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -17356,7 +17345,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1129,7 +1482,7 @@ ENTRY(retint_kernel)
+@@ -1129,7 +1480,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -17365,7 +17354,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  /*
   * End of kprobes section
   */
-@@ -1147,7 +1500,7 @@ ENTRY(\sym)
+@@ -1147,7 +1498,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -17374,7 +17363,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1203,12 +1556,22 @@ ENTRY(\sym)
+@@ -1203,12 +1554,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -17398,7 +17387,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1221,15 +1584,25 @@ ENTRY(\sym)
+@@ -1221,15 +1582,25 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -17426,7 +17415,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1240,14 +1613,30 @@ ENTRY(\sym)
+@@ -1240,14 +1611,30 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF_DEBUG
@@ -17458,7 +17447,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  .endm
  
  .macro errorentry sym do_sym
-@@ -1259,13 +1648,23 @@ ENTRY(\sym)
+@@ -1259,13 +1646,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -17483,7 +17472,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  .endm
  
  	/* error code is on the stack already */
-@@ -1279,13 +1678,23 @@ ENTRY(\sym)
+@@ -1279,13 +1676,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -17508,7 +17497,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1315,9 +1724,10 @@ gs_change:
+@@ -1315,9 +1722,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -17520,7 +17509,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  	_ASM_EXTABLE(gs_change,bad_gs)
  	.section .fixup,"ax"
-@@ -1345,9 +1755,10 @@ ENTRY(call_softirq)
+@@ -1345,9 +1753,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -17532,7 +17521,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1385,7 +1796,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1385,7 +1794,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -17541,7 +17530,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1444,7 +1855,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1444,7 +1853,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -17550,7 +17539,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  apicinterrupt HYPERVISOR_CALLBACK_VECTOR \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1498,16 +1909,31 @@ ENTRY(paranoid_exit)
+@@ -1498,16 +1907,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF_DEBUG
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -17583,7 +17572,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1536,7 +1962,7 @@ paranoid_schedule:
+@@ -1536,7 +1960,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -17592,7 +17581,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1563,12 +1989,13 @@ ENTRY(error_entry)
+@@ -1563,12 +1987,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -17607,7 +17596,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	ret
  
  /*
-@@ -1595,7 +2022,7 @@ bstep_iret:
+@@ -1595,7 +2020,7 @@ bstep_iret:
  	movq %rcx,RIP+8(%rsp)
  	jmp error_swapgs
  	CFI_ENDPROC
@@ -17616,7 +17605,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1615,7 +2042,7 @@ ENTRY(error_exit)
+@@ -1615,7 +2040,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -17625,7 +17614,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  /*
   * Test if a given stack is an NMI stack or not.
-@@ -1673,9 +2100,11 @@ ENTRY(nmi)
+@@ -1673,9 +2098,11 @@ ENTRY(nmi)
  	 * If %cs was not the kernel segment, then the NMI triggered in user
  	 * space, which means it is definitely not nested.
  	 */
@@ -17638,7 +17627,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	/*
  	 * Check the special variable on the stack to see if NMIs are
  	 * executing.
-@@ -1709,8 +2138,7 @@ nested_nmi:
+@@ -1709,8 +2136,7 @@ nested_nmi:
  
  1:
  	/* Set up the interrupted NMIs stack to jump to repeat_nmi */
@@ -17648,7 +17637,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	CFI_ADJUST_CFA_OFFSET 1*8
  	leaq -10*8(%rsp), %rdx
  	pushq_cfi $__KERNEL_DS
-@@ -1728,6 +2156,7 @@ nested_nmi_out:
+@@ -1728,6 +2154,7 @@ nested_nmi_out:
  	CFI_RESTORE rdx
  
  	/* No need to check faults here */
@@ -17656,7 +17645,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	INTERRUPT_RETURN
  
  	CFI_RESTORE_STATE
-@@ -1844,6 +2273,8 @@ end_repeat_nmi:
+@@ -1844,6 +2271,8 @@ end_repeat_nmi:
  	 */
  	movq %cr2, %r12
  
@@ -17665,7 +17654,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1856,26 +2287,31 @@ end_repeat_nmi:
+@@ -1856,26 +2285,31 @@ end_repeat_nmi:
  	movq %r12, %cr2
  1:
  	
@@ -18210,7 +18199,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/head_64.S linux-3.9.7-pax/arch/x86/kernel/head_64.S
 --- linux-3.9.7/arch/x86/kernel/head_64.S	2013-06-12 00:05:29.767602880 +0200
-+++ linux-3.9.7-pax/arch/x86/kernel/head_64.S	2013-06-12 00:05:35.687602564 +0200
++++ linux-3.9.7-pax/arch/x86/kernel/head_64.S	2013-06-25 02:54:04.655449595 +0200
 @@ -20,6 +20,8 @@
  #include <asm/processor-flags.h>
  #include <asm/percpu.h>
@@ -18374,7 +18363,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  NEXT_PAGE(level2_kernel_pgt)
  	/*
  	 * 512 MB kernel mapping. We spend a full page on this pagetable
-@@ -488,38 +536,64 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -488,39 +536,64 @@ NEXT_PAGE(level2_kernel_pgt)
  		KERNEL_IMAGE_SIZE/PMD_SIZE)
  
  NEXT_PAGE(level2_fixmap_pgt)
@@ -18448,8 +18437,9 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
 -	.skip IDT_ENTRIES * 16
 +	.fill 512,8,0
  
- 	__PAGE_ALIGNED_BSS
+-	__PAGE_ALIGNED_BSS
  NEXT_PAGE(empty_zero_page)
+ 	.skip PAGE_SIZE
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/i386_ksyms_32.c linux-3.9.7-pax/arch/x86/kernel/i386_ksyms_32.c
 --- linux-3.9.7/arch/x86/kernel/i386_ksyms_32.c	2013-04-30 01:25:06.279586515 +0200
 +++ linux-3.9.7-pax/arch/x86/kernel/i386_ksyms_32.c	2013-04-30 01:26:50.751580937 +0200
@@ -20116,7 +20106,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/r
  1:
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/setup.c linux-3.9.7-pax/arch/x86/kernel/setup.c
 --- linux-3.9.7/arch/x86/kernel/setup.c	2013-04-30 01:25:06.287586515 +0200
-+++ linux-3.9.7-pax/arch/x86/kernel/setup.c	2013-06-11 12:15:49.639972148 +0200
++++ linux-3.9.7-pax/arch/x86/kernel/setup.c	2013-06-25 23:41:28.667960974 +0200
 @@ -111,6 +111,7 @@
  #include <asm/mce.h>
  #include <asm/alternative.h>
@@ -20157,7 +20147,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
  void __init setup_arch(char **cmdline_p)
  {
 +#ifdef CONFIG_X86_32
-+	memblock_reserve(LOAD_PHYSICAL_ADDR, __pa_symbol(__bss_stop) - ____LOAD_PHYSICAL_ADDR);
++	memblock_reserve(LOAD_PHYSICAL_ADDR, __pa_symbol(__bss_stop) - LOAD_PHYSICAL_ADDR);
 +#else
  	memblock_reserve(__pa_symbol(_text),
  			 (unsigned long)__bss_stop - (unsigned long)_text);
@@ -20405,8 +20395,8 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
  		switch (opcode[i]) {
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/sys_i386_32.c linux-3.9.7-pax/arch/x86/kernel/sys_i386_32.c
 --- linux-3.9.7/arch/x86/kernel/sys_i386_32.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.9.7-pax/arch/x86/kernel/sys_i386_32.c	2013-04-30 01:26:50.775580936 +0200
-@@ -0,0 +1,248 @@
++++ linux-3.9.7-pax/arch/x86/kernel/sys_i386_32.c	2013-06-25 17:32:22.865143388 +0200
+@@ -0,0 +1,184 @@
 +/*
 + * This file contains various random system calls that
 + * have a non-standard calling sequence on the Linux/i386
@@ -20427,6 +20417,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
 +#include <linux/file.h>
 +#include <linux/utsname.h>
 +#include <linux/ipc.h>
++#include <linux/elf.h>
 +
 +#include <linux/uaccess.h>
 +#include <linux/unistd.h>
@@ -20449,13 +20440,28 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
 +	return 0;
 +}
 +
++/*
++ * Align a virtual address to avoid aliasing in the I$ on AMD F15h.
++ */
++static unsigned long get_align_mask(void)
++{
++	if (va_align.flags < 0 || !(va_align.flags & ALIGN_VA_32))
++		return 0;
++
++	if (!(current->flags & PF_RANDOMIZE))
++		return 0;
++
++	return va_align.mask;
++}
++
 +unsigned long
 +arch_get_unmapped_area(struct file *filp, unsigned long addr,
 +		unsigned long len, unsigned long pgoff, unsigned long flags)
 +{
 +	struct mm_struct *mm = current->mm;
 +	struct vm_area_struct *vma;
-+	unsigned long start_addr, pax_task_size = TASK_SIZE;
++	unsigned long pax_task_size = TASK_SIZE;
++	struct vm_unmapped_area_info info;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
@@ -20482,61 +20488,34 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
 +				return addr;
 +		}
 +	}
-+	if (len > mm->cached_hole_size) {
-+		start_addr = addr = mm->free_area_cache;
-+	} else {
-+		start_addr = addr = mm->mmap_base;
-+		mm->cached_hole_size = 0;
-+	}
++
++	info.flags = 0;
++	info.length = len;
++	info.align_mask = filp ? get_align_mask() : 0;
++	info.align_offset = pgoff << PAGE_SHIFT;
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
-+	if (!(__supported_pte_mask & _PAGE_NX) && (mm->pax_flags & MF_PAX_PAGEEXEC) && (flags & MAP_EXECUTABLE) && start_addr >= mm->mmap_base) {
-+		start_addr = 0x00110000UL;
++	if (!(__supported_pte_mask & _PAGE_NX) && (mm->pax_flags & MF_PAX_PAGEEXEC) && (flags & MAP_EXECUTABLE)) {
++		info.low_limit = 0x00110000UL;
++		info.high_limit = mm->start_code;
 +
 +#ifdef CONFIG_PAX_RANDMMAP
 +		if (mm->pax_flags & MF_PAX_RANDMMAP)
-+			start_addr += mm->delta_mmap & 0x03FFF000UL;
++			info.low_limit += mm->delta_mmap & 0x03FFF000UL;
 +#endif
 +
-+		if (mm->start_brk <= start_addr && start_addr < mm->mmap_base)
-+			start_addr = addr = mm->mmap_base;
-+		else
-+			addr = start_addr;
-+	}
++		if (info.low_limit < info.high_limit) {
++			addr = vm_unmapped_area(&info);
++			if (!IS_ERR_VALUE(addr))
++				return addr;
++		}
++	} else
 +#endif
 +
-+full_search:
-+	for (vma = find_vma(mm, addr); ; vma = vma->vm_next) {
-+		/* At this point:  (!vma || addr < vma->vm_end). */
-+		if (pax_task_size - len < addr) {
-+			/*
-+			 * Start a new search - just in case we missed
-+			 * some holes.
-+			 */
-+			if (start_addr != mm->mmap_base) {
-+				start_addr = addr = mm->mmap_base;
-+				mm->cached_hole_size = 0;
-+				goto full_search;
-+			}
-+			return -ENOMEM;
-+		}
-+		if (check_heap_stack_gap(vma, addr, len))
-+			break;
-+		if (addr + mm->cached_hole_size < vma->vm_start)
-+			mm->cached_hole_size = vma->vm_start - addr;
-+		addr = vma->vm_end;
-+		if (mm->start_brk <= addr && addr < mm->mmap_base) {
-+			start_addr = addr = mm->mmap_base;
-+			mm->cached_hole_size = 0;
-+			goto full_search;
-+		}
-+	}
++	info.low_limit = mm->mmap_base;
++	info.high_limit = pax_task_size;
 +
-+	/*
-+	 * Remember the place where we stopped the search:
-+	 */
-+	mm->free_area_cache = addr + len;
-+	return addr;
++	return vm_unmapped_area(&info);
 +}
 +
 +unsigned long
@@ -20546,7 +20525,8 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
 +{
 +	struct vm_area_struct *vma;
 +	struct mm_struct *mm = current->mm;
-+	unsigned long base = mm->mmap_base, addr = addr0, pax_task_size = TASK_SIZE;
++	unsigned long addr = addr0, pax_task_size = TASK_SIZE;
++	struct vm_unmapped_area_info info;
 +
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (mm->pax_flags & MF_PAX_SEGMEXEC)
@@ -20581,46 +20561,16 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
 +		}
 +	}
 +
-+	/* check if free_area_cache is useful for us */
-+	if (len <= mm->cached_hole_size) {
-+		mm->cached_hole_size = 0;
-+		mm->free_area_cache = mm->mmap_base;
-+	}
-+
-+	/* either no address requested or can't fit in requested address hole */
-+	addr = mm->free_area_cache;
-+
-+	/* make sure it can fit in the remaining address space */
-+	if (addr > len) {
-+		vma = find_vma(mm, addr-len);
-+		if (check_heap_stack_gap(vma, addr - len, len))
-+			/* remember the address as a hint for next time */
-+			return (mm->free_area_cache = addr-len);
-+	}
-+
-+	if (mm->mmap_base < len)
-+		goto bottomup;
-+
-+	addr = mm->mmap_base-len;
-+
-+	do {
-+		/*
-+		 * Lookup failure means no vma is above this address,
-+		 * else if new region fits below vma->vm_start,
-+		 * return with success:
-+		 */
-+		vma = find_vma(mm, addr);
-+		if (check_heap_stack_gap(vma, addr, len))
-+			/* remember the address as a hint for next time */
-+			return (mm->free_area_cache = addr);
-+
-+		/* remember the largest hole we saw so far */
-+		if (addr + mm->cached_hole_size < vma->vm_start)
-+			mm->cached_hole_size = vma->vm_start - addr;
-+
-+		/* try just below the current vma->vm_start */
-+		addr = skip_heap_stack_gap(vma, len);
-+	} while (!IS_ERR_VALUE(addr));
++	info.flags = VM_UNMAPPED_AREA_TOPDOWN;
++	info.length = len;
++	info.low_limit = PAGE_SIZE;
++	info.high_limit = mm->mmap_base;
++	info.align_mask = filp ? get_align_mask() : 0;
++	info.align_offset = pgoff << PAGE_SHIFT;
++	addr = vm_unmapped_area(&info);
++	if (!(addr & ~PAGE_MASK))
++		return addr;
++	VM_BUG_ON(addr != -ENOMEM);
 +
 +bottomup:
 +	/*
@@ -20629,31 +20579,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/s
 +	 * can happen with large stack limits and large mmap()
 +	 * allocations.
 +	 */
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	if (mm->pax_flags & MF_PAX_SEGMEXEC)
-+		mm->mmap_base = SEGMEXEC_TASK_UNMAPPED_BASE;
-+	else
-+#endif
-+
-+	mm->mmap_base = TASK_UNMAPPED_BASE;
-+
-+#ifdef CONFIG_PAX_RANDMMAP
-+	if (mm->pax_flags & MF_PAX_RANDMMAP)
-+		mm->mmap_base += mm->delta_mmap;
-+#endif
-+
-+	mm->free_area_cache = mm->mmap_base;
-+	mm->cached_hole_size = ~0UL;
-+	addr = arch_get_unmapped_area(filp, addr0, len, pgoff, flags);
-+	/*
-+	 * Restore the topdown base:
-+	 */
-+	mm->mmap_base = base;
-+	mm->free_area_cache = base;
-+	mm->cached_hole_size = ~0UL;
-+
-+	return addr;
++	return arch_get_unmapped_area(filp, addr0, len, pgoff, flags);
 +}
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/sys_x86_64.c linux-3.9.7-pax/arch/x86/kernel/sys_x86_64.c
 --- linux-3.9.7/arch/x86/kernel/sys_x86_64.c	2013-04-30 01:25:06.291586514 +0200
@@ -25933,7 +25859,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  		return "[vsyscall]";
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init.c linux-3.9.7-pax/arch/x86/mm/init.c
 --- linux-3.9.7/arch/x86/mm/init.c	2013-06-21 03:32:43.402251279 +0200
-+++ linux-3.9.7-pax/arch/x86/mm/init.c	2013-06-21 03:32:59.530252155 +0200
++++ linux-3.9.7-pax/arch/x86/mm/init.c	2013-06-26 00:18:06.919843605 +0200
 @@ -17,6 +17,7 @@
  #include <asm/proto.h>
  #include <asm/dma.h>		/* for MAX_DMA_PFN */
@@ -34771,13 +34697,13 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/drivers/leds/leds
  		.ident = "Intel SS4200-E",
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/drivers/lguest/core.c linux-3.9.7-pax/drivers/lguest/core.c
 --- linux-3.9.7/drivers/lguest/core.c	2013-02-19 01:13:01.825767199 +0100
-+++ linux-3.9.7-pax/drivers/lguest/core.c	2013-04-30 01:26:50.963580926 +0200
++++ linux-3.9.7-pax/drivers/lguest/core.c	2013-06-23 12:28:48.138834625 +0200
 @@ -92,9 +92,17 @@ static __init int map_switcher(void)
  	 * it's worked so far.  The end address needs +1 because __get_vm_area
  	 * allocates an extra guard page, so we need space for that.
  	 */
 +
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +	switcher_vma = __get_vm_area(TOTAL_SWITCHER_PAGES * PAGE_SIZE,
 +				     VM_ALLOC | VM_KERNEXEC, SWITCHER_ADDR, SWITCHER_ADDR
 +				     + (TOTAL_SWITCHER_PAGES+1) * PAGE_SIZE);
@@ -49662,7 +49588,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/include/linux/mat
  	return div_u64_rem(dividend, divisor, &remainder);
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/include/linux/mm.h linux-3.9.7-pax/include/linux/mm.h
 --- linux-3.9.7/include/linux/mm.h	2013-04-30 01:25:26.835585417 +0200
-+++ linux-3.9.7-pax/include/linux/mm.h	2013-04-30 01:26:51.283580909 +0200
++++ linux-3.9.7-pax/include/linux/mm.h	2013-06-25 17:13:36.941203504 +0200
 @@ -101,6 +101,11 @@ extern unsigned int kobjsize(const void
  #define VM_HUGETLB	0x00400000	/* Huge TLB Page VM */
  #define VM_NONLINEAR	0x00800000	/* Is non-linear (remap_file_pages) */
@@ -49833,6 +49759,26 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/include/linux/mm.
  
  #ifdef CONFIG_MMU
  extern int __mm_populate(unsigned long addr, unsigned long len,
+@@ -1485,8 +1499,8 @@ struct vm_unmapped_area_info {
+ 	unsigned long align_offset;
+ };
+ 
+-extern unsigned long unmapped_area(struct vm_unmapped_area_info *info);
+-extern unsigned long unmapped_area_topdown(struct vm_unmapped_area_info *info);
++extern unsigned long unmapped_area(const struct vm_unmapped_area_info *info);
++extern unsigned long unmapped_area_topdown(const struct vm_unmapped_area_info *info);
+ 
+ /*
+  * Search for an unmapped address range.
+@@ -1498,7 +1512,7 @@ extern unsigned long unmapped_area_topdo
+  * - satisfies (begin_addr & align_mask) == (align_offset & align_mask)
+  */
+ static inline unsigned long
+-vm_unmapped_area(struct vm_unmapped_area_info *info)
++vm_unmapped_area(const struct vm_unmapped_area_info *info)
+ {
+ 	if (!(info->flags & VM_UNMAPPED_AREA_TOPDOWN))
+ 		return unmapped_area(info);
 @@ -1561,6 +1575,10 @@ extern struct vm_area_struct * find_vma(
  extern struct vm_area_struct * find_vma_prev(struct mm_struct * mm, unsigned long addr,
  					     struct vm_area_struct **pprev);
@@ -51600,13 +51546,13 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/include/linux/ver
  
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/include/linux/vmalloc.h linux-3.9.7-pax/include/linux/vmalloc.h
 --- linux-3.9.7/include/linux/vmalloc.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.9.7-pax/include/linux/vmalloc.h	2013-04-30 01:26:51.331580906 +0200
++++ linux-3.9.7-pax/include/linux/vmalloc.h	2013-06-23 12:28:27.562835724 +0200
 @@ -14,6 +14,11 @@ struct vm_area_struct;		/* vma defining
  #define VM_USERMAP	0x00000008	/* suitable for remap_vmalloc_range */
  #define VM_VPAGES	0x00000010	/* buffer for pages was vmalloc'ed */
  #define VM_UNLIST	0x00000020	/* vm_struct is not listed in vmlist */
 +
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
 +#define VM_KERNEXEC	0x00000040	/* allocate from executable kernel memory range */
 +#endif
 +
@@ -59366,7 +59312,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mlock.c linux-
  			newflags |= VM_LOCKED;
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3.9.7-pax/mm/mmap.c
 --- linux-3.9.7/mm/mmap.c	2013-05-23 21:49:17.322562422 +0200
-+++ linux-3.9.7-pax/mm/mmap.c	2013-06-13 02:34:44.523822175 +0200
++++ linux-3.9.7-pax/mm/mmap.c	2013-06-25 17:11:30.877210235 +0200
 @@ -49,6 +49,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -59723,10 +59669,11 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	kmem_cache_free(vm_area_cachep, vma);
  unacct_error:
  	if (charged)
-@@ -1584,6 +1730,44 @@ unacct_error:
+@@ -1584,7 +1730,45 @@ unacct_error:
  	return error;
  }
  
+-unsigned long unmapped_area(struct vm_unmapped_area_info *info)
 +bool check_heap_stack_gap(const struct vm_area_struct *vma, unsigned long addr, unsigned long len)
 +{
 +	if (!vma) {
@@ -59765,10 +59712,60 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
 +	return -ENOMEM;
 +}
 +
- unsigned long unmapped_area(struct vm_unmapped_area_info *info)
++unsigned long unmapped_area(const struct vm_unmapped_area_info *info)
  {
  	/*
-@@ -1810,17 +1994,26 @@ arch_get_unmapped_area(struct file *filp
+ 	 * We implement the search by looking for an rbtree node that
+@@ -1637,7 +1821,18 @@ check_current:
+ 		/* Check if current node has a suitable gap */
+ 		if (gap_start > high_limit)
+ 			return -ENOMEM;
+-		if (gap_end >= low_limit && gap_end - gap_start >= length)
++		if (vma->vm_prev && (vma->vm_prev->vm_flags & VM_GROWSUP)) {
++			if (high_limit - gap_start < sysctl_heap_stack_gap)
++				return -ENOMEM;
++			gap_start += sysctl_heap_stack_gap;
++		}
++		if (vma->vm_flags & VM_GROWSDOWN) {
++			if (gap_end >= sysctl_heap_stack_gap)
++				gap_end -= sysctl_heap_stack_gap;
++			else
++				gap_end = gap_start;
++		}
++		if (gap_end >= low_limit && gap_end > gap_start && gap_end - gap_start >= length)
+ 			goto found;
+ 
+ 		/* Visit right subtree if it looks promising */
+@@ -1686,7 +1881,7 @@ found:
+ 	return gap_start;
+ }
+ 
+-unsigned long unmapped_area_topdown(struct vm_unmapped_area_info *info)
++unsigned long unmapped_area_topdown(const struct vm_unmapped_area_info *info)
+ {
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma;
+@@ -1740,7 +1935,18 @@ check_current:
+ 		gap_end = vma->vm_start;
+ 		if (gap_end < low_limit)
+ 			return -ENOMEM;
+-		if (gap_start <= high_limit && gap_end - gap_start >= length)
++		if (vma->vm_prev && (vma->vm_prev->vm_flags & VM_GROWSUP)) {
++			if (high_limit - gap_start < sysctl_heap_stack_gap)
++				return -ENOMEM;
++			gap_start += sysctl_heap_stack_gap;
++		}
++		if (vma->vm_flags & VM_GROWSDOWN) {
++			if (gap_end >= sysctl_heap_stack_gap)
++				gap_end -= sysctl_heap_stack_gap;
++			else
++				gap_end = gap_start;
++		}
++		if (gap_start <= high_limit && gap_end > gap_start && gap_end - gap_start >= length)
+ 			goto found;
+ 
+ 		/* Visit left subtree if it looks promising */
+@@ -1810,17 +2016,26 @@ arch_get_unmapped_area(struct file *filp
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -59797,7 +59794,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	info.high_limit = TASK_SIZE;
  	info.align_mask = 0;
  	return vm_unmapped_area(&info);
-@@ -1829,10 +2022,16 @@ arch_get_unmapped_area(struct file *filp
+@@ -1829,10 +2044,16 @@ arch_get_unmapped_area(struct file *filp
  
  void arch_unmap_area(struct mm_struct *mm, unsigned long addr)
  {
@@ -59815,7 +59812,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		mm->free_area_cache = addr;
  }
  
-@@ -1858,12 +2057,15 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1858,12 +2079,15 @@ arch_get_unmapped_area_topdown(struct fi
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -59833,7 +59830,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  			return addr;
  	}
  
-@@ -1884,6 +2086,12 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1884,6 +2108,12 @@ arch_get_unmapped_area_topdown(struct fi
  		VM_BUG_ON(addr != -ENOMEM);
  		info.flags = 0;
  		info.low_limit = TASK_UNMAPPED_BASE;
@@ -59846,7 +59843,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		info.high_limit = TASK_SIZE;
  		addr = vm_unmapped_area(&info);
  	}
-@@ -1894,6 +2102,12 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1894,6 +2124,12 @@ arch_get_unmapped_area_topdown(struct fi
  
  void arch_unmap_area_topdown(struct mm_struct *mm, unsigned long addr)
  {
@@ -59859,7 +59856,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	/*
  	 * Is this a new hole at the highest possible address?
  	 */
-@@ -1901,8 +2115,10 @@ void arch_unmap_area_topdown(struct mm_s
+@@ -1901,8 +2137,10 @@ void arch_unmap_area_topdown(struct mm_s
  		mm->free_area_cache = addr;
  
  	/* dont allow allocations above current base */
@@ -59871,7 +59868,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  }
  
  unsigned long
-@@ -2001,6 +2217,28 @@ find_vma_prev(struct mm_struct *mm, unsi
+@@ -2001,6 +2239,28 @@ find_vma_prev(struct mm_struct *mm, unsi
  	return vma;
  }
  
@@ -59900,7 +59897,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -2059,34 +2297,42 @@ static int acct_stack_growth(struct vm_a
+@@ -2059,34 +2319,42 @@ static int acct_stack_growth(struct vm_a
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
  	int error;
@@ -59952,7 +59949,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -2121,6 +2367,8 @@ int expand_upwards(struct vm_area_struct
+@@ -2121,6 +2389,8 @@ int expand_upwards(struct vm_area_struct
  			}
  		}
  	}
@@ -59961,7 +59958,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	vma_unlock_anon_vma(vma);
  	khugepaged_enter_vma_merge(vma);
  	validate_mm(vma->vm_mm);
-@@ -2135,6 +2383,8 @@ int expand_downwards(struct vm_area_stru
+@@ -2135,6 +2405,8 @@ int expand_downwards(struct vm_area_stru
  				   unsigned long address)
  {
  	int error;
@@ -59970,7 +59967,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -2148,6 +2398,15 @@ int expand_downwards(struct vm_area_stru
+@@ -2148,6 +2420,15 @@ int expand_downwards(struct vm_area_stru
  	if (error)
  		return error;
  
@@ -59986,7 +59983,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	vma_lock_anon_vma(vma);
  
  	/*
-@@ -2157,9 +2416,17 @@ int expand_downwards(struct vm_area_stru
+@@ -2157,9 +2438,17 @@ int expand_downwards(struct vm_area_stru
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -60005,7 +60002,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -2184,13 +2451,27 @@ int expand_downwards(struct vm_area_stru
+@@ -2184,13 +2473,27 @@ int expand_downwards(struct vm_area_stru
  				vma->vm_pgoff -= grow;
  				anon_vma_interval_tree_post_update_vma(vma);
  				vma_gap_update(vma);
@@ -60033,7 +60030,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	khugepaged_enter_vma_merge(vma);
  	validate_mm(vma->vm_mm);
  	return error;
-@@ -2288,6 +2569,13 @@ static void remove_vma_list(struct mm_st
+@@ -2288,6 +2591,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -60047,7 +60044,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		if (vma->vm_flags & VM_ACCOUNT)
  			nr_accounted += nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
-@@ -2333,6 +2621,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -2333,6 +2643,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -60064,7 +60061,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		vma_rb_erase(vma, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -2364,14 +2662,33 @@ static int __split_vma(struct mm_struct
+@@ -2364,14 +2684,33 @@ static int __split_vma(struct mm_struct
  	struct vm_area_struct *new;
  	int err = -ENOMEM;
  
@@ -60098,7 +60095,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -2384,6 +2701,22 @@ static int __split_vma(struct mm_struct
+@@ -2384,6 +2723,22 @@ static int __split_vma(struct mm_struct
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -60121,7 +60118,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	pol = mpol_dup(vma_policy(vma));
  	if (IS_ERR(pol)) {
  		err = PTR_ERR(pol);
-@@ -2406,6 +2739,36 @@ static int __split_vma(struct mm_struct
+@@ -2406,6 +2761,36 @@ static int __split_vma(struct mm_struct
  	else
  		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -60158,7 +60155,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	/* Success. */
  	if (!err)
  		return 0;
-@@ -2415,10 +2778,18 @@ static int __split_vma(struct mm_struct
+@@ -2415,10 +2800,18 @@ static int __split_vma(struct mm_struct
  		new->vm_ops->close(new);
  	if (new->vm_file)
  		fput(new->vm_file);
@@ -60178,7 +60175,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	kmem_cache_free(vm_area_cachep, new);
   out_err:
  	return err;
-@@ -2431,6 +2802,15 @@ static int __split_vma(struct mm_struct
+@@ -2431,6 +2824,15 @@ static int __split_vma(struct mm_struct
  int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
  	      unsigned long addr, int new_below)
  {
@@ -60194,7 +60191,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -2442,11 +2822,30 @@ int split_vma(struct mm_struct *mm, stru
+@@ -2442,11 +2844,30 @@ int split_vma(struct mm_struct *mm, stru
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -60225,7 +60222,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -2521,6 +2920,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -2521,6 +2942,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -60234,7 +60231,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	return 0;
  }
  
-@@ -2529,6 +2930,13 @@ int vm_munmap(unsigned long start, size_
+@@ -2529,6 +2952,13 @@ int vm_munmap(unsigned long start, size_
  	int ret;
  	struct mm_struct *mm = current->mm;
  
@@ -60248,7 +60245,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	down_write(&mm->mmap_sem);
  	ret = do_munmap(mm, start, len);
  	up_write(&mm->mmap_sem);
-@@ -2542,16 +2950,6 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -2542,16 +2972,6 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  	return vm_munmap(addr, len);
  }
  
@@ -60265,7 +60262,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2565,6 +2963,7 @@ static unsigned long do_brk(unsigned lon
+@@ -2565,6 +2985,7 @@ static unsigned long do_brk(unsigned lon
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -60273,7 +60270,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2572,16 +2971,30 @@ static unsigned long do_brk(unsigned lon
+@@ -2572,16 +2993,30 @@ static unsigned long do_brk(unsigned lon
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -60305,7 +60302,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		locked += mm->locked_vm;
  		lock_limit = rlimit(RLIMIT_MEMLOCK);
  		lock_limit >>= PAGE_SHIFT;
-@@ -2598,21 +3011,20 @@ static unsigned long do_brk(unsigned lon
+@@ -2598,21 +3033,20 @@ static unsigned long do_brk(unsigned lon
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -60330,7 +60327,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2626,7 +3038,7 @@ static unsigned long do_brk(unsigned lon
+@@ -2626,7 +3060,7 @@ static unsigned long do_brk(unsigned lon
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -60339,7 +60336,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		return -ENOMEM;
  	}
  
-@@ -2640,9 +3052,10 @@ static unsigned long do_brk(unsigned lon
+@@ -2640,9 +3074,10 @@ static unsigned long do_brk(unsigned lon
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
  	perf_event_mmap(vma);
@@ -60352,7 +60349,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	return addr;
  }
  
-@@ -2704,6 +3117,7 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2704,6 +3139,7 @@ void exit_mmap(struct mm_struct *mm)
  	while (vma) {
  		if (vma->vm_flags & VM_ACCOUNT)
  			nr_accounted += vma_pages(vma);
@@ -60360,7 +60357,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  		vma = remove_vma(vma);
  	}
  	vm_unacct_memory(nr_accounted);
-@@ -2720,6 +3134,10 @@ int insert_vm_struct(struct mm_struct *m
+@@ -2720,6 +3156,10 @@ int insert_vm_struct(struct mm_struct *m
  	struct vm_area_struct *prev;
  	struct rb_node **rb_link, *rb_parent;
  
@@ -60371,7 +60368,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2743,7 +3161,21 @@ int insert_vm_struct(struct mm_struct *m
+@@ -2743,7 +3183,21 @@ int insert_vm_struct(struct mm_struct *m
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
  
@@ -60393,7 +60390,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	return 0;
  }
  
-@@ -2763,6 +3195,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2763,6 +3217,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct mempolicy *pol;
  	bool faulted_in_anon_vma = true;
  
@@ -60402,7 +60399,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2829,6 +3263,39 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2829,6 +3285,39 @@ struct vm_area_struct *copy_vma(struct v
  	return NULL;
  }
  
@@ -60442,7 +60439,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/mmap.c linux-3
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2910,6 +3377,17 @@ int install_special_mapping(struct mm_st
+@@ -2910,6 +3399,17 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -60850,7 +60847,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/nommu.c linux-
  
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/mm/page_alloc.c linux-3.9.7-pax/mm/page_alloc.c
 --- linux-3.9.7/mm/page_alloc.c	2013-06-21 03:32:43.702251296 +0200
-+++ linux-3.9.7-pax/mm/page_alloc.c	2013-06-21 03:32:59.562252157 +0200
++++ linux-3.9.7-pax/mm/page_alloc.c	2013-06-25 23:41:01.151962443 +0200
 @@ -59,6 +59,7 @@
  #include <linux/migrate.h>
  #include <linux/page-debug-flags.h>
