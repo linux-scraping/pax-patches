@@ -1,4 +1,7 @@
-- forward port to 3.2.47
+- fixed an ftrace regression on KERNEXEC/i386
+- reverted the nmi changes, 3.2 doesn't need them
+- fixed some fallout from the recent executable vmalloc changes (http://forums.grsecurity.net/viewtopic.php?t=3562#p13111)
+- empty_zero_page can be read-only on amd64 as well
 
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/alpha/include/asm/atomic.h linux-3.2.47-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.47/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -14595,7 +14598,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  /*
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel/entry_64.S linux-3.2.47-pax/arch/x86/kernel/entry_64.S
 --- linux-3.2.47/arch/x86/kernel/entry_64.S	2012-10-31 13:04:03.411702825 +0100
-+++ linux-3.2.47-pax/arch/x86/kernel/entry_64.S	2013-06-21 20:15:56.158564327 +0200
++++ linux-3.2.47-pax/arch/x86/kernel/entry_64.S	2013-06-25 13:24:19.853938026 +0200
 @@ -55,6 +55,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -14669,7 +14672,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	jmp *%rdi
  #endif
  
-@@ -178,6 +186,311 @@ ENTRY(native_usergs_sysret64)
+@@ -178,6 +186,285 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -14862,7 +14865,6 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
 +	sub phys_base(%rip),%rbx
 +
 +#ifdef CONFIG_PARAVIRT
-+	pushq %rdi
 +	cmpl $0, pv_info+PARAVIRT_enabled
 +	jz 1f
 +	i = 0
@@ -14873,7 +14875,6 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
 +	call PARA_INDIRECT(pv_mmu_ops+PV_MMU_set_pgd_batched)
 +	i = i + 1
 +	.endr
-+	popq %rdi
 +	PV_RESTORE_REGS(CLBR_RDI)
 +	jmp 2f
 +1:
@@ -14897,30 +14898,6 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
 +	jmp 3b
 +ENDPROC(pax_exit_kernel_user)
 +#endif
-+
-+	.macro pax_enter_kernel_nmi
-+	pax_set_fptr_mask
-+
-+#ifdef CONFIG_PAX_KERNEXEC
-+	GET_CR0_INTO_RDI
-+	bts $16,%rdi
-+	SET_RDI_INTO_CR0
-+	jc 110f
-+	or $2,%ebx
-+110:
-+#endif
-+	.endm
-+
-+	.macro pax_exit_kernel_nmi
-+#ifdef CONFIG_PAX_KERNEXEC
-+	test $2,%ebx
-+	jz 110f
-+	GET_CR0_INTO_RDI
-+	btr $16,%rdi
-+	SET_RDI_INTO_CR0
-+110:
-+#endif
-+	.endm
 +
 +.macro pax_erase_kstack
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
@@ -14981,7 +14958,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -231,8 +544,8 @@ ENDPROC(native_usergs_sysret64)
+@@ -231,8 +518,8 @@ ENDPROC(native_usergs_sysret64)
  	.endm
  
  	.macro UNFAKE_STACK_FRAME
@@ -14992,7 +14969,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	.endm
  
  /*
-@@ -319,7 +632,7 @@ ENDPROC(native_usergs_sysret64)
+@@ -319,7 +606,7 @@ ENDPROC(native_usergs_sysret64)
  	movq %rsp, %rsi
  
  	leaq -RBP(%rsp),%rdi	/* arg1 for handler */
@@ -15001,7 +14978,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	je 1f
  	SWAPGS
  	/*
-@@ -355,9 +668,10 @@ ENTRY(save_rest)
+@@ -355,9 +642,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
@@ -15013,7 +14990,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -386,9 +700,10 @@ ENTRY(save_paranoid)
+@@ -386,9 +674,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -15026,7 +15003,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	.popsection
  
  /*
-@@ -410,7 +725,7 @@ ENTRY(ret_from_fork)
+@@ -410,7 +699,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -15035,7 +15012,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -420,7 +735,7 @@ ENTRY(ret_from_fork)
+@@ -420,7 +709,7 @@ ENTRY(ret_from_fork)
  	jmp ret_from_sys_call			# go to the SYSRET fastpath
  
  	CFI_ENDPROC
@@ -15044,7 +15021,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /*
   * System call entry. Up to 6 arguments in registers are supported.
-@@ -456,7 +771,7 @@ END(ret_from_fork)
+@@ -456,7 +745,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -15053,7 +15030,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -469,12 +784,18 @@ ENTRY(system_call_after_swapgs)
+@@ -469,12 +758,18 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -15073,7 +15050,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -484,7 +805,7 @@ ENTRY(system_call_after_swapgs)
+@@ -484,7 +779,7 @@ ENTRY(system_call_after_swapgs)
  system_call_fastpath:
  	cmpq $__NR_syscall_max,%rax
  	ja badsys
@@ -15082,7 +15059,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	call *sys_call_table(,%rax,8)  # XXX:	 rip relative
  	movq %rax,RAX-ARGOFFSET(%rsp)
  /*
-@@ -503,6 +824,8 @@ sysret_check:
+@@ -503,6 +798,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -15091,7 +15068,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -554,14 +877,18 @@ badsys:
+@@ -554,14 +851,18 @@ badsys:
  	 * jump back to the normal fast path.
  	 */
  auditsys:
@@ -15111,7 +15088,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	jmp system_call_fastpath
  
  	/*
-@@ -591,16 +918,20 @@ tracesys:
+@@ -591,16 +892,20 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -15133,7 +15110,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	call *sys_call_table(,%rax,8)
  	movq %rax,RAX-ARGOFFSET(%rsp)
  	/* Use IRET because user could have changed frame */
-@@ -612,7 +943,7 @@ tracesys:
+@@ -612,7 +917,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -15142,7 +15119,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -623,7 +954,9 @@ GLOBAL(int_with_check)
+@@ -623,7 +928,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -15153,7 +15130,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -669,7 +1002,7 @@ int_restore_rest:
+@@ -669,7 +976,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -15162,7 +15139,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /*
   * Certain special system calls that need to save a complete full stack frame.
-@@ -685,7 +1018,7 @@ ENTRY(\label)
+@@ -685,7 +992,7 @@ ENTRY(\label)
  	call \func
  	jmp ptregscall_common
  	CFI_ENDPROC
@@ -15171,7 +15148,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	.endm
  
  	PTREGSCALL stub_clone, sys_clone, %r8
-@@ -703,9 +1036,10 @@ ENTRY(ptregscall_common)
+@@ -703,9 +1010,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
@@ -15183,7 +15160,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -720,7 +1054,7 @@ ENTRY(stub_execve)
+@@ -720,7 +1028,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -15192,7 +15169,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -738,7 +1072,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -738,7 +1046,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -15201,7 +15178,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /*
   * Build the entry stubs and pointer table with some assembler magic.
-@@ -773,7 +1107,7 @@ vector=vector+1
+@@ -773,7 +1081,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -15210,7 +15187,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  .previous
  END(interrupt)
-@@ -793,6 +1127,16 @@ END(interrupt)
+@@ -793,6 +1101,16 @@ END(interrupt)
  	subq $ORIG_RAX-RBP, %rsp
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-RBP
  	SAVE_ARGS_IRQ
@@ -15227,7 +15204,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	call \func
  	.endm
  
-@@ -824,7 +1168,7 @@ ret_from_intr:
+@@ -824,7 +1142,7 @@ ret_from_intr:
  
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -15236,7 +15213,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -846,12 +1190,16 @@ retint_swapgs:		/* return to user-space
+@@ -846,12 +1164,16 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -15253,7 +15230,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -940,7 +1288,7 @@ ENTRY(retint_kernel)
+@@ -940,7 +1262,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -15262,7 +15239,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  /*
   * End of kprobes section
   */
-@@ -956,7 +1304,7 @@ ENTRY(\sym)
+@@ -956,7 +1278,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -15271,7 +15248,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1021,12 +1369,22 @@ ENTRY(\sym)
+@@ -1021,12 +1343,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -15295,7 +15272,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1038,15 +1396,25 @@ ENTRY(\sym)
+@@ -1038,15 +1370,25 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -15323,7 +15300,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1056,14 +1424,30 @@ ENTRY(\sym)
+@@ -1056,14 +1398,30 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -15355,7 +15332,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  .endm
  
  .macro errorentry sym do_sym
-@@ -1074,13 +1458,23 @@ ENTRY(\sym)
+@@ -1074,13 +1432,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -15380,7 +15357,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  .endm
  
  	/* error code is on the stack already */
-@@ -1093,13 +1487,23 @@ ENTRY(\sym)
+@@ -1093,13 +1461,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -15405,7 +15382,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1129,9 +1533,10 @@ gs_change:
+@@ -1129,9 +1507,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -15417,7 +15394,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  	.section __ex_table,"a"
  	.align 8
-@@ -1153,13 +1558,14 @@ ENTRY(kernel_thread_helper)
+@@ -1153,13 +1532,14 @@ ENTRY(kernel_thread_helper)
  	 * Here we are in the child and the registers are set as they were
  	 * at kernel_thread() invocation in the parent.
  	 */
@@ -15433,7 +15410,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1186,11 +1592,11 @@ ENTRY(kernel_execve)
+@@ -1186,11 +1566,11 @@ ENTRY(kernel_execve)
  	RESTORE_REST
  	testq %rax,%rax
  	je int_ret_from_sys_call
@@ -15447,7 +15424,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1208,9 +1614,10 @@ ENTRY(call_softirq)
+@@ -1208,9 +1588,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -15459,7 +15436,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1248,7 +1655,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1248,7 +1629,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -15468,7 +15445,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1307,7 +1714,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1307,7 +1688,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -15477,7 +15454,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  apicinterrupt XEN_HVM_EVTCHN_CALLBACK \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1356,16 +1763,31 @@ ENTRY(paranoid_exit)
+@@ -1356,16 +1737,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -15510,7 +15487,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1394,7 +1816,7 @@ paranoid_schedule:
+@@ -1394,7 +1790,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -15519,7 +15496,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1421,12 +1843,13 @@ ENTRY(error_entry)
+@@ -1421,12 +1817,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -15534,7 +15511,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	ret
  
  /*
-@@ -1453,7 +1876,7 @@ bstep_iret:
+@@ -1453,7 +1850,7 @@ bstep_iret:
  	movq %rcx,RIP+8(%rsp)
  	jmp error_swapgs
  	CFI_ENDPROC
@@ -15543,7 +15520,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1473,7 +1896,7 @@ ENTRY(error_exit)
+@@ -1473,7 +1870,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -15552,38 +15529,55 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  
  	/* runs on exception stack */
-@@ -1485,6 +1908,8 @@ ENTRY(nmi)
+@@ -1485,6 +1882,17 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	DEFAULT_FRAME 0
-+	pax_enter_kernel_nmi
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testb $3, CS(%rsp)
++	jnz 1f
++	pax_enter_kernel
++	jmp 2f
++1:	pax_enter_kernel_user
++2:
++#else
++	pax_enter_kernel
++#endif
 +
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1493,15 +1918,19 @@ ENTRY(nmi)
- 	/* paranoidexit; without TRACE_IRQS_OFF */
- 	/* ebx:	no swapgs flag */
+@@ -1495,12 +1903,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
--	testl %ebx,%ebx				/* swapgs needed? */
-+	testl $1,%ebx				/* swapgs needed? */
+ 	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
- 	testl $3,CS(%rsp)
+-	testl $3,CS(%rsp)
++	testb $3,CS(%rsp)
  	jnz nmi_userspace
- nmi_swapgs:
- 	SWAPGS_UNSAFE_STACK
- nmi_restore:
-+	pax_exit_kernel_nmi
- 	RESTORE_ALL 8
--	jmp irq_return
-+	testb $3, 8(%rsp)
-+	jnz 1f
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	pax_exit_kernel
++	SWAPGS_UNSAFE_STACK
++	RESTORE_ALL 8
 +	pax_force_retaddr_bts
-+1:	jmp irq_return
++	jmp irq_return
++#endif
+ nmi_swapgs:
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	pax_exit_kernel_user
++#else
++	pax_exit_kernel
++#endif
+ 	SWAPGS_UNSAFE_STACK
++	RESTORE_ALL 8
++	jmp irq_return
+ nmi_restore:
++	pax_exit_kernel
+ 	RESTORE_ALL 8
++	pax_force_retaddr_bts
+ 	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
- 	movl TI_flags(%rcx),%ebx
-@@ -1529,14 +1958,14 @@ nmi_schedule:
+@@ -1529,14 +1953,14 @@ nmi_schedule:
  	jmp paranoid_exit
  	CFI_ENDPROC
  #endif
@@ -15602,7 +15596,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
   * End of kprobes section
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel/ftrace.c linux-3.2.47-pax/arch/x86/kernel/ftrace.c
 --- linux-3.2.47/arch/x86/kernel/ftrace.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.47-pax/arch/x86/kernel/ftrace.c	2012-12-14 19:47:30.817567033 +0100
++++ linux-3.2.47-pax/arch/x86/kernel/ftrace.c	2013-06-25 14:50:19.865662521 +0200
 @@ -126,7 +126,7 @@ static void *mod_code_ip;		/* holds the
  static const void *mod_code_newcode;	/* holds the text to write to the IP */
  
@@ -15633,15 +15627,6 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	}
  	/* Must have previous changes seen before executions */
  	smp_mb();
-@@ -236,7 +238,7 @@ do_ftrace_mod_code(unsigned long ip, con
- 	 * kernel identity mapping to modify code.
- 	 */
- 	if (within(ip, (unsigned long)_text, (unsigned long)_etext))
--		ip = (unsigned long)__va(__pa(ip));
-+		ip = (unsigned long)__va(__pa(ktla_ktva(ip)));
- 
- 	mod_code_ip = (void *)ip;
- 	mod_code_newcode = new_code;
 @@ -271,6 +273,8 @@ ftrace_modify_code(unsigned long ip, uns
  {
  	unsigned char replaced[MCOUNT_INSN_SIZE];
@@ -15651,15 +15636,6 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  	/*
  	 * Note: Due to modules and __init, code can
  	 *  disappear and change, we need to protect against faulting
-@@ -282,7 +286,7 @@ ftrace_modify_code(unsigned long ip, uns
- 	 */
- 
- 	/* read the text we want to modify */
--	if (probe_kernel_read(replaced, (void *)ip, MCOUNT_INSN_SIZE))
-+	if (probe_kernel_read(replaced, (void *)ktla_ktva(ip), MCOUNT_INSN_SIZE))
- 		return -EFAULT;
- 
- 	/* Make sure it is what we expect it to be */
 @@ -327,7 +331,7 @@ int ftrace_update_ftrace_func(ftrace_fun
  	unsigned char old[MCOUNT_INSN_SIZE], *new;
  	int ret;
@@ -16139,7 +16115,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
 +	.endr
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel/head_64.S linux-3.2.47-pax/arch/x86/kernel/head_64.S
 --- linux-3.2.47/arch/x86/kernel/head_64.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.47-pax/arch/x86/kernel/head_64.S	2012-07-04 19:24:47.572063003 +0200
++++ linux-3.2.47-pax/arch/x86/kernel/head_64.S	2013-06-25 16:29:46.389343955 +0200
 @@ -19,6 +19,8 @@
  #include <asm/cache.h>
  #include <asm/processor-flags.h>
@@ -16363,7 +16339,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -389,33 +429,55 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -389,35 +429,56 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -16427,8 +16403,10 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel
 -	.skip IDT_ENTRIES * 16
 +	.fill 512,8,0
  
- 	__PAGE_ALIGNED_BSS
+-	__PAGE_ALIGNED_BSS
  	.align PAGE_SIZE
+ ENTRY(empty_zero_page)
+ 	.skip PAGE_SIZE
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/x86/kernel/i386_ksyms_32.c linux-3.2.47-pax/arch/x86/kernel/i386_ksyms_32.c
 --- linux-3.2.47/arch/x86/kernel/i386_ksyms_32.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.47-pax/arch/x86/kernel/i386_ksyms_32.c	2012-07-04 19:24:47.572063003 +0200
@@ -33846,13 +33824,13 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/drivers/leds/le
  		.ident = "Intel SS4200-E",
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/drivers/lguest/core.c linux-3.2.47-pax/drivers/lguest/core.c
 --- linux-3.2.47/drivers/lguest/core.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.47-pax/drivers/lguest/core.c	2012-07-04 19:24:48.476063007 +0200
++++ linux-3.2.47-pax/drivers/lguest/core.c	2013-06-26 00:26:06.199818015 +0200
 @@ -92,9 +92,17 @@ static __init int map_switcher(void)
  	 * it's worked so far.  The end address needs +1 because __get_vm_area
  	 * allocates an extra guard page, so we need space for that.
  	 */
 +
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
 +	switcher_vma = __get_vm_area(TOTAL_SWITCHER_PAGES * PAGE_SIZE,
 +				     VM_ALLOC | VM_KERNEXEC, SWITCHER_ADDR, SWITCHER_ADDR
 +				     + (TOTAL_SWITCHER_PAGES+1) * PAGE_SIZE);
@@ -50014,13 +49992,13 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/include/linux/v
  
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/include/linux/vmalloc.h linux-3.2.47-pax/include/linux/vmalloc.h
 --- linux-3.2.47/include/linux/vmalloc.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.47-pax/include/linux/vmalloc.h	2013-03-30 21:53:12.719052580 +0100
++++ linux-3.2.47-pax/include/linux/vmalloc.h	2013-06-26 00:25:42.011819306 +0200
 @@ -14,6 +14,11 @@ struct vm_area_struct;		/* vma defining
  #define VM_USERMAP	0x00000008	/* suitable for remap_vmalloc_range */
  #define VM_VPAGES	0x00000010	/* buffer for pages was vmalloc'ed */
  #define VM_UNLIST	0x00000020	/* vm_struct is not listed in vmlist */
 +
-+#if defined(CONFIG_MODULES) && defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_X86) && defined(CONFIG_PAX_KERNEXEC)
 +#define VM_KERNEXEC	0x00000040	/* allocate from executable kernel memory range */
 +#endif
 +
