@@ -1,5 +1,5 @@
-- fixed a regression on PARAVIRT/amd64 kernels
-- simplified the recent vm_unmapped_area_info based change
+- hopefully fixed the EFI boot regression (https://bugs.gentoo.org/show_bug.cgi?id=471626)
+- fixed some arm compilation issues (http://forums.grsecurity.net/viewtopic.php?f=1&t=3586 and http://forums.grsecurity.net/viewtopic.php?f=1&t=3587)
 
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/alpha/include/asm/atomic.h linux-3.9.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.9.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -1504,7 +1504,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/include/
  	},								\
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/include/asm/uaccess.h linux-3.9.7-pax/arch/arm/include/asm/uaccess.h
 --- linux-3.9.7/arch/arm/include/asm/uaccess.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.9.7-pax/arch/arm/include/asm/uaccess.h	2013-04-30 01:26:50.571580947 +0200
++++ linux-3.9.7-pax/arch/arm/include/asm/uaccess.h	2013-07-04 19:45:59.106440994 +0200
 @@ -18,6 +18,7 @@
  #include <asm/domain.h>
  #include <asm/unified.h>
@@ -1513,15 +1513,21 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/include/
  
  #define VERIFY_READ 0
  #define VERIFY_WRITE 1
-@@ -60,10 +61,34 @@ extern int __put_user_bad(void);
- #define USER_DS		TASK_SIZE
- #define get_fs()	(current_thread_info()->addr_limit)
+@@ -63,11 +64,35 @@ extern int __put_user_bad(void);
+ static inline void set_fs(mm_segment_t fs)
+ {
+ 	current_thread_info()->addr_limit = fs;
+-	modify_domain(DOMAIN_KERNEL, fs ? DOMAIN_CLIENT : DOMAIN_MANAGER);
++	modify_domain(DOMAIN_KERNEL, fs ? DOMAIN_KERNELCLIENT : DOMAIN_MANAGER);
+ }
+ 
+ #define segment_eq(a,b)	((a) == (b))
  
 +static inline void pax_open_userland(void)
 +{
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (get_fs() == USER_DS) {
++	if (segment_eq(get_fs(), USER_DS) {
 +		BUG_ON(test_domain(DOMAIN_USER, DOMAIN_UDEREF));
 +		modify_domain(DOMAIN_USER, DOMAIN_UDEREF);
 +	}
@@ -1533,7 +1539,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/include/
 +{
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (get_fs() == USER_DS) {
++	if (segment_eq(get_fs(), USER_DS) {
 +		BUG_ON(test_domain(DOMAIN_USER, DOMAIN_NOACCESS));
 +		modify_domain(DOMAIN_USER, DOMAIN_NOACCESS);
 +	}
@@ -1541,14 +1547,9 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/include/
 +
 +}
 +
- static inline void set_fs(mm_segment_t fs)
- {
- 	current_thread_info()->addr_limit = fs;
--	modify_domain(DOMAIN_KERNEL, fs ? DOMAIN_CLIENT : DOMAIN_MANAGER);
-+	modify_domain(DOMAIN_KERNEL, fs ? DOMAIN_KERNELCLIENT : DOMAIN_MANAGER);
- }
- 
- #define segment_eq(a,b)	((a) == (b))
+ #define __addr_ok(addr) ({ \
+ 	unsigned long flag; \
+ 	__asm__("cmp %2, %0; movlo %0, #0" \
 @@ -143,8 +168,12 @@ extern int __get_user_4(void *);
  
  #define get_user(x,p)							\
@@ -1707,7 +1708,16 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/Kconfig 
  	  Implement faster copy_to_user and clear_user methods for CPU
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/kernel/armksyms.c linux-3.9.7-pax/arch/arm/kernel/armksyms.c
 --- linux-3.9.7/arch/arm/kernel/armksyms.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.9.7-pax/arch/arm/kernel/armksyms.c	2013-04-30 01:26:50.571580947 +0200
++++ linux-3.9.7-pax/arch/arm/kernel/armksyms.c	2013-07-03 13:37:12.451345974 +0200
+@@ -53,7 +53,7 @@ EXPORT_SYMBOL(arm_delay_ops);
+ 
+ 	/* networking */
+ EXPORT_SYMBOL(csum_partial);
+-EXPORT_SYMBOL(csum_partial_copy_from_user);
++EXPORT_SYMBOL(__csum_partial_copy_from_user);
+ EXPORT_SYMBOL(csum_partial_copy_nocheck);
+ EXPORT_SYMBOL(__csum_ipv6_magic);
+ 
 @@ -89,9 +89,9 @@ EXPORT_SYMBOL(__memzero);
  #ifdef CONFIG_MMU
  EXPORT_SYMBOL(copy_page);
@@ -1723,7 +1733,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/kernel/a
  EXPORT_SYMBOL(__get_user_2);
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/kernel/entry-armv.S linux-3.9.7-pax/arch/arm/kernel/entry-armv.S
 --- linux-3.9.7/arch/arm/kernel/entry-armv.S	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.9.7-pax/arch/arm/kernel/entry-armv.S	2013-04-30 01:26:50.571580947 +0200
++++ linux-3.9.7-pax/arch/arm/kernel/entry-armv.S	2013-07-04 19:47:57.454434675 +0200
 @@ -47,6 +47,87 @@
  9997:
  	.endm
@@ -1893,7 +1903,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/kernel/e
   THUMB(	str	sp, [ip], #4		   )
   THUMB(	str	lr, [ip], #4		   )
 -#ifdef CONFIG_CPU_USE_DOMAINS
-+#if defined(CONFIG_CPU_USE_DOMAINS) || defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_CPU_USE_DOMAINS) || defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF)
  	ldr	r6, [r2, #TI_CPU_DOMAIN]
  #endif
  	set_tls	r3, r4, r5
@@ -1902,7 +1912,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/kernel/e
  	ldr	r7, [r7, #TSK_STACK_CANARY]
  #endif
 -#ifdef CONFIG_CPU_USE_DOMAINS
-+#if defined(CONFIG_CPU_USE_DOMAINS) || defined(CONFIG_PAX_KERNEXEC)
++#if defined(CONFIG_CPU_USE_DOMAINS) || defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF)
  	mcr	p15, 0, r6, c3, c0, 0		@ Set domain register
  #endif
  	mov	r5, r0
@@ -3078,13 +3088,13 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/mm/iorem
  			__builtin_return_address(0));
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/arm/mm/Kconfig linux-3.9.7-pax/arch/arm/mm/Kconfig
 --- linux-3.9.7/arch/arm/mm/Kconfig	2013-04-30 01:24:47.951587494 +0200
-+++ linux-3.9.7-pax/arch/arm/mm/Kconfig	2013-04-30 01:26:50.591580946 +0200
++++ linux-3.9.7-pax/arch/arm/mm/Kconfig	2013-07-03 22:10:29.581701646 +0200
 @@ -425,7 +425,7 @@ config CPU_32v5
  
  config CPU_32v6
  	bool
 -	select CPU_USE_DOMAINS if CPU_V6 && MMU
-+	select CPU_USE_DOMAINS if CPU_V6 && MMU && !PAX_KERNEXEC
++	select CPU_USE_DOMAINS if CPU_V6 && MMU && !PAX_KERNEXEC && !PAX_MEMORY_UDEREF
  	select TLS_REG_EMUL if !CPU_32v6K && !MMU
  
  config CPU_32v6K
@@ -9212,7 +9222,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/crypto/t
  ENDPROC(twofish_dec_blk)
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/ia32/ia32entry.S linux-3.9.7-pax/arch/x86/ia32/ia32entry.S
 --- linux-3.9.7/arch/x86/ia32/ia32entry.S	2013-04-30 01:25:06.235586517 +0200
-+++ linux-3.9.7-pax/arch/x86/ia32/ia32entry.S	2013-05-13 02:43:40.765805828 +0200
++++ linux-3.9.7-pax/arch/x86/ia32/ia32entry.S	2013-07-04 20:11:07.498360457 +0200
 @@ -15,8 +15,10 @@
  #include <asm/irqflags.h>
  #include <asm/asm.h>
@@ -9248,11 +9258,11 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/ia32/ia3
 +#endif
 +	.endm
 +
-+.macro pax_erase_kstack
++	.macro pax_erase_kstack
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +	call pax_erase_kstack
 +#endif
-+.endm
++	.endm
 +
  /*
   * 32bit SYSENTER instruction entry.
@@ -11789,6 +11799,17 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/include/
  {
  	unsigned long y = x - __START_KERNEL_map;
  
+diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/include/asm/page.h linux-3.9.7-pax/arch/x86/include/asm/page.h
+--- linux-3.9.7/arch/x86/include/asm/page.h	2013-04-30 01:25:06.243586517 +0200
++++ linux-3.9.7-pax/arch/x86/include/asm/page.h	2013-07-04 19:49:26.242429934 +0200
+@@ -52,6 +52,7 @@ static inline void copy_user_page(void *
+ 	__phys_addr_symbol(__phys_reloc_hide((unsigned long)(x)))
+ 
+ #define __va(x)			((void *)((unsigned long)(x)+PAGE_OFFSET))
++#define __early_va(x)		((void *)((unsigned long)(x)+__START_KERNEL_map - phys_base))
+ 
+ #define __boot_va(x)		__va(x)
+ #define __boot_pa(x)		__pa(x)
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/include/asm/paravirt.h linux-3.9.7-pax/arch/x86/include/asm/paravirt.h
 --- linux-3.9.7/arch/x86/include/asm/paravirt.h	2013-04-30 01:25:06.243586517 +0200
 +++ linux-3.9.7-pax/arch/x86/include/asm/paravirt.h	2013-04-30 01:26:50.707580939 +0200
@@ -15867,7 +15888,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  #include <asm/fcntl.h>
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/entry_32.S linux-3.9.7-pax/arch/x86/kernel/entry_32.S
 --- linux-3.9.7/arch/x86/kernel/entry_32.S	2013-04-30 01:25:06.275586515 +0200
-+++ linux-3.9.7-pax/arch/x86/kernel/entry_32.S	2013-04-30 01:26:50.751580937 +0200
++++ linux-3.9.7-pax/arch/x86/kernel/entry_32.S	2013-07-04 20:11:21.842359691 +0200
 @@ -177,13 +177,153 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
@@ -15963,11 +15984,11 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
 +ENDPROC(pax_exit_kernel)
 +#endif
 +
-+.macro pax_erase_kstack
++	.macro pax_erase_kstack
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +	call pax_erase_kstack
 +#endif
-+.endm
++	.endm
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +/*
@@ -16626,7 +16647,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  /*
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/entry_64.S linux-3.9.7-pax/arch/x86/kernel/entry_64.S
 --- linux-3.9.7/arch/x86/kernel/entry_64.S	2013-04-30 01:25:06.279586515 +0200
-+++ linux-3.9.7-pax/arch/x86/kernel/entry_64.S	2013-06-27 00:07:50.745907891 +0200
++++ linux-3.9.7-pax/arch/x86/kernel/entry_64.S	2013-07-04 20:11:29.514359282 +0200
 @@ -59,6 +59,8 @@
  #include <asm/context_tracking.h>
  #include <asm/smap.h>
@@ -16962,11 +16983,11 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
 +#endif
 +	.endm
 +
-+.macro pax_erase_kstack
++	.macro pax_erase_kstack
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +	call pax_erase_kstack
 +#endif
-+.endm
++	.endm
 +
 +#ifdef CONFIG_PAX_MEMORY_STACKLEAK
 +ENTRY(pax_erase_kstack)
@@ -17536,9 +17557,12 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  apicinterrupt HYPERVISOR_CALLBACK_VECTOR \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1498,16 +1907,31 @@ ENTRY(paranoid_exit)
+@@ -1496,18 +1905,33 @@ ENTRY(paranoid_exit)
+ 	DEFAULT_FRAME
+ 	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF_DEBUG
- 	testl %ebx,%ebx				/* swapgs needed? */
+-	testl %ebx,%ebx				/* swapgs needed? */
++	testl $1,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
 -	testl $3,CS(%rsp)
 +	testb $3,CS(%rsp)
@@ -17602,6 +17626,15 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/e
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
+@@ -1606,7 +2031,7 @@ ENTRY(error_exit)
+ 	DISABLE_INTERRUPTS(CLBR_NONE)
+ 	TRACE_IRQS_OFF
+ 	GET_THREAD_INFO(%rcx)
+-	testl %eax,%eax
++	testl $1,%eax
+ 	jne retint_kernel
+ 	LOCKDEP_SYS_EXIT_IRQ
+ 	movl TI_flags(%rcx),%edx
 @@ -1615,7 +2040,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
@@ -18185,7 +18218,48 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
 +	.endr
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/head64.c linux-3.9.7-pax/arch/x86/kernel/head64.c
 --- linux-3.9.7/arch/x86/kernel/head64.c	2013-05-28 01:54:11.810770119 +0200
-+++ linux-3.9.7-pax/arch/x86/kernel/head64.c	2013-05-21 13:18:15.921665476 +0200
++++ linux-3.9.7-pax/arch/x86/kernel/head64.c	2013-07-04 19:53:48.142415951 +0200
+@@ -67,12 +67,12 @@ again:
+ 	pgd = *pgd_p;
+ 
+ 	/*
+-	 * The use of __START_KERNEL_map rather than __PAGE_OFFSET here is
+-	 * critical -- __PAGE_OFFSET would point us back into the dynamic
++	 * The use of __early_va rather than __va here is critical:
++	 * __va would point us back into the dynamic
+ 	 * range and we might end up looping forever...
+ 	 */
+ 	if (pgd)
+-		pud_p = (pudval_t *)((pgd & PTE_PFN_MASK) + __START_KERNEL_map - phys_base);
++		pud_p = (pudval_t *)(__early_va(pgd & PTE_PFN_MASK));
+ 	else {
+ 		if (next_early_pgt >= EARLY_DYNAMIC_PAGE_TABLES) {
+ 			reset_early_page_tables();
+@@ -82,13 +82,13 @@ again:
+ 		pud_p = (pudval_t *)early_dynamic_pgts[next_early_pgt++];
+ 		for (i = 0; i < PTRS_PER_PUD; i++)
+ 			pud_p[i] = 0;
+-		*pgd_p = (pgdval_t)pud_p - __START_KERNEL_map + phys_base + _KERNPG_TABLE;
++		*pgd_p = (pgdval_t)__pa(pud_p) + _KERNPG_TABLE;
+ 	}
+ 	pud_p += pud_index(address);
+ 	pud = *pud_p;
+ 
+ 	if (pud)
+-		pmd_p = (pmdval_t *)((pud & PTE_PFN_MASK) + __START_KERNEL_map - phys_base);
++		pmd_p = (pmdval_t *)(__early_va(pud & PTE_PFN_MASK));
+ 	else {
+ 		if (next_early_pgt >= EARLY_DYNAMIC_PAGE_TABLES) {
+ 			reset_early_page_tables();
+@@ -98,7 +98,7 @@ again:
+ 		pmd_p = (pmdval_t *)early_dynamic_pgts[next_early_pgt++];
+ 		for (i = 0; i < PTRS_PER_PMD; i++)
+ 			pmd_p[i] = 0;
+-		*pud_p = (pudval_t)pmd_p - __START_KERNEL_map + phys_base + _KERNPG_TABLE;
++		*pud_p = (pudval_t)__pa(pmd_p) + _KERNPG_TABLE;
+ 	}
+ 	pmd = (physaddr & PMD_MASK) + early_pmd_flags;
+ 	pmd_p[pmd_index(address)] = pmd;
 @@ -175,7 +175,6 @@ void __init x86_64_start_kernel(char * r
  	if (console_loglevel == 10)
  		early_printk("Kernel alive\n");
@@ -18196,7 +18270,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/head_64.S linux-3.9.7-pax/arch/x86/kernel/head_64.S
 --- linux-3.9.7/arch/x86/kernel/head_64.S	2013-06-12 00:05:29.767602880 +0200
-+++ linux-3.9.7-pax/arch/x86/kernel/head_64.S	2013-06-25 02:54:04.655449595 +0200
++++ linux-3.9.7-pax/arch/x86/kernel/head_64.S	2013-07-04 19:55:18.646411118 +0200
 @@ -20,6 +20,8 @@
  #include <asm/processor-flags.h>
  #include <asm/percpu.h>
@@ -18219,23 +18293,34 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  
  	.text
  	__HEAD
-@@ -89,11 +97,15 @@ startup_64:
+@@ -89,11 +97,23 @@ startup_64:
  	 * Fixup the physical addresses in the page table
  	 */
  	addq	%rbp, early_level4_pgt + (L4_START_KERNEL*8)(%rip)
++	addq	%rbp, init_level4_pgt + (L4_PAGE_OFFSET*8)(%rip)
 +	addq	%rbp, init_level4_pgt + (L4_VMALLOC_START*8)(%rip)
 +	addq	%rbp, init_level4_pgt + (L4_VMALLOC_END*8)(%rip)
 +	addq	%rbp, init_level4_pgt + (L4_VMEMMAP_START*8)(%rip)
++	addq	%rbp, init_level4_pgt + (L4_START_KERNEL*8)(%rip)
  
- 	addq	%rbp, level3_kernel_pgt + (510*8)(%rip)
- 	addq	%rbp, level3_kernel_pgt + (511*8)(%rip)
+-	addq	%rbp, level3_kernel_pgt + (510*8)(%rip)
+-	addq	%rbp, level3_kernel_pgt + (511*8)(%rip)
++	addq	%rbp, level3_ident_pgt + (0*8)(%rip)
++#ifndef CONFIG_XEN
++	addq	%rbp, level3_ident_pgt + (1*8)(%rip)
++#endif
++
++	addq	%rbp, level3_vmemmap_pgt + (L3_VMEMMAP_START*8)(%rip)
  
- 	addq	%rbp, level2_fixmap_pgt + (506*8)(%rip)
+-	addq	%rbp, level2_fixmap_pgt + (506*8)(%rip)
++	addq	%rbp, level3_kernel_pgt + (L3_START_KERNEL*8)(%rip)
++	addq	%rbp, level3_kernel_pgt + ((L3_START_KERNEL+1)*8)(%rip)
++
 +	addq	%rbp, level2_fixmap_pgt + (507*8)(%rip)
  
  	/*
  	 * Set up the identity mapping for the switchover.  These
-@@ -177,8 +189,8 @@ ENTRY(secondary_startup_64)
+@@ -177,8 +197,8 @@ ENTRY(secondary_startup_64)
  	movq	$(init_level4_pgt - __START_KERNEL_map), %rax
  1:
  
@@ -18246,7 +18331,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  	movq	%rcx, %cr4
  
  	/* Setup early boot stage 4 level pagetables. */
-@@ -199,10 +211,18 @@ ENTRY(secondary_startup_64)
+@@ -199,10 +219,18 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -18266,7 +18351,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -282,6 +302,7 @@ ENTRY(secondary_startup_64)
+@@ -282,6 +310,7 @@ ENTRY(secondary_startup_64)
  	 *	REX.W + FF /5 JMP m16:64 Jump far, absolute indirect,
  	 *		address given in m16:64.
  	 */
@@ -18274,7 +18359,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -388,7 +409,7 @@ ENTRY(early_idt_handler)
+@@ -388,7 +417,7 @@ ENTRY(early_idt_handler)
  	call dump_stack
  #ifdef CONFIG_KALLSYMS	
  	leaq early_idt_ripmsg(%rip),%rdi
@@ -18283,7 +18368,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  	call __print_symbol
  #endif
  #endif /* EARLY_PRINTK */
-@@ -416,6 +437,7 @@ ENDPROC(early_idt_handler)
+@@ -416,6 +445,7 @@ ENDPROC(early_idt_handler)
  early_recursion_flag:
  	.long 0
  
@@ -18291,9 +18376,12 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  #ifdef CONFIG_EARLY_PRINTK
  early_idt_msg:
  	.asciz "PANIC: early exception %02lx rip %lx:%lx error %lx cr2 %lx\n"
-@@ -445,27 +467,50 @@ NEXT_PAGE(early_dynamic_pgts)
+@@ -443,29 +473,52 @@ NEXT_PAGE(early_level4_pgt)
+ NEXT_PAGE(early_dynamic_pgts)
+ 	.fill	512*EARLY_DYNAMIC_PAGE_TABLES,8,0
  
- 	.data
+-	.data
++	.section .rodata,"a",@progbits
  
 -#ifndef CONFIG_XEN
 -NEXT_PAGE(init_level4_pgt)
@@ -18350,7 +18438,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -473,6 +518,9 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -473,6 +526,9 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -18360,7 +18448,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/kernel/h
  NEXT_PAGE(level2_kernel_pgt)
  	/*
  	 * 512 MB kernel mapping. We spend a full page on this pagetable
-@@ -488,39 +536,64 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -488,39 +544,64 @@ NEXT_PAGE(level2_kernel_pgt)
  		KERNEL_IMAGE_SIZE/PMD_SIZE)
  
  NEXT_PAGE(level2_fixmap_pgt)
@@ -25432,7 +25520,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/huget
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_32.c linux-3.9.7-pax/arch/x86/mm/init_32.c
 --- linux-3.9.7/arch/x86/mm/init_32.c	2013-04-30 01:25:06.303586514 +0200
-+++ linux-3.9.7-pax/arch/x86/mm/init_32.c	2013-04-30 01:26:50.803580934 +0200
++++ linux-3.9.7-pax/arch/x86/mm/init_32.c	2013-07-04 20:01:16.302392022 +0200
 @@ -62,33 +62,6 @@ static noinline int do_test_wp_bit(void)
  bool __read_mostly __vmalloc_start_set = false;
  
@@ -25644,20 +25732,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  EXPORT_SYMBOL_GPL(__supported_pte_mask);
  
  /* user-defined highmem size */
-@@ -752,6 +754,12 @@ void __init mem_init(void)
- 
- 	pci_iommu_alloc();
- 
-+#ifdef CONFIG_PAX_PER_CPU_PGD
-+	clone_pgd_range(get_cpu_pgd(0) + KERNEL_PGD_BOUNDARY,
-+			swapper_pg_dir + KERNEL_PGD_BOUNDARY,
-+			KERNEL_PGD_PTRS);
-+#endif
-+
- #ifdef CONFIG_FLATMEM
- 	BUG_ON(!mem_map);
- #endif
-@@ -780,7 +788,7 @@ void __init mem_init(void)
+@@ -780,7 +782,7 @@ void __init mem_init(void)
  	after_bootmem = 1;
  
  	codesize =  (unsigned long) &_etext - (unsigned long) &_text;
@@ -25666,7 +25741,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  	initsize =  (unsigned long) &__init_end - (unsigned long) &__init_begin;
  
  	printk(KERN_INFO "Memory: %luk/%luk available (%dk kernel code, "
-@@ -821,10 +829,10 @@ void __init mem_init(void)
+@@ -821,10 +823,10 @@ void __init mem_init(void)
  		((unsigned long)&__init_end -
  		 (unsigned long)&__init_begin) >> 10,
  
@@ -25680,7 +25755,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  		((unsigned long)&_etext - (unsigned long)&_text) >> 10);
  
  	/*
-@@ -914,6 +922,7 @@ void set_kernel_text_rw(void)
+@@ -914,6 +916,7 @@ void set_kernel_text_rw(void)
  	if (!kernel_set_to_readonly)
  		return;
  
@@ -25688,7 +25763,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  	pr_debug("Set kernel text: %lx - %lx for read write\n",
  		 start, start+size);
  
-@@ -928,6 +937,7 @@ void set_kernel_text_ro(void)
+@@ -928,6 +931,7 @@ void set_kernel_text_ro(void)
  	if (!kernel_set_to_readonly)
  		return;
  
@@ -25696,7 +25771,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  	pr_debug("Set kernel text: %lx - %lx for read only\n",
  		 start, start+size);
  
-@@ -956,6 +966,7 @@ void mark_rodata_ro(void)
+@@ -956,6 +960,7 @@ void mark_rodata_ro(void)
  	unsigned long start = PFN_ALIGN(_text);
  	unsigned long size = PFN_ALIGN(_etext) - start;
  
@@ -25706,7 +25781,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  		size >> 10);
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_64.c linux-3.9.7-pax/arch/x86/mm/init_64.c
 --- linux-3.9.7/arch/x86/mm/init_64.c	2013-04-30 01:25:06.303586514 +0200
-+++ linux-3.9.7-pax/arch/x86/mm/init_64.c	2013-05-18 03:43:28.489305160 +0200
++++ linux-3.9.7-pax/arch/x86/mm/init_64.c	2013-07-04 20:01:29.078391340 +0200
 @@ -150,7 +150,7 @@ early_param("gbpages", parse_direct_gbpa
   * around without checking the pgd every time.
   */
@@ -25821,20 +25896,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  		spin_unlock(&init_mm.page_table_lock);
  		pgd_changed = true;
  	}
-@@ -1065,6 +1079,12 @@ void __init mem_init(void)
- 
- 	pci_iommu_alloc();
- 
-+#ifdef CONFIG_PAX_PER_CPU_PGD
-+	clone_pgd_range(get_cpu_pgd(0) + KERNEL_PGD_BOUNDARY,
-+			swapper_pg_dir + KERNEL_PGD_BOUNDARY,
-+			KERNEL_PGD_PTRS);
-+#endif
-+
- 	/* clear_bss() already clear the empty_zero_page */
- 
- 	reservedpages = 0;
-@@ -1224,8 +1244,8 @@ int kern_addr_valid(unsigned long addr)
+@@ -1224,8 +1238,8 @@ int kern_addr_valid(unsigned long addr)
  static struct vm_area_struct gate_vma = {
  	.vm_start	= VSYSCALL_START,
  	.vm_end		= VSYSCALL_START + (VSYSCALL_MAPPED_PAGES * PAGE_SIZE),
@@ -25845,7 +25907,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  };
  
  struct vm_area_struct *get_gate_vma(struct mm_struct *mm)
-@@ -1259,7 +1279,7 @@ int in_gate_area_no_mm(unsigned long add
+@@ -1259,7 +1273,7 @@ int in_gate_area_no_mm(unsigned long add
  
  const char *arch_vma_name(struct vm_area_struct *vma)
  {
@@ -25856,7 +25918,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init_
  		return "[vsyscall]";
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init.c linux-3.9.7-pax/arch/x86/mm/init.c
 --- linux-3.9.7/arch/x86/mm/init.c	2013-06-21 03:32:43.402251279 +0200
-+++ linux-3.9.7-pax/arch/x86/mm/init.c	2013-06-26 00:18:39.891841844 +0200
++++ linux-3.9.7-pax/arch/x86/mm/init.c	2013-07-04 20:02:41.186387490 +0200
 @@ -17,6 +17,7 @@
  #include <asm/proto.h>
  #include <asm/dma.h>		/* for MAX_DMA_PFN */
@@ -25865,7 +25927,23 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init.
  
  #include "mm_internal.h"
  
-@@ -466,7 +467,13 @@ void __init init_mem_mapping(void)
+@@ -448,7 +449,15 @@ void __init init_mem_mapping(void)
+ 	early_ioremap_page_table_range_init();
+ #endif
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	clone_pgd_range(get_cpu_pgd(0) + KERNEL_PGD_BOUNDARY,
++			swapper_pg_dir + KERNEL_PGD_BOUNDARY,
++			KERNEL_PGD_PTRS);
++	load_cr3(get_cpu_pgd(0));
++#else
+ 	load_cr3(swapper_pg_dir);
++#endif
++
+ 	__flush_tlb_all();
+ 
+ 	early_memtest(0, max_pfn_mapped << PAGE_SHIFT);
+@@ -466,7 +475,13 @@ void __init init_mem_mapping(void)
   */
  int devmem_is_allowed(unsigned long pagenr)
  {
@@ -25880,7 +25958,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/mm/init.
  		return 1;
  	if (iomem_is_exclusive(pagenr << PAGE_SHIFT))
  		return 0;
-@@ -526,6 +533,87 @@ void free_init_pages(char *what, unsigne
+@@ -526,6 +541,87 @@ void free_init_pages(char *what, unsigne
  
  void free_initmem(void)
  {
@@ -27438,7 +27516,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/pci/pcbi
  EXPORT_SYMBOL(pcibios_set_irq_routing);
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/platform/efi/efi_32.c linux-3.9.7-pax/arch/x86/platform/efi/efi_32.c
 --- linux-3.9.7/arch/x86/platform/efi/efi_32.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.9.7-pax/arch/x86/platform/efi/efi_32.c	2013-04-30 01:26:50.819580933 +0200
++++ linux-3.9.7-pax/arch/x86/platform/efi/efi_32.c	2013-07-04 20:17:00.062341633 +0200
 @@ -44,11 +44,22 @@ void efi_call_phys_prelog(void)
  {
  	struct desc_ptr gdt_descr;
@@ -27462,7 +27540,7 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/platform
  	gdt_descr.address = __pa(get_cpu_gdt_table(0));
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
-@@ -58,6 +69,14 @@ void efi_call_phys_epilog(void)
+@@ -58,11 +69,24 @@ void efi_call_phys_epilog(void)
  {
  	struct desc_ptr gdt_descr;
  
@@ -27477,6 +27555,43 @@ diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/platform
  	gdt_descr.address = (unsigned long)get_cpu_gdt_table(0);
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	load_cr3(get_cpu_pgd(smp_processor_id()));
++#else
+ 	load_cr3(swapper_pg_dir);
++#endif
++
+ 	__flush_tlb_all();
+ 
+ 	local_irq_restore(efi_rt_eflags);
+diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/platform/efi/efi_64.c linux-3.9.7-pax/arch/x86/platform/efi/efi_64.c
+--- linux-3.9.7/arch/x86/platform/efi/efi_64.c	2013-02-19 01:12:52.297766682 +0100
++++ linux-3.9.7-pax/arch/x86/platform/efi/efi_64.c	2013-07-04 20:00:16.338395224 +0200
+@@ -75,6 +75,11 @@ void __init efi_call_phys_prelog(void)
+ 		vaddress = (unsigned long)__va(pgd * PGDIR_SIZE);
+ 		set_pgd(pgd_offset_k(pgd * PGDIR_SIZE), *pgd_offset_k(vaddress));
+ 	}
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	load_cr3(swapper_pg_dir);
++#endif
++
+ 	__flush_tlb_all();
+ }
+ 
+@@ -88,6 +93,11 @@ void __init efi_call_phys_epilog(void)
+ 	for (pgd = 0; pgd < n_pgds; pgd++)
+ 		set_pgd(pgd_offset_k(pgd * PGDIR_SIZE), save_pgd[pgd]);
+ 	kfree(save_pgd);
++
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	load_cr3(get_cpu_pgd(smp_processor_id()));
++#endif
++
+ 	__flush_tlb_all();
+ 	local_irq_restore(efi_flags);
+ 	early_code_mapping_set_exec(0);
 diff -NurpX linux-3.9.7-pax/Documentation/dontdiff linux-3.9.7/arch/x86/platform/efi/efi_stub_32.S linux-3.9.7-pax/arch/x86/platform/efi/efi_stub_32.S
 --- linux-3.9.7/arch/x86/platform/efi/efi_stub_32.S	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.9.7-pax/arch/x86/platform/efi/efi_stub_32.S	2013-04-30 01:26:50.819580933 +0200
