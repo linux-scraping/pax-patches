@@ -1,4 +1,5 @@
-- forward port to 3.9.9
+- fixed the heap-stack gap code for STACK_GROWSUP some more, reported by spender
+- a few cleanups based on the 3.10 port
 
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/alpha/include/asm/atomic.h linux-3.9.9-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.9.9/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -2759,6 +2760,18 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/arm/mach-oma
  	pdev = omap_device_build(dev_name, id, oh, &pdata,
  				 sizeof(struct omap_wd_timer_platform_data));
  	WARN(IS_ERR(pdev), "Can't build omap_device for %s:%s.\n",
+diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/arm/mach-tegra/cpuidle-tegra20.c linux-3.9.9-pax/arch/arm/mach-tegra/cpuidle-tegra20.c
+--- linux-3.9.9/arch/arm/mach-tegra/cpuidle-tegra20.c	2013-04-30 01:24:47.867587498 +0200
++++ linux-3.9.9-pax/arch/arm/mach-tegra/cpuidle-tegra20.c	2013-07-08 15:15:15.687143120 +0200
+@@ -184,7 +184,7 @@ static int tegra20_idle_lp2_coupled(stru
+ 	bool entered_lp2 = false;
+ 
+ 	if (tegra_pending_sgi())
+-		ACCESS_ONCE(abort_flag) = true;
++		ACCESS_ONCE_RW(abort_flag) = true;
+ 
+ 	cpuidle_coupled_parallel_barrier(dev, &abort_barrier);
+ 
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/arm/mach-ux500/include/mach/setup.h linux-3.9.9-pax/arch/arm/mach-ux500/include/mach/setup.h
 --- linux-3.9.9/arch/arm/mach-ux500/include/mach/setup.h	2013-04-30 01:24:47.919587495 +0200
 +++ linux-3.9.9-pax/arch/arm/mach-ux500/include/mach/setup.h	2013-04-30 01:26:50.587580946 +0200
@@ -23937,7 +23950,7 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/lib/thun
  	CFI_ENDPROC
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/lib/usercopy_32.c linux-3.9.9-pax/arch/x86/lib/usercopy_32.c
 --- linux-3.9.9/arch/x86/lib/usercopy_32.c	2013-02-19 01:12:52.193766676 +0100
-+++ linux-3.9.9-pax/arch/x86/lib/usercopy_32.c	2013-04-30 01:26:50.799580934 +0200
++++ linux-3.9.9-pax/arch/x86/lib/usercopy_32.c	2013-07-08 22:11:06.395876715 +0200
 @@ -42,11 +42,13 @@ do {									\
  	int __d0;							\
  	might_fault();							\
@@ -24453,7 +24466,7 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/lib/user
  	clac();
  	return n;
  }
-@@ -632,66 +743,51 @@ unsigned long __copy_from_user_ll_nocach
+@@ -632,66 +743,50 @@ unsigned long __copy_from_user_ll_nocach
  	if (n > 64 && cpu_has_xmm2)
  		n = __copy_user_intel_nocache(to, from, n);
  	else
@@ -24541,7 +24554,6 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/lib/user
 +	default:
 +		BUG();
 +	}
-+	return;
  }
 -EXPORT_SYMBOL(copy_from_user_overflow);
 +EXPORT_SYMBOL(__set_fs);
@@ -26428,6 +26440,18 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/mm/pat.c
  				cattr_name(want_flags),
  				(unsigned long long)paddr,
  				(unsigned long long)(paddr + size - 1),
+diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/mm/pat_rbtree.c linux-3.9.9-pax/arch/x86/mm/pat_rbtree.c
+--- linux-3.9.9/arch/x86/mm/pat_rbtree.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.9.9-pax/arch/x86/mm/pat_rbtree.c	2013-07-08 02:56:49.504369934 +0200
+@@ -160,7 +160,7 @@ success:
+ 
+ failure:
+ 	printk(KERN_INFO "%s:%d conflicting memory types "
+-		"%Lx-%Lx %s<->%s\n", current->comm, current->pid, start,
++		"%Lx-%Lx %s<->%s\n", current->comm, task_pid_nr(current), start,
+ 		end, cattr_name(found_type), cattr_name(match->type));
+ 	return -EBUSY;
+ }
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/mm/pf_in.c linux-3.9.9-pax/arch/x86/mm/pf_in.c
 --- linux-3.9.9/arch/x86/mm/pf_in.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.9.9-pax/arch/x86/mm/pf_in.c	2013-04-30 01:26:50.811580934 +0200
@@ -28157,6 +28181,18 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/tools/re
  	if (show_absolute_syms) {
  		print_absolute_symbols();
  		goto out;
+diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/um/tls_32.c linux-3.9.9-pax/arch/x86/um/tls_32.c
+--- linux-3.9.9/arch/x86/um/tls_32.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.9.9-pax/arch/x86/um/tls_32.c	2013-07-08 02:57:09.364370518 +0200
+@@ -259,7 +259,7 @@ out:
+ 	if (unlikely(task == current &&
+ 		     !t->arch.tls_array[idx - GDT_ENTRY_TLS_MIN].flushed)) {
+ 		printk(KERN_ERR "get_tls_entry: task with pid %d got here "
+-				"without flushed TLS.", current->pid);
++				"without flushed TLS.", task_pid_nr(current));
+ 	}
+ 
+ 	return 0;
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/arch/x86/vdso/Makefile linux-3.9.9-pax/arch/x86/vdso/Makefile
 --- linux-3.9.9/arch/x86/vdso/Makefile	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.9.9-pax/arch/x86/vdso/Makefile	2013-04-30 01:26:50.823580933 +0200
@@ -33050,7 +33086,7 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/drivers/gpu/drm/r
  
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/drivers/gpu/drm/radeon/radeon_ttm.c linux-3.9.9-pax/drivers/gpu/drm/radeon/radeon_ttm.c
 --- linux-3.9.9/drivers/gpu/drm/radeon/radeon_ttm.c	2013-05-28 01:54:11.826770118 +0200
-+++ linux-3.9.9-pax/drivers/gpu/drm/radeon/radeon_ttm.c	2013-05-28 01:54:17.350769823 +0200
++++ linux-3.9.9-pax/drivers/gpu/drm/radeon/radeon_ttm.c	2013-07-09 01:41:34.972248018 +0200
 @@ -782,7 +782,7 @@ void radeon_ttm_set_active_vram_size(str
  	man->size = size >> PAGE_SHIFT;
  }
@@ -33071,54 +33107,69 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/drivers/gpu/drm/r
  	}
  	vma->vm_ops = &radeon_ttm_vm_ops;
  	return 0;
-@@ -862,28 +864,33 @@ static int radeon_ttm_debugfs_init(struc
- 			sprintf(radeon_mem_types_names[i], "radeon_vram_mm");
- 		else
- 			sprintf(radeon_mem_types_names[i], "radeon_gtt_mm");
+@@ -853,38 +855,33 @@ static int radeon_mm_dump_table(struct s
+ static int radeon_ttm_debugfs_init(struct radeon_device *rdev)
+ {
+ #if defined(CONFIG_DEBUG_FS)
+-	static struct drm_info_list radeon_mem_types_list[RADEON_DEBUGFS_MEM_TYPES+2];
+-	static char radeon_mem_types_names[RADEON_DEBUGFS_MEM_TYPES+2][32];
++	static struct drm_info_list radeon_mem_types_list[RADEON_DEBUGFS_MEM_TYPES+2] = {
++		{
++			.name = "radeon_vram_mm",
++			.show = &radeon_mm_dump_table,
++		},
++		{
++			.name = "radeon_gtt_mm",
++			.show = &radeon_mm_dump_table,
++		},
++		{
++			.name = "ttm_page_pool",
++			.show = &ttm_page_alloc_debugfs,
++		},
++		{
++			.name = "ttm_dma_page_pool",
++			.show = &ttm_dma_page_alloc_debugfs,
++		},
++	};
+ 	unsigned i;
+ 
+-	for (i = 0; i < RADEON_DEBUGFS_MEM_TYPES; i++) {
+-		if (i == 0)
+-			sprintf(radeon_mem_types_names[i], "radeon_vram_mm");
+-		else
+-			sprintf(radeon_mem_types_names[i], "radeon_gtt_mm");
 -		radeon_mem_types_list[i].name = radeon_mem_types_names[i];
 -		radeon_mem_types_list[i].show = &radeon_mm_dump_table;
 -		radeon_mem_types_list[i].driver_features = 0;
-+		pax_open_kernel();
-+		*(const char **)&radeon_mem_types_list[i].name = radeon_mem_types_names[i];
-+		*(void **)&radeon_mem_types_list[i].show = &radeon_mm_dump_table;
-+		*(u32 *)&radeon_mem_types_list[i].driver_features = 0;
- 		if (i == 0)
+-		if (i == 0)
 -			radeon_mem_types_list[i].data = rdev->mman.bdev.man[TTM_PL_VRAM].priv;
-+			*(void **)&radeon_mem_types_list[i].data = rdev->mman.bdev.man[TTM_PL_VRAM].priv;
- 		else
+-		else
 -			radeon_mem_types_list[i].data = rdev->mman.bdev.man[TTM_PL_TT].priv;
 -
-+			*(void **)&radeon_mem_types_list[i].data = rdev->mman.bdev.man[TTM_PL_TT].priv;
-+		pax_close_kernel();
- 	}
- 	/* Add ttm page pool to debugfs */
- 	sprintf(radeon_mem_types_names[i], "ttm_page_pool");
+-	}
+-	/* Add ttm page pool to debugfs */
+-	sprintf(radeon_mem_types_names[i], "ttm_page_pool");
 -	radeon_mem_types_list[i].name = radeon_mem_types_names[i];
 -	radeon_mem_types_list[i].show = &ttm_page_alloc_debugfs;
 -	radeon_mem_types_list[i].driver_features = 0;
 -	radeon_mem_types_list[i++].data = NULL;
 +	pax_open_kernel();
-+	*(const char **)&radeon_mem_types_list[i].name = radeon_mem_types_names[i];
-+	*(void **)&radeon_mem_types_list[i].show = &ttm_page_alloc_debugfs;
-+	*(u32 *)&radeon_mem_types_list[i].driver_features = 0;
-+	*(void **)&radeon_mem_types_list[i++].data = NULL;
++	*(void **)&radeon_mem_types_list[0].data = rdev->mman.bdev.man[TTM_PL_VRAM].priv;
++	*(void **)&radeon_mem_types_list[1].data = rdev->mman.bdev.man[TTM_PL_TT].priv;
 +	pax_close_kernel();
  #ifdef CONFIG_SWIOTLB
- 	if (swiotlb_nr_tbl()) {
- 		sprintf(radeon_mem_types_names[i], "ttm_dma_page_pool");
+-	if (swiotlb_nr_tbl()) {
+-		sprintf(radeon_mem_types_names[i], "ttm_dma_page_pool");
 -		radeon_mem_types_list[i].name = radeon_mem_types_names[i];
 -		radeon_mem_types_list[i].show = &ttm_dma_page_alloc_debugfs;
 -		radeon_mem_types_list[i].driver_features = 0;
 -		radeon_mem_types_list[i++].data = NULL;
-+		pax_open_kernel();
-+		*(const char **)&radeon_mem_types_list[i].name = radeon_mem_types_names[i];
-+		*(void **)&radeon_mem_types_list[i].show = &ttm_dma_page_alloc_debugfs;
-+		*(u32 *)&radeon_mem_types_list[i].driver_features = 0;
-+		*(void **)&radeon_mem_types_list[i++].data = NULL;
-+		pax_close_kernel();
- 	}
+-	}
++	if (swiotlb_nr_tbl())
++		i++;
  #endif
  	return radeon_debugfs_add_files(rdev, radeon_mem_types_list, i);
+ 
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/drivers/gpu/drm/radeon/rs690.c linux-3.9.9-pax/drivers/gpu/drm/radeon/rs690.c
 --- linux-3.9.9/drivers/gpu/drm/radeon/rs690.c	2013-06-21 03:32:34.294250785 +0200
 +++ linux-3.9.9-pax/drivers/gpu/drm/radeon/rs690.c	2013-06-21 03:32:51.210251703 +0200
@@ -59423,7 +59474,7 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/mm/mlock.c linux-
  			newflags |= VM_LOCKED;
 diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/mm/mmap.c linux-3.9.9-pax/mm/mmap.c
 --- linux-3.9.9/mm/mmap.c	2013-05-23 21:49:17.322562422 +0200
-+++ linux-3.9.9-pax/mm/mmap.c	2013-06-26 20:05:49.182683230 +0200
++++ linux-3.9.9-pax/mm/mmap.c	2013-07-05 02:19:14.725181170 +0200
 @@ -49,6 +49,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -59806,7 +59857,7 @@ diff -NurpX linux-3.9.9-pax/Documentation/dontdiff linux-3.9.9/mm/mmap.c linux-3
 +		return sysctl_heap_stack_gap <= vma->vm_start - addr - len;
 +#ifdef CONFIG_STACK_GROWSUP
 +	else if (vma->vm_prev && (vma->vm_prev->vm_flags & VM_GROWSUP))
-+		return addr - vma->vm_prev->vm_end <= sysctl_heap_stack_gap;
++		return addr - vma->vm_prev->vm_end >= sysctl_heap_stack_gap;
 +#endif
 +
 +	return true;
