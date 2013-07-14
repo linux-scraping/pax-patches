@@ -1,4 +1,10 @@
-- forward port to 3.10
+- spender fixed a compile regression in a recent arm/UDEREF change, reported by Michael Tremer
+- spender fixed arm/KERNEXEC for v5 and older CPUs, reported by Michael Tremer
+- spender fixed a new CONSTIFY victim on arm, reported by Michael Tremer
+- spender fixed an madvise regression, reported by Peter Keel
+- spender fixed a SLAB regression, reported by Thorsten (http://forums.grsecurity.net/viewtopic.php?f=3&t=3614) and Jens (http://forums.grsecurity.net/viewtopic.php?f=1&t=3616)
+- fixed a headers_install regression, reported by Mathias Krause
+- fixed a SLOB compile regression, reported by Mathias Krause
 
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/alpha/include/asm/atomic.h linux-3.10-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -1540,7 +1546,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/include/as
  	},								\
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/include/asm/uaccess.h linux-3.10-pax/arch/arm/include/asm/uaccess.h
 --- linux-3.10/arch/arm/include/asm/uaccess.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.10-pax/arch/arm/include/asm/uaccess.h	2013-07-08 02:01:14.388271875 +0200
++++ linux-3.10-pax/arch/arm/include/asm/uaccess.h	2013-07-14 18:58:38.863239399 +0200
 @@ -18,6 +18,7 @@
  #include <asm/domain.h>
  #include <asm/unified.h>
@@ -1563,7 +1569,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/include/as
 +{
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (segment_eq(get_fs(), USER_DS) {
++	if (segment_eq(get_fs(), USER_DS)) {
 +		BUG_ON(test_domain(DOMAIN_USER, DOMAIN_UDEREF));
 +		modify_domain(DOMAIN_USER, DOMAIN_UDEREF);
 +	}
@@ -1575,7 +1581,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/include/as
 +{
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	if (segment_eq(get_fs(), USER_DS) {
++	if (segment_eq(get_fs(), USER_DS)) {
 +		BUG_ON(test_domain(DOMAIN_USER, DOMAIN_NOACCESS));
 +		modify_domain(DOMAIN_USER, DOMAIN_NOACCESS);
 +	}
@@ -3247,7 +3253,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmap.c 
  	}
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c linux-3.10-pax/arch/arm/mm/mmu.c
 --- linux-3.10/arch/arm/mm/mmu.c	2013-07-08 01:57:53.592265972 +0200
-+++ linux-3.10-pax/arch/arm/mm/mmu.c	2013-07-08 03:39:06.668444531 +0200
++++ linux-3.10-pax/arch/arm/mm/mmu.c	2013-07-14 18:58:38.867239399 +0200
 @@ -36,6 +36,22 @@
  #include "mm.h"
  #include "tcm.h"
@@ -3312,7 +3318,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  		.domain    = DOMAIN_KERNEL,
  	},
  #endif
-@@ -277,36 +301,54 @@ static struct mem_type mem_types[] = {
+@@ -277,36 +301,65 @@ static struct mem_type mem_types[] = {
  		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
  				L_PTE_RDONLY,
  		.prot_l1   = PMD_TYPE_TABLE,
@@ -3320,9 +3326,21 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
 +		.domain    = DOMAIN_VECTORS,
  	},
  	[MT_HIGH_VECTORS] = {
- 		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
+-		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
 -				L_PTE_USER | L_PTE_RDONLY,
-+			     L_PTE_RDONLY,
++		/* we always want the vector page to be noaccess for userland on archs with
++		   XN where we can enforce some reasonable measure of security
++		   therefore, when kernexec is disabled, instead of L_PTE_USER | L_PTE_RDONLY
++		   which turns into supervisor rwx, userland rx, we instead omit that entirely,
++		   leaving it as supervisor rwx only
++		*/
++#ifdef CONFIG_PAX_KERNEXEC
++		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY | L_PTE_RDONLY,
++#elif __LINUX_ARM_ARCH__ >= 6
++		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY,
++#else
++		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY | L_PTE_USER | L_PTE_RDONLY,
++#endif
  		.prot_l1   = PMD_TYPE_TABLE,
 -		.domain    = DOMAIN_USER,
 +		.domain    = DOMAIN_VECTORS,
@@ -3376,7 +3394,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  		.domain    = DOMAIN_KERNEL,
  	},
  	[MT_MEMORY_ITCM] = {
-@@ -316,10 +358,10 @@ static struct mem_type mem_types[] = {
+@@ -316,10 +369,10 @@ static struct mem_type mem_types[] = {
  	},
  	[MT_MEMORY_SO] = {
  		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
@@ -3389,7 +3407,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  		.domain    = DOMAIN_KERNEL,
  	},
  	[MT_MEMORY_DMA_READY] = {
-@@ -405,9 +447,35 @@ static void __init build_mem_type_table(
+@@ -405,9 +458,35 @@ static void __init build_mem_type_table(
  			 * to prevent speculative instruction fetches.
  			 */
  			mem_types[MT_DEVICE].prot_sect |= PMD_SECT_XN;
@@ -3425,7 +3443,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  		}
  		if (cpu_arch >= CPU_ARCH_ARMv7 && (cr & CR_TRE)) {
  			/*
-@@ -468,6 +536,9 @@ static void __init build_mem_type_table(
+@@ -468,6 +547,9 @@ static void __init build_mem_type_table(
  		 * from SVC mode and no access from userspace.
  		 */
  		mem_types[MT_ROM].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
@@ -3435,7 +3453,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  		mem_types[MT_MINICLEAN].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
  		mem_types[MT_CACHECLEAN].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
  #endif
-@@ -485,11 +556,17 @@ static void __init build_mem_type_table(
+@@ -485,11 +567,17 @@ static void __init build_mem_type_table(
  			mem_types[MT_DEVICE_WC].prot_pte |= L_PTE_SHARED;
  			mem_types[MT_DEVICE_CACHED].prot_sect |= PMD_SECT_S;
  			mem_types[MT_DEVICE_CACHED].prot_pte |= L_PTE_SHARED;
@@ -3457,7 +3475,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  		}
  	}
  
-@@ -500,15 +577,20 @@ static void __init build_mem_type_table(
+@@ -500,15 +588,20 @@ static void __init build_mem_type_table(
  	if (cpu_arch >= CPU_ARCH_ARMv6) {
  		if (cpu_arch >= CPU_ARCH_ARMv7 && (cr & CR_TRE)) {
  			/* Non-cacheable Normal is XCB = 001 */
@@ -3481,7 +3499,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  	}
  
  #ifdef CONFIG_ARM_LPAE
-@@ -524,6 +606,8 @@ static void __init build_mem_type_table(
+@@ -524,6 +617,8 @@ static void __init build_mem_type_table(
  	vecs_pgprot |= PTE_EXT_AF;
  #endif
  
@@ -3490,7 +3508,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  	for (i = 0; i < 16; i++) {
  		pteval_t v = pgprot_val(protection_map[i]);
  		protection_map[i] = __pgprot(v | user_pgprot);
-@@ -541,10 +625,15 @@ static void __init build_mem_type_table(
+@@ -541,10 +636,15 @@ static void __init build_mem_type_table(
  
  	mem_types[MT_LOW_VECTORS].prot_l1 |= ecc_mask;
  	mem_types[MT_HIGH_VECTORS].prot_l1 |= ecc_mask;
@@ -3509,7 +3527,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  	mem_types[MT_ROM].prot_sect |= cp->pmd;
  
  	switch (cp->pmd) {
-@@ -1166,18 +1255,15 @@ void __init arm_mm_memblock_reserve(void
+@@ -1166,18 +1266,15 @@ void __init arm_mm_memblock_reserve(void
   * called function.  This means you can't use any function or debugging
   * method which may touch any device, otherwise the kernel _will_ crash.
   */
@@ -3532,7 +3550,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  
  	for (addr = VMALLOC_START; addr; addr += PMD_SIZE)
  		pmd_clear(pmd_off_k(addr));
-@@ -1217,7 +1303,7 @@ static void __init devicemaps_init(struc
+@@ -1217,7 +1314,7 @@ static void __init devicemaps_init(struc
  	 * location (0xffff0000).  If we aren't using high-vectors, also
  	 * create a mapping at the low-vectors virtual address.
  	 */
@@ -3541,7 +3559,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/arch/arm/mm/mmu.c l
  	map.virtual = 0xffff0000;
  	map.length = PAGE_SIZE;
  	map.type = MT_HIGH_VECTORS;
-@@ -1275,8 +1361,39 @@ static void __init map_lowmem(void)
+@@ -1275,8 +1372,39 @@ static void __init map_lowmem(void)
  		map.pfn = __phys_to_pfn(start);
  		map.virtual = __phys_to_virt(start);
  		map.length = end - start;
@@ -31411,6 +31429,22 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/drivers/clk/clk-com
  
  	composite = kzalloc(sizeof(*composite), GFP_KERNEL);
  	if (!composite) {
+diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/drivers/clk/socfpga/clk.c linux-3.10-pax/drivers/clk/socfpga/clk.c
+--- linux-3.10/drivers/clk/socfpga/clk.c	2013-07-08 01:58:09.388266436 +0200
++++ linux-3.10-pax/drivers/clk/socfpga/clk.c	2013-07-14 18:58:38.867239399 +0200
+@@ -135,8 +135,10 @@ static __init struct clk *socfpga_clk_in
+ 	if (strcmp(clk_name, "main_pll") || strcmp(clk_name, "periph_pll") ||
+ 			strcmp(clk_name, "sdram_pll")) {
+ 		socfpga_clk->hw.bit_idx = SOCFPGA_PLL_EXT_ENA;
+-		clk_pll_ops.enable = clk_gate_ops.enable;
+-		clk_pll_ops.disable = clk_gate_ops.disable;
++		pax_open_kernel();
++		*(void **)&clk_pll_ops.enable = clk_gate_ops.enable;
++		*(void **)&clk_pll_ops.disable = clk_gate_ops.disable;
++		pax_close_kernel();
+ 	}
+ 
+ 	clk = clk_register(NULL, &socfpga_clk->hw.hw);
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/drivers/clocksource/arm_arch_timer.c linux-3.10-pax/drivers/clocksource/arm_arch_timer.c
 --- linux-3.10/drivers/clocksource/arm_arch_timer.c	2013-07-08 01:58:09.504266439 +0200
 +++ linux-3.10-pax/drivers/clocksource/arm_arch_timer.c	2013-07-08 02:01:14.676271884 +0200
@@ -58673,7 +58707,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/maccess.c linux-
  
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/madvise.c linux-3.10-pax/mm/madvise.c
 --- linux-3.10/mm/madvise.c	2013-07-08 01:58:56.700267827 +0200
-+++ linux-3.10-pax/mm/madvise.c	2013-07-08 02:39:03.608338594 +0200
++++ linux-3.10-pax/mm/madvise.c	2013-07-14 18:58:38.871239399 +0200
 @@ -51,6 +51,10 @@ static long madvise_behavior(struct vm_a
  	pgoff_t pgoff;
  	unsigned long new_flags = vma->vm_flags;
@@ -58740,12 +58774,12 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/madvise.c linux-
 +#ifdef CONFIG_PAX_SEGMEXEC
 +	if (current->mm->pax_flags & MF_PAX_SEGMEXEC) {
 +		if (end > SEGMEXEC_TASK_SIZE)
-+			goto out;
++			return error;
 +	} else
 +#endif
 +
 +	if (end > TASK_SIZE)
-+		goto out;
++		return error;
 +
  	error = 0;
  	if (end == start)
@@ -61511,7 +61545,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/shmem.c linux-3.
  
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/slab.c linux-3.10-pax/mm/slab.c
 --- linux-3.10/mm/slab.c	2013-07-08 01:58:56.728267828 +0200
-+++ linux-3.10-pax/mm/slab.c	2013-07-08 02:01:15.340271903 +0200
++++ linux-3.10-pax/mm/slab.c	2013-07-14 18:56:05.615247582 +0200
 @@ -366,10 +366,10 @@ static void kmem_cache_node_init(struct
  		if ((x)->max_freeable < i)				\
  			(x)->max_freeable = i;				\
@@ -61544,6 +61578,21 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/slab.c linux-3.1
 +static struct notifier_block cpucache_notifier = {
  	&cpuup_callback, NULL, 0
  };
+ 
+@@ -1565,12 +1565,12 @@ void __init kmem_cache_init(void)
+ 	 */
+ 
+ 	kmalloc_caches[INDEX_AC] = create_kmalloc_cache("kmalloc-ac",
+-					kmalloc_size(INDEX_AC), ARCH_KMALLOC_FLAGS);
++					kmalloc_size(INDEX_AC), SLAB_USERCOPY | ARCH_KMALLOC_FLAGS);
+ 
+ 	if (INDEX_AC != INDEX_NODE)
+ 		kmalloc_caches[INDEX_NODE] =
+ 			create_kmalloc_cache("kmalloc-node",
+-				kmalloc_size(INDEX_NODE), ARCH_KMALLOC_FLAGS);
++				kmalloc_size(INDEX_NODE), SLAB_USERCOPY | ARCH_KMALLOC_FLAGS);
+ 
+ 	slab_early_init = 0;
  
 @@ -3800,6 +3800,7 @@ void kfree(const void *objp)
  
@@ -61778,7 +61827,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/slab.h linux-3.1
  		return cachep;
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/slob.c linux-3.10-pax/mm/slob.c
 --- linux-3.10/mm/slob.c	2013-04-30 01:25:29.279585287 +0200
-+++ linux-3.10-pax/mm/slob.c	2013-07-08 02:01:15.344271903 +0200
++++ linux-3.10-pax/mm/slob.c	2013-07-11 17:30:29.038601727 +0200
 @@ -157,7 +157,7 @@ static void set_slob(slob_t *s, slobidx_
  /*
   * Return the size of a slob block.
@@ -61831,7 +61880,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/slob.c linux-3.1
  		current->reclaim_state->reclaimed_slab += 1 << order;
 -	free_pages((unsigned long)b, order);
 +	__ClearPageSlab(sp);
-+	reset_page_mapcount(sp);
++	page_mapcount_reset(sp);
 +	sp->private = 0;
 +	__free_pages(sp, order);
  }
@@ -61945,7 +61994,7 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/mm/slob.c linux-3.1
 +		slob_free(m, m[0].units + align);
 +	} else {
 +		__ClearPageSlab(sp);
-+		reset_page_mapcount(sp);
++		page_mapcount_reset(sp);
 +		sp->private = 0;
  		__free_pages(sp, compound_order(sp));
 +	}
@@ -67346,12 +67395,12 @@ diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/scripts/gcc-plugin.
 +fi
 diff -NurpX linux-3.10-pax/Documentation/dontdiff linux-3.10/scripts/headers_install.sh linux-3.10-pax/scripts/headers_install.sh
 --- linux-3.10/scripts/headers_install.sh	2013-07-08 01:59:01.768267976 +0200
-+++ linux-3.10-pax/scripts/headers_install.sh	2013-07-08 12:13:56.018823239 +0200
++++ linux-3.10-pax/scripts/headers_install.sh	2013-07-12 10:13:41.815769214 +0200
 @@ -29,6 +29,7 @@ do
  	FILE="$(basename "$i")"
  	sed -r \
  		-e 's/([ \t(])(__user|__force|__iomem)[ \t]/\1/g' \
-+		-e 's/__intentional_overflow\([ \t,0-9]*\)//g' \
++		-e 's/__intentional_overflow\([- \t,0-9]*\)//g' \
  		-e 's/__attribute_const__([ \t]|$)/\1/g' \
  		-e 's@^#include <linux/compiler.h>@@' \
  		-e 's/(^|[^a-zA-Z0-9])__packed([^a-zA-Z0-9_]|$)/\1__attribute__((packed))\2/g' \
