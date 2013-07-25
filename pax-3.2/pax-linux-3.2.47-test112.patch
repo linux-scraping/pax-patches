@@ -1,4 +1,4 @@
-- a few cleanups based on the 3.10 port
+- fixed an i386 regression with the lower address space gap on i386, reported by cnu
 
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/alpha/include/asm/atomic.h linux-3.2.47-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.47/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -4805,7 +4805,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/sparc/kern
  		if (flags & MAP_SHARED)
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/sparc/kernel/sys_sparc_64.c linux-3.2.47-pax/arch/sparc/kernel/sys_sparc_64.c
 --- linux-3.2.47/arch/sparc/kernel/sys_sparc_64.c	2012-10-31 13:04:03.367702818 +0100
-+++ linux-3.2.47-pax/arch/sparc/kernel/sys_sparc_64.c	2013-07-05 02:11:56.353204576 +0200
++++ linux-3.2.47-pax/arch/sparc/kernel/sys_sparc_64.c	2013-07-26 01:28:54.319112328 +0200
 @@ -124,7 +124,7 @@ unsigned long arch_get_unmapped_area(str
  		/* We do not accept a shared mapping if it would violate
  		 * cache aliasing constraints.
@@ -4932,17 +4932,31 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/arch/sparc/kern
  
  bottomup:
  	/*
-@@ -365,6 +366,10 @@ static unsigned long mmap_rnd(void)
+@@ -361,10 +362,14 @@ unsigned long get_fb_unmapped_area(struc
+ EXPORT_SYMBOL(get_fb_unmapped_area);
+ 
+ /* Essentially the same as PowerPC.  */
+-static unsigned long mmap_rnd(void)
++static unsigned long mmap_rnd(struct mm_struct *mm)
  {
  	unsigned long rnd = 0UL;
  
 +#ifdef CONFIG_PAX_RANDMMAP
-+	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
 +#endif
 +
  	if (current->flags & PF_RANDOMIZE) {
  		unsigned long val = get_random_int();
  		if (test_thread_flag(TIF_32BIT))
+@@ -377,7 +382,7 @@ static unsigned long mmap_rnd(void)
+ 
+ void arch_pick_mmap_layout(struct mm_struct *mm)
+ {
+-	unsigned long random_factor = mmap_rnd();
++	unsigned long random_factor = mmap_rnd(mm);
+ 	unsigned long gap;
+ 
+ 	/*
 @@ -390,6 +395,12 @@ void arch_pick_mmap_layout(struct mm_str
  	    gap == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
@@ -42221,7 +42235,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/fs/ecryptfs/rea
  }
 diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/fs/exec.c linux-3.2.47-pax/fs/exec.c
 --- linux-3.2.47/fs/exec.c	2013-03-29 02:18:30.175676739 +0100
-+++ linux-3.2.47-pax/fs/exec.c	2013-06-21 19:34:10.614698103 +0200
++++ linux-3.2.47-pax/fs/exec.c	2013-07-26 01:26:57.371105976 +0200
 @@ -55,12 +55,32 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -42467,7 +42481,7 @@ diff -NurpX linux-3.2.47-pax/Documentation/dontdiff linux-3.2.47/fs/exec.c linux
 +
 +#ifdef CONFIG_X86
 +		if (!ret) {
-+			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
++			size = PAGE_SIZE + mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
 +			ret = 0 != mmap_region(NULL, 0, PAGE_ALIGN(size), flags, vm_flags, 0);
 +		}
 +#endif
