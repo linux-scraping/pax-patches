@@ -1,4 +1,5 @@
-- forward port to 3.10.1
+- fixed some compile issues reported by Michael Tremer and spender
+- fixed an i386 regression with the lower address space gap on i386, reported by cnu
 
 diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/arch/alpha/include/asm/atomic.h linux-3.10.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.1/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -6694,7 +6695,7 @@ diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/arch/sparc/kern
  	info.length = len;
 diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/arch/sparc/kernel/sys_sparc_64.c linux-3.10.1-pax/arch/sparc/kernel/sys_sparc_64.c
 --- linux-3.10.1/arch/sparc/kernel/sys_sparc_64.c	2013-07-08 01:58:00.952266188 +0200
-+++ linux-3.10.1-pax/arch/sparc/kernel/sys_sparc_64.c	2013-07-08 02:01:14.464271878 +0200
++++ linux-3.10.1-pax/arch/sparc/kernel/sys_sparc_64.c	2013-07-15 01:22:08.855754723 +0200
 @@ -96,7 +96,7 @@ unsigned long arch_get_unmapped_area(str
  		/* We do not accept a shared mapping if it would violate
  		 * cache aliasing constraints.
@@ -6788,7 +6789,12 @@ diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/arch/sparc/kern
  		info.high_limit = STACK_TOP32;
  		addr = vm_unmapped_area(&info);
  	}
-@@ -264,6 +282,10 @@ static unsigned long mmap_rnd(void)
+@@ -260,10 +278,14 @@ unsigned long get_fb_unmapped_area(struc
+ EXPORT_SYMBOL(get_fb_unmapped_area);
+ 
+ /* Essentially the same as PowerPC.  */
+-static unsigned long mmap_rnd(void)
++static unsigned long mmap_rnd(struct mm_struct *mm)
  {
  	unsigned long rnd = 0UL;
  
@@ -6799,6 +6805,15 @@ diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/arch/sparc/kern
  	if (current->flags & PF_RANDOMIZE) {
  		unsigned long val = get_random_int();
  		if (test_thread_flag(TIF_32BIT))
+@@ -276,7 +298,7 @@ static unsigned long mmap_rnd(void)
+ 
+ void arch_pick_mmap_layout(struct mm_struct *mm)
+ {
+-	unsigned long random_factor = mmap_rnd();
++	unsigned long random_factor = mmap_rnd(mm);
+ 	unsigned long gap;
+ 
+ 	/*
 @@ -289,6 +311,12 @@ void arch_pick_mmap_layout(struct mm_str
  	    gap == RLIM_INFINITY ||
  	    sysctl_legacy_va_layout) {
@@ -31392,8 +31407,16 @@ diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/drivers/clk/clk
  	if (!composite) {
 diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/drivers/clk/socfpga/clk.c linux-3.10.1-pax/drivers/clk/socfpga/clk.c
 --- linux-3.10.1/drivers/clk/socfpga/clk.c	2013-07-08 01:58:09.388266436 +0200
-+++ linux-3.10.1-pax/drivers/clk/socfpga/clk.c	2013-07-14 21:55:54.834671521 +0200
-@@ -135,8 +135,10 @@ static __init struct clk *socfpga_clk_in
++++ linux-3.10.1-pax/drivers/clk/socfpga/clk.c	2013-07-22 19:33:30.335546695 +0200
+@@ -22,6 +22,7 @@
+ #include <linux/clk-provider.h>
+ #include <linux/io.h>
+ #include <linux/of.h>
++#include <asm/pgtable.h>
+ 
+ /* Clock Manager offsets */
+ #define CLKMGR_CTRL    0x0
+@@ -135,8 +136,10 @@ static __init struct clk *socfpga_clk_in
  	if (strcmp(clk_name, "main_pll") || strcmp(clk_name, "periph_pll") ||
  			strcmp(clk_name, "sdram_pll")) {
  		socfpga_clk->hw.bit_idx = SOCFPGA_PLL_EXT_ENA;
@@ -33527,6 +33550,18 @@ diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/drivers/gpu/drm
  		else {
  			marker = list_first_entry(&queue->head,
  						 struct vmw_marker, head);
+diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/drivers/gpu/host1x/drm/dc.c linux-3.10.1-pax/drivers/gpu/host1x/drm/dc.c
+--- linux-3.10.1/drivers/gpu/host1x/drm/dc.c	2013-07-08 01:58:14.940266599 +0200
++++ linux-3.10.1-pax/drivers/gpu/host1x/drm/dc.c	2013-07-22 20:35:58.635656902 +0200
+@@ -999,7 +999,7 @@ static int tegra_dc_debugfs_init(struct
+ 	}
+ 
+ 	for (i = 0; i < ARRAY_SIZE(debugfs_files); i++)
+-		dc->debugfs_files[i].data = dc;
++		*(void **)&dc->debugfs_files[i].data = dc;
+ 
+ 	err = drm_debugfs_create_files(dc->debugfs_files,
+ 				       ARRAY_SIZE(debugfs_files),
 diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/drivers/hid/hid-core.c linux-3.10.1-pax/drivers/hid/hid-core.c
 --- linux-3.10.1/drivers/hid/hid-core.c	2013-07-08 01:58:14.972266600 +0200
 +++ linux-3.10.1-pax/drivers/hid/hid-core.c	2013-07-08 02:01:14.716271885 +0200
@@ -43929,7 +43964,7 @@ diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/fs/ecryptfs/mis
  		if (copy_to_user(&buf[i], msg_ctx->msg, msg_ctx->msg_size))
 diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/fs/exec.c linux-3.10.1-pax/fs/exec.c
 --- linux-3.10.1/fs/exec.c	2013-07-08 01:58:48.988267600 +0200
-+++ linux-3.10.1-pax/fs/exec.c	2013-07-08 02:01:14.944271892 +0200
++++ linux-3.10.1-pax/fs/exec.c	2013-07-25 16:00:14.885259211 +0200
 @@ -55,6 +55,15 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -44168,7 +44203,7 @@ diff -NurpX linux-3.10.1-pax/Documentation/dontdiff linux-3.10.1/fs/exec.c linux
 +
 +#ifdef CONFIG_X86
 +		if (!ret) {
-+			size = mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
++			size = PAGE_SIZE + mmap_min_addr + ((mm->delta_mmap ^ mm->delta_stack) & (0xFFUL << PAGE_SHIFT));
 +			ret = 0 != mmap_region(NULL, 0, PAGE_ALIGN(size), vm_flags, 0);
 +		}
 +#endif
