@@ -1,4 +1,8 @@
-- forward port to 3.10.3
+- introduced per-slab object sanitization, contributed by Mathias Krause and secunet.
+  this is finer grained sanitization than the existing per-page based approach (which
+  is still done) at a somewhat higher performance cost. the pax_sanitize_slab command
+  line option can be used to enable/disable it on boot (it's enabled by default when
+  CONFIG_PAX_MEMORY_SANITIZE is enabled).
 
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/arch/alpha/include/asm/atomic.h linux-3.10.3-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.3/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -29057,8 +29061,8 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/Documentation/d
  zoffset.h
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/Documentation/kernel-parameters.txt linux-3.10.3-pax/Documentation/kernel-parameters.txt
 --- linux-3.10.3/Documentation/kernel-parameters.txt	2013-07-08 01:57:47.860265803 +0200
-+++ linux-3.10.3-pax/Documentation/kernel-parameters.txt	2013-07-08 02:01:14.628271882 +0200
-@@ -2195,6 +2195,18 @@ bytes respectively. Such letter suffixes
++++ linux-3.10.3-pax/Documentation/kernel-parameters.txt	2013-07-26 02:29:15.619309010 +0200
+@@ -2195,6 +2195,22 @@ bytes respectively. Such letter suffixes
  			the specified number of seconds.  This is to be used if
  			your oopses keep scrolling off the screen.
  
@@ -29066,6 +29070,10 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/Documentation/k
 +			virtualization environments that don't cope well with the
 +			expand down segment used by UDEREF on X86-32 or the frequent
 +			page table updates on X86-64.
++
++	pax_sanitize_slab=
++			0/1 to disable/enable slab object sanitization (enabled by
++			default).
 +
 +	pax_softmode=	0/1 to disable/enable PaX softmode on boot already.
 +
@@ -43067,6 +43075,18 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/fs/btrfs/super.
  	__btrfs_std_error(root->fs_info, function, line, errno, NULL);
  }
  /*
+diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/fs/buffer.c linux-3.10.3-pax/fs/buffer.c
+--- linux-3.10.3/fs/buffer.c	2013-07-08 01:58:48.496267586 +0200
++++ linux-3.10.3-pax/fs/buffer.c	2013-07-26 02:23:12.971289314 +0200
+@@ -3367,7 +3367,7 @@ void __init buffer_init(void)
+ 	bh_cachep = kmem_cache_create("buffer_head",
+ 			sizeof(struct buffer_head), 0,
+ 				(SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|
+-				SLAB_MEM_SPREAD),
++				SLAB_MEM_SPREAD|SLAB_NO_SANITIZE),
+ 				NULL);
+ 
+ 	/*
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/fs/cachefiles/bind.c linux-3.10.3-pax/fs/cachefiles/bind.c
 --- linux-3.10.3/fs/cachefiles/bind.c	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.10.3-pax/fs/cachefiles/bind.c	2013-07-08 02:01:14.928271891 +0200
@@ -43918,13 +43938,14 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/fs/coredump.c l
  
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/fs/dcache.c linux-3.10.3-pax/fs/dcache.c
 --- linux-3.10.3/fs/dcache.c	2013-07-08 01:58:48.904267598 +0200
-+++ linux-3.10.3-pax/fs/dcache.c	2013-07-08 02:01:14.944271892 +0200
-@@ -3086,7 +3086,7 @@ void __init vfs_caches_init(unsigned lon
++++ linux-3.10.3-pax/fs/dcache.c	2013-07-26 02:23:12.975289314 +0200
+@@ -3086,7 +3086,8 @@ void __init vfs_caches_init(unsigned lon
  	mempages -= reserve;
  
  	names_cachep = kmem_cache_create("names_cache", PATH_MAX, 0,
 -			SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
-+			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_USERCOPY, NULL);
++			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_USERCOPY|
++			SLAB_NO_SANITIZE, NULL);
  
  	dcache_init();
  	inode_init();
@@ -51127,7 +51148,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  extern int	       skb_copy_and_csum_datagram_iovec(struct sk_buff *skb,
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/slab_def.h linux-3.10.3-pax/include/linux/slab_def.h
 --- linux-3.10.3/include/linux/slab_def.h	2013-07-08 01:58:53.580267735 +0200
-+++ linux-3.10.3-pax/include/linux/slab_def.h	2013-07-08 02:10:29.916288209 +0200
++++ linux-3.10.3-pax/include/linux/slab_def.h	2013-07-26 02:23:12.979289314 +0200
 @@ -50,7 +50,7 @@ struct kmem_cache {
  /* 4) cache creation/removal */
  	const char *name;
@@ -51137,7 +51158,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  	int object_size;
  	int align;
  
-@@ -66,10 +66,10 @@ struct kmem_cache {
+@@ -66,10 +66,14 @@ struct kmem_cache {
  	unsigned long node_allocs;
  	unsigned long node_frees;
  	unsigned long node_overflow;
@@ -51149,10 +51170,14 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
 +	atomic_unchecked_t allocmiss;
 +	atomic_unchecked_t freehit;
 +	atomic_unchecked_t freemiss;
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	atomic_unchecked_t sanitized;
++	atomic_unchecked_t not_sanitized;
++#endif
  
  	/*
  	 * If debugging is enabled, then the allocator can add additional
-@@ -103,7 +103,7 @@ struct kmem_cache {
+@@ -103,7 +107,7 @@ struct kmem_cache {
  };
  
  void *kmem_cache_alloc(struct kmem_cache *, gfp_t);
@@ -51161,7 +51186,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  
  #ifdef CONFIG_TRACING
  extern void *kmem_cache_alloc_trace(struct kmem_cache *, gfp_t, size_t);
-@@ -136,6 +136,13 @@ static __always_inline void *kmalloc(siz
+@@ -136,6 +140,13 @@ static __always_inline void *kmalloc(siz
  			cachep = kmalloc_dma_caches[i];
  		else
  #endif
@@ -51175,7 +51200,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  			cachep = kmalloc_caches[i];
  
  		ret = kmem_cache_alloc_trace(cachep, flags, size);
-@@ -146,7 +153,7 @@ static __always_inline void *kmalloc(siz
+@@ -146,7 +157,7 @@ static __always_inline void *kmalloc(siz
  }
  
  #ifdef CONFIG_NUMA
@@ -51184,7 +51209,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  extern void *kmem_cache_alloc_node(struct kmem_cache *, gfp_t flags, int node);
  
  #ifdef CONFIG_TRACING
-@@ -185,6 +192,13 @@ static __always_inline void *kmalloc_nod
+@@ -185,6 +196,13 @@ static __always_inline void *kmalloc_nod
  			cachep = kmalloc_dma_caches[i];
  		else
  #endif
@@ -51200,8 +51225,8 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  		return kmem_cache_alloc_node_trace(cachep, flags, node, size);
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/slab.h linux-3.10.3-pax/include/linux/slab.h
 --- linux-3.10.3/include/linux/slab.h	2013-07-08 01:58:53.580267735 +0200
-+++ linux-3.10.3-pax/include/linux/slab.h	2013-07-08 02:22:17.332309008 +0200
-@@ -12,13 +12,20 @@
++++ linux-3.10.3-pax/include/linux/slab.h	2013-07-26 02:23:12.979289314 +0200
+@@ -12,15 +12,29 @@
  #include <linux/gfp.h>
  #include <linux/types.h>
  #include <linux/workqueue.h>
@@ -51222,8 +51247,17 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
 +
  #define SLAB_RED_ZONE		0x00000400UL	/* DEBUG: Red zone objs in a cache */
  #define SLAB_POISON		0x00000800UL	/* DEBUG: Poison objects */
++
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++#define SLAB_NO_SANITIZE	0x00001000UL	/* PaX: Do not sanitize objs on free */
++#else
++#define SLAB_NO_SANITIZE	0x00000000UL
++#endif
++
  #define SLAB_HWCACHE_ALIGN	0x00002000UL	/* Align objs on cache lines */
-@@ -89,10 +96,13 @@
+ #define SLAB_CACHE_DMA		0x00004000UL	/* Use GFP_DMA memory */
+ #define SLAB_STORE_USER		0x00010000UL	/* DEBUG: Store the last owner for bug hunting */
+@@ -89,10 +103,13 @@
   * ZERO_SIZE_PTR can be passed to kfree though in the same way that NULL can.
   * Both make kfree a no-op.
   */
@@ -51240,7 +51274,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  
  
  struct mem_cgroup;
-@@ -132,6 +142,8 @@ void * __must_check krealloc(const void
+@@ -132,6 +149,8 @@ void * __must_check krealloc(const void
  void kfree(const void *);
  void kzfree(const void *);
  size_t ksize(const void *);
@@ -51249,7 +51283,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  
  /*
   * Some archs want to perform DMA into kmalloc caches and need a guaranteed
-@@ -164,7 +176,7 @@ struct kmem_cache {
+@@ -164,7 +183,7 @@ struct kmem_cache {
  	unsigned int align;	/* Alignment as calculated */
  	unsigned long flags;	/* Active flags on the slab */
  	const char *name;	/* Slab name for sysfs */
@@ -51258,7 +51292,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  	void (*ctor)(void *);	/* Called on object slot creation */
  	struct list_head list;	/* List of all slab caches on the system */
  };
-@@ -226,6 +238,10 @@ extern struct kmem_cache *kmalloc_caches
+@@ -226,6 +245,10 @@ extern struct kmem_cache *kmalloc_caches
  extern struct kmem_cache *kmalloc_dma_caches[KMALLOC_SHIFT_HIGH + 1];
  #endif
  
@@ -51269,7 +51303,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  /*
   * Figure out which kmalloc slab an allocation of a certain size
   * belongs to.
-@@ -234,7 +250,7 @@ extern struct kmem_cache *kmalloc_dma_ca
+@@ -234,7 +257,7 @@ extern struct kmem_cache *kmalloc_dma_ca
   * 2 = 120 .. 192 bytes
   * n = 2^(n-1) .. 2^n -1
   */
@@ -51278,7 +51312,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  {
  	if (!size)
  		return 0;
-@@ -406,8 +422,18 @@ void print_slabinfo_header(struct seq_fi
+@@ -406,8 +429,18 @@ void print_slabinfo_header(struct seq_fi
   * for general use, and so are not documented here. For a full list of
   * potential flags, always refer to linux/gfp.h.
   */
@@ -51297,7 +51331,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  	if (size != 0 && n > SIZE_MAX / size)
  		return NULL;
  	return __kmalloc(n * size, flags);
-@@ -465,7 +491,7 @@ static inline void *kmem_cache_alloc_nod
+@@ -465,7 +498,7 @@ static inline void *kmem_cache_alloc_nod
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING)) || \
  	(defined(CONFIG_SLOB) && defined(CONFIG_TRACING))
@@ -51306,7 +51340,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/include/linux/s
  #define kmalloc_track_caller(size, flags) \
  	__kmalloc_track_caller(size, flags, _RET_IP_)
  #else
-@@ -485,7 +511,7 @@ extern void *__kmalloc_track_caller(size
+@@ -485,7 +518,7 @@ extern void *__kmalloc_track_caller(size
  #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB) || \
  	(defined(CONFIG_SLAB) && defined(CONFIG_TRACING)) || \
  	(defined(CONFIG_SLOB) && defined(CONFIG_TRACING))
@@ -54131,7 +54165,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/kernel/exit.c l
  	struct signal_struct *sig = current->signal;
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/kernel/fork.c linux-3.10.3-pax/kernel/fork.c
 --- linux-3.10.3/kernel/fork.c	2013-07-08 01:58:56.024267807 +0200
-+++ linux-3.10.3-pax/kernel/fork.c	2013-07-08 02:01:15.248271901 +0200
++++ linux-3.10.3-pax/kernel/fork.c	2013-07-26 02:23:12.979289314 +0200
 @@ -319,7 +319,7 @@ static struct task_struct *dup_task_stru
  	*stackend = STACK_END_MAGIC;	/* for overflow detection */
  
@@ -54354,6 +54388,15 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/kernel/fork.c l
  		spin_unlock(&fs->lock);
  		return 0;
  	}
+@@ -1723,7 +1766,7 @@ void __init proc_caches_init(void)
+ 	mm_cachep = kmem_cache_create("mm_struct",
+ 			sizeof(struct mm_struct), ARCH_MIN_MMSTRUCT_ALIGN,
+ 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_NOTRACK, NULL);
+-	vm_area_cachep = KMEM_CACHE(vm_area_struct, SLAB_PANIC);
++	vm_area_cachep = KMEM_CACHE(vm_area_struct, SLAB_PANIC | SLAB_NO_SANITIZE);
+ 	mmap_init();
+ 	nsproxy_cache_init();
+ }
 @@ -1763,7 +1806,7 @@ static int unshare_fs(unsigned long unsh
  		return 0;
  
@@ -61389,7 +61432,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/process_vm_a
  	if (nr_pages == 0)
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/rmap.c linux-3.10.3-pax/mm/rmap.c
 --- linux-3.10.3/mm/rmap.c	2013-07-08 01:58:56.724267828 +0200
-+++ linux-3.10.3-pax/mm/rmap.c	2013-07-08 02:01:15.336271903 +0200
++++ linux-3.10.3-pax/mm/rmap.c	2013-07-26 02:23:12.983289315 +0200
 @@ -163,6 +163,10 @@ int anon_vma_prepare(struct vm_area_stru
  	struct anon_vma *anon_vma = vma->anon_vma;
  	struct anon_vma_chain *avc;
@@ -61476,6 +61519,19 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/rmap.c linux
  {
  	struct anon_vma_chain *avc;
  	struct anon_vma *anon_vma;
+@@ -373,8 +407,10 @@ static void anon_vma_ctor(void *data)
+ void __init anon_vma_init(void)
+ {
+ 	anon_vma_cachep = kmem_cache_create("anon_vma", sizeof(struct anon_vma),
+-			0, SLAB_DESTROY_BY_RCU|SLAB_PANIC, anon_vma_ctor);
+-	anon_vma_chain_cachep = KMEM_CACHE(anon_vma_chain, SLAB_PANIC);
++			0, SLAB_DESTROY_BY_RCU|SLAB_PANIC|SLAB_NO_SANITIZE,
++			anon_vma_ctor);
++	anon_vma_chain_cachep = KMEM_CACHE(anon_vma_chain,
++			SLAB_PANIC|SLAB_NO_SANITIZE);
+ }
+ 
+ /*
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/shmem.c linux-3.10.3-pax/mm/shmem.c
 --- linux-3.10.3/mm/shmem.c	2013-07-08 01:58:56.728267828 +0200
 +++ linux-3.10.3-pax/mm/shmem.c	2013-07-08 02:01:15.340271903 +0200
@@ -61528,8 +61584,8 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/shmem.c linu
  
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux-3.10.3-pax/mm/slab.c
 --- linux-3.10.3/mm/slab.c	2013-07-25 19:23:42.401922233 +0200
-+++ linux-3.10.3-pax/mm/slab.c	2013-07-25 19:23:48.565922568 +0200
-@@ -366,10 +366,10 @@ static void kmem_cache_node_init(struct
++++ linux-3.10.3-pax/mm/slab.c	2013-07-26 02:35:40.727329926 +0200
+@@ -366,10 +366,12 @@ static void kmem_cache_node_init(struct
  		if ((x)->max_freeable < i)				\
  			(x)->max_freeable = i;				\
  	} while (0)
@@ -61541,10 +61597,21 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux
 +#define STATS_INC_ALLOCMISS(x)	atomic_inc_unchecked(&(x)->allocmiss)
 +#define STATS_INC_FREEHIT(x)	atomic_inc_unchecked(&(x)->freehit)
 +#define STATS_INC_FREEMISS(x)	atomic_inc_unchecked(&(x)->freemiss)
++#define STATS_INC_SANITIZED(x)	atomic_inc_unchecked(&(x)->sanitized)
++#define STATS_INC_NOT_SANITIZED(x) atomic_inc_unchecked(&(x)->not_sanitized)
  #else
  #define	STATS_INC_ACTIVE(x)	do { } while (0)
  #define	STATS_DEC_ACTIVE(x)	do { } while (0)
-@@ -477,7 +477,7 @@ static inline void *index_to_obj(struct
+@@ -386,6 +388,8 @@ static void kmem_cache_node_init(struct
+ #define STATS_INC_ALLOCMISS(x)	do { } while (0)
+ #define STATS_INC_FREEHIT(x)	do { } while (0)
+ #define STATS_INC_FREEMISS(x)	do { } while (0)
++#define STATS_INC_SANITIZED(x)	do { } while (0)
++#define STATS_INC_NOT_SANITIZED(x) do { } while (0)
+ #endif
+ 
+ #if DEBUG
+@@ -477,7 +481,7 @@ static inline void *index_to_obj(struct
   *   reciprocal_divide(offset, cache->reciprocal_buffer_size)
   */
  static inline unsigned int obj_to_index(const struct kmem_cache *cache,
@@ -61553,7 +61620,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux
  {
  	u32 offset = (obj - slab->s_mem);
  	return reciprocal_divide(offset, cache->reciprocal_buffer_size);
-@@ -1384,7 +1384,7 @@ static int __cpuinit cpuup_callback(stru
+@@ -1384,7 +1388,7 @@ static int __cpuinit cpuup_callback(stru
  	return notifier_from_errno(err);
  }
  
@@ -61562,7 +61629,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux
  	&cpuup_callback, NULL, 0
  };
  
-@@ -1565,12 +1565,12 @@ void __init kmem_cache_init(void)
+@@ -1565,12 +1569,12 @@ void __init kmem_cache_init(void)
  	 */
  
  	kmalloc_caches[INDEX_AC] = create_kmalloc_cache("kmalloc-ac",
@@ -61577,7 +61644,29 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux
  
  	slab_early_init = 0;
  
-@@ -3800,6 +3800,7 @@ void kfree(const void *objp)
+@@ -3583,6 +3587,21 @@ static inline void __cache_free(struct k
+ 	struct array_cache *ac = cpu_cache_get(cachep);
+ 
+ 	check_irq_off();
++
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	if (pax_sanitize_slab) {
++		if (!(cachep->flags & (SLAB_POISON | SLAB_NO_SANITIZE))) {
++			memset(objp, PAX_MEMORY_SANITIZE_VALUE, cachep->object_size);
++
++			if (cachep->ctor)
++				cachep->ctor(objp);
++
++			STATS_INC_SANITIZED(cachep);
++		} else
++			STATS_INC_NOT_SANITIZED(cachep);
++	}
++#endif
++
+ 	kmemleak_free_recursive(objp, cachep->flags);
+ 	objp = cache_free_debugcheck(cachep, objp, caller);
+ 
+@@ -3800,6 +3819,7 @@ void kfree(const void *objp)
  
  	if (unlikely(ZERO_OR_NULL_PTR(objp)))
  		return;
@@ -61585,7 +61674,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux
  	local_irq_save(flags);
  	kfree_debugcheck(objp);
  	c = virt_to_cache(objp);
-@@ -4241,10 +4242,10 @@ void slabinfo_show_stats(struct seq_file
+@@ -4241,14 +4261,22 @@ void slabinfo_show_stats(struct seq_file
  	}
  	/* cpu stats */
  	{
@@ -61600,7 +61689,19 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux
  
  		seq_printf(m, " : cpustat %6lu %6lu %6lu %6lu",
  			   allochit, allocmiss, freehit, freemiss);
-@@ -4483,6 +4484,64 @@ static int __init slab_proc_init(void)
+ 	}
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	{
++		unsigned long sanitized = atomic_read_unchecked(&cachep->sanitized);
++		unsigned long not_sanitized = atomic_read_unchecked(&cachep->not_sanitized);
++
++		seq_printf(m, " : pax %6lu %6lu", sanitized, not_sanitized);
++	}
++#endif
+ #endif
+ }
+ 
+@@ -4483,6 +4511,64 @@ static int __init slab_proc_init(void)
  module_init(slab_proc_init);
  #endif
  
@@ -61667,8 +61768,8 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.c linux
   * @objp: Pointer to the object
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.c linux-3.10.3-pax/mm/slab_common.c
 --- linux-3.10.3/mm/slab_common.c	2013-07-08 01:58:56.728267828 +0200
-+++ linux-3.10.3-pax/mm/slab_common.c	2013-07-08 12:36:38.382863295 +0200
-@@ -22,7 +22,7 @@
++++ linux-3.10.3-pax/mm/slab_common.c	2013-07-26 02:36:52.303333814 +0200
+@@ -22,11 +22,22 @@
  
  #include "slab.h"
  
@@ -61677,7 +61778,22 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  LIST_HEAD(slab_caches);
  DEFINE_MUTEX(slab_mutex);
  struct kmem_cache *kmem_cache;
-@@ -209,7 +209,7 @@ kmem_cache_create_memcg(struct mem_cgrou
+ 
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++bool pax_sanitize_slab __read_only = true;
++static int __init pax_sanitize_slab_setup(char *str)
++{
++	pax_sanitize_slab = !!simple_strtol(str, NULL, 0);
++	printk("%sabled PaX slab sanitization\n", pax_sanitize_slab ? "En" : "Dis");
++	return 1;
++}
++__setup("pax_sanitize_slab=", pax_sanitize_slab_setup);
++#endif
++
+ #ifdef CONFIG_DEBUG_VM
+ static int kmem_cache_sanity_check(struct mem_cgroup *memcg, const char *name,
+ 				   size_t size)
+@@ -209,7 +220,7 @@ kmem_cache_create_memcg(struct mem_cgrou
  
  		err = __kmem_cache_create(s, flags);
  		if (!err) {
@@ -61686,7 +61802,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  			list_add(&s->list, &slab_caches);
  			memcg_cache_list_add(memcg, s);
  		} else {
-@@ -255,8 +255,7 @@ void kmem_cache_destroy(struct kmem_cach
+@@ -255,8 +266,7 @@ void kmem_cache_destroy(struct kmem_cach
  
  	get_online_cpus();
  	mutex_lock(&slab_mutex);
@@ -61696,7 +61812,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  		list_del(&s->list);
  
  		if (!__kmem_cache_shutdown(s)) {
-@@ -302,7 +301,7 @@ void __init create_boot_cache(struct kme
+@@ -302,7 +312,7 @@ void __init create_boot_cache(struct kme
  		panic("Creation of kmalloc slab %s size=%zu failed. Reason %d\n",
  					name, size, err);
  
@@ -61705,7 +61821,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  }
  
  struct kmem_cache *__init create_kmalloc_cache(const char *name, size_t size,
-@@ -315,7 +314,7 @@ struct kmem_cache *__init create_kmalloc
+@@ -315,7 +325,7 @@ struct kmem_cache *__init create_kmalloc
  
  	create_boot_cache(s, name, size, flags);
  	list_add(&s->list, &slab_caches);
@@ -61714,7 +61830,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  	return s;
  }
  
-@@ -327,6 +326,11 @@ struct kmem_cache *kmalloc_dma_caches[KM
+@@ -327,6 +337,11 @@ struct kmem_cache *kmalloc_dma_caches[KM
  EXPORT_SYMBOL(kmalloc_dma_caches);
  #endif
  
@@ -61726,7 +61842,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  /*
   * Conversion table for small slabs sizes / 8 to the index in the
   * kmalloc array. This is necessary for slabs < 192 since we have non power
-@@ -391,6 +395,13 @@ struct kmem_cache *kmalloc_slab(size_t s
+@@ -391,6 +406,13 @@ struct kmem_cache *kmalloc_slab(size_t s
  		return kmalloc_dma_caches[index];
  
  #endif
@@ -61740,7 +61856,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  	return kmalloc_caches[index];
  }
  
-@@ -447,7 +458,7 @@ void __init create_kmalloc_caches(unsign
+@@ -447,7 +469,7 @@ void __init create_kmalloc_caches(unsign
  	for (i = KMALLOC_SHIFT_LOW; i <= KMALLOC_SHIFT_HIGH; i++) {
  		if (!kmalloc_caches[i]) {
  			kmalloc_caches[i] = create_kmalloc_cache(NULL,
@@ -61749,7 +61865,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  		}
  
  		/*
-@@ -456,10 +467,10 @@ void __init create_kmalloc_caches(unsign
+@@ -456,10 +478,10 @@ void __init create_kmalloc_caches(unsign
  		 * earlier power of two caches
  		 */
  		if (KMALLOC_MIN_SIZE <= 32 && !kmalloc_caches[1] && i == 6)
@@ -61762,7 +61878,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  	}
  
  	/* Kmalloc array is now usable */
-@@ -492,6 +503,23 @@ void __init create_kmalloc_caches(unsign
+@@ -492,6 +514,23 @@ void __init create_kmalloc_caches(unsign
  		}
  	}
  #endif
@@ -61786,19 +61902,46 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab_common.
  }
  #endif /* !CONFIG_SLOB */
  
+@@ -516,6 +555,9 @@ void print_slabinfo_header(struct seq_fi
+ 	seq_puts(m, " : globalstat <listallocs> <maxobjs> <grown> <reaped> "
+ 		 "<error> <maxfreeable> <nodeallocs> <remotefrees> <alienoverflow>");
+ 	seq_puts(m, " : cpustat <allochit> <allocmiss> <freehit> <freemiss>");
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	seq_puts(m, " : pax <sanitized> <not_sanitized>");
++#endif
+ #endif
+ 	seq_putc(m, '\n');
+ }
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.h linux-3.10.3-pax/mm/slab.h
 --- linux-3.10.3/mm/slab.h	2013-07-08 01:58:56.728267828 +0200
-+++ linux-3.10.3-pax/mm/slab.h	2013-07-08 02:01:15.344271903 +0200
-@@ -67,7 +67,7 @@ __kmem_cache_alias(struct mem_cgroup *me
++++ linux-3.10.3-pax/mm/slab.h	2013-07-26 02:23:12.987289315 +0200
+@@ -32,6 +32,15 @@ extern struct list_head slab_caches;
+ /* The slab cache that manages slab cache information */
+ extern struct kmem_cache *kmem_cache;
+ 
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++#ifdef CONFIG_X86_64
++#define PAX_MEMORY_SANITIZE_VALUE	'\xfe'
++#else
++#define PAX_MEMORY_SANITIZE_VALUE	'\xff'
++#endif
++extern bool pax_sanitize_slab;
++#endif
++
+ unsigned long calculate_alignment(unsigned long flags,
+ 		unsigned long align, unsigned long size);
+ 
+@@ -67,7 +76,8 @@ __kmem_cache_alias(struct mem_cgroup *me
  
  /* Legal flag mask for kmem_cache_create(), for various configurations */
  #define SLAB_CORE_FLAGS (SLAB_HWCACHE_ALIGN | SLAB_CACHE_DMA | SLAB_PANIC | \
 -			 SLAB_DESTROY_BY_RCU | SLAB_DEBUG_OBJECTS )
-+			 SLAB_DESTROY_BY_RCU | SLAB_DEBUG_OBJECTS | SLAB_USERCOPY)
++			 SLAB_DESTROY_BY_RCU | SLAB_DEBUG_OBJECTS | \
++			 SLAB_USERCOPY | SLAB_NO_SANITIZE)
  
  #if defined(CONFIG_DEBUG_SLAB)
  #define SLAB_DEBUG_FLAGS (SLAB_RED_ZONE | SLAB_POISON | SLAB_STORE_USER)
-@@ -229,6 +229,9 @@ static inline struct kmem_cache *cache_f
+@@ -229,6 +239,9 @@ static inline struct kmem_cache *cache_f
  		return s;
  
  	page = virt_to_head_page(x);
@@ -61810,7 +61953,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slab.h linux
  		return cachep;
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux-3.10.3-pax/mm/slob.c
 --- linux-3.10.3/mm/slob.c	2013-04-30 01:25:29.279585287 +0200
-+++ linux-3.10.3-pax/mm/slob.c	2013-07-11 17:30:29.038601727 +0200
++++ linux-3.10.3-pax/mm/slob.c	2013-07-26 02:23:12.991289315 +0200
 @@ -157,7 +157,7 @@ static void set_slob(slob_t *s, slobidx_
  /*
   * Return the size of a slob block.
@@ -61889,7 +62032,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  		INIT_LIST_HEAD(&sp->list);
  		set_slob(b, SLOB_UNITS(PAGE_SIZE), b + SLOB_UNITS(PAGE_SIZE));
  		set_slob_page_free(sp, slob_list);
-@@ -359,9 +363,7 @@ static void slob_free(void *block, int s
+@@ -359,12 +363,15 @@ static void slob_free(void *block, int s
  		if (slob_page_free(sp))
  			clear_slob_page_free(sp);
  		spin_unlock_irqrestore(&slob_lock, flags);
@@ -61900,7 +62043,15 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  		return;
  	}
  
-@@ -424,11 +426,10 @@ out:
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	if (pax_sanitize_slab)
++		memset(block, PAX_MEMORY_SANITIZE_VALUE, size);
++#endif
++
+ 	if (!slob_page_free(sp)) {
+ 		/* This slob page is about to become partially free. Easy! */
+ 		sp->units = units;
+@@ -424,11 +431,10 @@ out:
   */
  
  static __always_inline void *
@@ -61915,7 +62066,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  
  	gfp &= gfp_allowed_mask;
  
-@@ -442,23 +443,41 @@ __do_kmalloc_node(size_t size, gfp_t gfp
+@@ -442,23 +448,41 @@ __do_kmalloc_node(size_t size, gfp_t gfp
  
  		if (!m)
  			return NULL;
@@ -61960,7 +62111,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  	return ret;
  }
  
-@@ -493,34 +512,112 @@ void kfree(const void *block)
+@@ -493,34 +517,112 @@ void kfree(const void *block)
  		return;
  	kmemleak_free(block);
  
@@ -62082,7 +62233,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  }
  EXPORT_SYMBOL(ksize);
  
-@@ -536,23 +633,33 @@ int __kmem_cache_create(struct kmem_cach
+@@ -536,23 +638,33 @@ int __kmem_cache_create(struct kmem_cach
  
  void *kmem_cache_alloc_node(struct kmem_cache *c, gfp_t flags, int node)
  {
@@ -62118,7 +62269,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  
  	if (c->ctor)
  		c->ctor(b);
-@@ -564,10 +671,14 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
+@@ -564,10 +676,14 @@ EXPORT_SYMBOL(kmem_cache_alloc_node);
  
  static void __kmem_cache_free(void *b, int size)
  {
@@ -62135,7 +62286,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  }
  
  static void kmem_rcu_free(struct rcu_head *head)
-@@ -580,17 +691,31 @@ static void kmem_rcu_free(struct rcu_hea
+@@ -580,17 +696,31 @@ static void kmem_rcu_free(struct rcu_hea
  
  void kmem_cache_free(struct kmem_cache *c, void *b)
  {
@@ -62172,8 +62323,23 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slob.c linux
  
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux-3.10.3-pax/mm/slub.c
 --- linux-3.10.3/mm/slub.c	2013-07-08 01:58:56.732267828 +0200
-+++ linux-3.10.3-pax/mm/slub.c	2013-07-08 15:26:49.995163534 +0200
-@@ -2661,7 +2661,7 @@ static int slub_min_objects;
++++ linux-3.10.3-pax/mm/slub.c	2013-07-26 02:23:12.995289315 +0200
+@@ -2594,6 +2594,14 @@ static __always_inline void slab_free(st
+ 
+ 	slab_free_hook(s, x);
+ 
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++	if (pax_sanitize_slab && !(s->flags & SLAB_NO_SANITIZE)) {
++		memset(x, PAX_MEMORY_SANITIZE_VALUE, s->object_size);
++		if (s->ctor)
++			s->ctor(x);
++	}
++#endif
++
+ redo:
+ 	/*
+ 	 * Determine the currently cpus per cpu slab.
+@@ -2661,7 +2669,7 @@ static int slub_min_objects;
   * Merge control. If this is set then no merging of slab caches will occur.
   * (Could be removed. This was introduced to pacify the merge skeptics.)
   */
@@ -62182,7 +62348,17 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  
  /*
   * Calculate the order of allocation given an slab object size.
-@@ -3283,6 +3283,59 @@ void *__kmalloc_node(size_t size, gfp_t
+@@ -2938,6 +2946,9 @@ static int calculate_sizes(struct kmem_c
+ 	s->inuse = size;
+ 
+ 	if (((flags & (SLAB_DESTROY_BY_RCU | SLAB_POISON)) ||
++#ifdef CONFIG_PAX_MEMORY_SANITIZE
++		(pax_sanitize_slab && !(flags & SLAB_NO_SANITIZE)) ||
++#endif
+ 		s->ctor)) {
+ 		/*
+ 		 * Relocate free pointer after the object if it is not
+@@ -3283,6 +3294,59 @@ void *__kmalloc_node(size_t size, gfp_t
  EXPORT_SYMBOL(__kmalloc_node);
  #endif
  
@@ -62242,7 +62418,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  size_t ksize(const void *object)
  {
  	struct page *page;
-@@ -3347,6 +3400,7 @@ void kfree(const void *x)
+@@ -3347,6 +3411,7 @@ void kfree(const void *x)
  	if (unlikely(ZERO_OR_NULL_PTR(x)))
  		return;
  
@@ -62250,7 +62426,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  	page = virt_to_head_page(x);
  	if (unlikely(!PageSlab(page))) {
  		BUG_ON(!PageCompound(page));
-@@ -3652,7 +3706,7 @@ static int slab_unmergeable(struct kmem_
+@@ -3652,7 +3717,7 @@ static int slab_unmergeable(struct kmem_
  	/*
  	 * We may have set a slab to be unmergeable during bootstrap.
  	 */
@@ -62259,7 +62435,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  		return 1;
  
  	return 0;
-@@ -3710,7 +3764,7 @@ __kmem_cache_alias(struct mem_cgroup *me
+@@ -3710,7 +3775,7 @@ __kmem_cache_alias(struct mem_cgroup *me
  
  	s = find_mergeable(memcg, size, align, flags, name, ctor);
  	if (s) {
@@ -62268,7 +62444,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  		/*
  		 * Adjust the object sizes so that we clear
  		 * the complete object on kzalloc.
-@@ -3719,7 +3773,7 @@ __kmem_cache_alias(struct mem_cgroup *me
+@@ -3719,7 +3784,7 @@ __kmem_cache_alias(struct mem_cgroup *me
  		s->inuse = max_t(int, s->inuse, ALIGN(size, sizeof(void *)));
  
  		if (sysfs_slab_alias(s, name)) {
@@ -62277,7 +62453,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  			s = NULL;
  		}
  	}
-@@ -3781,7 +3835,7 @@ static int __cpuinit slab_cpuup_callback
+@@ -3781,7 +3846,7 @@ static int __cpuinit slab_cpuup_callback
  	return NOTIFY_OK;
  }
  
@@ -62286,7 +62462,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  	.notifier_call = slab_cpuup_callback
  };
  
-@@ -4475,7 +4529,7 @@ SLAB_ATTR_RO(ctor);
+@@ -4475,7 +4540,7 @@ SLAB_ATTR_RO(ctor);
  
  static ssize_t aliases_show(struct kmem_cache *s, char *buf)
  {
@@ -62295,7 +62471,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  }
  SLAB_ATTR_RO(aliases);
  
-@@ -4563,6 +4617,14 @@ static ssize_t cache_dma_show(struct kme
+@@ -4563,6 +4628,14 @@ static ssize_t cache_dma_show(struct kme
  SLAB_ATTR_RO(cache_dma);
  #endif
  
@@ -62310,7 +62486,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  static ssize_t destroy_by_rcu_show(struct kmem_cache *s, char *buf)
  {
  	return sprintf(buf, "%d\n", !!(s->flags & SLAB_DESTROY_BY_RCU));
-@@ -4897,6 +4959,9 @@ static struct attribute *slab_attrs[] =
+@@ -4897,6 +4970,9 @@ static struct attribute *slab_attrs[] =
  #ifdef CONFIG_ZONE_DMA
  	&cache_dma_attr.attr,
  #endif
@@ -62320,7 +62496,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/mm/slub.c linux
  #ifdef CONFIG_NUMA
  	&remote_node_defrag_ratio_attr.attr,
  #endif
-@@ -5151,7 +5216,7 @@ static int sysfs_slab_add(struct kmem_ca
+@@ -5151,7 +5227,7 @@ static int sysfs_slab_add(struct kmem_ca
  	}
  
  	s->kobj.kset = slab_kset;
@@ -63647,6 +63823,27 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/net/core/scm.c 
  	     i++, cmfptr++)
  	{
  		struct socket *sock;
+diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/net/core/skbuff.c linux-3.10.3-pax/net/core/skbuff.c
+--- linux-3.10.3/net/core/skbuff.c	2013-07-08 01:58:57.796267859 +0200
++++ linux-3.10.3-pax/net/core/skbuff.c	2013-07-26 02:23:12.999289315 +0200
+@@ -3087,13 +3087,15 @@ void __init skb_init(void)
+ 	skbuff_head_cache = kmem_cache_create("skbuff_head_cache",
+ 					      sizeof(struct sk_buff),
+ 					      0,
+-					      SLAB_HWCACHE_ALIGN|SLAB_PANIC,
++					      SLAB_HWCACHE_ALIGN|SLAB_PANIC|
++					      SLAB_NO_SANITIZE,
+ 					      NULL);
+ 	skbuff_fclone_cache = kmem_cache_create("skbuff_fclone_cache",
+ 						(2*sizeof(struct sk_buff)) +
+ 						sizeof(atomic_t),
+ 						0,
+-						SLAB_HWCACHE_ALIGN|SLAB_PANIC,
++						SLAB_HWCACHE_ALIGN|SLAB_PANIC|
++						SLAB_NO_SANITIZE,
+ 						NULL);
+ }
+ 
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/net/core/sock.c linux-3.10.3-pax/net/core/sock.c
 --- linux-3.10.3/net/core/sock.c	2013-07-08 01:58:57.796267859 +0200
 +++ linux-3.10.3-pax/net/core/sock.c	2013-07-08 02:01:15.372271904 +0200
@@ -67799,8 +67996,8 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/security/integr
  	return 0;
 diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/security/Kconfig linux-3.10.3-pax/security/Kconfig
 --- linux-3.10.3/security/Kconfig	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.10.3-pax/security/Kconfig	2013-07-08 02:01:15.464271907 +0200
-@@ -4,6 +4,680 @@
++++ linux-3.10.3-pax/security/Kconfig	2013-07-26 02:28:18.027305882 +0200
+@@ -4,6 +4,691 @@
  
  menu "Security options"
  
@@ -68296,20 +68493,31 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/security/Kconfi
 +	bool "Sanitize all freed memory"
 +	depends on !HIBERNATION
 +	help
-+	  By saying Y here the kernel will erase memory pages as soon as they
-+	  are freed.  This in turn reduces the lifetime of data stored in the
-+	  pages, making it less likely that sensitive information such as
-+	  passwords, cryptographic secrets, etc stay in memory for too long.
++	  By saying Y here the kernel will erase memory pages and slab objects
++	  as soon as they are freed.  This in turn reduces the lifetime of data
++	  stored in them, making it less likely that sensitive information such
++	  as passwords, cryptographic secrets, etc stay in memory for too long.
 +
 +	  This is especially useful for programs whose runtime is short, long
 +	  lived processes and the kernel itself benefit from this as long as
-+	  they operate on whole memory pages and ensure timely freeing of pages
-+	  that may hold sensitive information.
++	  they ensure timely freeing of memory that may hold sensitive
++	  information.
++
++	  A nice side effect of the sanitization of slab objects is the
++	  reduction of possible info leaks caused by padding bytes within the
++	  leaky structures.  Use-after-free bugs for structures containing
++	  pointers can also be detected as dereferencing the sanitized pointer
++	  will generate an access violation.
 +
 +	  The tradeoff is performance impact, on a single CPU system kernel
 +	  compilation sees a 3% slowdown, other systems and workloads may vary
 +	  and you are advised to test this feature on your expected workload
 +	  before deploying it.
++
++	  To reduce the performance penalty by sanitizing pages only, albeit
++	  limiting the effectiveness of this feature at the same time, slab
++	  sanitization can be disabled with the kernel commandline parameter
++	  "pax_sanitize_slab=0".
 +
 +	  Note that this feature does not protect data stored in live pages,
 +	  e.g., process memory swapped to disk may stay there for a long time.
@@ -68481,7 +68689,7 @@ diff -NurpX linux-3.10.3-pax/Documentation/dontdiff linux-3.10.3/security/Kconfi
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +777,7 @@ config INTEL_TXT
+@@ -103,7 +788,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
