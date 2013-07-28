@@ -1,4 +1,4 @@
-- forward port to 3.2.49
+- fixed amd64 kstack alignment (caught by some crazy codegen by clang/llvm)
 
 diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/alpha/include/asm/atomic.h linux-3.2.49-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.49/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -10559,7 +10559,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/includ
   * x86-64 Task Priority Register, CR8
 diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/include/asm/processor.h linux-3.2.49-pax/arch/x86/include/asm/processor.h
 --- linux-3.2.49/arch/x86/include/asm/processor.h	2012-08-12 12:28:37.769232285 +0200
-+++ linux-3.2.49-pax/arch/x86/include/asm/processor.h	2012-08-12 12:28:48.565230852 +0200
++++ linux-3.2.49-pax/arch/x86/include/asm/processor.h	2013-07-28 16:03:29.171356375 +0200
 @@ -266,7 +266,7 @@ struct tss_struct {
  
  } ____cacheline_aligned;
@@ -10642,12 +10642,12 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/includ
  
  #define INIT_THREAD  { \
 -	.sp0 = (unsigned long)&init_stack + sizeof(init_stack) \
-+	.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 16 \
++	.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 8 \
  }
  
  #define INIT_TSS  { \
 -	.x86_tss.sp0 = (unsigned long)&init_stack + sizeof(init_stack) \
-+	.x86_tss.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 16 \
++	.x86_tss.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 8 \
  }
  
  /*
@@ -12879,7 +12879,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel
  			size = 64;
 diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel/cpu/common.c linux-3.2.49-pax/arch/x86/kernel/cpu/common.c
 --- linux-3.2.49/arch/x86/kernel/cpu/common.c	2012-08-12 12:28:37.817231019 +0200
-+++ linux-3.2.49-pax/arch/x86/kernel/cpu/common.c	2012-08-12 12:28:48.569231103 +0200
++++ linux-3.2.49-pax/arch/x86/kernel/cpu/common.c	2013-07-28 16:03:29.179356375 +0200
 @@ -84,60 +84,6 @@ static const struct cpu_dev __cpuinitcon
  
  static const struct cpu_dev *this_cpu __cpuinitdata = &default_cpu;
@@ -12976,7 +12976,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel
  
  DEFINE_PER_CPU(unsigned long, kernel_stack) =
 -	(unsigned long)&init_thread_union - KERNEL_STACK_OFFSET + THREAD_SIZE;
-+	(unsigned long)&init_thread_union - 16 + THREAD_SIZE;
++	(unsigned long)&init_thread_union - 8 + THREAD_SIZE;
  EXPORT_PER_CPU_SYMBOL(kernel_stack);
  
  DEFINE_PER_CPU(char *, irq_stack_ptr) =
@@ -17663,7 +17663,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel
 -
 diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel/process_64.c linux-3.2.49-pax/arch/x86/kernel/process_64.c
 --- linux-3.2.49/arch/x86/kernel/process_64.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.49-pax/arch/x86/kernel/process_64.c	2012-07-04 19:24:47.588063004 +0200
++++ linux-3.2.49-pax/arch/x86/kernel/process_64.c	2013-07-28 16:03:59.259354769 +0200
 @@ -89,7 +89,7 @@ static void __exit_idle(void)
  void exit_idle(void)
  {
@@ -17679,7 +17679,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel
  
 -	childregs = ((struct pt_regs *)
 -			(THREAD_SIZE + task_stack_page(p))) - 1;
-+	childregs = task_stack_page(p) + THREAD_SIZE - sizeof(struct pt_regs) - 16;
++	childregs = task_stack_page(p) + THREAD_SIZE - sizeof(struct pt_regs) - 8;
  	*childregs = *regs;
  
  	childregs->ax = 0;
@@ -18346,7 +18346,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel
  	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel/smpboot.c linux-3.2.49-pax/arch/x86/kernel/smpboot.c
 --- linux-3.2.49/arch/x86/kernel/smpboot.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.49-pax/arch/x86/kernel/smpboot.c	2012-07-04 19:24:47.592063004 +0200
++++ linux-3.2.49-pax/arch/x86/kernel/smpboot.c	2013-07-28 16:03:47.399355402 +0200
 @@ -709,17 +709,20 @@ static int __cpuinit do_boot_cpu(int api
  	set_idle_for_cpu(cpu, c_idle.idle);
  do_rest:
@@ -18361,7 +18361,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/kernel
 -	per_cpu(kernel_stack, cpu) =
 -		(unsigned long)task_stack_page(c_idle.idle) -
 -		KERNEL_STACK_OFFSET + THREAD_SIZE;
-+	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(c_idle.idle) - 16 + THREAD_SIZE;
++	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(c_idle.idle) - 8 + THREAD_SIZE;
  #endif
 +
 +	pax_open_kernel();
@@ -26730,7 +26730,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/xen/mm
  	.release_pud = xen_release_pmd_init,
 diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/xen/smp.c linux-3.2.49-pax/arch/x86/xen/smp.c
 --- linux-3.2.49/arch/x86/xen/smp.c	2013-05-14 13:33:40.524285678 +0200
-+++ linux-3.2.49-pax/arch/x86/xen/smp.c	2013-05-14 13:33:46.520285358 +0200
++++ linux-3.2.49-pax/arch/x86/xen/smp.c	2013-07-28 16:03:29.183356375 +0200
 @@ -209,11 +209,6 @@ static void __init xen_smp_prepare_boot_
  {
  	BUG_ON(smp_processor_id() != 0);
@@ -26771,7 +26771,7 @@ diff -NurpX linux-3.2.49-pax/Documentation/dontdiff linux-3.2.49/arch/x86/xen/sm
 -	per_cpu(kernel_stack, cpu) =
 -		(unsigned long)task_stack_page(idle) -
 -		KERNEL_STACK_OFFSET + THREAD_SIZE;
-+	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(idle) - 16 + THREAD_SIZE;
++	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(idle) - 8 + THREAD_SIZE;
  #endif
  	xen_setup_runstate_info(cpu);
  	xen_setup_timer(cpu);
