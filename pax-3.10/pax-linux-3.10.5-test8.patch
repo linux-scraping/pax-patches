@@ -1,4 +1,6 @@
-- forward port to 3.10.5
+- Emese fixed a size overflow false positive, reported by markusle (http://forums.grsecurity.net/viewtopic.php?f=3&t=3692)
+- fixed the use of PXN for 2-level pages tables on arm, by Corey Minyard <cminyard@mvista.com>
+- added PAGEEXEC/XI violation reporting on mips, by Corey Minyard <cminyard@mvista.com>
 
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/alpha/include/asm/atomic.h linux-3.10.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.5/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -1295,15 +1297,17 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/arm/includ
  
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/arm/include/asm/pgtable-2level.h linux-3.10.5-pax/arch/arm/include/asm/pgtable-2level.h
 --- linux-3.10.5/arch/arm/include/asm/pgtable-2level.h	2013-02-19 01:12:35.725765782 +0100
-+++ linux-3.10.5-pax/arch/arm/include/asm/pgtable-2level.h	2013-07-08 02:01:14.384271875 +0200
-@@ -125,6 +125,7 @@
- #define L_PTE_XN		(_AT(pteval_t, 1) << 9)
++++ linux-3.10.5-pax/arch/arm/include/asm/pgtable-2level.h	2013-08-08 14:39:07.966396808 +0200
+@@ -126,6 +126,9 @@
  #define L_PTE_SHARED		(_AT(pteval_t, 1) << 10)	/* shared(v6), coherent(xsc3) */
  #define L_PTE_NONE		(_AT(pteval_t, 1) << 11)
-+#define L_PTE_PXN		(_AT(pteval_t, 1) << 12)	/* v7*/
  
++/* Two-level page tables only have PXN in the PGD, not in the PTE. */
++#define L_PTE_PXN		(_AT(pteval_t, 0))
++
  /*
   * These are the memory types, defined to be compatible with
+  * pre-ARMv6 CPUs cacheable and bufferable bits:   XXCB
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/arm/include/asm/pgtable-2level-hwdef.h linux-3.10.5-pax/arch/arm/include/asm/pgtable-2level-hwdef.h
 --- linux-3.10.5/arch/arm/include/asm/pgtable-2level-hwdef.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.10.5-pax/arch/arm/include/asm/pgtable-2level-hwdef.h	2013-07-08 02:01:14.384271875 +0200
@@ -3604,19 +3608,6 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/arm/mm/mmu
  		create_mapping(&map);
  	}
  }
-diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/arm/mm/proc-v7-2level.S linux-3.10.5-pax/arch/arm/mm/proc-v7-2level.S
---- linux-3.10.5/arch/arm/mm/proc-v7-2level.S	2013-07-08 01:57:53.616265972 +0200
-+++ linux-3.10.5-pax/arch/arm/mm/proc-v7-2level.S	2013-07-08 02:01:14.412271876 +0200
-@@ -99,6 +99,9 @@ ENTRY(cpu_v7_set_pte_ext)
- 	tst	r1, #L_PTE_XN
- 	orrne	r3, r3, #PTE_EXT_XN
- 
-+	tst	r1, #L_PTE_PXN
-+	orrne	r3, r3, #PTE_EXT_PXN
-+
- 	tst	r1, #L_PTE_YOUNG
- 	tstne	r1, #L_PTE_VALID
- #ifndef CONFIG_CPU_USE_DOMAINS
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/arm/plat-omap/sram.c linux-3.10.5-pax/arch/arm/plat-omap/sram.c
 --- linux-3.10.5/arch/arm/plat-omap/sram.c	2013-02-19 01:12:38.497765932 +0100
 +++ linux-3.10.5-pax/arch/arm/plat-omap/sram.c	2013-07-08 02:01:14.412271876 +0200
@@ -4380,7 +4371,7 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/mips/kerne
 -}
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/mips/mm/fault.c linux-3.10.5-pax/arch/mips/mm/fault.c
 --- linux-3.10.5/arch/mips/mm/fault.c	2013-04-30 01:25:02.287586728 +0200
-+++ linux-3.10.5-pax/arch/mips/mm/fault.c	2013-07-08 02:01:14.428271877 +0200
++++ linux-3.10.5-pax/arch/mips/mm/fault.c	2013-08-09 00:14:52.842505511 +0200
 @@ -27,6 +27,23 @@
  #include <asm/highmem.h>		/* For VMALLOC_END */
  #include <linux/kdebug.h>
@@ -4405,6 +4396,21 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/mips/mm/fa
  /*
   * This routine handles page faults.  It determines the address,
   * and the problem, and then passes it off to one of the appropriate
+@@ -196,6 +213,14 @@ bad_area:
+ bad_area_nosemaphore:
+ 	/* User mode accesses just cause a SIGSEGV */
+ 	if (user_mode(regs)) {
++
++#ifdef CONFIG_PAX_PAGEEXEC
++		if (cpu_has_rixi && (mm->pax_flags & MF_PAX_PAGEEXEC) && !write && address == instruction_pointer(regs)) {
++			pax_report_fault(regs, (void *)address, (void *)user_stack_pointer(regs));
++			do_group_exit(SIGKILL);
++		}
++#endif
++
+ 		tsk->thread.cp0_badvaddr = address;
+ 		tsk->thread.error_code = write;
+ #if 0
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/mips/mm/mmap.c linux-3.10.5-pax/arch/mips/mm/mmap.c
 --- linux-3.10.5/arch/mips/mm/mmap.c	2013-02-19 01:12:42.217766134 +0100
 +++ linux-3.10.5-pax/arch/mips/mm/mmap.c	2013-07-08 02:01:14.428271877 +0200
@@ -12526,7 +12532,7 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/x86/includ
  extern pgprot_t pgprot_writecombine(pgprot_t prot);
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/x86/include/asm/processor.h linux-3.10.5-pax/arch/x86/include/asm/processor.h
 --- linux-3.10.5/arch/x86/include/asm/processor.h	2013-07-08 01:58:03.452266261 +0200
-+++ linux-3.10.5-pax/arch/x86/include/asm/processor.h	2013-07-31 11:54:09.369108510 +0200
++++ linux-3.10.5-pax/arch/x86/include/asm/processor.h	2013-08-08 20:04:54.410458315 +0200
 @@ -282,7 +282,7 @@ struct tss_struct {
  
  } ____cacheline_aligned;
@@ -12629,7 +12635,17 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/x86/includ
  #define KSTK_EIP(task)		(task_pt_regs(task)->ip)
  
  /* Get/set a process' ability to use the timestamp counter instruction */
-@@ -970,7 +977,7 @@ unsigned long calc_aperfmperf_ratio(stru
+@@ -942,7 +949,8 @@ extern int set_tsc_mode(unsigned int val
+ extern u16 amd_get_nb_id(int cpu);
+ 
+ struct aperfmperf {
+-	u64 aperf, mperf;
++	u64 aperf __intentional_overflow(0);
++	u64 mperf __intentional_overflow(0);
+ };
+ 
+ static inline void get_aperfmperf(struct aperfmperf *am)
+@@ -970,7 +978,7 @@ unsigned long calc_aperfmperf_ratio(stru
  	return ratio;
  }
  
@@ -12638,7 +12654,7 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/arch/x86/includ
  extern void free_init_pages(char *what, unsigned long begin, unsigned long end);
  
  void default_idle(void);
-@@ -980,6 +987,6 @@ bool xen_set_default_idle(void);
+@@ -980,6 +988,6 @@ bool xen_set_default_idle(void);
  #define xen_set_default_idle 0
  #endif
  
@@ -50003,7 +50019,7 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/include/linux/l
   * @list: the entry to move
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/include/linux/math64.h linux-3.10.5-pax/include/linux/math64.h
 --- linux-3.10.5/include/linux/math64.h	2013-07-08 01:58:52.448267702 +0200
-+++ linux-3.10.5-pax/include/linux/math64.h	2013-07-08 02:02:53.616274793 +0200
++++ linux-3.10.5-pax/include/linux/math64.h	2013-08-08 20:04:04.706458159 +0200
 @@ -15,7 +15,7 @@
   * This is commonly provided by 32bit archs to provide an optimized 64bit
   * divide.
@@ -50013,6 +50029,15 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/include/linux/m
  {
  	*remainder = dividend % divisor;
  	return dividend / divisor;
+@@ -33,7 +33,7 @@ static inline s64 div_s64_rem(s64 divide
+ /**
+  * div64_u64 - unsigned 64bit divide with 64bit divisor
+  */
+-static inline u64 div64_u64(u64 dividend, u64 divisor)
++static inline u64 __intentional_overflow(0) div64_u64(u64 dividend, u64 divisor)
+ {
+ 	return dividend / divisor;
+ }
 @@ -52,7 +52,7 @@ static inline s64 div64_s64(s64 dividend
  #define div64_ul(x, y)   div_u64((x), (y))
  
@@ -68143,8 +68168,8 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/security/integr
  	return 0;
 diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/security/Kconfig linux-3.10.5-pax/security/Kconfig
 --- linux-3.10.5/security/Kconfig	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.10.5-pax/security/Kconfig	2013-07-26 02:28:18.027305882 +0200
-@@ -4,6 +4,691 @@
++++ linux-3.10.5-pax/security/Kconfig	2013-08-08 12:01:29.946367047 +0200
+@@ -4,6 +4,689 @@
  
  menu "Security options"
  
@@ -68322,8 +68347,6 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/security/Kconfi
 +	depends on PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MATOM || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
 +	select X86_PAE if X86_32 && !HIGHMEM4G && (MCORE2 || MPSC || MATOM || MK8)
 +	select ARCH_TRACK_EXEC_LIMIT if X86_32
-+	select S390_SWITCH_AMODE if S390
-+	select S390_EXEC_PROTECT if S390
 +	help
 +	  This implementation is based on the paging feature of the CPU.
 +	  On i386 without hardware non-executable bit support there is a
@@ -68836,7 +68859,7 @@ diff -NurpX linux-3.10.5-pax/Documentation/dontdiff linux-3.10.5/security/Kconfi
  source security/keys/Kconfig
  
  config SECURITY_DMESG_RESTRICT
-@@ -103,7 +788,7 @@ config INTEL_TXT
+@@ -103,7 +786,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
