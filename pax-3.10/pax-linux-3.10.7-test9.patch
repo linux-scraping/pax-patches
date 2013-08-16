@@ -1,4 +1,7 @@
-- forward port to 3.10.7
+- Emese fixed a size overflow false positive reported by Sven Vermeulen
+- fixed some arm compile problems reported by spender
+- added empty unchecked wrappers for local_t accessors on mips, by Corey Minyard <cminyard@mvista.com>
+  eventually we'll have full REFCOUNT support on mips
 
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/alpha/include/asm/atomic.h linux-3.10.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -2234,8 +2237,8 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
  
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel/process.c linux-3.10.7-pax/arch/arm/kernel/process.c
 --- linux-3.10.7/arch/arm/kernel/process.c	2013-08-15 23:48:37.694699866 +0200
-+++ linux-3.10.7-pax/arch/arm/kernel/process.c	2013-08-16 01:36:02.270355776 +0200
-@@ -28,7 +28,6 @@
++++ linux-3.10.7-pax/arch/arm/kernel/process.c	2013-08-16 14:50:46.679524826 +0200
+@@ -28,10 +28,10 @@
  #include <linux/tick.h>
  #include <linux/utsname.h>
  #include <linux/uaccess.h>
@@ -2243,7 +2246,11 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
  #include <linux/hw_breakpoint.h>
  #include <linux/cpuidle.h>
  #include <linux/leds.h>
-@@ -223,6 +222,7 @@ void machine_power_off(void)
++#include <linux/random.h>
+ 
+ #include <asm/cacheflush.h>
+ #include <asm/idmap.h>
+@@ -223,6 +223,7 @@ void machine_power_off(void)
  
  	if (pm_power_off)
  		pm_power_off();
@@ -2251,7 +2258,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
  }
  
  /*
-@@ -236,7 +236,7 @@ void machine_power_off(void)
+@@ -236,7 +237,7 @@ void machine_power_off(void)
   * executing pre-reset code, and using RAM that the primary CPU's code wishes
   * to use. Implementing such co-ordination would be essentially impossible.
   */
@@ -2260,7 +2267,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
  {
  	smp_send_stop();
  
-@@ -426,12 +426,6 @@ unsigned long get_wchan(struct task_stru
+@@ -426,12 +427,6 @@ unsigned long get_wchan(struct task_stru
  	return 0;
  }
  
@@ -2273,7 +2280,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
  #ifdef CONFIG_MMU
  #ifdef CONFIG_KUSER_HELPERS
  /*
-@@ -442,12 +436,12 @@ unsigned long arch_randomize_brk(struct
+@@ -442,12 +437,12 @@ unsigned long arch_randomize_brk(struct
  static struct vm_area_struct gate_vma = {
  	.vm_start	= 0xffff0000,
  	.vm_end		= 0xffff0000 + PAGE_SIZE,
@@ -2288,7 +2295,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
  	return 0;
  }
  arch_initcall(gate_vma_init);
-@@ -466,7 +460,7 @@ int in_gate_area_no_mm(unsigned long add
+@@ -466,48 +461,23 @@ int in_gate_area_no_mm(unsigned long add
  {
  	return in_gate_area(NULL, addr);
  }
@@ -2297,8 +2304,13 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
  #else
  #define is_gate_vma(vma)	0
  #endif
-@@ -478,36 +472,13 @@ const char *arch_vma_name(struct vm_area
- 		 "[sigpage]" : NULL;
+ 
+ const char *arch_vma_name(struct vm_area_struct *vma)
+ {
+-	return is_gate_vma(vma) ? "[vectors]" :
+-		(vma->vm_mm && vma->vm_start == vma->vm_mm->context.sigpage) ?
+-		 "[sigpage]" : NULL;
++	return is_gate_vma(vma) ? "[vectors]" : NULL;
  }
  
 -static struct page *signal_page;
@@ -2330,7 +2342,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/kernel
 -		mm->context.sigpage = addr;
 -
 - up_fail:
-+	mm->context.sigpage = PAGE_OFFSET + (get_random_int() & 0xCFFFFFFC) - 64*1024 - 16;
++	mm->context.sigpage = (PAGE_OFFSET + (get_random_int() % 0x3FFEFFE0)) & 0xFFFFFFFC;
  	up_write(&mm->mmap_sem);
 -	return ret;
 +	return 0;
@@ -2966,7 +2978,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/ali
  	} while (0)
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/fault.c linux-3.10.7-pax/arch/arm/mm/fault.c
 --- linux-3.10.7/arch/arm/mm/fault.c	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.10.7-pax/arch/arm/mm/fault.c	2013-08-16 01:55:00.574294999 +0200
++++ linux-3.10.7-pax/arch/arm/mm/fault.c	2013-08-16 14:52:44.811518518 +0200
 @@ -25,6 +25,7 @@
  #include <asm/system_misc.h>
  #include <asm/system_info.h>
@@ -3059,7 +3071,16 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/fau
  	printk(KERN_ALERT "Unhandled fault: %s (0x%03x) at 0x%08lx\n",
  		inf->name, fsr, addr);
  
-@@ -575,9 +629,55 @@ do_PrefetchAbort(unsigned long addr, uns
+@@ -569,15 +623,64 @@ hook_ifault_code(int nr, int (*fn)(unsig
+ 	ifsr_info[nr].name = name;
+ }
+ 
++asmlinkage int sys_sigreturn(struct pt_regs *regs);
++asmlinkage int sys_rt_sigreturn(struct pt_regs *regs);
++
+ asmlinkage void __exception
+ do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
+ {
  	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
  	struct siginfo info;
  
@@ -3220,7 +3241,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/ior
  			__builtin_return_address(0));
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/Kconfig linux-3.10.7-pax/arch/arm/mm/Kconfig
 --- linux-3.10.7/arch/arm/mm/Kconfig	2013-08-15 23:48:37.718699865 +0200
-+++ linux-3.10.7-pax/arch/arm/mm/Kconfig	2013-08-16 02:04:24.046264914 +0200
++++ linux-3.10.7-pax/arch/arm/mm/Kconfig	2013-08-16 15:21:14.575427230 +0200
 @@ -436,7 +436,7 @@ config CPU_32v5
  
  config CPU_32v6
@@ -3238,13 +3259,11 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/Kco
  	help
  	  This option enables or disables the use of domain switching
  	  via the set_fs() function.
-@@ -779,7 +780,8 @@ config NEED_KUSER_HELPERS
- 
+@@ -780,6 +781,7 @@ config NEED_KUSER_HELPERS
  config KUSER_HELPERS
  	bool "Enable kuser helpers in vector page" if !NEED_KUSER_HELPERS
--	default y
-+	default n
-+	depends on BROKEN if CPU_V6 || CPU_V6K || CPU_V7
+ 	default y
++	depends on !(CPU_V6 || CPU_V6K || CPU_V7)
  	help
  	  Warning: disabling this option may break user programs.
  
@@ -3338,7 +3357,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mma
  	}
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu.c linux-3.10.7-pax/arch/arm/mm/mmu.c
 --- linux-3.10.7/arch/arm/mm/mmu.c	2013-08-15 23:48:37.722699865 +0200
-+++ linux-3.10.7-pax/arch/arm/mm/mmu.c	2013-08-16 00:14:10.434618030 +0200
++++ linux-3.10.7-pax/arch/arm/mm/mmu.c	2013-08-16 13:22:46.283806758 +0200
 @@ -36,6 +36,22 @@
  #include "mm.h"
  #include "tcm.h"
@@ -3403,7 +3422,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  		.domain    = DOMAIN_KERNEL,
  	},
  #endif
-@@ -277,36 +301,65 @@ static struct mem_type mem_types[] = {
+@@ -277,36 +301,54 @@ static struct mem_type mem_types[] = {
  		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
  				L_PTE_RDONLY,
  		.prot_l1   = PMD_TYPE_TABLE,
@@ -3411,21 +3430,8 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
 +		.domain    = DOMAIN_VECTORS,
  	},
  	[MT_HIGH_VECTORS] = {
--		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
--				L_PTE_USER | L_PTE_RDONLY,
-+		/* we always want the vector page to be noaccess for userland on archs with
-+		   XN where we can enforce some reasonable measure of security
-+		   therefore, when kernexec is disabled, instead of L_PTE_USER | L_PTE_RDONLY
-+		   which turns into supervisor rwx, userland rx, we instead omit that entirely,
-+		   leaving it as supervisor rwx only
-+		*/
-+#ifdef CONFIG_PAX_KERNEXEC
-+		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY | L_PTE_RDONLY,
-+#elif __LINUX_ARM_ARCH__ >= 6
-+		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY,
-+#else
-+		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY | L_PTE_USER | L_PTE_RDONLY,
-+#endif
+ 		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
+ 				L_PTE_USER | L_PTE_RDONLY,
  		.prot_l1   = PMD_TYPE_TABLE,
 -		.domain    = DOMAIN_USER,
 +		.domain    = DOMAIN_VECTORS,
@@ -3479,7 +3485,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  		.domain    = DOMAIN_KERNEL,
  	},
  	[MT_MEMORY_ITCM] = {
-@@ -316,10 +369,10 @@ static struct mem_type mem_types[] = {
+@@ -316,10 +358,10 @@ static struct mem_type mem_types[] = {
  	},
  	[MT_MEMORY_SO] = {
  		.prot_pte  = L_PTE_PRESENT | L_PTE_YOUNG | L_PTE_DIRTY |
@@ -3492,7 +3498,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  		.domain    = DOMAIN_KERNEL,
  	},
  	[MT_MEMORY_DMA_READY] = {
-@@ -405,9 +458,35 @@ static void __init build_mem_type_table(
+@@ -405,9 +447,35 @@ static void __init build_mem_type_table(
  			 * to prevent speculative instruction fetches.
  			 */
  			mem_types[MT_DEVICE].prot_sect |= PMD_SECT_XN;
@@ -3528,7 +3534,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  		}
  		if (cpu_arch >= CPU_ARCH_ARMv7 && (cr & CR_TRE)) {
  			/*
-@@ -468,6 +547,9 @@ static void __init build_mem_type_table(
+@@ -468,6 +536,9 @@ static void __init build_mem_type_table(
  		 * from SVC mode and no access from userspace.
  		 */
  		mem_types[MT_ROM].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
@@ -3538,7 +3544,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  		mem_types[MT_MINICLEAN].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
  		mem_types[MT_CACHECLEAN].prot_sect |= PMD_SECT_APX|PMD_SECT_AP_WRITE;
  #endif
-@@ -485,11 +567,17 @@ static void __init build_mem_type_table(
+@@ -485,11 +556,17 @@ static void __init build_mem_type_table(
  			mem_types[MT_DEVICE_WC].prot_pte |= L_PTE_SHARED;
  			mem_types[MT_DEVICE_CACHED].prot_sect |= PMD_SECT_S;
  			mem_types[MT_DEVICE_CACHED].prot_pte |= L_PTE_SHARED;
@@ -3560,7 +3566,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  		}
  	}
  
-@@ -500,15 +588,20 @@ static void __init build_mem_type_table(
+@@ -500,15 +577,20 @@ static void __init build_mem_type_table(
  	if (cpu_arch >= CPU_ARCH_ARMv6) {
  		if (cpu_arch >= CPU_ARCH_ARMv7 && (cr & CR_TRE)) {
  			/* Non-cacheable Normal is XCB = 001 */
@@ -3584,7 +3590,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  	}
  
  #ifdef CONFIG_ARM_LPAE
-@@ -524,6 +617,8 @@ static void __init build_mem_type_table(
+@@ -524,6 +606,8 @@ static void __init build_mem_type_table(
  	vecs_pgprot |= PTE_EXT_AF;
  #endif
  
@@ -3593,7 +3599,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  	for (i = 0; i < 16; i++) {
  		pteval_t v = pgprot_val(protection_map[i]);
  		protection_map[i] = __pgprot(v | user_pgprot);
-@@ -541,10 +636,15 @@ static void __init build_mem_type_table(
+@@ -541,10 +625,15 @@ static void __init build_mem_type_table(
  
  	mem_types[MT_LOW_VECTORS].prot_l1 |= ecc_mask;
  	mem_types[MT_HIGH_VECTORS].prot_l1 |= ecc_mask;
@@ -3612,7 +3618,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  	mem_types[MT_ROM].prot_sect |= cp->pmd;
  
  	switch (cp->pmd) {
-@@ -1166,18 +1266,15 @@ void __init arm_mm_memblock_reserve(void
+@@ -1166,18 +1255,15 @@ void __init arm_mm_memblock_reserve(void
   * called function.  This means you can't use any function or debugging
   * method which may touch any device, otherwise the kernel _will_ crash.
   */
@@ -3635,7 +3641,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  
  	for (addr = VMALLOC_START; addr; addr += PMD_SIZE)
  		pmd_clear(pmd_off_k(addr));
-@@ -1217,7 +1314,7 @@ static void __init devicemaps_init(struc
+@@ -1217,7 +1303,7 @@ static void __init devicemaps_init(struc
  	 * location (0xffff0000).  If we aren't using high-vectors, also
  	 * create a mapping at the low-vectors virtual address.
  	 */
@@ -3644,7 +3650,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/arm/mm/mmu
  	map.virtual = 0xffff0000;
  	map.length = PAGE_SIZE;
  #ifdef CONFIG_KUSER_HELPERS
-@@ -1287,8 +1384,39 @@ static void __init map_lowmem(void)
+@@ -1287,8 +1373,39 @@ static void __init map_lowmem(void)
  		map.pfn = __phys_to_pfn(start);
  		map.virtual = __phys_to_virt(start);
  		map.length = end - start;
@@ -4366,6 +4372,96 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/mips/inclu
 +#define arch_align_stack(x) ((x) & ~0xfUL)
  
  #endif /* _ASM_EXEC_H */
+diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/mips/include/asm/local.h linux-3.10.7-pax/arch/mips/include/asm/local.h
+--- linux-3.10.7/arch/mips/include/asm/local.h	2013-04-30 01:24:53.719587186 +0200
++++ linux-3.10.7-pax/arch/mips/include/asm/local.h	2013-08-16 14:10:10.087654921 +0200
+@@ -12,15 +12,25 @@ typedef struct
+ 	atomic_long_t a;
+ } local_t;
+ 
++typedef struct {
++	atomic_long_unchecked_t a;
++} local_unchecked_t;
++
+ #define LOCAL_INIT(i)	{ ATOMIC_LONG_INIT(i) }
+ 
+ #define local_read(l)	atomic_long_read(&(l)->a)
++#define local_read_unchecked(l)	atomic_long_read_unchecked(&(l)->a)
+ #define local_set(l, i) atomic_long_set(&(l)->a, (i))
++#define local_set_unchecked(l, i)	atomic_long_set_unchecked(&(l)->a, (i))
+ 
+ #define local_add(i, l) atomic_long_add((i), (&(l)->a))
++#define local_add_unchecked(i, l) atomic_long_add_unchecked((i), (&(l)->a))
+ #define local_sub(i, l) atomic_long_sub((i), (&(l)->a))
++#define local_sub_unchecked(i, l) atomic_long_sub_unchecked((i), (&(l)->a))
+ #define local_inc(l)	atomic_long_inc(&(l)->a)
++#define local_inc_unchecked(l)	atomic_long_inc_unchecked(&(l)->a)
+ #define local_dec(l)	atomic_long_dec(&(l)->a)
++#define local_dec_unchecked(l)	atomic_long_dec_unchecked(&(l)->a)
+ 
+ /*
+  * Same as above, but return the result value
+@@ -70,6 +80,51 @@ static __inline__ long local_add_return(
+ 	return result;
+ }
+ 
++static __inline__ long local_add_return_unchecked(long i, local_unchecked_t * l)
++{
++	unsigned long result;
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		unsigned long temp;
++
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:"	__LL	"%1, %2		# local_add_return	\n"
++		"	addu	%0, %1, %3				\n"
++			__SC	"%0, %2					\n"
++		"	beqzl	%0, 1b					\n"
++		"	addu	%0, %1, %3				\n"
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "=m" (l->a.counter)
++		: "Ir" (i), "m" (l->a.counter)
++		: "memory");
++	} else if (kernel_uses_llsc) {
++		unsigned long temp;
++
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:"	__LL	"%1, %2		# local_add_return	\n"
++		"	addu	%0, %1, %3				\n"
++			__SC	"%0, %2					\n"
++		"	beqz	%0, 1b					\n"
++		"	addu	%0, %1, %3				\n"
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "=m" (l->a.counter)
++		: "Ir" (i), "m" (l->a.counter)
++		: "memory");
++	} else {
++		unsigned long flags;
++
++		local_irq_save(flags);
++		result = l->a.counter;
++		result += i;
++		l->a.counter = result;
++		local_irq_restore(flags);
++	}
++
++	return result;
++}
++
+ static __inline__ long local_sub_return(long i, local_t * l)
+ {
+ 	unsigned long result;
+@@ -117,6 +172,8 @@ static __inline__ long local_sub_return(
+ 
+ #define local_cmpxchg(l, o, n) \
+ 	((long)cmpxchg_local(&((l)->a.counter), (o), (n)))
++#define local_cmpxchg_unchecked(l, o, n) \
++	((long)cmpxchg_local(&((l)->a.counter), (o), (n)))
+ #define local_xchg(l, n) (atomic_long_xchg((&(l)->a), (n)))
+ 
+ /**
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/mips/include/asm/page.h linux-3.10.7-pax/arch/mips/include/asm/page.h
 --- linux-3.10.7/arch/mips/include/asm/page.h	2013-07-08 01:57:56.192266048 +0200
 +++ linux-3.10.7-pax/arch/mips/include/asm/page.h	2013-08-15 23:49:46.918696170 +0200
@@ -58914,7 +59010,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/hugetlb.c li
  		return VM_FAULT_OOM;
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/internal.h linux-3.10.7-pax/mm/internal.h
 --- linux-3.10.7/mm/internal.h	2013-04-30 01:25:29.207585291 +0200
-+++ linux-3.10.7-pax/mm/internal.h	2013-08-15 23:49:53.850695800 +0200
++++ linux-3.10.7-pax/mm/internal.h	2013-08-16 13:16:02.759828303 +0200
 @@ -100,6 +100,7 @@ extern pmd_t *mm_find_pmd(struct mm_stru
   * in mm/page_alloc.c
   */
@@ -58923,6 +59019,15 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/internal.h l
  extern void prep_compound_page(struct page *page, unsigned long order);
  #ifdef CONFIG_MEMORY_FAILURE
  extern bool is_free_buddy_page(struct page *page);
+@@ -355,7 +356,7 @@ extern u32 hwpoison_filter_enable;
+ 
+ extern unsigned long vm_mmap_pgoff(struct file *, unsigned long,
+         unsigned long, unsigned long,
+-        unsigned long, unsigned long);
++        unsigned long, unsigned long) __intentional_overflow(-1);
+ 
+ extern void set_pageblock_order(void);
+ unsigned long reclaim_clean_pages_from_list(struct zone *zone,
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/Kconfig linux-3.10.7-pax/mm/Kconfig
 --- linux-3.10.7/mm/Kconfig	2013-07-08 01:58:56.644267825 +0200
 +++ linux-3.10.7-pax/mm/Kconfig	2013-08-15 23:49:53.850695800 +0200
@@ -62836,7 +62941,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/swapfile.c l
  	if (S_ISREG(inode->i_mode))
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/util.c linux-3.10.7-pax/mm/util.c
 --- linux-3.10.7/mm/util.c	2013-04-30 01:25:29.283585287 +0200
-+++ linux-3.10.7-pax/mm/util.c	2013-08-15 23:49:54.198695781 +0200
++++ linux-3.10.7-pax/mm/util.c	2013-08-16 12:58:21.715884954 +0200
 @@ -294,6 +294,12 @@ done:
  void arch_pick_mmap_layout(struct mm_struct *mm)
  {
