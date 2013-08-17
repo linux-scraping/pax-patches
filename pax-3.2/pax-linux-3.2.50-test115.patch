@@ -1,4 +1,8 @@
-- forward port to 3.2.50
+- added a few more missing format strings
+- added reporting of mismatched MPROTECT/EMUTRAMP flags between libraries and the main executable
+- reverted the recent amd64 kstack alignment fix, it'll be done the harder way another time
+- Emese fixed a size overflow false positive, reported by markusle (http://forums.grsecurity.net/viewtopic.php?f=3&t=3692)
+- disabled preemption when calling show_regs, reported by Corey Minyard
 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/alpha/include/asm/atomic.h linux-3.2.50-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.50/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -10559,7 +10563,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/includ
   * x86-64 Task Priority Register, CR8
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/include/asm/processor.h linux-3.2.50-pax/arch/x86/include/asm/processor.h
 --- linux-3.2.50/arch/x86/include/asm/processor.h	2012-08-12 12:28:37.769232285 +0200
-+++ linux-3.2.50-pax/arch/x86/include/asm/processor.h	2013-07-28 16:03:29.171356375 +0200
++++ linux-3.2.50-pax/arch/x86/include/asm/processor.h	2013-08-17 01:55:05.444229905 +0200
 @@ -266,7 +266,7 @@ struct tss_struct {
  
  } ____cacheline_aligned;
@@ -10642,12 +10646,12 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/includ
  
  #define INIT_THREAD  { \
 -	.sp0 = (unsigned long)&init_stack + sizeof(init_stack) \
-+	.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 8 \
++	.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 16 \
  }
  
  #define INIT_TSS  { \
 -	.x86_tss.sp0 = (unsigned long)&init_stack + sizeof(init_stack) \
-+	.x86_tss.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 8 \
++	.x86_tss.sp0 = (unsigned long)&init_stack + sizeof(init_stack) - 16 \
  }
  
  /*
@@ -10662,6 +10666,16 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/includ
  #define KSTK_EIP(task)		(task_pt_regs(task)->ip)
  
  /* Get/set a process' ability to use the timestamp counter instruction */
+@@ -972,7 +979,8 @@ extern int set_tsc_mode(unsigned int val
+ extern int amd_get_nb_id(int cpu);
+ 
+ struct aperfmperf {
+-	u64 aperf, mperf;
++	u64 aperf __intentional_overflow(0);
++	u64 mperf __intentional_overflow(0);
+ };
+ 
+ static inline void get_aperfmperf(struct aperfmperf *am)
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/include/asm/ptrace.h linux-3.2.50-pax/arch/x86/include/asm/ptrace.h
 --- linux-3.2.50/arch/x86/include/asm/ptrace.h	2012-12-06 19:03:21.335215616 +0100
 +++ linux-3.2.50-pax/arch/x86/include/asm/ptrace.h	2012-12-06 19:03:25.635213290 +0100
@@ -12879,7 +12893,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
  			size = 64;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel/cpu/common.c linux-3.2.50-pax/arch/x86/kernel/cpu/common.c
 --- linux-3.2.50/arch/x86/kernel/cpu/common.c	2012-08-12 12:28:37.817231019 +0200
-+++ linux-3.2.50-pax/arch/x86/kernel/cpu/common.c	2013-07-28 16:03:29.179356375 +0200
++++ linux-3.2.50-pax/arch/x86/kernel/cpu/common.c	2013-08-17 01:55:05.444229905 +0200
 @@ -84,60 +84,6 @@ static const struct cpu_dev __cpuinitcon
  
  static const struct cpu_dev *this_cpu __cpuinitdata = &default_cpu;
@@ -12976,7 +12990,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
  
  DEFINE_PER_CPU(unsigned long, kernel_stack) =
 -	(unsigned long)&init_thread_union - KERNEL_STACK_OFFSET + THREAD_SIZE;
-+	(unsigned long)&init_thread_union - 8 + THREAD_SIZE;
++	(unsigned long)&init_thread_union - 16 + THREAD_SIZE;
  EXPORT_PER_CPU_SYMBOL(kernel_stack);
  
  DEFINE_PER_CPU(char *, irq_stack_ptr) =
@@ -13671,7 +13685,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
 +#endif
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel/dumpstack.c linux-3.2.50-pax/arch/x86/kernel/dumpstack.c
 --- linux-3.2.50/arch/x86/kernel/dumpstack.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/arch/x86/kernel/dumpstack.c	2012-07-04 19:24:47.568063004 +0200
++++ linux-3.2.50-pax/arch/x86/kernel/dumpstack.c	2013-08-17 01:56:05.764231679 +0200
 @@ -35,9 +35,8 @@ void printk_address(unsigned long addres
  static void
  print_ftrace_graph_addr(unsigned long addr, void *data,
@@ -13757,6 +13771,15 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
  	}
  
  	return (unsigned long)frame;
+@@ -147,7 +144,7 @@ static int print_trace_stack(void *data,
+ static void print_trace_address(void *data, unsigned long addr, int reliable)
+ {
+ 	touch_nmi_watchdog();
+-	printk(data);
++	printk("%s", (char *)data);
+ 	printk_address(addr, reliable);
+ }
+ 
 @@ -186,7 +183,7 @@ void dump_stack(void)
  
  	bp = stack_frame(current, NULL);
@@ -17663,7 +17686,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
 -
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel/process_64.c linux-3.2.50-pax/arch/x86/kernel/process_64.c
 --- linux-3.2.50/arch/x86/kernel/process_64.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/arch/x86/kernel/process_64.c	2013-07-28 16:03:59.259354769 +0200
++++ linux-3.2.50-pax/arch/x86/kernel/process_64.c	2013-08-17 01:55:05.448229905 +0200
 @@ -89,7 +89,7 @@ static void __exit_idle(void)
  void exit_idle(void)
  {
@@ -17679,7 +17702,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
  
 -	childregs = ((struct pt_regs *)
 -			(THREAD_SIZE + task_stack_page(p))) - 1;
-+	childregs = task_stack_page(p) + THREAD_SIZE - sizeof(struct pt_regs) - 8;
++	childregs = task_stack_page(p) + THREAD_SIZE - sizeof(struct pt_regs) - 16;
  	*childregs = *regs;
  
  	childregs->ax = 0;
@@ -18132,6 +18155,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
  	.power_off = native_machine_power_off,
  	.shutdown = native_machine_shutdown,
  	.emergency_restart = native_machine_emergency_restart,
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel/reboot_fixups_32.c linux-3.2.50-pax/arch/x86/kernel/reboot_fixups_32.c
+--- linux-3.2.50/arch/x86/kernel/reboot_fixups_32.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/arch/x86/kernel/reboot_fixups_32.c	2013-08-17 01:58:58.388236754 +0200
+@@ -57,7 +57,7 @@ struct device_fixup {
+ 	unsigned int vendor;
+ 	unsigned int device;
+ 	void (*reboot_fixup)(struct pci_dev *);
+-};
++} __do_const;
+ 
+ /*
+  * PCI ids solely used for fixups_table go here
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel/relocate_kernel_64.S linux-3.2.50-pax/arch/x86/kernel/relocate_kernel_64.S
 --- linux-3.2.50/arch/x86/kernel/relocate_kernel_64.S	2013-06-21 21:22:07.574352284 +0200
 +++ linux-3.2.50-pax/arch/x86/kernel/relocate_kernel_64.S	2012-07-04 19:24:47.592063004 +0200
@@ -18346,7 +18381,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
  	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel/smpboot.c linux-3.2.50-pax/arch/x86/kernel/smpboot.c
 --- linux-3.2.50/arch/x86/kernel/smpboot.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/arch/x86/kernel/smpboot.c	2013-07-28 16:03:47.399355402 +0200
++++ linux-3.2.50-pax/arch/x86/kernel/smpboot.c	2013-08-17 01:55:05.452229905 +0200
 @@ -709,17 +709,20 @@ static int __cpuinit do_boot_cpu(int api
  	set_idle_for_cpu(cpu, c_idle.idle);
  do_rest:
@@ -18361,7 +18396,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/kernel
 -	per_cpu(kernel_stack, cpu) =
 -		(unsigned long)task_stack_page(c_idle.idle) -
 -		KERNEL_STACK_OFFSET + THREAD_SIZE;
-+	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(c_idle.idle) - 8 + THREAD_SIZE;
++	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(c_idle.idle) - 16 + THREAD_SIZE;
  #endif
 +
 +	pax_open_kernel();
@@ -26730,7 +26765,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/xen/mm
  	.release_pud = xen_release_pmd_init,
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/xen/smp.c linux-3.2.50-pax/arch/x86/xen/smp.c
 --- linux-3.2.50/arch/x86/xen/smp.c	2013-05-14 13:33:40.524285678 +0200
-+++ linux-3.2.50-pax/arch/x86/xen/smp.c	2013-07-28 16:03:29.183356375 +0200
++++ linux-3.2.50-pax/arch/x86/xen/smp.c	2013-08-17 01:55:05.452229905 +0200
 @@ -209,11 +209,6 @@ static void __init xen_smp_prepare_boot_
  {
  	BUG_ON(smp_processor_id() != 0);
@@ -26771,7 +26806,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/xen/sm
 -	per_cpu(kernel_stack, cpu) =
 -		(unsigned long)task_stack_page(idle) -
 -		KERNEL_STACK_OFFSET + THREAD_SIZE;
-+	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(idle) - 8 + THREAD_SIZE;
++	per_cpu(kernel_stack, cpu) = (unsigned long)task_stack_page(idle) - 16 + THREAD_SIZE;
  #endif
  	xen_setup_runstate_info(cpu);
  	xen_setup_timer(cpu);
@@ -36515,7 +36550,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/wir
  	IWL_DEBUG_INFO(priv, "*** LOAD DRIVER ***\n");
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/wireless/iwlwifi/iwl-debugfs.c linux-3.2.50-pax/drivers/net/wireless/iwlwifi/iwl-debugfs.c
 --- linux-3.2.50/drivers/net/wireless/iwlwifi/iwl-debugfs.c	2012-09-20 01:42:17.294672774 +0200
-+++ linux-3.2.50-pax/drivers/net/wireless/iwlwifi/iwl-debugfs.c	2012-09-20 01:42:29.906672814 +0200
++++ linux-3.2.50-pax/drivers/net/wireless/iwlwifi/iwl-debugfs.c	2013-08-17 01:57:36.852234357 +0200
 @@ -163,7 +163,7 @@ static ssize_t iwl_dbgfs_clear_traffic_s
  	struct iwl_priv *priv = file->private_data;
  	u32 clear_flag;
@@ -36570,6 +36605,21 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/wir
  	int traffic_log;
  
  	memset(buf, 0, sizeof(buf));
+@@ -912,10 +912,10 @@ static ssize_t iwl_dbgfs_traffic_log_wri
+ 	return count;
+ }
+ 
+-static const char *fmt_value = "  %-30s %10u\n";
+-static const char *fmt_hex   = "  %-30s       0x%02X\n";
+-static const char *fmt_table = "  %-30s %10u  %10u  %10u  %10u\n";
+-static const char *fmt_header =
++static const char fmt_value[] = "  %-30s %10u\n";
++static const char fmt_hex[]   = "  %-30s       0x%02X\n";
++static const char fmt_table[] = "  %-30s %10u  %10u  %10u  %10u\n";
++static const char fmt_header[] =
+ 	"%-32s    current  cumulative       delta         max\n";
+ 
+ static int iwl_statistics_flag(struct iwl_priv *priv, char *buf, int bufsz)
 @@ -2078,7 +2078,7 @@ static ssize_t iwl_dbgfs_clear_ucode_sta
  {
  	struct iwl_priv *priv = file->private_data;
@@ -39786,6 +39836,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/video/a
  
  	return 0;
  }
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/video/backlight/backlight.c linux-3.2.50-pax/drivers/video/backlight/backlight.c
+--- linux-3.2.50/drivers/video/backlight/backlight.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/video/backlight/backlight.c	2013-08-17 01:58:42.952236300 +0200
+@@ -303,7 +303,7 @@ struct backlight_device *backlight_devic
+ 	new_bd->dev.class = backlight_class;
+ 	new_bd->dev.parent = parent;
+ 	new_bd->dev.release = bl_device_release;
+-	dev_set_name(&new_bd->dev, name);
++	dev_set_name(&new_bd->dev, "%s", name);
+ 	dev_set_drvdata(&new_bd->dev, devdata);
+ 
+ 	/* Set default properties */
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/video/backlight/kb3886_bl.c linux-3.2.50-pax/drivers/video/backlight/kb3886_bl.c
 --- linux-3.2.50/drivers/video/backlight/kb3886_bl.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/video/backlight/kb3886_bl.c	2013-03-28 01:35:23.304427948 +0100
@@ -39798,6 +39860,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/video/b
  	{
  		.ident = "Sahara Touch-iT",
  		.matches = {
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/video/backlight/lcd.c linux-3.2.50-pax/drivers/video/backlight/lcd.c
+--- linux-3.2.50/drivers/video/backlight/lcd.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/video/backlight/lcd.c	2013-08-17 01:58:27.748235853 +0200
+@@ -209,7 +209,7 @@ struct lcd_device *lcd_device_register(c
+ 	new_ld->dev.class = lcd_class;
+ 	new_ld->dev.parent = parent;
+ 	new_ld->dev.release = lcd_device_release;
+-	dev_set_name(&new_ld->dev, name);
++	dev_set_name(&new_ld->dev, "%s", name);
+ 	dev_set_drvdata(&new_ld->dev, devdata);
+ 
+ 	rc = device_register(&new_ld->dev);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/video/fbcmap.c linux-3.2.50-pax/drivers/video/fbcmap.c
 --- linux-3.2.50/drivers/video/fbcmap.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/video/fbcmap.c	2012-07-04 19:24:48.652063007 +0200
@@ -40558,7 +40632,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/binfmt_elf.c linux-3.2.50-pax/fs/binfmt_elf.c
 --- linux-3.2.50/fs/binfmt_elf.c	2012-10-24 01:05:57.304814639 +0200
-+++ linux-3.2.50-pax/fs/binfmt_elf.c	2013-06-21 19:34:10.602698104 +0200
++++ linux-3.2.50-pax/fs/binfmt_elf.c	2013-08-17 01:59:52.980238359 +0200
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -41193,7 +41267,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/binfmt_elf.c
 +		size = PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
 +		flags = MAP_FIXED | MAP_PRIVATE;
 +		vm_flags = VM_DONTEXPAND | VM_RESERVED;
- 
++
 +		down_write(&current->mm->mmap_sem);
 +		start = get_unmapped_area(NULL, start, PAGE_ALIGN(size), 0, flags);
 +		retval = -ENOMEM;
@@ -41212,7 +41286,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/binfmt_elf.c
 +		}
 +	}
 +#endif
-+
+ 
 +	if (elf_interpreter) {
  		elf_entry = load_elf_interp(&loc->interp_elf_ex,
  					    interpreter,
@@ -41294,7 +41368,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/binfmt_elf.c
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2064,6 +2510,96 @@ out:
+@@ -2064,6 +2510,137 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -41362,27 +41436,68 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/binfmt_elf.c
 +				elf_dyn dyn;
 +
 +				if (sizeof(dyn) != kernel_read(vma->vm_file, elf_p.p_offset + i*sizeof(dyn), (char *)&dyn, sizeof(dyn)))
-+					return;
++					break;
 +				if (dyn.d_tag == DT_NULL)
-+					return;
++					break;
 +				if (dyn.d_tag == DT_TEXTREL || (dyn.d_tag == DT_FLAGS && (dyn.d_un.d_val & DF_TEXTREL))) {
 +					if (is_textrel_rw)
 +						vma->vm_flags |= VM_MAYWRITE;
 +					else
 +						/* PaX: disallow write access after relocs are done, hopefully noone else needs it... */
 +						vma->vm_flags &= ~VM_MAYWRITE;
-+					return;
++					break;
 +				}
 +				i++;
 +			}
-+			return;
++			is_textrel_rw = false;
++			is_textrel_rx = false;
++			continue;
 +
 +		case PT_GNU_RELRO:
 +			if (!is_relro)
 +				continue;
 +			if ((elf_p.p_offset >> PAGE_SHIFT) == vma->vm_pgoff && ELF_PAGEALIGN(elf_p.p_memsz) == vma->vm_end - vma->vm_start)
 +				vma->vm_flags &= ~VM_MAYWRITE;
-+			return;
++			is_relro = false;
++			continue;
++
++#ifdef CONFIG_PAX_PT_PAX_FLAGS
++		case PT_PAX_FLAGS: {
++			const char *msg_mprotect = "", *msg_emutramp = "";
++			char *buffer_lib, *buffer_exe;
++
++			if (elf_p.p_flags & PF_NOMPROTECT)
++				msg_mprotect = "MPROTECT disabled";
++
++#ifdef CONFIG_PAX_EMUTRAMP
++			if (!(vma->vm_mm->pax_flags & MF_PAX_EMUTRAMP) && !(elf_p.p_flags & PF_NOEMUTRAMP))
++				msg_emutramp = "EMUTRAMP enabled";
++#endif
++
++			if (!msg_mprotect[0] && !msg_emutramp[0])
++				continue;
++
++			if (!printk_ratelimit())
++				continue;
++
++			buffer_lib = (char *)__get_free_page(GFP_KERNEL);
++			buffer_exe = (char *)__get_free_page(GFP_KERNEL);
++			if (buffer_lib && buffer_exe) {
++				char *path_lib, *path_exe;
++
++				path_lib = pax_get_path(&vma->vm_file->f_path, buffer_lib, PAGE_SIZE);
++				path_exe = pax_get_path(&vma->vm_mm->exe_file->f_path, buffer_exe, PAGE_SIZE);
++
++				pr_info("PAX: %s wants %s%s%s on %s\n", path_lib, msg_mprotect,
++					(msg_mprotect[0] && msg_emutramp[0] ? " and " : ""), msg_emutramp, path_exe);
++
++			}
++			free_page((unsigned long)buffer_exe);
++			free_page((unsigned long)buffer_lib);
++			continue;
++		}
++#endif
++
 +		}
 +	}
 +}
@@ -42219,7 +42334,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ecryptfs/rea
  }
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/exec.c linux-3.2.50-pax/fs/exec.c
 --- linux-3.2.50/fs/exec.c	2013-07-27 11:12:22.431992798 +0200
-+++ linux-3.2.50-pax/fs/exec.c	2013-07-27 11:12:26.603992575 +0200
++++ linux-3.2.50-pax/fs/exec.c	2013-08-17 01:59:52.984238359 +0200
 @@ -55,12 +55,32 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -42570,6 +42685,25 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/exec.c linux
 +EXPORT_SYMBOL(pax_check_flags);
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC)
++char *pax_get_path(const struct path *path, char *buf, int buflen)
++{
++	char *pathname = d_path(path, buf, buflen);
++
++	if (IS_ERR(pathname))
++		goto toolong;
++
++	pathname = mangle_path(buf, pathname, "\t\n\\");
++	if (!pathname)
++		goto toolong;
++
++	*pathname = 0;
++	return buf;
++
++toolong:
++	return "<path too long>";
++}
++EXPORT_SYMBOL(pax_get_path);
++
 +void pax_report_fault(struct pt_regs *regs, void *pc, void *sp)
 +{
 +	struct task_struct *tsk = current;
@@ -42592,36 +42726,15 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/exec.c linux
 +				vma_fault = vma;
 +			vma = vma->vm_next;
 +		}
-+		if (vma_exec) {
-+			path_exec = d_path(&vma_exec->vm_file->f_path, buffer_exec, PAGE_SIZE);
-+			if (IS_ERR(path_exec))
-+				path_exec = "<path too long>";
-+			else {
-+				path_exec = mangle_path(buffer_exec, path_exec, "\t\n\\");
-+				if (path_exec) {
-+					*path_exec = 0;
-+					path_exec = buffer_exec;
-+				} else
-+					path_exec = "<path too long>";
-+			}
-+		}
++		if (vma_exec)
++			path_exec = pax_get_path(&vma_exec->vm_file->f_path, buffer_exec, PAGE_SIZE);
 +		if (vma_fault) {
 +			start = vma_fault->vm_start;
 +			end = vma_fault->vm_end;
 +			offset = vma_fault->vm_pgoff << PAGE_SHIFT;
-+			if (vma_fault->vm_file) {
-+				path_fault = d_path(&vma_fault->vm_file->f_path, buffer_fault, PAGE_SIZE);
-+				if (IS_ERR(path_fault))
-+					path_fault = "<path too long>";
-+				else {
-+					path_fault = mangle_path(buffer_fault, path_fault, "\t\n\\");
-+					if (path_fault) {
-+						*path_fault = 0;
-+						path_fault = buffer_fault;
-+					} else
-+						path_fault = "<path too long>";
-+				}
-+			} else
++			if (vma_fault->vm_file)
++				path_fault = pax_get_path(&vma_fault->vm_file->f_path, buffer_fault, PAGE_SIZE);
++			else
 +				path_fault = "<anonymous mapping>";
 +		}
 +		up_read(&mm->mmap_sem);
@@ -42643,7 +42756,9 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/exec.c linux
 +	printk(KERN_ERR "PAX: refcount overflow detected in: %s:%d, uid/euid: %u/%u\n",
 +			 current->comm, task_pid_nr(current), current_uid(), current_euid());
 +	print_symbol(KERN_ERR "PAX: refcount overflow occured at: %s\n", instruction_pointer(regs));
++	preempt_disable();
 +	show_regs(regs);
++	preempt_enable();
 +	force_sig_info(SIGKILL, SEND_SIG_FORCED, current);
 +}
 +#endif
@@ -48070,7 +48185,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/l
   * @list: the entry to move
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/math64.h linux-3.2.50-pax/include/linux/math64.h
 --- linux-3.2.50/include/linux/math64.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/include/linux/math64.h	2013-03-28 04:10:58.191929537 +0100
++++ linux-3.2.50-pax/include/linux/math64.h	2013-08-17 01:28:03.232182209 +0200
 @@ -14,7 +14,7 @@
   * This is commonly provided by 32bit archs to provide an optimized 64bit
   * divide.
@@ -48080,6 +48195,15 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/m
  {
  	*remainder = dividend % divisor;
  	return dividend / divisor;
+@@ -32,7 +32,7 @@ static inline s64 div_s64_rem(s64 divide
+ /**
+  * div64_u64 - unsigned 64bit divide with 64bit divisor
+  */
+-static inline u64 div64_u64(u64 dividend, u64 divisor)
++static inline u64 __intentional_overflow(0) div64_u64(u64 dividend, u64 divisor)
+ {
+ 	return dividend / divisor;
+ }
 @@ -50,7 +50,7 @@ static inline s64 div64_s64(s64 dividend
  #define div64_long(x,y) div_s64((x),(y))
  
@@ -49104,7 +49228,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/r
  static inline void anon_vma_merge(struct vm_area_struct *vma,
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/sched.h linux-3.2.50-pax/include/linux/sched.h
 --- linux-3.2.50/include/linux/sched.h	2013-02-20 12:30:42.064171943 +0100
-+++ linux-3.2.50-pax/include/linux/sched.h	2013-07-05 02:05:14.873226012 +0200
++++ linux-3.2.50-pax/include/linux/sched.h	2013-08-17 01:59:23.492237492 +0200
 @@ -101,6 +101,7 @@ struct bio_list;
  struct fs_struct;
  struct perf_event_context;
@@ -49167,7 +49291,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/s
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
-@@ -1578,6 +1586,50 @@ struct task_struct {
+@@ -1578,6 +1586,52 @@ struct task_struct {
  #endif
  };
  
@@ -49211,6 +49335,8 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/s
 +extern void (*pax_set_initial_flags_func)(struct linux_binprm *bprm);
 +#endif
 +
++struct path;
++extern char *pax_get_path(const struct path *path, char *buf, int buflen);
 +extern void pax_report_fault(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_insns(struct pt_regs *regs, void *pc, void *sp);
 +extern void pax_report_refcount_overflow(struct pt_regs *regs);
@@ -49218,7 +49344,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/s
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -2093,7 +2145,9 @@ void yield(void);
+@@ -2093,7 +2147,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -49228,7 +49354,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/s
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2263,7 +2317,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2263,7 +2319,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -49237,7 +49363,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/s
  
  extern void daemonize(const char *, ...);
  extern int allow_signal(int);
-@@ -2428,9 +2482,9 @@ static inline unsigned long *end_of_stac
+@@ -2428,9 +2484,9 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -65853,8 +65979,8 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/security/integr
  	return 0;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/security/Kconfig linux-3.2.50-pax/security/Kconfig
 --- linux-3.2.50/security/Kconfig	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/security/Kconfig	2013-07-26 18:16:39.945474129 +0200
-@@ -4,6 +4,691 @@
++++ linux-3.2.50-pax/security/Kconfig	2013-08-17 01:28:32.936183082 +0200
+@@ -4,6 +4,689 @@
  
  menu "Security options"
  
@@ -66032,8 +66158,6 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/security/Kconfi
 +	depends on PAX_NOEXEC && (!X86_32 || M586 || M586TSC || M586MMX || M686 || MPENTIUMII || MPENTIUMIII || MPENTIUMM || MCORE2 || MPENTIUM4 || MPSC || MATOM || MK7 || MK8 || MWINCHIPC6 || MWINCHIP2 || MWINCHIP3D || MVIAC3_2 || MVIAC7)
 +	select X86_PAE if X86_32 && !HIGHMEM4G && (MCORE2 || MPSC || MATOM || MK8)
 +	select ARCH_TRACK_EXEC_LIMIT if X86_32
-+	select S390_SWITCH_AMODE if S390
-+	select S390_EXEC_PROTECT if S390
 +	help
 +	  This implementation is based on the paging feature of the CPU.
 +	  On i386 without hardware non-executable bit support there is a
@@ -66546,7 +66670,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/security/Kconfi
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +854,7 @@ config INTEL_TXT
+@@ -169,7 +852,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
