@@ -1,4 +1,5 @@
-- added a few more return insn instrumentation in new amd64 crypto code
+- fixed superfluous initializer in __native_flush_tlb_single, reported by Mathias Krause
+- fixed some arm compile problems
 
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/alpha/include/asm/atomic.h linux-3.10.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -14291,7 +14292,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/include/asm/tlbflush.h linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h
 --- linux-3.10.7/arch/x86/include/asm/tlbflush.h	2013-04-30 01:25:06.247586517 +0200
-+++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-17 00:56:50.000127133 +0200
++++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-17 15:17:32.380937296 +0200
 @@ -17,18 +17,39 @@
  
  static inline void __native_flush_tlb(void)
@@ -14351,7 +14352,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
 +		unsigned int cpu = raw_get_cpu();
 +
 +		if (static_cpu_has(X86_FEATURE_INVPCID)) {
-+			unsigned long descriptor[2] = {PCID_USER, addr};
++			unsigned long descriptor[2];
 +			descriptor[0] = PCID_USER;
 +			descriptor[1] = addr;
 +			asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_ADDRESS) : "memory");
@@ -33092,6 +33093,18 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/drivers/clockso
  	.notifier_call = arch_timer_cpu_notify,
  };
  
+diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/drivers/clocksource/bcm_kona_timer.c linux-3.10.7-pax/drivers/clocksource/bcm_kona_timer.c
+--- linux-3.10.7/drivers/clocksource/bcm_kona_timer.c	2013-07-08 01:58:09.504266439 +0200
++++ linux-3.10.7-pax/drivers/clocksource/bcm_kona_timer.c	2013-08-17 17:40:10.728480347 +0200
+@@ -199,7 +199,7 @@ static struct irqaction kona_timer_irq =
+ 	.handler = kona_timer_interrupt,
+ };
+ 
+-static void __init kona_timer_init(void)
++static void __init kona_timer_init(struct device_node *np)
+ {
+ 	kona_timers_init();
+ 	kona_timer_clockevents_init();
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/drivers/clocksource/metag_generic.c linux-3.10.7-pax/drivers/clocksource/metag_generic.c
 --- linux-3.10.7/drivers/clocksource/metag_generic.c	2013-04-30 01:25:08.227586411 +0200
 +++ linux-3.10.7-pax/drivers/clocksource/metag_generic.c	2013-08-15 23:49:47.306696149 +0200
@@ -58667,7 +58680,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/sched/sc
  #define for_each_class(class) \
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/signal.c linux-3.10.7-pax/kernel/signal.c
 --- linux-3.10.7/kernel/signal.c	2013-07-08 01:58:56.212267813 +0200
-+++ linux-3.10.7-pax/kernel/signal.c	2013-08-17 00:56:50.040127134 +0200
++++ linux-3.10.7-pax/kernel/signal.c	2013-08-17 17:10:43.224574718 +0200
 @@ -51,12 +51,12 @@ static struct kmem_cache *sigqueue_cache
  
  int print_fatal_signals __read_mostly;
@@ -58701,10 +58714,11 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/signal.c
  	if (is_global_init(tsk))
  		return 1;
  	if (handler != SIG_IGN && handler != SIG_DFL)
-@@ -3219,6 +3219,14 @@ int __save_altstack(stack_t __user *uss,
+@@ -3219,6 +3219,16 @@ int __save_altstack(stack_t __user *uss,
  		__put_user(t->sas_ss_size, &uss->ss_size);
  }
  
++#ifdef CONFIG_X86
 +void __save_altstack_ex(stack_t __user *uss, unsigned long sp)
 +{
 +	struct task_struct *t = current;
@@ -58712,11 +58726,12 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/signal.c
 +	put_user_ex(sas_ss_flags(sp), &uss->ss_flags);
 +	put_user_ex(t->sas_ss_size, &uss->ss_size);
 +}
++#endif
 +
  #ifdef CONFIG_COMPAT
  COMPAT_SYSCALL_DEFINE2(sigaltstack,
  			const compat_stack_t __user *, uss_ptr,
-@@ -3240,8 +3248,8 @@ COMPAT_SYSCALL_DEFINE2(sigaltstack,
+@@ -3240,8 +3250,8 @@ COMPAT_SYSCALL_DEFINE2(sigaltstack,
  	}
  	seg = get_fs();
  	set_fs(KERNEL_DS);
@@ -58727,11 +58742,12 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/signal.c
  			     compat_user_stack_pointer());
  	set_fs(seg);
  	if (ret >= 0 && uoss_ptr)  {
-@@ -3268,6 +3276,14 @@ int __compat_save_altstack(compat_stack_
+@@ -3268,6 +3278,16 @@ int __compat_save_altstack(compat_stack_
  		__put_user(sas_ss_flags(sp), &uss->ss_flags) |
  		__put_user(t->sas_ss_size, &uss->ss_size);
  }
 +
++#ifdef CONFIG_X86
 +void __compat_save_altstack_ex(compat_stack_t __user *uss, unsigned long sp)
 +{
 +	struct task_struct *t = current;
@@ -58739,6 +58755,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/signal.c
 +	put_user_ex(sas_ss_flags(sp), &uss->ss_flags);
 +	put_user_ex(t->sas_ss_size, &uss->ss_size);
 +}
++#endif
  #endif
  
  #ifdef __ARCH_WANT_SYS_SIGPENDING
