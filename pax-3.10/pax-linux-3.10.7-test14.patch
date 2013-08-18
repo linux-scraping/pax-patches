@@ -1,5 +1,5 @@
-- always enable the use of PCID and INVPCID when available in the CPU
-  - kvm guest kernels can use these features even if the host kernel lacks UDEREF
+- fixed compile error introduced by the previous PCID change
+- fixed timer_create kernel stack leak, reported by Roman Žilka (https://bugs.gentoo.org/show_bug.cgi?id=470214)
 
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/alpha/include/asm/atomic.h linux-3.10.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -14292,7 +14292,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/include/asm/tlbflush.h linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h
 --- linux-3.10.7/arch/x86/include/asm/tlbflush.h	2013-04-30 01:25:06.247586517 +0200
-+++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-18 02:27:07.578792252 +0200
++++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-18 23:30:48.314125271 +0200
 @@ -17,18 +17,40 @@
  
  static inline void __native_flush_tlb(void)
@@ -14353,7 +14353,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
 +		descriptor[1] = addr;
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+		if (!static_cpu_has(X86_FEATURE_STRONGUDEREF || addr >= TASK_SIZE_MAX) {
++		if (!static_cpu_has(X86_FEATURE_STRONGUDEREF || addr >= TASK_SIZE_MAX)) {
 +			if (addr < TASK_SIZE_MAX)
 +				descriptor[1] += pax_user_shadow_base;
 +			asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_ADDRESS) : "memory");
@@ -57520,7 +57520,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/posix-cp
  		.timer_create	= thread_cpu_timer_create,
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/posix-timers.c linux-3.10.7-pax/kernel/posix-timers.c
 --- linux-3.10.7/kernel/posix-timers.c	2013-07-08 01:58:56.124267810 +0200
-+++ linux-3.10.7-pax/kernel/posix-timers.c	2013-08-15 23:49:53.130695838 +0200
++++ linux-3.10.7-pax/kernel/posix-timers.c	2013-08-18 23:34:54.966138667 +0200
 @@ -122,7 +122,7 @@ static DEFINE_SPINLOCK(hash_lock);
   *	    which we beg off on and pass to do_sys_settimeofday().
   */
@@ -57602,6 +57602,15 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/posix-ti
  }
  
  static int common_timer_create(struct k_itimer *new_timer)
+@@ -597,7 +597,7 @@ SYSCALL_DEFINE3(timer_create, const cloc
+ 	struct k_clock *kc = clockid_to_kclock(which_clock);
+ 	struct k_itimer *new_timer;
+ 	int error, new_timer_id;
+-	sigevent_t event;
++	sigevent_t event = { };
+ 	int it_id_set = IT_ID_NOT_SET;
+ 
+ 	if (!kc)
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/kernel/power/process.c linux-3.10.7-pax/kernel/power/process.c
 --- linux-3.10.7/kernel/power/process.c	2013-04-30 01:25:29.063585299 +0200
 +++ linux-3.10.7-pax/kernel/power/process.c	2013-08-15 23:49:53.302695829 +0200
