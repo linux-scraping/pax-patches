@@ -1,5 +1,5 @@
-- fixed superfluous initializer in __native_flush_tlb_single, reported by Mathias Krause
-- fixed some arm compile problems
+- always enable the use of PCID and INVPCID when available in the CPU
+  - kvm guest kernels can use these features even if the host kernel lacks UDEREF
 
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/alpha/include/asm/atomic.h linux-3.10.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -14292,29 +14292,29 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/include/asm/tlbflush.h linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h
 --- linux-3.10.7/arch/x86/include/asm/tlbflush.h	2013-04-30 01:25:06.247586517 +0200
-+++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-17 15:17:32.380937296 +0200
-@@ -17,18 +17,39 @@
++++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-18 02:27:07.578792252 +0200
+@@ -17,18 +17,40 @@
  
  static inline void __native_flush_tlb(void)
  {
--	native_write_cr3(native_read_cr3());
++	if (static_cpu_has(X86_FEATURE_INVPCID)) {
++		unsigned long descriptor[2];
++		asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_ALL_MONGLOBAL) : "memory");
++		return;
++	}
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	if (static_cpu_has(X86_FEATURE_PCID)) {
 +		unsigned int cpu = raw_get_cpu();
 +
-+		if (static_cpu_has(X86_FEATURE_INVPCID)) {
-+			unsigned long descriptor[2];
-+			asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_ALL_MONGLOBAL) : "memory");
-+		} else {
-+			native_write_cr3(__pa(get_cpu_pgd(cpu, user)) | PCID_USER);
-+			native_write_cr3(__pa(get_cpu_pgd(cpu, kernel)) | PCID_KERNEL);
-+		}
++		native_write_cr3(__pa(get_cpu_pgd(cpu, user)) | PCID_USER);
++		native_write_cr3(__pa(get_cpu_pgd(cpu, kernel)) | PCID_KERNEL);
 +		raw_put_cpu_no_resched();
-+	} else
++		return;
++	}
 +#endif
 +
-+		native_write_cr3(native_read_cr3());
+ 	native_write_cr3(native_read_cr3());
  }
  
  static inline void __native_flush_tlb_global_irq_disabled(void)
@@ -14341,41 +14341,49 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
  }
  
  static inline void __native_flush_tlb_global(void)
-@@ -49,7 +70,33 @@ static inline void __native_flush_tlb_gl
+@@ -49,6 +71,42 @@ static inline void __native_flush_tlb_gl
  
  static inline void __native_flush_tlb_single(unsigned long addr)
  {
--	asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
++
++	if (static_cpu_has(X86_FEATURE_INVPCID)) {
++		unsigned long descriptor[2];
++
++		descriptor[0] = PCID_KERNEL;
++		descriptor[1] = addr;
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+	if (static_cpu_has(X86_FEATURE_PCID) && addr < TASK_SIZE_MAX) {
-+		unsigned int cpu = raw_get_cpu();
-+
-+		if (static_cpu_has(X86_FEATURE_INVPCID)) {
-+			unsigned long descriptor[2];
-+			descriptor[0] = PCID_USER;
-+			descriptor[1] = addr;
++		if (!static_cpu_has(X86_FEATURE_STRONGUDEREF || addr >= TASK_SIZE_MAX) {
++			if (addr < TASK_SIZE_MAX)
++				descriptor[1] += pax_user_shadow_base;
 +			asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_ADDRESS) : "memory");
-+			if (!static_cpu_has(X86_FEATURE_STRONGUDEREF)) {
-+				descriptor[0] = PCID_KERNEL;
-+				descriptor[1] = addr + pax_user_shadow_base;
-+				asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_ADDRESS) : "memory");
-+			}
-+		} else {
-+			native_write_cr3(__pa(get_cpu_pgd(cpu, user)) | PCID_USER | PCID_NOFLUSH);
-+			asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
-+			native_write_cr3(__pa(get_cpu_pgd(cpu, kernel)) | PCID_KERNEL | PCID_NOFLUSH);
-+			if (!static_cpu_has(X86_FEATURE_STRONGUDEREF))
-+				asm volatile("invlpg (%0)" ::"r" (addr + pax_user_shadow_base) : "memory");
 +		}
-+		raw_put_cpu_no_resched();
-+	} else
++
++		descriptor[0] = PCID_USER;
++		descriptor[1] = addr;
 +#endif
 +
++		asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_ADDRESS) : "memory");
++		return;
++	}
++
++#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++	if (static_cpu_has(X86_FEATURE_PCID)) {
++		unsigned int cpu = raw_get_cpu();
++
++		native_write_cr3(__pa(get_cpu_pgd(cpu, user)) | PCID_USER | PCID_NOFLUSH);
 +		asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
++		native_write_cr3(__pa(get_cpu_pgd(cpu, kernel)) | PCID_KERNEL | PCID_NOFLUSH);
++		raw_put_cpu_no_resched();
++
++		if (!static_cpu_has(X86_FEATURE_STRONGUDEREF) && addr < TASK_SIZE_MAX)
++			addr += pax_user_shadow_base;
++	}
++#endif
++
+ 	asm volatile("invlpg (%0)" ::"r" (addr) : "memory");
  }
  
- static inline void __flush_tlb_all(void)
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/include/asm/uaccess_32.h linux-3.10.7-pax/arch/x86/include/asm/uaccess_32.h
 --- linux-3.10.7/arch/x86/include/asm/uaccess_32.h	2012-12-11 04:30:57.000000000 +0100
 +++ linux-3.10.7-pax/arch/x86/include/asm/uaccess_32.h	2013-08-15 23:49:46.994696166 +0200
@@ -15984,7 +15992,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  			size = 64;
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel/cpu/common.c linux-3.10.7-pax/arch/x86/kernel/cpu/common.c
 --- linux-3.10.7/arch/x86/kernel/cpu/common.c	2013-07-08 01:58:07.044266367 +0200
-+++ linux-3.10.7-pax/arch/x86/kernel/cpu/common.c	2013-08-17 00:56:50.004127133 +0200
++++ linux-3.10.7-pax/arch/x86/kernel/cpu/common.c	2013-08-18 00:59:33.415072784 +0200
 @@ -88,60 +88,6 @@ static const struct cpu_dev __cpuinitcon
  
  static const struct cpu_dev *this_cpu __cpuinitdata = &default_cpu;
@@ -16046,48 +16054,60 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  static int __init x86_xsave_setup(char *s)
  {
  	setup_clear_cpu_cap(X86_FEATURE_XSAVE);
-@@ -288,6 +234,40 @@ static __always_inline void setup_smap(s
+@@ -288,6 +234,52 @@ static __always_inline void setup_smap(s
  		set_in_cr4(X86_CR4_SMAP);
  }
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++#ifdef CONFIG_X86_64
 +static __init int setup_disable_pcid(char *arg)
 +{
 +	setup_clear_cpu_cap(X86_FEATURE_PCID);
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (clone_pgd_mask != ~(pgdval_t)0UL)
 +		pax_user_shadow_base = 1UL << TASK_SIZE_MAX_SHIFT;
++#endif
++
 +	return 1;
 +}
 +__setup("nopcid", setup_disable_pcid);
 +
 +static void setup_pcid(struct cpuinfo_x86 *c)
 +{
-+	if (cpu_has(c, X86_FEATURE_PCID))
-+		printk("PAX: PCID detected\n");
++	if (!cpu_has(c, X86_FEATURE_PCID)) {
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++		if (pax_user_shadow_base)
++			printk("PAX: slow and weak UDEREF enabled\n");
++		else
++			printk("PAX: UDEREF disabled\n");
++#endif
++
++		return;
++	}
++
++	printk("PAX: PCID detected\n");
++	set_in_cr4(X86_CR4_PCIDE);
++
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	clone_pgd_mask = ~(pgdval_t)0UL;
++	if (pax_user_shadow_base)
++		printk("PAX: weak UDEREF enabled\n");
++	else {
++		set_cpu_cap(c, X86_FEATURE_STRONGUDEREF);
++		printk("PAX: strong UDEREF enabled\n");
++	}
++#endif
 +
 +	if (cpu_has(c, X86_FEATURE_INVPCID))
 +		printk("PAX: INVPCID detected\n");
-+
-+	if (cpu_has(c, X86_FEATURE_PCID)) {
-+		set_in_cr4(X86_CR4_PCIDE);
-+		clone_pgd_mask = ~(pgdval_t)0UL;
-+		if (pax_user_shadow_base)
-+			printk("PAX: weak UDEREF enabled\n");
-+		else {
-+			set_cpu_cap(c, X86_FEATURE_STRONGUDEREF);
-+			printk("PAX: strong UDEREF enabled\n");
-+		}
-+	} else if (pax_user_shadow_base)
-+		printk("PAX: slow and weak UDEREF enabled\n");
-+	else
-+		printk("PAX: UDEREF disabled\n");
 +}
 +#endif
 +
  /*
   * Some CPU features depend on higher CPUID levels, which may not always
   * be available due to CPUID level capping or broken virtualization
-@@ -386,7 +366,7 @@ void switch_to_new_gdt(int cpu)
+@@ -386,7 +378,7 @@ void switch_to_new_gdt(int cpu)
  {
  	struct desc_ptr gdt_descr;
  
@@ -16096,18 +16116,18 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
  	/* Reload the per-cpu base */
-@@ -874,6 +854,10 @@ static void __cpuinit identify_cpu(struc
+@@ -874,6 +866,10 @@ static void __cpuinit identify_cpu(struc
  	setup_smep(c);
  	setup_smap(c);
  
-+#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
++#ifdef CONFIG_X86_64
 +	setup_pcid(c);
 +#endif
 +
  	/*
  	 * The vendor-specific functions might have changed features.
  	 * Now we do "generic changes."
-@@ -882,6 +866,10 @@ static void __cpuinit identify_cpu(struc
+@@ -882,6 +878,10 @@ static void __cpuinit identify_cpu(struc
  	/* Filter out anything that depends on CPUID levels we don't have */
  	filter_cpuid_features(c, true);
  
@@ -16118,7 +16138,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/* If the model name is still unset, do table lookup. */
  	if (!c->x86_model_id[0]) {
  		const char *p;
-@@ -1069,10 +1057,12 @@ static __init int setup_disablecpuid(cha
+@@ -1069,10 +1069,12 @@ static __init int setup_disablecpuid(cha
  }
  __setup("clearcpuid=", setup_disablecpuid);
  
@@ -16133,7 +16153,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  DEFINE_PER_CPU_FIRST(union irq_stack_union,
  		     irq_stack_union) __aligned(PAGE_SIZE);
-@@ -1086,7 +1076,7 @@ DEFINE_PER_CPU(struct task_struct *, cur
+@@ -1086,7 +1088,7 @@ DEFINE_PER_CPU(struct task_struct *, cur
  EXPORT_PER_CPU_SYMBOL(current_task);
  
  DEFINE_PER_CPU(unsigned long, kernel_stack) =
@@ -16142,7 +16162,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  EXPORT_PER_CPU_SYMBOL(kernel_stack);
  
  DEFINE_PER_CPU(char *, irq_stack_ptr) =
-@@ -1231,7 +1221,7 @@ void __cpuinit cpu_init(void)
+@@ -1231,7 +1233,7 @@ void __cpuinit cpu_init(void)
  	load_ucode_ap();
  
  	cpu = stack_smp_processor_id();
@@ -16151,7 +16171,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	oist = &per_cpu(orig_ist, cpu);
  
  #ifdef CONFIG_NUMA
-@@ -1257,7 +1247,7 @@ void __cpuinit cpu_init(void)
+@@ -1257,7 +1259,7 @@ void __cpuinit cpu_init(void)
  	switch_to_new_gdt(cpu);
  	loadsegment(fs, 0);
  
@@ -16160,7 +16180,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  	memset(me->thread.tls_array, 0, GDT_ENTRY_TLS_ENTRIES * 8);
  	syscall_init();
-@@ -1266,7 +1256,6 @@ void __cpuinit cpu_init(void)
+@@ -1266,7 +1268,6 @@ void __cpuinit cpu_init(void)
  	wrmsrl(MSR_KERNEL_GS_BASE, 0);
  	barrier();
  
@@ -16168,7 +16188,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	enable_x2apic();
  
  	/*
-@@ -1318,7 +1307,7 @@ void __cpuinit cpu_init(void)
+@@ -1318,7 +1319,7 @@ void __cpuinit cpu_init(void)
  {
  	int cpu = smp_processor_id();
  	struct task_struct *curr = current;
