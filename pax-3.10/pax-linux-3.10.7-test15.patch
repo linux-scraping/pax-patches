@@ -1,5 +1,5 @@
-- fixed compile error introduced by the previous PCID change
-- fixed timer_create kernel stack leak, reported by Roman Žilka (https://bugs.gentoo.org/show_bug.cgi?id=470214)
+- fixed more PCID fallout, reported by spender, Negres and GBit (http://forums.grsecurity.net/viewtopic.php?f=3&t=3705)
+- fixed some new REFCOUNT false positives, caught by inspection
 
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/alpha/include/asm/atomic.h linux-3.10.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -14292,7 +14292,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/include/asm/tlbflush.h linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h
 --- linux-3.10.7/arch/x86/include/asm/tlbflush.h	2013-04-30 01:25:06.247586517 +0200
-+++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-18 23:30:48.314125271 +0200
++++ linux-3.10.7-pax/arch/x86/include/asm/tlbflush.h	2013-08-19 02:47:57.227416570 +0200
 @@ -17,18 +17,40 @@
  
  static inline void __native_flush_tlb(void)
@@ -14353,7 +14353,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
 +		descriptor[1] = addr;
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
-+		if (!static_cpu_has(X86_FEATURE_STRONGUDEREF || addr >= TASK_SIZE_MAX)) {
++		if (!static_cpu_has(X86_FEATURE_STRONGUDEREF) || addr >= TASK_SIZE_MAX) {
 +			if (addr < TASK_SIZE_MAX)
 +				descriptor[1] += pax_user_shadow_base;
 +			asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_ADDRESS) : "memory");
@@ -15992,7 +15992,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  			size = 64;
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel/cpu/common.c linux-3.10.7-pax/arch/x86/kernel/cpu/common.c
 --- linux-3.10.7/arch/x86/kernel/cpu/common.c	2013-07-08 01:58:07.044266367 +0200
-+++ linux-3.10.7-pax/arch/x86/kernel/cpu/common.c	2013-08-18 00:59:33.415072784 +0200
++++ linux-3.10.7-pax/arch/x86/kernel/cpu/common.c	2013-08-19 02:33:01.779464380 +0200
 @@ -88,60 +88,6 @@ static const struct cpu_dev __cpuinitcon
  
  static const struct cpu_dev *this_cpu __cpuinitdata = &default_cpu;
@@ -16054,7 +16054,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  static int __init x86_xsave_setup(char *s)
  {
  	setup_clear_cpu_cap(X86_FEATURE_XSAVE);
-@@ -288,6 +234,52 @@ static __always_inline void setup_smap(s
+@@ -288,6 +234,53 @@ static __always_inline void setup_smap(s
  		set_in_cr4(X86_CR4_SMAP);
  }
  
@@ -16077,9 +16077,10 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
 +	if (!cpu_has(c, X86_FEATURE_PCID)) {
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+		if (pax_user_shadow_base)
++		if (clone_pgd_mask != ~(pgdval_t)0UL) {
++			pax_user_shadow_base = 1UL << TASK_SIZE_MAX_SHIFT;
 +			printk("PAX: slow and weak UDEREF enabled\n");
-+		else
++		} else
 +			printk("PAX: UDEREF disabled\n");
 +#endif
 +
@@ -16107,7 +16108,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  /*
   * Some CPU features depend on higher CPUID levels, which may not always
   * be available due to CPUID level capping or broken virtualization
-@@ -386,7 +378,7 @@ void switch_to_new_gdt(int cpu)
+@@ -386,7 +379,7 @@ void switch_to_new_gdt(int cpu)
  {
  	struct desc_ptr gdt_descr;
  
@@ -16116,7 +16117,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
  	/* Reload the per-cpu base */
-@@ -874,6 +866,10 @@ static void __cpuinit identify_cpu(struc
+@@ -874,6 +867,10 @@ static void __cpuinit identify_cpu(struc
  	setup_smep(c);
  	setup_smap(c);
  
@@ -16127,7 +16128,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/*
  	 * The vendor-specific functions might have changed features.
  	 * Now we do "generic changes."
-@@ -882,6 +878,10 @@ static void __cpuinit identify_cpu(struc
+@@ -882,6 +879,10 @@ static void __cpuinit identify_cpu(struc
  	/* Filter out anything that depends on CPUID levels we don't have */
  	filter_cpuid_features(c, true);
  
@@ -16138,7 +16139,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/* If the model name is still unset, do table lookup. */
  	if (!c->x86_model_id[0]) {
  		const char *p;
-@@ -1069,10 +1069,12 @@ static __init int setup_disablecpuid(cha
+@@ -1069,10 +1070,12 @@ static __init int setup_disablecpuid(cha
  }
  __setup("clearcpuid=", setup_disablecpuid);
  
@@ -16153,7 +16154,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  DEFINE_PER_CPU_FIRST(union irq_stack_union,
  		     irq_stack_union) __aligned(PAGE_SIZE);
-@@ -1086,7 +1088,7 @@ DEFINE_PER_CPU(struct task_struct *, cur
+@@ -1086,7 +1089,7 @@ DEFINE_PER_CPU(struct task_struct *, cur
  EXPORT_PER_CPU_SYMBOL(current_task);
  
  DEFINE_PER_CPU(unsigned long, kernel_stack) =
@@ -16162,7 +16163,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  EXPORT_PER_CPU_SYMBOL(kernel_stack);
  
  DEFINE_PER_CPU(char *, irq_stack_ptr) =
-@@ -1231,7 +1233,7 @@ void __cpuinit cpu_init(void)
+@@ -1231,7 +1234,7 @@ void __cpuinit cpu_init(void)
  	load_ucode_ap();
  
  	cpu = stack_smp_processor_id();
@@ -16171,7 +16172,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	oist = &per_cpu(orig_ist, cpu);
  
  #ifdef CONFIG_NUMA
-@@ -1257,7 +1259,7 @@ void __cpuinit cpu_init(void)
+@@ -1257,7 +1260,7 @@ void __cpuinit cpu_init(void)
  	switch_to_new_gdt(cpu);
  	loadsegment(fs, 0);
  
@@ -16180,7 +16181,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  	memset(me->thread.tls_array, 0, GDT_ENTRY_TLS_ENTRIES * 8);
  	syscall_init();
-@@ -1266,7 +1268,6 @@ void __cpuinit cpu_init(void)
+@@ -1266,7 +1269,6 @@ void __cpuinit cpu_init(void)
  	wrmsrl(MSR_KERNEL_GS_BASE, 0);
  	barrier();
  
@@ -16188,7 +16189,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	enable_x2apic();
  
  	/*
-@@ -1318,7 +1319,7 @@ void __cpuinit cpu_init(void)
+@@ -1318,7 +1320,7 @@ void __cpuinit cpu_init(void)
  {
  	int cpu = smp_processor_id();
  	struct task_struct *curr = current;
@@ -17831,7 +17832,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  /*
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel/entry_64.S linux-3.10.7-pax/arch/x86/kernel/entry_64.S
 --- linux-3.10.7/arch/x86/kernel/entry_64.S	2013-07-08 01:58:07.196266372 +0200
-+++ linux-3.10.7-pax/arch/x86/kernel/entry_64.S	2013-08-17 00:56:50.004127133 +0200
++++ linux-3.10.7-pax/arch/x86/kernel/entry_64.S	2013-08-19 02:38:35.711446551 +0200
 @@ -59,6 +59,8 @@
  #include <asm/context_tracking.h>
  #include <asm/smap.h>
@@ -17916,7 +17917,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  #endif
  
  
-@@ -284,6 +293,427 @@ ENTRY(native_usergs_sysret64)
+@@ -284,6 +293,430 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -18106,10 +18107,11 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
 +	.popsection
 +	GET_CR3_INTO_RDI
 +	cmp $1,%dil
-+	jnz 3f
++	jnz 4f
 +	sub $4097,%rdi
 +	bts $63,%rdi
-+	jmp 2f
++	SET_RDI_INTO_CR3
++	jmp 3f
 +111:
 +
 +	GET_CR3_INTO_RDI
@@ -18140,13 +18142,15 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
 +	i = i + 1
 +	.endr
 +
++2:	SET_RDI_INTO_CR3
++
 +#ifdef CONFIG_PAX_KERNEXEC
 +	GET_CR0_INTO_RDI
 +	bts $16,%rdi
 +	SET_RDI_INTO_CR0
 +#endif
 +
-+2:	SET_RDI_INTO_CR3
++3:
 +
 +#ifdef CONFIG_PARAVIRT
 +	PV_RESTORE_REGS(CLBR_RDI)
@@ -18156,7 +18160,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
 +	popq %rdi
 +	pax_force_retaddr
 +	retq
-+3:	ud2
++4:	ud2
 +ENDPROC(pax_enter_kernel_user)
 +
 +ENTRY(pax_exit_kernel_user)
@@ -18344,7 +18348,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -375,8 +805,8 @@ ENDPROC(native_usergs_sysret64)
+@@ -375,8 +808,8 @@ ENDPROC(native_usergs_sysret64)
  	.endm
  
  	.macro UNFAKE_STACK_FRAME
@@ -18355,7 +18359,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	.endm
  
  /*
-@@ -463,7 +893,7 @@ ENDPROC(native_usergs_sysret64)
+@@ -463,7 +896,7 @@ ENDPROC(native_usergs_sysret64)
  	movq %rsp, %rsi
  
  	leaq -RBP(%rsp),%rdi	/* arg1 for handler */
@@ -18364,7 +18368,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	je 1f
  	SWAPGS
  	/*
-@@ -498,9 +928,10 @@ ENTRY(save_rest)
+@@ -498,9 +931,10 @@ ENTRY(save_rest)
  	movq_cfi r15, R15+16
  	movq %r11, 8(%rsp)	/* return address */
  	FIXUP_TOP_OF_STACK %r11, 16
@@ -18376,7 +18380,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -529,9 +960,10 @@ ENTRY(save_paranoid)
+@@ -529,9 +963,10 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -18389,7 +18393,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	.popsection
  
  /*
-@@ -553,7 +985,7 @@ ENTRY(ret_from_fork)
+@@ -553,7 +988,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -18398,7 +18402,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	jz   1f
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -571,7 +1003,7 @@ ENTRY(ret_from_fork)
+@@ -571,7 +1006,7 @@ ENTRY(ret_from_fork)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -18407,7 +18411,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  /*
   * System call entry. Up to 6 arguments in registers are supported.
-@@ -608,7 +1040,7 @@ END(ret_from_fork)
+@@ -608,7 +1043,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -18416,7 +18420,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -621,16 +1053,23 @@ GLOBAL(system_call_after_swapgs)
+@@ -621,16 +1056,23 @@ GLOBAL(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -18442,7 +18446,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	jnz tracesys
  system_call_fastpath:
  #if __SYSCALL_MASK == ~0
-@@ -640,7 +1079,7 @@ system_call_fastpath:
+@@ -640,7 +1082,7 @@ system_call_fastpath:
  	cmpl $__NR_syscall_max,%eax
  #endif
  	ja badsys
@@ -18451,7 +18455,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	call *sys_call_table(,%rax,8)  # XXX:	 rip relative
  	movq %rax,RAX-ARGOFFSET(%rsp)
  /*
-@@ -654,10 +1093,13 @@ sysret_check:
+@@ -654,10 +1096,13 @@ sysret_check:
  	LOCKDEP_SYS_EXIT
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -18466,7 +18470,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -709,14 +1151,18 @@ badsys:
+@@ -709,14 +1154,18 @@ badsys:
  	 * jump back to the normal fast path.
  	 */
  auditsys:
@@ -18486,7 +18490,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	jmp system_call_fastpath
  
  	/*
-@@ -737,7 +1183,7 @@ sysret_audit:
+@@ -737,7 +1186,7 @@ sysret_audit:
  	/* Do syscall tracing */
  tracesys:
  #ifdef CONFIG_AUDITSYSCALL
@@ -18495,7 +18499,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	jz auditsys
  #endif
  	SAVE_REST
-@@ -745,12 +1191,16 @@ tracesys:
+@@ -745,12 +1194,16 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -18512,7 +18516,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	RESTORE_REST
  #if __SYSCALL_MASK == ~0
  	cmpq $__NR_syscall_max,%rax
-@@ -759,7 +1209,7 @@ tracesys:
+@@ -759,7 +1212,7 @@ tracesys:
  	cmpl $__NR_syscall_max,%eax
  #endif
  	ja   int_ret_from_sys_call	/* RAX(%rsp) set to -ENOSYS above */
@@ -18521,7 +18525,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	call *sys_call_table(,%rax,8)
  	movq %rax,RAX-ARGOFFSET(%rsp)
  	/* Use IRET because user could have changed frame */
-@@ -780,7 +1230,9 @@ GLOBAL(int_with_check)
+@@ -780,7 +1233,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -18532,7 +18536,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -826,7 +1278,7 @@ int_restore_rest:
+@@ -826,7 +1281,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -18541,7 +18545,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  	.macro FORK_LIKE func
  ENTRY(stub_\func)
-@@ -839,9 +1291,10 @@ ENTRY(stub_\func)
+@@ -839,9 +1294,10 @@ ENTRY(stub_\func)
  	DEFAULT_FRAME 0 8		/* offset 8: return address */
  	call sys_\func
  	RESTORE_TOP_OF_STACK %r11, 8
@@ -18553,7 +18557,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	.endm
  
  	.macro FIXED_FRAME label,func
-@@ -851,9 +1304,10 @@ ENTRY(\label)
+@@ -851,9 +1307,10 @@ ENTRY(\label)
  	FIXUP_TOP_OF_STACK %r11, 8-ARGOFFSET
  	call \func
  	RESTORE_TOP_OF_STACK %r11, 8-ARGOFFSET
@@ -18565,7 +18569,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	.endm
  
  	FORK_LIKE  clone
-@@ -870,9 +1324,10 @@ ENTRY(ptregscall_common)
+@@ -870,9 +1327,10 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R12+8, r12
  	movq_cfi_restore RBP+8, rbp
  	movq_cfi_restore RBX+8, rbx
@@ -18577,7 +18581,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -885,7 +1340,7 @@ ENTRY(stub_execve)
+@@ -885,7 +1343,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -18586,7 +18590,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -902,7 +1357,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -902,7 +1360,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -18595,7 +18599,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  #ifdef CONFIG_X86_X32_ABI
  ENTRY(stub_x32_rt_sigreturn)
-@@ -916,7 +1371,7 @@ ENTRY(stub_x32_rt_sigreturn)
+@@ -916,7 +1374,7 @@ ENTRY(stub_x32_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -18604,7 +18608,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  ENTRY(stub_x32_execve)
  	CFI_STARTPROC
-@@ -930,7 +1385,7 @@ ENTRY(stub_x32_execve)
+@@ -930,7 +1388,7 @@ ENTRY(stub_x32_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -18613,7 +18617,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  #endif
  
-@@ -967,7 +1422,7 @@ vector=vector+1
+@@ -967,7 +1425,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -18622,7 +18626,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  .previous
  END(interrupt)
-@@ -987,6 +1442,16 @@ END(interrupt)
+@@ -987,6 +1445,16 @@ END(interrupt)
  	subq $ORIG_RAX-RBP, %rsp
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-RBP
  	SAVE_ARGS_IRQ
@@ -18639,7 +18643,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	call \func
  	.endm
  
-@@ -1019,7 +1484,7 @@ ret_from_intr:
+@@ -1019,7 +1487,7 @@ ret_from_intr:
  
  exit_intr:
  	GET_THREAD_INFO(%rcx)
@@ -18648,7 +18652,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -1041,12 +1506,16 @@ retint_swapgs:		/* return to user-space
+@@ -1041,12 +1509,16 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -18665,7 +18669,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -1129,7 +1598,7 @@ ENTRY(retint_kernel)
+@@ -1129,7 +1601,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -18674,7 +18678,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  /*
   * End of kprobes section
   */
-@@ -1147,7 +1616,7 @@ ENTRY(\sym)
+@@ -1147,7 +1619,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -18683,7 +18687,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1208,12 +1677,22 @@ ENTRY(\sym)
+@@ -1208,12 +1680,22 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -18707,7 +18711,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1226,15 +1705,25 @@ ENTRY(\sym)
+@@ -1226,15 +1708,25 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF
@@ -18735,7 +18739,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1245,14 +1734,30 @@ ENTRY(\sym)
+@@ -1245,14 +1737,30 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	TRACE_IRQS_OFF_DEBUG
@@ -18767,7 +18771,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  .endm
  
  .macro errorentry sym do_sym
-@@ -1264,13 +1769,23 @@ ENTRY(\sym)
+@@ -1264,13 +1772,23 @@ ENTRY(\sym)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call error_entry
  	DEFAULT_FRAME 0
@@ -18792,7 +18796,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  .endm
  
  	/* error code is on the stack already */
-@@ -1284,13 +1799,23 @@ ENTRY(\sym)
+@@ -1284,13 +1802,23 @@ ENTRY(\sym)
  	call save_paranoid
  	DEFAULT_FRAME 0
  	TRACE_IRQS_OFF
@@ -18817,7 +18821,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1320,9 +1845,10 @@ gs_change:
+@@ -1320,9 +1848,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -18829,7 +18833,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  	_ASM_EXTABLE(gs_change,bad_gs)
  	.section .fixup,"ax"
-@@ -1350,9 +1876,10 @@ ENTRY(call_softirq)
+@@ -1350,9 +1879,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -18841,7 +18845,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1390,7 +1917,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1390,7 +1920,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -18850,7 +18854,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1449,7 +1976,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1449,7 +1979,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -18859,7 +18863,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  apicinterrupt HYPERVISOR_CALLBACK_VECTOR \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1501,18 +2028,33 @@ ENTRY(paranoid_exit)
+@@ -1501,18 +2031,33 @@ ENTRY(paranoid_exit)
  	DEFAULT_FRAME
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF_DEBUG
@@ -18895,7 +18899,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1541,7 +2083,7 @@ paranoid_schedule:
+@@ -1541,7 +2086,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -18904,7 +18908,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1568,12 +2110,13 @@ ENTRY(error_entry)
+@@ -1568,12 +2113,13 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -18919,7 +18923,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	ret
  
  /*
-@@ -1600,7 +2143,7 @@ bstep_iret:
+@@ -1600,7 +2146,7 @@ bstep_iret:
  	movq %rcx,RIP+8(%rsp)
  	jmp error_swapgs
  	CFI_ENDPROC
@@ -18928,7 +18932,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1611,7 +2154,7 @@ ENTRY(error_exit)
+@@ -1611,7 +2157,7 @@ ENTRY(error_exit)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
  	GET_THREAD_INFO(%rcx)
@@ -18937,7 +18941,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	jne retint_kernel
  	LOCKDEP_SYS_EXIT_IRQ
  	movl TI_flags(%rcx),%edx
-@@ -1620,7 +2163,7 @@ ENTRY(error_exit)
+@@ -1620,7 +2166,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -18946,7 +18950,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  /*
   * Test if a given stack is an NMI stack or not.
-@@ -1678,9 +2221,11 @@ ENTRY(nmi)
+@@ -1678,9 +2224,11 @@ ENTRY(nmi)
  	 * If %cs was not the kernel segment, then the NMI triggered in user
  	 * space, which means it is definitely not nested.
  	 */
@@ -18959,7 +18963,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/*
  	 * Check the special variable on the stack to see if NMIs are
  	 * executing.
-@@ -1714,8 +2259,7 @@ nested_nmi:
+@@ -1714,8 +2262,7 @@ nested_nmi:
  
  1:
  	/* Set up the interrupted NMIs stack to jump to repeat_nmi */
@@ -18969,7 +18973,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	CFI_ADJUST_CFA_OFFSET 1*8
  	leaq -10*8(%rsp), %rdx
  	pushq_cfi $__KERNEL_DS
-@@ -1733,6 +2277,7 @@ nested_nmi_out:
+@@ -1733,6 +2280,7 @@ nested_nmi_out:
  	CFI_RESTORE rdx
  
  	/* No need to check faults here */
@@ -18977,7 +18981,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	INTERRUPT_RETURN
  
  	CFI_RESTORE_STATE
-@@ -1849,6 +2394,8 @@ end_repeat_nmi:
+@@ -1849,6 +2397,8 @@ end_repeat_nmi:
  	 */
  	movq %cr2, %r12
  
@@ -18986,7 +18990,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1861,26 +2408,31 @@ end_repeat_nmi:
+@@ -1861,26 +2411,31 @@ end_repeat_nmi:
  	movq %r12, %cr2
  1:
  	
@@ -45004,6 +45008,27 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/fs/ceph/dir.c l
  	int err;
  	u32 ftype;
  	struct ceph_mds_reply_info_parsed *rinfo;
+diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/fs/ceph/super.c linux-3.10.7-pax/fs/ceph/super.c
+--- linux-3.10.7/fs/ceph/super.c	2013-07-08 01:58:48.644267590 +0200
++++ linux-3.10.7-pax/fs/ceph/super.c	2013-08-19 00:46:15.875806406 +0200
+@@ -839,7 +839,7 @@ static int ceph_compare_super(struct sup
+ /*
+  * construct our own bdi so we can control readahead, etc.
+  */
+-static atomic_long_t bdi_seq = ATOMIC_LONG_INIT(0);
++static atomic_long_unchecked_t bdi_seq = ATOMIC_LONG_INIT(0);
+ 
+ static int ceph_register_bdi(struct super_block *sb,
+ 			     struct ceph_fs_client *fsc)
+@@ -856,7 +856,7 @@ static int ceph_register_bdi(struct supe
+ 			default_backing_dev_info.ra_pages;
+ 
+ 	err = bdi_register(&fsc->backing_dev_info, NULL, "ceph-%ld",
+-			   atomic_long_inc_return(&bdi_seq));
++			   atomic_long_inc_return_unchecked(&bdi_seq));
+ 	if (!err)
+ 		sb->s_bdi = &fsc->backing_dev_info;
+ 	return err;
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/fs/cifs/cifs_debug.c linux-3.10.7-pax/fs/cifs/cifs_debug.c
 --- linux-3.10.7/fs/cifs/cifs_debug.c	2013-07-08 01:58:48.668267591 +0200
 +++ linux-3.10.7-pax/fs/cifs/cifs_debug.c	2013-08-15 23:49:48.822696068 +0200
@@ -60413,7 +60438,16 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/Makefile linux-
  	$(build)=$(build-dir) $(@:.ko=.o)
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/backing-dev.c linux-3.10.7-pax/mm/backing-dev.c
 --- linux-3.10.7/mm/backing-dev.c	2013-07-08 01:58:56.660267826 +0200
-+++ linux-3.10.7-pax/mm/backing-dev.c	2013-08-15 23:49:53.814695802 +0200
++++ linux-3.10.7-pax/mm/backing-dev.c	2013-08-19 00:46:24.595805940 +0200
+@@ -12,7 +12,7 @@
+ #include <linux/device.h>
+ #include <trace/events/writeback.h>
+ 
+-static atomic_long_t bdi_seq = ATOMIC_LONG_INIT(0);
++static atomic_long_unchecked_t bdi_seq = ATOMIC_LONG_INIT(0);
+ 
+ struct backing_dev_info default_backing_dev_info = {
+ 	.name		= "default",
 @@ -515,7 +515,6 @@ EXPORT_SYMBOL(bdi_destroy);
  int bdi_setup_and_register(struct backing_dev_info *bdi, char *name,
  			   unsigned int cap)
@@ -60428,7 +60462,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/mm/backing-dev.
  
 -	sprintf(tmp, "%.28s%s", name, "-%d");
 -	err = bdi_register(bdi, NULL, tmp, atomic_long_inc_return(&bdi_seq));
-+	err = bdi_register(bdi, NULL, "%.28s-%ld", name, atomic_long_inc_return(&bdi_seq));
++	err = bdi_register(bdi, NULL, "%.28s-%ld", name, atomic_long_inc_return_unchecked(&bdi_seq));
  	if (err) {
  		bdi_destroy(bdi);
  		return err;
