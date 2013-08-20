@@ -1,4 +1,4 @@
-- fixed suspend/resume regression due to the recent constification of mmu_cr4_features, reported by Mathias Krause
+- fixed a UDEREF resume regression due to the constification of clone_pgd_mask
 
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/alpha/include/asm/atomic.h linux-3.10.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.7/arch/alpha/include/asm/atomic.h	2012-12-11 04:30:57.000000000 +0100
@@ -13014,7 +13014,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/includ
  
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/include/asm/pgtable.h linux-3.10.7-pax/arch/x86/include/asm/pgtable.h
 --- linux-3.10.7/arch/x86/include/asm/pgtable.h	2013-04-30 01:25:06.247586517 +0200
-+++ linux-3.10.7-pax/arch/x86/include/asm/pgtable.h	2013-08-17 00:56:50.000127133 +0200
++++ linux-3.10.7-pax/arch/x86/include/asm/pgtable.h	2013-08-20 12:47:11.559923281 +0200
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -16011,7 +16011,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  			size = 64;
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel/cpu/common.c linux-3.10.7-pax/arch/x86/kernel/cpu/common.c
 --- linux-3.10.7/arch/x86/kernel/cpu/common.c	2013-07-08 01:58:07.044266367 +0200
-+++ linux-3.10.7-pax/arch/x86/kernel/cpu/common.c	2013-08-19 02:33:01.779464380 +0200
++++ linux-3.10.7-pax/arch/x86/kernel/cpu/common.c	2013-08-20 12:48:08.811921651 +0200
 @@ -88,60 +88,6 @@ static const struct cpu_dev __cpuinitcon
  
  static const struct cpu_dev *this_cpu __cpuinitdata = &default_cpu;
@@ -16073,7 +16073,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  static int __init x86_xsave_setup(char *s)
  {
  	setup_clear_cpu_cap(X86_FEATURE_XSAVE);
-@@ -288,6 +234,53 @@ static __always_inline void setup_smap(s
+@@ -288,6 +234,57 @@ static __always_inline void setup_smap(s
  		set_in_cr4(X86_CR4_SMAP);
  }
  
@@ -16097,7 +16097,9 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +		if (clone_pgd_mask != ~(pgdval_t)0UL) {
++			pax_open_kernel();
 +			pax_user_shadow_base = 1UL << TASK_SIZE_MAX_SHIFT;
++			pax_close_kernel();
 +			printk("PAX: slow and weak UDEREF enabled\n");
 +		} else
 +			printk("PAX: UDEREF disabled\n");
@@ -16110,7 +16112,9 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
 +	set_in_cr4(X86_CR4_PCIDE);
 +
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
++	pax_open_kernel();
 +	clone_pgd_mask = ~(pgdval_t)0UL;
++	pax_close_kernel();
 +	if (pax_user_shadow_base)
 +		printk("PAX: weak UDEREF enabled\n");
 +	else {
@@ -16127,7 +16131,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  /*
   * Some CPU features depend on higher CPUID levels, which may not always
   * be available due to CPUID level capping or broken virtualization
-@@ -386,7 +379,7 @@ void switch_to_new_gdt(int cpu)
+@@ -386,7 +383,7 @@ void switch_to_new_gdt(int cpu)
  {
  	struct desc_ptr gdt_descr;
  
@@ -16136,7 +16140,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	gdt_descr.size = GDT_SIZE - 1;
  	load_gdt(&gdt_descr);
  	/* Reload the per-cpu base */
-@@ -874,6 +867,10 @@ static void __cpuinit identify_cpu(struc
+@@ -874,6 +871,10 @@ static void __cpuinit identify_cpu(struc
  	setup_smep(c);
  	setup_smap(c);
  
@@ -16147,7 +16151,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/*
  	 * The vendor-specific functions might have changed features.
  	 * Now we do "generic changes."
-@@ -882,6 +879,10 @@ static void __cpuinit identify_cpu(struc
+@@ -882,6 +883,10 @@ static void __cpuinit identify_cpu(struc
  	/* Filter out anything that depends on CPUID levels we don't have */
  	filter_cpuid_features(c, true);
  
@@ -16158,7 +16162,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	/* If the model name is still unset, do table lookup. */
  	if (!c->x86_model_id[0]) {
  		const char *p;
-@@ -1069,10 +1070,12 @@ static __init int setup_disablecpuid(cha
+@@ -1069,10 +1074,12 @@ static __init int setup_disablecpuid(cha
  }
  __setup("clearcpuid=", setup_disablecpuid);
  
@@ -16173,7 +16177,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  DEFINE_PER_CPU_FIRST(union irq_stack_union,
  		     irq_stack_union) __aligned(PAGE_SIZE);
-@@ -1086,7 +1089,7 @@ DEFINE_PER_CPU(struct task_struct *, cur
+@@ -1086,7 +1093,7 @@ DEFINE_PER_CPU(struct task_struct *, cur
  EXPORT_PER_CPU_SYMBOL(current_task);
  
  DEFINE_PER_CPU(unsigned long, kernel_stack) =
@@ -16182,7 +16186,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  EXPORT_PER_CPU_SYMBOL(kernel_stack);
  
  DEFINE_PER_CPU(char *, irq_stack_ptr) =
-@@ -1231,7 +1234,7 @@ void __cpuinit cpu_init(void)
+@@ -1231,7 +1238,7 @@ void __cpuinit cpu_init(void)
  	load_ucode_ap();
  
  	cpu = stack_smp_processor_id();
@@ -16191,7 +16195,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	oist = &per_cpu(orig_ist, cpu);
  
  #ifdef CONFIG_NUMA
-@@ -1257,7 +1260,7 @@ void __cpuinit cpu_init(void)
+@@ -1257,7 +1264,7 @@ void __cpuinit cpu_init(void)
  	switch_to_new_gdt(cpu);
  	loadsegment(fs, 0);
  
@@ -16200,7 +16204,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  
  	memset(me->thread.tls_array, 0, GDT_ENTRY_TLS_ENTRIES * 8);
  	syscall_init();
-@@ -1266,7 +1269,6 @@ void __cpuinit cpu_init(void)
+@@ -1266,7 +1273,6 @@ void __cpuinit cpu_init(void)
  	wrmsrl(MSR_KERNEL_GS_BASE, 0);
  	barrier();
  
@@ -16208,7 +16212,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/kernel
  	enable_x2apic();
  
  	/*
-@@ -1318,7 +1320,7 @@ void __cpuinit cpu_init(void)
+@@ -1318,7 +1324,7 @@ void __cpuinit cpu_init(void)
  {
  	int cpu = smp_processor_id();
  	struct task_struct *curr = current;
@@ -28088,7 +28092,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/mm/pgt
  	 * It's enough to flush this one mapping.
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/arch/x86/mm/pgtable.c linux-3.10.7-pax/arch/x86/mm/pgtable.c
 --- linux-3.10.7/arch/x86/mm/pgtable.c	2013-04-30 01:25:06.307586513 +0200
-+++ linux-3.10.7-pax/arch/x86/mm/pgtable.c	2013-08-17 00:56:50.012127133 +0200
++++ linux-3.10.7-pax/arch/x86/mm/pgtable.c	2013-08-20 12:47:17.907923101 +0200
 @@ -91,10 +91,67 @@ static inline void pgd_list_del(pgd_t *p
  	list_del(&page->lru);
  }
@@ -55317,7 +55321,7 @@ diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/init/Kconfig li
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.10.7-pax/Documentation/dontdiff linux-3.10.7/init/main.c linux-3.10.7-pax/init/main.c
 --- linux-3.10.7/init/main.c	2013-07-08 01:58:55.884267803 +0200
-+++ linux-3.10.7-pax/init/main.c	2013-08-17 00:56:50.036127134 +0200
++++ linux-3.10.7-pax/init/main.c	2013-08-20 12:47:06.587923423 +0200
 @@ -153,6 +153,64 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
