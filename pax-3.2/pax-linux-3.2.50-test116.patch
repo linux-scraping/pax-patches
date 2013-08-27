@@ -1,8 +1,5 @@
-- added a few more missing format strings
-- added reporting of mismatched MPROTECT/EMUTRAMP flags between libraries and the main executable
-- reverted the recent amd64 kstack alignment fix, it'll be done the harder way another time
-- Emese fixed a size overflow false positive, reported by markusle (http://forums.grsecurity.net/viewtopic.php?f=3&t=3692)
-- disabled preemption when calling show_regs, reported by Corey Minyard
+- fixed timer_create kernel stack leak, reported by Roman Žilka (https://bugs.gentoo.org/show_bug.cgi?id=470214)
+- fixed some new REFCOUNT false positives, caught by inspection
 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/alpha/include/asm/atomic.h linux-3.2.50-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.50/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -41810,6 +41807,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ceph/dir.c l
  	int err;
  	u32 ftype;
  	struct ceph_mds_reply_info_parsed *rinfo;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ceph/super.c linux-3.2.50-pax/fs/ceph/super.c
+--- linux-3.2.50/fs/ceph/super.c	2013-07-27 11:12:22.431992798 +0200
++++ linux-3.2.50-pax/fs/ceph/super.c	2013-08-19 00:45:40.335808303 +0200
+@@ -785,7 +785,7 @@ static int ceph_compare_super(struct sup
+ /*
+  * construct our own bdi so we can control readahead, etc.
+  */
+-static atomic_long_t bdi_seq = ATOMIC_LONG_INIT(0);
++static atomic_long_unchecked_t bdi_seq = ATOMIC_LONG_INIT(0);
+ 
+ static int ceph_register_bdi(struct super_block *sb,
+ 			     struct ceph_fs_client *fsc)
+@@ -802,7 +802,7 @@ static int ceph_register_bdi(struct supe
+ 			default_backing_dev_info.ra_pages;
+ 
+ 	err = bdi_register(&fsc->backing_dev_info, NULL, "ceph-%d",
+-			   atomic_long_inc_return(&bdi_seq));
++			   atomic_long_inc_return_unchecked(&bdi_seq));
+ 	if (!err)
+ 		sb->s_bdi = &fsc->backing_dev_info;
+ 	return err;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/cifs/cifs_debug.c linux-3.2.50-pax/fs/cifs/cifs_debug.c
 --- linux-3.2.50/fs/cifs/cifs_debug.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/fs/cifs/cifs_debug.c	2012-07-04 19:24:48.680063008 +0200
@@ -53624,7 +53642,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/posix-cp
  		.timer_create	= thread_cpu_timer_create,
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/posix-timers.c linux-3.2.50-pax/kernel/posix-timers.c
 --- linux-3.2.50/kernel/posix-timers.c	2013-03-29 02:18:30.203676737 +0100
-+++ linux-3.2.50-pax/kernel/posix-timers.c	2013-03-29 02:19:02.135675032 +0100
++++ linux-3.2.50-pax/kernel/posix-timers.c	2013-08-18 23:55:01.099970575 +0200
 @@ -129,7 +129,7 @@ static DEFINE_SPINLOCK(idr_lock);
   *	    which we beg off on and pass to do_sys_settimeofday().
   */
@@ -53697,6 +53715,15 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/posix-ti
  }
  
  static int common_timer_create(struct k_itimer *new_timer)
+@@ -539,7 +539,7 @@ SYSCALL_DEFINE3(timer_create, const cloc
+ 	struct k_clock *kc = clockid_to_kclock(which_clock);
+ 	struct k_itimer *new_timer;
+ 	int error, new_timer_id;
+-	sigevent_t event;
++	sigevent_t event = { };
+ 	int it_id_set = IT_ID_NOT_SET;
+ 
+ 	if (!kc)
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/power/poweroff.c linux-3.2.50-pax/kernel/power/poweroff.c
 --- linux-3.2.50/kernel/power/poweroff.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/kernel/power/poweroff.c	2012-07-04 19:24:48.868063009 +0200
@@ -56341,7 +56368,16 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/Makefile linux-
  	$(build)=$(build-dir) $(@:.ko=.o)
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/mm/backing-dev.c linux-3.2.50-pax/mm/backing-dev.c
 --- linux-3.2.50/mm/backing-dev.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/mm/backing-dev.c	2013-06-21 20:15:56.438564312 +0200
++++ linux-3.2.50-pax/mm/backing-dev.c	2013-08-19 00:45:51.659807699 +0200
+@@ -12,7 +12,7 @@
+ #include <linux/device.h>
+ #include <trace/events/writeback.h>
+ 
+-static atomic_long_t bdi_seq = ATOMIC_LONG_INIT(0);
++static atomic_long_unchecked_t bdi_seq = ATOMIC_LONG_INIT(0);
+ 
+ struct backing_dev_info default_backing_dev_info = {
+ 	.name		= "default",
 @@ -759,7 +759,6 @@ EXPORT_SYMBOL(bdi_destroy);
  int bdi_setup_and_register(struct backing_dev_info *bdi, char *name,
  			   unsigned int cap)
@@ -56356,7 +56392,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/mm/backing-dev.
  
 -	sprintf(tmp, "%.28s%s", name, "-%d");
 -	err = bdi_register(bdi, NULL, tmp, atomic_long_inc_return(&bdi_seq));
-+	err = bdi_register(bdi, NULL, "%.28s-%ld", name, atomic_long_inc_return(&bdi_seq));
++	err = bdi_register(bdi, NULL, "%.28s-%ld", name, atomic_long_inc_return_unchecked(&bdi_seq));
  	if (err) {
  		bdi_destroy(bdi);
  		return err;
