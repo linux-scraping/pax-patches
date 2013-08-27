@@ -1,7 +1,6 @@
-- removed unnecessary mark_sym_for_renaming calls from the gcc plugins, reported by Emese Revfy
-- made some KERNEXEC/UDEREF induced fault handling on arm more robust (IFAR isn't always set on v7), by Corey Minyard <cminyard@mvista.com>
-- converted some mips atomic accessor macros to functions in preparation of REFCOUNT support, by Corey Minyard <cminyard@mvista.com>
-- __copy_from_user_inatomic on amd64 will now return unsigned long like other userland accessors do
+- added REFCOUNT support for mips, by Corey Minyard <cminyard@mvista.com>
+- fixed arm compilation with UDEREF disabled, reported by fabled (http://forums.grsecurity.net/viewtopic.php?f=1&t=3720)
+- fixed early boot panic due to a INVCPID/PCID mismatch, reported by Patrick McLean (https://bugs.gentoo.org/show_bug.cgi?id=482010)
 
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/alpha/include/asm/atomic.h linux-3.10.9-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.9/arch/alpha/include/asm/atomic.h	2013-08-20 19:08:15.659833397 +0200
@@ -1386,7 +1385,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/includ
  /*
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/include/asm/pgtable.h linux-3.10.9-pax/arch/arm/include/asm/pgtable.h
 --- linux-3.10.9/arch/arm/include/asm/pgtable.h	2013-08-20 19:08:15.679833396 +0200
-+++ linux-3.10.9-pax/arch/arm/include/asm/pgtable.h	2013-08-15 23:49:46.874696173 +0200
++++ linux-3.10.9-pax/arch/arm/include/asm/pgtable.h	2013-08-27 08:53:24.260044265 +0200
 @@ -30,6 +30,9 @@
  #include <asm/pgtable-2level.h>
  #endif
@@ -1407,20 +1406,18 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/includ
  extern void __pte_error(const char *file, int line, pte_t);
  extern void __pmd_error(const char *file, int line, pmd_t);
  extern void __pgd_error(const char *file, int line, pgd_t);
-@@ -53,6 +59,50 @@ extern void __pgd_error(const char *file
+@@ -53,6 +59,48 @@ extern void __pgd_error(const char *file
  #define pmd_ERROR(pmd)		__pmd_error(__FILE__, __LINE__, pmd)
  #define pgd_ERROR(pgd)		__pgd_error(__FILE__, __LINE__, pgd)
  
 +#define  __HAVE_ARCH_PAX_OPEN_KERNEL
 +#define  __HAVE_ARCH_PAX_CLOSE_KERNEL
 +
-+#ifdef CONFIG_PAX_KERNEXEC
++#if defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF)
 +#include <asm/domain.h>
 +#include <linux/thread_info.h>
 +#include <linux/preempt.h>
-+#endif
 +
-+#if defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF)
 +static inline int test_domain(int domain, int domaintype)
 +{
 +	return ((current_thread_info()->cpu_domain) & domain_val(domain, 3)) == domain_val(domain, domaintype);
@@ -1458,7 +1455,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/includ
  /*
   * This is the lowest virtual address we can permit any user space
   * mapping to be mapped at.  This is particularly important for
-@@ -72,8 +122,8 @@ extern void __pgd_error(const char *file
+@@ -72,8 +120,8 @@ extern void __pgd_error(const char *file
  /*
   * The pgprot_* and protection_map entries will be fixed up in runtime
   * to include the cachable and bufferable bits based on memory policy,
@@ -1469,7 +1466,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/includ
   */
  #define _L_PTE_DEFAULT	L_PTE_PRESENT | L_PTE_YOUNG
  
-@@ -257,7 +307,7 @@ static inline pte_t pte_mkspecial(pte_t
+@@ -257,7 +305,7 @@ static inline pte_t pte_mkspecial(pte_t
  static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
  {
  	const pteval_t mask = L_PTE_XN | L_PTE_RDONLY | L_PTE_USER |
@@ -4294,8 +4291,8 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/m32r/lib/u
  		__copy_user_zeroing(to,from,n);
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/include/asm/atomic.h linux-3.10.9-pax/arch/mips/include/asm/atomic.h
 --- linux-3.10.9/arch/mips/include/asm/atomic.h	2013-08-20 19:08:15.743833392 +0200
-+++ linux-3.10.9-pax/arch/mips/include/asm/atomic.h	2013-08-24 01:55:37.381291995 +0200
-@@ -21,6 +21,10 @@
++++ linux-3.10.9-pax/arch/mips/include/asm/atomic.h	2013-08-27 21:37:49.657595408 +0200
+@@ -21,15 +21,39 @@
  #include <asm/cmpxchg.h>
  #include <asm/war.h>
  
@@ -4305,8 +4302,21 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
 +
  #define ATOMIC_INIT(i)	  { (i) }
  
++#ifdef CONFIG_64BIT
++#define _ASM_EXTABLE(from, to)		\
++"	.section __ex_table,\"a\"\n"	\
++"	.dword	" #from ", " #to"\n"	\
++"	.previous\n"
++#else
++#define _ASM_EXTABLE(from, to)		\
++"	.section __ex_table,\"a\"\n"	\
++"	.word	" #from ", " #to"\n"	\
++"	.previous\n"
++#endif
++
  /*
-@@ -29,7 +33,10 @@
+  * atomic_read - read atomic variable
+  * @v: pointer of type atomic_t
   *
   * Atomically reads the value of @v.
   */
@@ -4315,10 +4325,15 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
 +{
 +	return (*(volatile const int *) &v->counter);
 +}
++
++static inline int atomic_read_unchecked(const atomic_unchecked_t *v)
++{
++	return (*(volatile const int *) &v->counter);
++}
  
  /*
   * atomic_set - set atomic variable
-@@ -38,7 +45,10 @@
+@@ -38,7 +62,15 @@
   *
   * Atomically sets the value of @v to @i.
   */
@@ -4327,46 +4342,343 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
 +{
 +	v->counter = i;
 +}
++
++static inline void atomic_set_unchecked(atomic_unchecked_t *v, int i)
++{
++	v->counter = i;
++}
  
  /*
   * atomic_add - add integer to atomic variable
-@@ -47,7 +57,7 @@
+@@ -47,7 +79,67 @@
   *
   * Atomically adds @i to @v.
   */
 -static __inline__ void atomic_add(int i, atomic_t * v)
 +static __inline__ void atomic_add(int i, atomic_t *v)
++{
++	int temp;
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%0, %1		# atomic_add		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"2:	add	%0, %2					\n"
++#else
++		"	addu	%0, %2					\n"
++#endif
++		"	sc	%0, %1					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%0, %1		# atomic_add		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Exception on overflow. */
++		"2:	add	%0, %2					\n"
++#else
++		"	addu	%0, %2					\n"
++#endif
++		"	sc	%0, %1					\n"
++		"	beqz	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	add	%0, %1					\n"
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#else
++		"	addu	%0, %1					\n"
++#endif
++		: "+r" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++}
++
++static __inline__ void atomic_add_unchecked(int i, atomic_unchecked_t *v)
  {
  	if (kernel_uses_llsc && R10000_LLSC_WAR) {
  		int temp;
-@@ -90,7 +100,7 @@ static __inline__ void atomic_add(int i,
+@@ -90,7 +182,67 @@ static __inline__ void atomic_add(int i,
   *
   * Atomically subtracts @i from @v.
   */
 -static __inline__ void atomic_sub(int i, atomic_t * v)
 +static __inline__ void atomic_sub(int i, atomic_t *v)
++{
++	int temp;
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%0, %1		# atomic64_sub		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Exception on overflow. */
++		"2:	sub	%0, %2					\n"
++#else
++		"	subu	%0, %2					\n"
++#endif
++		"	sc	%0, %1					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%0, %1		# atomic64_sub		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Exception on overflow. */
++		"2:	sub	%0, %2					\n"
++#else
++		"	subu	%0, %2					\n"
++#endif
++		"	sc	%0, %1					\n"
++		"	beqz	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	sub	%0, %1					\n"
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#else
++		"	subu	%0, %1					\n"
++#endif
++		: "+r" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++}
++
++static __inline__ void atomic_sub_unchecked(long i, atomic_unchecked_t *v)
  {
  	if (kernel_uses_llsc && R10000_LLSC_WAR) {
  		int temp;
-@@ -129,7 +139,7 @@ static __inline__ void atomic_sub(int i,
+@@ -129,7 +281,93 @@ static __inline__ void atomic_sub(int i,
  /*
   * Same as above, but return the result value
   */
 -static __inline__ int atomic_add_return(int i, atomic_t * v)
 +static __inline__ int atomic_add_return(int i, atomic_t *v)
++{
++	int result;
++	int temp;
++
++	smp_mb__before_llsc();
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%1, %2		# atomic_add_return	\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	add	%0, %1, %3				\n"
++#else
++		"	addu	%0, %1, %3				\n"
++#endif
++		"	sc	%0, %2					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	b	4f					\n"
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	addu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%1, %2	# atomic_add_return		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	add	%0, %1, %3				\n"
++#else
++		"	addu	%0, %1, %3				\n"
++#endif
++		"	sc	%0, %2					\n"
++		"	bnez	%0, 4f					\n"
++		"	b	1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	addu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++		"	lw	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	add	%0, %2					\n"
++#else
++		"	addu	%0, %2					\n"
++#endif
++		"	sw	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Note: Dest reg is not modified on overflow */
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#endif
++		: "=&r" (result), "+m" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++
++	smp_llsc_mb();
++
++	return result;
++}
++
++static __inline__ int atomic_add_return_unchecked(int i, atomic_unchecked_t *v)
  {
  	int result;
  
-@@ -178,7 +188,7 @@ static __inline__ int atomic_add_return(
+@@ -178,7 +416,93 @@ static __inline__ int atomic_add_return(
  	return result;
  }
  
 -static __inline__ int atomic_sub_return(int i, atomic_t * v)
 +static __inline__ int atomic_sub_return(int i, atomic_t *v)
++{
++	int result;
++	int temp;
++
++	smp_mb__before_llsc();
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%1, %2		# atomic_sub_return	\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	sub	%0, %1, %3				\n"
++#else
++		"	subu	%0, %1, %3				\n"
++#endif
++		"	sc	%0, %2					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	b	4f					\n"
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	subu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "=m" (v->counter)
++		: "Ir" (i), "m" (v->counter)
++		: "memory");
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	ll	%1, %2	# atomic_sub_return		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	sub	%0, %1, %3				\n"
++#else
++		"	subu	%0, %1, %3				\n"
++#endif
++		"	sc	%0, %2					\n"
++		"	bnez	%0, 4f					\n"
++		"	b	1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	subu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++		"	lw	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	sub	%0, %2					\n"
++#else
++		"	subu	%0, %2					\n"
++#endif
++		"	sw	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Note: Dest reg is not modified on overflow */
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#endif
++		: "=&r" (result), "+m" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++
++	smp_llsc_mb();
++
++	return result;
++}
++static __inline__ int atomic_sub_return_unchecked(int i, atomic_unchecked_t *v)
  {
  	int result;
  
-@@ -238,7 +248,7 @@ static __inline__ int atomic_sub_return(
+@@ -238,7 +562,7 @@ static __inline__ int atomic_sub_return(
   * Atomically test @v and subtract @i if @v is greater or equal than @i.
   * The function returns the old value of @v minus @i.
   */
@@ -4375,7 +4687,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
  {
  	int result;
  
-@@ -295,8 +305,15 @@ static __inline__ int atomic_sub_if_posi
+@@ -295,8 +619,26 @@ static __inline__ int atomic_sub_if_posi
  	return result;
  }
  
@@ -4386,19 +4698,67 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
 +	return cmpxchg(&v->counter, old, new);
 +}
 +
++static inline int atomic_cmpxchg_unchecked(atomic_unchecked_t *v, int old,
++					   int new)
++{
++	return cmpxchg(&(v->counter), old, new);
++}
++
 +static inline int atomic_xchg(atomic_t *v, int new)
 +{
 +	return xchg(&v->counter, new);
 +}
++
++static inline int atomic_xchg_unchecked(atomic_unchecked_t *v, int new)
++{
++	return xchg(&(v->counter), new);
++}
  
  /**
   * __atomic_add_unless - add unless the number is a given value
-@@ -398,14 +415,20 @@ static __inline__ int __atomic_add_unles
+@@ -324,6 +666,7 @@ static __inline__ int __atomic_add_unles
+ 
+ #define atomic_dec_return(v) atomic_sub_return(1, (v))
+ #define atomic_inc_return(v) atomic_add_return(1, (v))
++#define atomic_inc_return_unchecked(v) atomic_add_return_unchecked(1, (v))
+ 
+ /*
+  * atomic_sub_and_test - subtract value from variable and test result
+@@ -345,6 +688,7 @@ static __inline__ int __atomic_add_unles
+  * other cases.
+  */
+ #define atomic_inc_and_test(v) (atomic_inc_return(v) == 0)
++#define atomic_inc_and_test_unchecked(v) (atomic_add_return_unchecked(1, (v)) == 0)
+ 
+ /*
+  * atomic_dec_and_test - decrement by 1 and test
+@@ -369,6 +713,7 @@ static __inline__ int __atomic_add_unles
+  * Atomically increments @v by 1.
+  */
+ #define atomic_inc(v) atomic_add(1, (v))
++#define atomic_inc_unchecked(v) atomic_add_unchecked(1, (v))
+ 
+ /*
+  * atomic_dec - decrement and test
+@@ -377,6 +722,7 @@ static __inline__ int __atomic_add_unles
+  * Atomically decrements @v by 1.
+  */
+ #define atomic_dec(v) atomic_sub(1, (v))
++#define atomic_dec_unchecked(v) atomic_sub_return_unchecked(1, (v))
+ 
+ /*
+  * atomic_add_negative - add and test if negative
+@@ -398,14 +744,30 @@ static __inline__ int __atomic_add_unles
   * @v: pointer of type atomic64_t
   *
   */
 -#define atomic64_read(v)	(*(volatile long *)&(v)->counter)
 +static inline long atomic64_read(const atomic64_t *v)
++{
++	return (*(volatile const long *) &v->counter);
++}
++
++static inline long atomic64_read_unchecked(const atomic64_unchecked_t *v)
 +{
 +	return (*(volatile const long *) &v->counter);
 +}
@@ -4413,46 +4773,346 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
 +{
 +	v->counter = i;
 +}
++
++static inline void atomic64_set_unchecked(atomic64_unchecked_t *v, long i)
++{
++	v->counter = i;
++}
  
  /*
   * atomic64_add - add integer to atomic variable
-@@ -414,7 +437,7 @@ static __inline__ int __atomic_add_unles
+@@ -414,7 +776,66 @@ static __inline__ int __atomic_add_unles
   *
   * Atomically adds @i to @v.
   */
 -static __inline__ void atomic64_add(long i, atomic64_t * v)
 +static __inline__ void atomic64_add(long i, atomic64_t *v)
++{
++	long temp;
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%0, %1		# atomic64_add		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"2:	dadd	%0, %2					\n"
++#else
++		"	daddu	%0, %2					\n"
++#endif
++		"	scd	%0, %1					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%0, %1		# atomic64_add		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"2:	dadd	%0, %2					\n"
++#else
++		"	daddu	%0, %2					\n"
++#endif
++		"	scd	%0, %1					\n"
++		"	beqz	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	dadd	%0, %1					\n"
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#else
++		"	daddu	%0, %1					\n"
++#endif
++		: "+r" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++}
++static __inline__ void atomic64_add_unchecked(long i, atomic64_unchecked_t *v)
  {
  	if (kernel_uses_llsc && R10000_LLSC_WAR) {
  		long temp;
-@@ -457,7 +480,7 @@ static __inline__ void atomic64_add(long
+@@ -457,7 +878,67 @@ static __inline__ void atomic64_add(long
   *
   * Atomically subtracts @i from @v.
   */
 -static __inline__ void atomic64_sub(long i, atomic64_t * v)
 +static __inline__ void atomic64_sub(long i, atomic64_t *v)
++{
++	long temp;
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%0, %1		# atomic64_sub		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Exception on overflow. */
++		"2:	dsub	%0, %2					\n"
++#else
++		"	dsubu	%0, %2					\n"
++#endif
++		"	scd	%0, %1					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%0, %1		# atomic64_sub		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Exception on overflow. */
++		"2:	dsub	%0, %2					\n"
++#else
++		"	dsubu	%0, %2					\n"
++#endif
++		"	scd	%0, %1					\n"
++		"	beqz	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"3:							\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	dsub	%0, %1					\n"
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#else
++		"	dsubu	%0, %1					\n"
++#endif
++		: "+r" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++}
++
++static __inline__ void atomic64_sub_unchecked(long i, atomic64_unchecked_t *v)
  {
  	if (kernel_uses_llsc && R10000_LLSC_WAR) {
  		long temp;
-@@ -496,7 +519,7 @@ static __inline__ void atomic64_sub(long
+@@ -496,7 +977,93 @@ static __inline__ void atomic64_sub(long
  /*
   * Same as above, but return the result value
   */
 -static __inline__ long atomic64_add_return(long i, atomic64_t * v)
 +static __inline__ long atomic64_add_return(long i, atomic64_t *v)
++{
++	long result;
++	long temp;
++
++	smp_mb__before_llsc();
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%1, %2		# atomic64_add_return	\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	dadd	%0, %1, %3				\n"
++#else
++		"	daddu	%0, %1, %3				\n"
++#endif
++		"	scd	%0, %2					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	b	4f					\n"
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	daddu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "+m" (v->counter)
++		: "Ir" (i));
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%1, %2	# atomic64_add_return		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	dadd	%0, %1, %3				\n"
++#else
++		"	daddu	%0, %1, %3				\n"
++#endif
++		"	scd	%0, %2					\n"
++		"	bnez	%0, 4f					\n"
++		"	b	1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	daddu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "=m" (v->counter)
++		: "Ir" (i), "m" (v->counter)
++		: "memory");
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++		"	ld	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	dadd	%0, %2					\n"
++#else
++		"	daddu	%0, %2					\n"
++#endif
++		"	sd	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Note: Dest reg is not modified on overflow */
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#endif
++		: "=&r" (result), "+m" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++
++	smp_llsc_mb();
++
++	return result;
++}
++static __inline__ long atomic64_add_return_unchecked(long i, atomic64_unchecked_t *v)
  {
  	long result;
  
-@@ -546,7 +569,7 @@ static __inline__ long atomic64_add_retu
+@@ -546,7 +1113,97 @@ static __inline__ long atomic64_add_retu
  	return result;
  }
  
 -static __inline__ long atomic64_sub_return(long i, atomic64_t * v)
 +static __inline__ long atomic64_sub_return(long i, atomic64_t *v)
++{
++	long result;
++	long temp;
++
++	smp_mb__before_llsc();
++
++	if (kernel_uses_llsc && R10000_LLSC_WAR) {
++		long temp;
++
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%1, %2		# atomic64_sub_return	\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	dsub	%0, %1, %3				\n"
++#else
++		"	dsubu	%0, %1, %3				\n"
++#endif
++		"	scd	%0, %2					\n"
++		"	beqzl	%0, 1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	b	4f					\n"
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	dsubu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "=m" (v->counter)
++		: "Ir" (i), "m" (v->counter)
++		: "memory");
++	} else if (kernel_uses_llsc) {
++		__asm__ __volatile__(
++		"	.set	mips3					\n"
++		"1:	lld	%1, %2	# atomic64_sub_return		\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"2:	dsub	%0, %1, %3				\n"
++#else
++		"	dsubu	%0, %1, %3				\n"
++#endif
++		"	scd	%0, %2					\n"
++		"	bnez	%0, 4f					\n"
++		"	b	1b					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"	.set	noreorder				\n"
++		"3:	b	5f					\n"
++		"	move	%0, %1					\n"
++		"	.set	reorder					\n"
++		_ASM_EXTABLE(2b, 3b)
++#endif
++		"4:	dsubu	%0, %1, %3				\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		"5:							\n"
++#endif
++		"	.set	mips0					\n"
++		: "=&r" (result), "=&r" (temp), "=m" (v->counter)
++		: "Ir" (i), "m" (v->counter)
++		: "memory");
++	} else {
++		unsigned long flags;
++
++		raw_local_irq_save(flags);
++		__asm__ __volatile__(
++		"	ld	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++			/* Exception on overflow. */
++		"1:	dsub	%0, %2					\n"
++#else
++		"	dsubu	%0, %2					\n"
++#endif
++		"	sd	%0, %1					\n"
++#ifdef CONFIG_PAX_REFCOUNT
++		/* Note: Dest reg is not modified on overflow */
++		"2:							\n"
++		_ASM_EXTABLE(1b, 2b)
++#endif
++		: "=&r" (result), "+m" (v->counter) : "Ir" (i));
++		raw_local_irq_restore(flags);
++	}
++
++	smp_llsc_mb();
++
++	return result;
++}
++
++static __inline__ long atomic64_sub_return_unchecked(long i, atomic64_unchecked_t *v)
  {
  	long result;
  
-@@ -605,7 +628,7 @@ static __inline__ long atomic64_sub_retu
+@@ -605,7 +1262,7 @@ static __inline__ long atomic64_sub_retu
   * Atomically test @v and subtract @i if @v is greater or equal than @i.
   * The function returns the old value of @v minus @i.
   */
@@ -4461,7 +5121,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
  {
  	long result;
  
-@@ -662,9 +685,15 @@ static __inline__ long atomic64_sub_if_p
+@@ -662,9 +1319,26 @@ static __inline__ long atomic64_sub_if_p
  	return result;
  }
  
@@ -4473,30 +5133,56 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/inclu
 +	return cmpxchg(&v->counter, old, new);
 +}
 +
++static inline long atomic64_cmpxchg_unchecked(atomic64_unchecked_t *v, long old,
++					      long new)
++{
++	return cmpxchg(&(v->counter), old, new);
++}
++
 +static inline long atomic64_xchg(atomic64_t *v, long new)
 +{
 +	return xchg(&v->counter, new);
 +}
++
++static inline long atomic64_xchg_unchecked(atomic64_unchecked_t *v, long new)
++{
++	return xchg(&(v->counter), new);
++}
  
  /**
   * atomic64_add_unless - add unless the number is a given value
-@@ -759,6 +788,16 @@ static __inline__ int atomic64_add_unles
-  */
- #define atomic64_add_negative(i, v) (atomic64_add_return(i, (v)) < 0)
+@@ -694,6 +1368,7 @@ static __inline__ int atomic64_add_unles
  
-+#define atomic64_read_unchecked(v)		atomic64_read(v)
-+#define atomic64_set_unchecked(v, i)		atomic64_set((v), (i))
-+#define atomic64_add_unchecked(a, v)		atomic64_add((a), (v))
-+#define atomic64_add_return_unchecked(a, v)	atomic64_add_return((a), (v))
-+#define atomic64_sub_unchecked(a, v)		atomic64_sub((a), (v))
-+#define atomic64_inc_unchecked(v)		atomic64_inc(v)
-+#define atomic64_inc_return_unchecked(v)	atomic64_inc_return(v)
-+#define atomic64_dec_unchecked(v)		atomic64_dec(v)
-+#define atomic64_cmpxchg_unchecked(v, o, n)	atomic64_cmpxchg((v), (o), (n))
-+
- #endif /* CONFIG_64BIT */
+ #define atomic64_dec_return(v) atomic64_sub_return(1, (v))
+ #define atomic64_inc_return(v) atomic64_add_return(1, (v))
++#define atomic64_inc_return_unchecked(v) atomic64_add_return_unchecked(1, (v))
  
  /*
+  * atomic64_sub_and_test - subtract value from variable and test result
+@@ -715,6 +1390,7 @@ static __inline__ int atomic64_add_unles
+  * other cases.
+  */
+ #define atomic64_inc_and_test(v) (atomic64_inc_return(v) == 0)
++#define atomic64_inc_and_test_unchecked(v) atomic64_add_return_unchecked(1, (v)) == 0)
+ 
+ /*
+  * atomic64_dec_and_test - decrement by 1 and test
+@@ -739,6 +1415,7 @@ static __inline__ int atomic64_add_unles
+  * Atomically increments @v by 1.
+  */
+ #define atomic64_inc(v) atomic64_add(1, (v))
++#define atomic64_inc_unchecked(v) atomic64_add_unchecked(1, (v))
+ 
+ /*
+  * atomic64_dec - decrement and test
+@@ -747,6 +1424,7 @@ static __inline__ int atomic64_add_unles
+  * Atomically decrements @v by 1.
+  */
+ #define atomic64_dec(v) atomic64_sub(1, (v))
++#define atomic64_dec_unchecked(v) atomic64_sub_unchecked(1, (v))
+ 
+ /*
+  * atomic64_add_negative - add and test if negative
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/include/asm/elf.h linux-3.10.9-pax/arch/mips/include/asm/elf.h
 --- linux-3.10.9/arch/mips/include/asm/elf.h	2013-08-20 19:08:15.743833392 +0200
 +++ linux-3.10.9-pax/arch/mips/include/asm/elf.h	2013-08-15 23:49:46.914696170 +0200
@@ -4702,6 +5388,30 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/kerne
 -
 -	return sp & ALMASK;
 -}
+diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/kernel/traps.c linux-3.10.9-pax/arch/mips/kernel/traps.c
+--- linux-3.10.9/arch/mips/kernel/traps.c	2013-07-08 01:57:57.608266090 +0200
++++ linux-3.10.9-pax/arch/mips/kernel/traps.c	2013-08-27 21:38:36.129592927 +0200
+@@ -675,7 +675,19 @@ asmlinkage void do_ov(struct pt_regs *re
+ {
+ 	siginfo_t info;
+ 
+-	die_if_kernel("Integer overflow", regs);
++	if (unlikely(!user_mode(regs))) {
++
++#ifdef CONFIG_PAX_REFCOUNT
++		if (fixup_exception(regs)) {
++			preempt_disable();
++			pax_report_refcount_overflow(regs);
++			preempt_enable();
++			return;
++		}
++#endif
++
++		die("Integer overflow", regs);
++	}
+ 
+ 	info.si_code = FPE_INTOVF;
+ 	info.si_signo = SIGFPE;
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/mm/fault.c linux-3.10.9-pax/arch/mips/mm/fault.c
 --- linux-3.10.9/arch/mips/mm/fault.c	2013-08-20 19:08:15.747833392 +0200
 +++ linux-3.10.9-pax/arch/mips/mm/fault.c	2013-08-15 23:49:46.918696170 +0200
@@ -13521,7 +14231,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/includ
  extern pgprot_t pgprot_writecombine(pgprot_t prot);
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/include/asm/processor.h linux-3.10.9-pax/arch/x86/include/asm/processor.h
 --- linux-3.10.9/arch/x86/include/asm/processor.h	2013-08-20 19:08:15.855833386 +0200
-+++ linux-3.10.9-pax/arch/x86/include/asm/processor.h	2013-08-20 02:10:11.761916115 +0200
++++ linux-3.10.9-pax/arch/x86/include/asm/processor.h	2013-08-27 13:25:01.259174132 +0200
 @@ -198,9 +198,21 @@ static inline void native_cpuid(unsigned
  	    : "memory");
  }
@@ -14489,13 +15199,15 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/includ
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/include/asm/tlbflush.h linux-3.10.9-pax/arch/x86/include/asm/tlbflush.h
 --- linux-3.10.9/arch/x86/include/asm/tlbflush.h	2013-08-20 19:08:15.863833386 +0200
-+++ linux-3.10.9-pax/arch/x86/include/asm/tlbflush.h	2013-08-19 02:47:57.227416570 +0200
-@@ -17,18 +17,40 @@
++++ linux-3.10.9-pax/arch/x86/include/asm/tlbflush.h	2013-08-27 14:14:15.671016389 +0200
+@@ -17,18 +17,44 @@
  
  static inline void __native_flush_tlb(void)
  {
 +	if (static_cpu_has(X86_FEATURE_INVPCID)) {
 +		unsigned long descriptor[2];
++
++		descriptor[0] = PCID_KERNEL;
 +		asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_ALL_MONGLOBAL) : "memory");
 +		return;
 +	}
@@ -14517,14 +15229,15 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/includ
  static inline void __native_flush_tlb_global_irq_disabled(void)
  {
 -	unsigned long cr4;
--
++	if (static_cpu_has(X86_FEATURE_INVPCID)) {
++		unsigned long descriptor[2];
+ 
 -	cr4 = native_read_cr4();
 -	/* clear PGE */
 -	native_write_cr4(cr4 & ~X86_CR4_PGE);
 -	/* write old PGE again and flush TLBs */
 -	native_write_cr4(cr4);
-+	if (static_cpu_has(X86_FEATURE_INVPCID)) {
-+		unsigned long descriptor[2];
++		descriptor[0] = PCID_KERNEL;
 +		asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_ALL_GLOBAL) : "memory");
 +	} else {
 +		unsigned long cr4;
@@ -14538,7 +15251,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/includ
  }
  
  static inline void __native_flush_tlb_global(void)
-@@ -49,6 +71,42 @@ static inline void __native_flush_tlb_gl
+@@ -49,6 +75,42 @@ static inline void __native_flush_tlb_gl
  
  static inline void __native_flush_tlb_single(unsigned long addr)
  {
@@ -16190,7 +16903,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/kernel
  			size = 64;
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/x86/kernel/cpu/common.c linux-3.10.9-pax/arch/x86/kernel/cpu/common.c
 --- linux-3.10.9/arch/x86/kernel/cpu/common.c	2013-08-20 19:08:15.883833385 +0200
-+++ linux-3.10.9-pax/arch/x86/kernel/cpu/common.c	2013-08-20 12:48:08.811921651 +0200
++++ linux-3.10.9-pax/arch/x86/kernel/cpu/common.c	2013-08-27 14:00:36.711060115 +0200
 @@ -88,60 +88,6 @@ static const struct cpu_dev __cpuinitcon
  
  static const struct cpu_dev *this_cpu __cpuinitdata = &default_cpu;
@@ -70275,7 +70988,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/security/integr
  	return 0;
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/security/Kconfig linux-3.10.9-pax/security/Kconfig
 --- linux-3.10.9/security/Kconfig	2013-08-20 19:08:17.343833307 +0200
-+++ linux-3.10.9-pax/security/Kconfig	2013-08-17 00:56:50.056127134 +0200
++++ linux-3.10.9-pax/security/Kconfig	2013-08-27 21:37:49.661595408 +0200
 @@ -4,6 +4,694 @@
  
  menu "Security options"
@@ -70866,7 +71579,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/security/Kconfi
 +
 +config PAX_REFCOUNT
 +	bool "Prevent various kernel object reference counter overflows"
-+	depends on (ARM && (CPU_V6 || CPU_V6K || CPU_V7)) || SPARC64 || X86
++	depends on (ARM && (CPU_V6 || CPU_V6K || CPU_V7)) || MIPS || SPARC64 || X86
 +	help
 +	  By saying Y here the kernel will detect and prevent overflowing
 +	  various (but not all) kinds of object reference counters.  Such
