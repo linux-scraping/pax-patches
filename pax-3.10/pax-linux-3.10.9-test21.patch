@@ -1,6 +1,15 @@
-- added REFCOUNT support for mips, by Corey Minyard <cminyard@mvista.com>
-- fixed arm compilation with UDEREF disabled, reported by fabled (http://forums.grsecurity.net/viewtopic.php?f=1&t=3720)
-- fixed early boot panic due to a INVCPID/PCID mismatch, reported by Patrick McLean (https://bugs.gentoo.org/show_bug.cgi?id=482010)
+- removed unnecessary type cast in do_PrefetchAbort, noticed by spender
+- since pax_report_refcount_overflow disables preemption inside, no need to do it explicitly in do_ov
+- fixed a REFCOUNT false positive in UHID
+- inspired by Dan Carpenter's recent fix (http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=909bd5926d474e275599094acad986af79671ac9)
+  Emese Revfy wrote a gcc plugin to find other instances of the same error, here's the fallout
+  (come to the 10th H2HC if you want to learn about the magic behind this and other plugins):
+  - icmpv6_filter: no memory corruption, probably just some logical error in the caller
+  - dccp_new/dccp_packet/dccp_error: probably remote kernel stack overflow (12 byte network data overwriting a local ptr variable)
+  - gigaset_brkchars: causes DMA on the kernel stack, some archs don't like it (more of this is to come)
+  - isdn_ioctl/IIOCDBGVAR: kernel heap address leak (by design), restricted to CAP_SYS_RAWIO now
+  - __dwc3_gadget_ep_enable: probably forgotten memset, seems harmless
+  - lowpan_header_create: leaks 3 bytes of a kernel heap address over the network
 
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/alpha/include/asm/atomic.h linux-3.10.9-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.9/arch/alpha/include/asm/atomic.h	2013-08-20 19:08:15.659833397 +0200
@@ -2960,7 +2969,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/mm/ali
  	} while (0)
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/mm/fault.c linux-3.10.9-pax/arch/arm/mm/fault.c
 --- linux-3.10.9/arch/arm/mm/fault.c	2013-08-20 19:08:15.715833394 +0200
-+++ linux-3.10.9-pax/arch/arm/mm/fault.c	2013-08-22 13:05:04.099711693 +0200
++++ linux-3.10.9-pax/arch/arm/mm/fault.c	2013-08-28 00:17:29.917083897 +0200
 @@ -25,6 +25,7 @@
  #include <asm/system_misc.h>
  #include <asm/system_info.h>
@@ -3065,7 +3074,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/arm/mm/fau
  {
  	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
  	struct siginfo info;
-+	unsigned int *pc = (unsigned int *)instruction_pointer(regs);
++	unsigned long pc = instruction_pointer(regs);
 +
 +	if (user_mode(regs)) {
 +		unsigned long sigpage = current->mm->context.sigpage;
@@ -5390,8 +5399,8 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/kerne
 -}
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/kernel/traps.c linux-3.10.9-pax/arch/mips/kernel/traps.c
 --- linux-3.10.9/arch/mips/kernel/traps.c	2013-07-08 01:57:57.608266090 +0200
-+++ linux-3.10.9-pax/arch/mips/kernel/traps.c	2013-08-27 21:38:36.129592927 +0200
-@@ -675,7 +675,19 @@ asmlinkage void do_ov(struct pt_regs *re
++++ linux-3.10.9-pax/arch/mips/kernel/traps.c	2013-08-28 12:20:35.839199835 +0200
+@@ -675,7 +675,17 @@ asmlinkage void do_ov(struct pt_regs *re
  {
  	siginfo_t info;
  
@@ -5400,9 +5409,7 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/arch/mips/kerne
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +		if (fixup_exception(regs)) {
-+			preempt_disable();
 +			pax_report_refcount_overflow(regs);
-+			preempt_enable();
 +			return;
 +		}
 +#endif
@@ -36236,6 +36243,36 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/hid/hid
  
  	hid_debug_register(hdev, dev_name(&hdev->dev));
  	ret = device_add(&hdev->dev);
+diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/hid/uhid.c linux-3.10.9-pax/drivers/hid/uhid.c
+--- linux-3.10.9/drivers/hid/uhid.c	2013-04-30 01:25:10.907586268 +0200
++++ linux-3.10.9-pax/drivers/hid/uhid.c	2013-08-29 01:39:19.420641087 +0200
+@@ -47,7 +47,7 @@ struct uhid_device {
+ 	struct mutex report_lock;
+ 	wait_queue_head_t report_wait;
+ 	atomic_t report_done;
+-	atomic_t report_id;
++	atomic_unchecked_t report_id;
+ 	struct uhid_event report_buf;
+ };
+ 
+@@ -187,7 +187,7 @@ static int uhid_hid_get_raw(struct hid_d
+ 
+ 	spin_lock_irqsave(&uhid->qlock, flags);
+ 	ev->type = UHID_FEATURE;
+-	ev->u.feature.id = atomic_inc_return(&uhid->report_id);
++	ev->u.feature.id = atomic_inc_return_unchecked(&uhid->report_id);
+ 	ev->u.feature.rnum = rnum;
+ 	ev->u.feature.rtype = report_type;
+ 
+@@ -471,7 +471,7 @@ static int uhid_dev_feature_answer(struc
+ 	spin_lock_irqsave(&uhid->qlock, flags);
+ 
+ 	/* id for old report; drop it silently */
+-	if (atomic_read(&uhid->report_id) != ev->u.feature_answer.id)
++	if (atomic_read_unchecked(&uhid->report_id) != ev->u.feature_answer.id)
+ 		goto unlock;
+ 	if (atomic_read(&uhid->report_done))
+ 		goto unlock;
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/hv/channel.c linux-3.10.9-pax/drivers/hv/channel.c
 --- linux-3.10.9/drivers/hv/channel.c	2013-08-20 19:08:16.127833372 +0200
 +++ linux-3.10.9-pax/drivers/hv/channel.c	2013-08-15 23:49:47.358696147 +0200
@@ -37531,6 +37568,18 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/isdn/gi
  		tty_port_tty_set(&cs->port, NULL);
  
  	mutex_unlock(&cs->mutex);
+diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/isdn/gigaset/usb-gigaset.c linux-3.10.9-pax/drivers/isdn/gigaset/usb-gigaset.c
+--- linux-3.10.9/drivers/isdn/gigaset/usb-gigaset.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.10.9-pax/drivers/isdn/gigaset/usb-gigaset.c	2013-08-28 21:49:06.513378589 +0200
+@@ -547,7 +547,7 @@ static int gigaset_brkchars(struct cards
+ 	gigaset_dbg_buffer(DEBUG_USBREQ, "brkchars", 6, buf);
+ 	memcpy(cs->hw.usb->bchars, buf, 6);
+ 	return usb_control_msg(udev, usb_sndctrlpipe(udev, 0), 0x19, 0x41,
+-			       0, 0, &buf, 6, 2000);
++			       0, 0, buf, 6, 2000);
+ }
+ 
+ static void gigaset_freebcshw(struct bc_state *bcs)
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/isdn/hardware/avm/b1.c linux-3.10.9-pax/drivers/isdn/hardware/avm/b1.c
 --- linux-3.10.9/drivers/isdn/hardware/avm/b1.c	2013-08-20 19:08:16.163833370 +0200
 +++ linux-3.10.9-pax/drivers/isdn/hardware/avm/b1.c	2013-08-15 23:49:47.554696136 +0200
@@ -37552,6 +37601,18 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/isdn/ha
  				return -EFAULT;
  		} else {
  			memcpy(buf, dp, left);
+diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/isdn/i4l/isdn_common.c linux-3.10.9-pax/drivers/isdn/i4l/isdn_common.c
+--- linux-3.10.9/drivers/isdn/i4l/isdn_common.c	2013-04-30 01:25:11.111586257 +0200
++++ linux-3.10.9-pax/drivers/isdn/i4l/isdn_common.c	2013-08-28 22:21:44.213274063 +0200
+@@ -1651,6 +1651,8 @@ isdn_ioctl(struct file *file, uint cmd,
+ 			} else
+ 				return -EINVAL;
+ 		case IIOCDBGVAR:
++			if (!capable(CAP_SYS_RAWIO))
++				return -EPERM;
+ 			if (arg) {
+ 				if (copy_to_user(argp, &dev, sizeof(ulong)))
+ 					return -EFAULT;
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/isdn/i4l/isdn_tty.c linux-3.10.9-pax/drivers/isdn/i4l/isdn_tty.c
 --- linux-3.10.9/drivers/isdn/i4l/isdn_tty.c	2013-08-20 19:08:16.163833370 +0200
 +++ linux-3.10.9-pax/drivers/isdn/i4l/isdn_tty.c	2013-08-15 23:49:47.554696136 +0200
@@ -40163,6 +40224,21 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/net/wir
  
  struct ath_nf_limits {
  	s16 max;
+diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/net/wireless/hostap/hostap_ioctl.c linux-3.10.9-pax/drivers/net/wireless/hostap/hostap_ioctl.c
+--- linux-3.10.9/drivers/net/wireless/hostap/hostap_ioctl.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.10.9-pax/drivers/net/wireless/hostap/hostap_ioctl.c	2013-08-28 23:12:12.473112378 +0200
+@@ -523,9 +523,9 @@ static int prism2_ioctl_giwaplist(struct
+ 
+ 	data->length = prism2_ap_get_sta_qual(local, addr, qual, IW_MAX_AP, 1);
+ 
+-	memcpy(extra, &addr, sizeof(struct sockaddr) * data->length);
++	memcpy(extra, addr, sizeof(struct sockaddr) * data->length);
+ 	data->flags = 1; /* has quality information */
+-	memcpy(extra + sizeof(struct sockaddr) * data->length, &qual,
++	memcpy(extra + sizeof(struct sockaddr) * data->length, qual,
+ 	       sizeof(struct iw_quality) * data->length);
+ 
+ 	kfree(addr);
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/net/wireless/iwlegacy/3945-mac.c linux-3.10.9-pax/drivers/net/wireless/iwlegacy/3945-mac.c
 --- linux-3.10.9/drivers/net/wireless/iwlegacy/3945-mac.c	2013-08-20 19:08:16.251833365 +0200
 +++ linux-3.10.9-pax/drivers/net/wireless/iwlegacy/3945-mac.c	2013-08-15 23:49:48.426696090 +0200
@@ -43794,6 +43870,19 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/usb/cor
  
  	INIT_LIST_HEAD(&dev->ep0.urb_list);
  	dev->ep0.desc.bLength = USB_DT_ENDPOINT_SIZE;
+diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/usb/dwc3/gadget.c linux-3.10.9-pax/drivers/usb/dwc3/gadget.c
+--- linux-3.10.9/drivers/usb/dwc3/gadget.c	2013-08-05 23:37:26.894213029 +0200
++++ linux-3.10.9-pax/drivers/usb/dwc3/gadget.c	2013-08-28 22:42:55.317206196 +0200
+@@ -550,8 +550,6 @@ static int __dwc3_gadget_ep_enable(struc
+ 		if (!usb_endpoint_xfer_isoc(desc))
+ 			return 0;
+ 
+-		memset(&trb_link, 0, sizeof(trb_link));
+-
+ 		/* Link TRB for ISOC. The HWO bit is never reset */
+ 		trb_st_hw = &dep->trb_pool[0];
+ 
+Binary files linux-3.10.9/drivers/usb/dwc3/.gadget.c.swp and linux-3.10.9-pax/drivers/usb/dwc3/.gadget.c.swp differ
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/drivers/usb/early/ehci-dbgp.c linux-3.10.9-pax/drivers/usb/early/ehci-dbgp.c
 --- linux-3.10.9/drivers/usb/early/ehci-dbgp.c	2013-08-20 19:08:16.363833359 +0200
 +++ linux-3.10.9-pax/drivers/usb/early/ehci-dbgp.c	2013-08-15 23:49:48.510696085 +0200
@@ -67058,6 +67147,18 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/decnet/sysc
  		return -EFAULT;
  
  	*lenp = len;
+diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/ieee802154/6lowpan.c linux-3.10.9-pax/net/ieee802154/6lowpan.c
+--- linux-3.10.9/net/ieee802154/6lowpan.c	2013-07-08 01:58:57.956267864 +0200
++++ linux-3.10.9-pax/net/ieee802154/6lowpan.c	2013-08-28 21:51:27.453371064 +0200
+@@ -459,7 +459,7 @@ static int lowpan_header_create(struct s
+ 			hc06_ptr += 3;
+ 		} else {
+ 			/* compress nothing */
+-			memcpy(hc06_ptr, &hdr, 4);
++			memcpy(hc06_ptr, hdr, 4);
+ 			/* replace the top byte with new ECN | DSCP format */
+ 			*hc06_ptr = tmp;
+ 			hc06_ptr += 4;
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/ipv4/af_inet.c linux-3.10.9-pax/net/ipv4/af_inet.c
 --- linux-3.10.9/net/ipv4/af_inet.c	2013-08-20 19:08:16.987833326 +0200
 +++ linux-3.10.9-pax/net/ipv4/af_inet.c	2013-08-15 23:49:54.542695763 +0200
@@ -68118,7 +68219,16 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/ipv6/netfil
  }
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/ipv6/raw.c linux-3.10.9-pax/net/ipv6/raw.c
 --- linux-3.10.9/net/ipv6/raw.c	2013-08-20 19:08:17.015833324 +0200
-+++ linux-3.10.9-pax/net/ipv6/raw.c	2013-08-15 23:49:54.842695747 +0200
++++ linux-3.10.9-pax/net/ipv6/raw.c	2013-08-28 21:43:53.165395320 +0200
+@@ -108,7 +108,7 @@ found:
+  */
+ static int icmpv6_filter(const struct sock *sk, const struct sk_buff *skb)
+ {
+-	struct icmp6hdr *_hdr;
++	struct icmp6hdr _hdr;
+ 	const struct icmp6hdr *hdr;
+ 
+ 	hdr = skb_header_pointer(skb, skb_transport_offset(skb),
 @@ -378,7 +378,7 @@ static inline int rawv6_rcv_skb(struct s
  {
  	if ((raw6_sk(sk)->checksum || rcu_access_pointer(sk->sk_filter)) &&
@@ -68948,7 +69058,16 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/netfilter/n
  	if (users > 0)
 diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/netfilter/nf_conntrack_proto_dccp.c linux-3.10.9-pax/net/netfilter/nf_conntrack_proto_dccp.c
 --- linux-3.10.9/net/netfilter/nf_conntrack_proto_dccp.c	2013-08-20 19:08:17.279833310 +0200
-+++ linux-3.10.9-pax/net/netfilter/nf_conntrack_proto_dccp.c	2013-08-15 23:49:55.018695738 +0200
++++ linux-3.10.9-pax/net/netfilter/nf_conntrack_proto_dccp.c	2013-08-29 01:51:44.620601299 +0200
+@@ -428,7 +428,7 @@ static bool dccp_new(struct nf_conn *ct,
+ 	const char *msg;
+ 	u_int8_t state;
+ 
+-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
++	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+ 	BUG_ON(dh == NULL);
+ 
+ 	state = dccp_state_table[CT_DCCP_ROLE_CLIENT][dh->dccph_type][CT_DCCP_NONE];
 @@ -457,7 +457,7 @@ static bool dccp_new(struct nf_conn *ct,
  out_invalid:
  	if (LOG_INVALID(net, IPPROTO_DCCP))
@@ -68958,6 +69077,24 @@ diff -NurpX linux-3.10.9-pax/Documentation/dontdiff linux-3.10.9/net/netfilter/n
  	return false;
  }
  
+@@ -486,7 +486,7 @@ static int dccp_packet(struct nf_conn *c
+ 	u_int8_t type, old_state, new_state;
+ 	enum ct_dccp_roles role;
+ 
+-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
++	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+ 	BUG_ON(dh == NULL);
+ 	type = dh->dccph_type;
+ 
+@@ -577,7 +577,7 @@ static int dccp_error(struct net *net, s
+ 	unsigned int cscov;
+ 	const char *msg;
+ 
+-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
++	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+ 	if (dh == NULL) {
+ 		msg = "nf_ct_dccp: short packet ";
+ 		goto out_invalid;
 @@ -614,7 +614,7 @@ static int dccp_error(struct net *net, s
  
  out_invalid:
