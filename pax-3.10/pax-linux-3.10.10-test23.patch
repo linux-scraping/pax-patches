@@ -1,5 +1,5 @@
-- fixed !REFCOUNT/mips compilation, by Corey Minyard <cminyard@mvista.com>
-- fixed a few more format strings
+- added the necessary atomic_unchecked_t conversion for mips
+- audited and fixed arm and sparc for proper atomic_unchecked_t usage
 
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/alpha/include/asm/atomic.h linux-3.10.10-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.10/arch/alpha/include/asm/atomic.h	2013-08-20 19:08:15.659833397 +0200
@@ -2550,6 +2550,45 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/arm/kern
  	. = ALIGN(THREAD_SIZE);
  	__data_loc = .;
  #endif
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/arm/kvm/arm.c linux-3.10.10-pax/arch/arm/kvm/arm.c
+--- linux-3.10.10/arch/arm/kvm/arm.c	2013-07-08 01:57:49.656265856 +0200
++++ linux-3.10.10-pax/arch/arm/kvm/arm.c	2013-08-31 13:46:20.658537607 +0200
+@@ -56,7 +56,7 @@ static unsigned long hyp_default_vectors
+ static DEFINE_PER_CPU(struct kvm_vcpu *, kvm_arm_running_vcpu);
+ 
+ /* The VMID used in the VTTBR */
+-static atomic64_t kvm_vmid_gen = ATOMIC64_INIT(1);
++static atomic64_unchecked_t kvm_vmid_gen = ATOMIC64_INIT(1);
+ static u8 kvm_next_vmid;
+ static DEFINE_SPINLOCK(kvm_vmid_lock);
+ 
+@@ -392,7 +392,7 @@ void force_vm_exit(const cpumask_t *mask
+  */
+ static bool need_new_vmid_gen(struct kvm *kvm)
+ {
+-	return unlikely(kvm->arch.vmid_gen != atomic64_read(&kvm_vmid_gen));
++	return unlikely(kvm->arch.vmid_gen != atomic64_read_unchecked(&kvm_vmid_gen));
+ }
+ 
+ /**
+@@ -425,7 +425,7 @@ static void update_vttbr(struct kvm *kvm
+ 
+ 	/* First user of a new VMID generation? */
+ 	if (unlikely(kvm_next_vmid == 0)) {
+-		atomic64_inc(&kvm_vmid_gen);
++		atomic64_inc_unchecked(&kvm_vmid_gen);
+ 		kvm_next_vmid = 1;
+ 
+ 		/*
+@@ -442,7 +442,7 @@ static void update_vttbr(struct kvm *kvm
+ 		kvm_call_hyp(__kvm_flush_vm_context);
+ 	}
+ 
+-	kvm->arch.vmid_gen = atomic64_read(&kvm_vmid_gen);
++	kvm->arch.vmid_gen = atomic64_read_unchecked(&kvm_vmid_gen);
+ 	kvm->arch.vmid = kvm_next_vmid;
+ 	kvm_next_vmid++;
+ 
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/arm/lib/clear_user.S linux-3.10.10-pax/arch/arm/lib/clear_user.S
 --- linux-3.10.10/arch/arm/lib/clear_user.S	2013-08-20 19:08:15.699833395 +0200
 +++ linux-3.10.10-pax/arch/arm/lib/clear_user.S	2013-08-15 23:49:46.890696172 +0200
@@ -2957,6 +2996,53 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/arm/mm/a
  		if (err)					\
  			goto fault;				\
  	} while (0)
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/arm/mm/context.c linux-3.10.10-pax/arch/arm/mm/context.c
+--- linux-3.10.10/arch/arm/mm/context.c	2013-07-25 19:23:42.241922225 +0200
++++ linux-3.10.10-pax/arch/arm/mm/context.c	2013-08-31 13:47:53.246532664 +0200
+@@ -42,7 +42,7 @@
+ #define NUM_USER_ASIDS		ASID_FIRST_VERSION
+ 
+ static DEFINE_RAW_SPINLOCK(cpu_asid_lock);
+-static atomic64_t asid_generation = ATOMIC64_INIT(ASID_FIRST_VERSION);
++static atomic64_unchecked_t asid_generation = ATOMIC64_INIT(ASID_FIRST_VERSION);
+ static DECLARE_BITMAP(asid_map, NUM_USER_ASIDS);
+ 
+ static DEFINE_PER_CPU(atomic64_t, active_asids);
+@@ -188,7 +188,7 @@ static int is_reserved_asid(u64 asid)
+ static u64 new_context(struct mm_struct *mm, unsigned int cpu)
+ {
+ 	u64 asid = atomic64_read(&mm->context.id);
+-	u64 generation = atomic64_read(&asid_generation);
++	u64 generation = atomic64_read_unchecked(&asid_generation);
+ 
+ 	if (asid != 0 && is_reserved_asid(asid)) {
+ 		/*
+@@ -206,7 +206,7 @@ static u64 new_context(struct mm_struct
+ 		 */
+ 		asid = find_next_zero_bit(asid_map, NUM_USER_ASIDS, 1);
+ 		if (asid == NUM_USER_ASIDS) {
+-			generation = atomic64_add_return(ASID_FIRST_VERSION,
++			generation = atomic64_add_return_unchecked(ASID_FIRST_VERSION,
+ 							 &asid_generation);
+ 			flush_context(cpu);
+ 			asid = find_next_zero_bit(asid_map, NUM_USER_ASIDS, 1);
+@@ -235,14 +235,14 @@ void check_and_switch_context(struct mm_
+ 	cpu_set_reserved_ttbr0();
+ 
+ 	asid = atomic64_read(&mm->context.id);
+-	if (!((asid ^ atomic64_read(&asid_generation)) >> ASID_BITS)
++	if (!((asid ^ atomic64_read_unchecked(&asid_generation)) >> ASID_BITS)
+ 	    && atomic64_xchg(&per_cpu(active_asids, cpu), asid))
+ 		goto switch_mm_fastpath;
+ 
+ 	raw_spin_lock_irqsave(&cpu_asid_lock, flags);
+ 	/* Check that our ASID belongs to the current generation. */
+ 	asid = atomic64_read(&mm->context.id);
+-	if ((asid ^ atomic64_read(&asid_generation)) >> ASID_BITS) {
++	if ((asid ^ atomic64_read_unchecked(&asid_generation)) >> ASID_BITS) {
+ 		asid = new_context(mm, cpu);
+ 		atomic64_set(&mm->context.id, asid);
+ 	}
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/arm/mm/fault.c linux-3.10.10-pax/arch/arm/mm/fault.c
 --- linux-3.10.10/arch/arm/mm/fault.c	2013-08-20 19:08:15.715833394 +0200
 +++ linux-3.10.10-pax/arch/arm/mm/fault.c	2013-08-28 00:17:29.917083897 +0200
@@ -5380,6 +5466,30 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/ker
  #include <asm/processor.h>
  
  /*
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/kernel/irq.c linux-3.10.10-pax/arch/mips/kernel/irq.c
+--- linux-3.10.10/arch/mips/kernel/irq.c	2013-04-30 01:24:55.099587112 +0200
++++ linux-3.10.10-pax/arch/mips/kernel/irq.c	2013-08-31 12:50:52.138715324 +0200
+@@ -77,17 +77,17 @@ void ack_bad_irq(unsigned int irq)
+ 	printk("unexpected IRQ # %d\n", irq);
+ }
+ 
+-atomic_t irq_err_count;
++atomic_unchecked_t irq_err_count;
+ 
+ int arch_show_interrupts(struct seq_file *p, int prec)
+ {
+-	seq_printf(p, "%*s: %10u\n", prec, "ERR", atomic_read(&irq_err_count));
++	seq_printf(p, "%*s: %10u\n", prec, "ERR", atomic_read_unchecked(&irq_err_count));
+ 	return 0;
+ }
+ 
+ asmlinkage void spurious_interrupt(void)
+ {
+-	atomic_inc(&irq_err_count);
++	atomic_inc_unchecked(&irq_err_count);
+ }
+ 
+ void __init init_IRQ(void)
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/kernel/process.c linux-3.10.10-pax/arch/mips/kernel/process.c
 --- linux-3.10.10/arch/mips/kernel/process.c	2013-08-20 19:08:15.747833392 +0200
 +++ linux-3.10.10-pax/arch/mips/kernel/process.c	2013-08-15 23:49:46.918696170 +0200
@@ -5399,6 +5509,74 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/ker
 -
 -	return sp & ALMASK;
 -}
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/kernel/sync-r4k.c linux-3.10.10-pax/arch/mips/kernel/sync-r4k.c
+--- linux-3.10.10/arch/mips/kernel/sync-r4k.c	2013-04-30 01:24:55.395587096 +0200
++++ linux-3.10.10-pax/arch/mips/kernel/sync-r4k.c	2013-08-31 12:55:37.070700111 +0200
+@@ -21,8 +21,8 @@
+ #include <asm/mipsregs.h>
+ 
+ static atomic_t __cpuinitdata count_start_flag = ATOMIC_INIT(0);
+-static atomic_t __cpuinitdata count_count_start = ATOMIC_INIT(0);
+-static atomic_t __cpuinitdata count_count_stop = ATOMIC_INIT(0);
++static atomic_unchecked_t __cpuinitdata count_count_start = ATOMIC_INIT(0);
++static atomic_unchecked_t __cpuinitdata count_count_stop = ATOMIC_INIT(0);
+ static atomic_t __cpuinitdata count_reference = ATOMIC_INIT(0);
+ 
+ #define COUNTON 100
+@@ -69,13 +69,13 @@ void __cpuinit synchronise_count_master(
+ 
+ 	for (i = 0; i < NR_LOOPS; i++) {
+ 		/* slaves loop on '!= 2' */
+-		while (atomic_read(&count_count_start) != 1)
++		while (atomic_read_unchecked(&count_count_start) != 1)
+ 			mb();
+-		atomic_set(&count_count_stop, 0);
++		atomic_set_unchecked(&count_count_stop, 0);
+ 		smp_wmb();
+ 
+ 		/* this lets the slaves write their count register */
+-		atomic_inc(&count_count_start);
++		atomic_inc_unchecked(&count_count_start);
+ 
+ 		/*
+ 		 * Everyone initialises count in the last loop:
+@@ -86,11 +86,11 @@ void __cpuinit synchronise_count_master(
+ 		/*
+ 		 * Wait for all slaves to leave the synchronization point:
+ 		 */
+-		while (atomic_read(&count_count_stop) != 1)
++		while (atomic_read_unchecked(&count_count_stop) != 1)
+ 			mb();
+-		atomic_set(&count_count_start, 0);
++		atomic_set_unchecked(&count_count_start, 0);
+ 		smp_wmb();
+-		atomic_inc(&count_count_stop);
++		atomic_inc_unchecked(&count_count_stop);
+ 	}
+ 	/* Arrange for an interrupt in a short while */
+ 	write_c0_compare(read_c0_count() + COUNTON);
+@@ -131,8 +131,8 @@ void __cpuinit synchronise_count_slave(i
+ 	initcount = atomic_read(&count_reference);
+ 
+ 	for (i = 0; i < NR_LOOPS; i++) {
+-		atomic_inc(&count_count_start);
+-		while (atomic_read(&count_count_start) != 2)
++		atomic_inc_unchecked(&count_count_start);
++		while (atomic_read_unchecked(&count_count_start) != 2)
+ 			mb();
+ 
+ 		/*
+@@ -141,8 +141,8 @@ void __cpuinit synchronise_count_slave(i
+ 		if (i == NR_LOOPS-1)
+ 			write_c0_count(initcount);
+ 
+-		atomic_inc(&count_count_stop);
+-		while (atomic_read(&count_count_stop) != 2)
++		atomic_inc_unchecked(&count_count_stop);
++		while (atomic_read_unchecked(&count_count_stop) != 2)
+ 			mb();
+ 	}
+ 	/* Arrange for an interrupt in a short while */
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/kernel/traps.c linux-3.10.10-pax/arch/mips/kernel/traps.c
 --- linux-3.10.10/arch/mips/kernel/traps.c	2013-07-08 01:57:57.608266090 +0200
 +++ linux-3.10.10-pax/arch/mips/kernel/traps.c	2013-08-28 12:20:35.839199835 +0200
@@ -5554,6 +5732,30 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/mm/
  int __virt_addr_valid(const volatile void *kaddr)
  {
  	return pfn_valid(PFN_DOWN(virt_to_phys(kaddr)));
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/mips/sgi-ip27/ip27-nmi.c linux-3.10.10-pax/arch/mips/sgi-ip27/ip27-nmi.c
+--- linux-3.10.10/arch/mips/sgi-ip27/ip27-nmi.c	2013-04-30 01:25:02.835586699 +0200
++++ linux-3.10.10-pax/arch/mips/sgi-ip27/ip27-nmi.c	2013-08-31 12:36:18.442761973 +0200
+@@ -187,9 +187,9 @@ void
+ cont_nmi_dump(void)
+ {
+ #ifndef REAL_NMI_SIGNAL
+-	static atomic_t nmied_cpus = ATOMIC_INIT(0);
++	static atomic_unchecked_t nmied_cpus = ATOMIC_INIT(0);
+ 
+-	atomic_inc(&nmied_cpus);
++	atomic_inc_unchecked(&nmied_cpus);
+ #endif
+ 	/*
+ 	 * Only allow 1 cpu to proceed
+@@ -233,7 +233,7 @@ cont_nmi_dump(void)
+ 		udelay(10000);
+ 	}
+ #else
+-	while (atomic_read(&nmied_cpus) != num_online_cpus());
++	while (atomic_read_unchecked(&nmied_cpus) != num_online_cpus());
+ #endif
+ 
+ 	/*
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/parisc/include/asm/atomic.h linux-3.10.10-pax/arch/parisc/include/asm/atomic.h
 --- linux-3.10.10/arch/parisc/include/asm/atomic.h	2013-08-20 19:08:15.751833392 +0200
 +++ linux-3.10.10-pax/arch/parisc/include/asm/atomic.h	2013-08-15 23:49:46.918696170 +0200
@@ -7736,6 +7938,56 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/ke
  	.nextprop = prom_common_nextprop,
  	.getproplen = prom_getproplen,
  	.getproperty = prom_getproperty,
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/kernel/smp_64.c linux-3.10.10-pax/arch/sparc/kernel/smp_64.c
+--- linux-3.10.10/arch/sparc/kernel/smp_64.c	2013-07-08 01:58:00.924266187 +0200
++++ linux-3.10.10-pax/arch/sparc/kernel/smp_64.c	2013-08-31 13:56:04.830506417 +0200
+@@ -868,8 +868,8 @@ extern unsigned long xcall_flush_dcache_
+ extern unsigned long xcall_flush_dcache_page_spitfire;
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-extern atomic_t dcpage_flushes;
+-extern atomic_t dcpage_flushes_xcall;
++extern atomic_unchecked_t dcpage_flushes;
++extern atomic_unchecked_t dcpage_flushes_xcall;
+ #endif
+ 
+ static inline void __local_flush_dcache_page(struct page *page)
+@@ -893,7 +893,7 @@ void smp_flush_dcache_page_impl(struct p
+ 		return;
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-	atomic_inc(&dcpage_flushes);
++	atomic_inc_unchecked(&dcpage_flushes);
+ #endif
+ 
+ 	this_cpu = get_cpu();
+@@ -917,7 +917,7 @@ void smp_flush_dcache_page_impl(struct p
+ 			xcall_deliver(data0, __pa(pg_addr),
+ 				      (u64) pg_addr, cpumask_of(cpu));
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-			atomic_inc(&dcpage_flushes_xcall);
++			atomic_inc_unchecked(&dcpage_flushes_xcall);
+ #endif
+ 		}
+ 	}
+@@ -936,7 +936,7 @@ void flush_dcache_page_all(struct mm_str
+ 	preempt_disable();
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-	atomic_inc(&dcpage_flushes);
++	atomic_inc_unchecked(&dcpage_flushes);
+ #endif
+ 	data0 = 0;
+ 	pg_addr = page_address(page);
+@@ -953,7 +953,7 @@ void flush_dcache_page_all(struct mm_str
+ 		xcall_deliver(data0, __pa(pg_addr),
+ 			      (u64) pg_addr, cpu_online_mask);
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-		atomic_inc(&dcpage_flushes_xcall);
++		atomic_inc_unchecked(&dcpage_flushes_xcall);
+ #endif
+ 	}
+ 	__local_flush_dcache_page(page);
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/kernel/sysfs.c linux-3.10.10-pax/arch/sparc/kernel/sysfs.c
 --- linux-3.10.10/arch/sparc/kernel/sysfs.c	2013-08-20 19:08:15.791833390 +0200
 +++ linux-3.10.10-pax/arch/sparc/kernel/sysfs.c	2013-08-15 23:49:46.950696168 +0200
@@ -7909,7 +8161,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/ke
  	}
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/kernel/traps_64.c linux-3.10.10-pax/arch/sparc/kernel/traps_64.c
 --- linux-3.10.10/arch/sparc/kernel/traps_64.c	2013-08-20 19:08:15.795833390 +0200
-+++ linux-3.10.10-pax/arch/sparc/kernel/traps_64.c	2013-08-15 23:49:46.954696168 +0200
++++ linux-3.10.10-pax/arch/sparc/kernel/traps_64.c	2013-08-31 14:00:09.238493367 +0200
 @@ -96,6 +96,12 @@ void bad_trap(struct pt_regs *regs, long
  
  	lvl -= 0x100;
@@ -7941,6 +8193,55 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/ke
  	dump_tl1_traplog((struct tl1_traplog *)(regs + 1));
  
  	sprintf (buffer, "Bad trap %lx at tl>0", lvl);
+@@ -1830,8 +1841,8 @@ struct sun4v_error_entry {
+ /*0x38*/u64		reserved_5;
+ };
+ 
+-static atomic_t sun4v_resum_oflow_cnt = ATOMIC_INIT(0);
+-static atomic_t sun4v_nonresum_oflow_cnt = ATOMIC_INIT(0);
++static atomic_unchecked_t sun4v_resum_oflow_cnt = ATOMIC_INIT(0);
++static atomic_unchecked_t sun4v_nonresum_oflow_cnt = ATOMIC_INIT(0);
+ 
+ static const char *sun4v_err_type_to_str(u8 type)
+ {
+@@ -1923,7 +1934,7 @@ static void sun4v_report_real_raddr(cons
+ }
+ 
+ static void sun4v_log_error(struct pt_regs *regs, struct sun4v_error_entry *ent,
+-			    int cpu, const char *pfx, atomic_t *ocnt)
++			    int cpu, const char *pfx, atomic_unchecked_t *ocnt)
+ {
+ 	u64 *raw_ptr = (u64 *) ent;
+ 	u32 attrs;
+@@ -1981,8 +1992,8 @@ static void sun4v_log_error(struct pt_re
+ 
+ 	show_regs(regs);
+ 
+-	if ((cnt = atomic_read(ocnt)) != 0) {
+-		atomic_set(ocnt, 0);
++	if ((cnt = atomic_read_unchecked(ocnt)) != 0) {
++		atomic_set_unchecked(ocnt, 0);
+ 		wmb();
+ 		printk("%s: Queue overflowed %d times.\n",
+ 		       pfx, cnt);
+@@ -2036,7 +2047,7 @@ void sun4v_resum_error(struct pt_regs *r
+  */
+ void sun4v_resum_overflow(struct pt_regs *regs)
+ {
+-	atomic_inc(&sun4v_resum_oflow_cnt);
++	atomic_inc_unchecked(&sun4v_resum_oflow_cnt);
+ }
+ 
+ /* We run with %pil set to PIL_NORMAL_MAX and PSTATE_IE enabled in %pstate.
+@@ -2089,7 +2100,7 @@ void sun4v_nonresum_overflow(struct pt_r
+ 	/* XXX Actually even this can make not that much sense.  Perhaps
+ 	 * XXX we should just pull the plug and panic directly from here?
+ 	 */
+-	atomic_inc(&sun4v_nonresum_oflow_cnt);
++	atomic_inc_unchecked(&sun4v_nonresum_oflow_cnt);
+ }
+ 
+ unsigned long sun4v_err_itlb_vaddr;
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/lib/atomic_64.S linux-3.10.10-pax/arch/sparc/lib/atomic_64.S
 --- linux-3.10.10/arch/sparc/lib/atomic_64.S	2013-08-20 19:08:15.795833390 +0200
 +++ linux-3.10.10-pax/arch/sparc/lib/atomic_64.S	2013-08-15 23:49:46.954696168 +0200
@@ -9069,6 +9370,43 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/mm
  			return addr;
  	}
  	if (mm->get_unmapped_area == arch_get_unmapped_area)
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/mm/init_64.c linux-3.10.10-pax/arch/sparc/mm/init_64.c
+--- linux-3.10.10/arch/sparc/mm/init_64.c	2013-07-08 01:58:01.000266189 +0200
++++ linux-3.10.10-pax/arch/sparc/mm/init_64.c	2013-08-31 13:56:02.170506559 +0200
+@@ -188,9 +188,9 @@ unsigned long sparc64_kern_sec_context _
+ int num_kernel_image_mappings;
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-atomic_t dcpage_flushes = ATOMIC_INIT(0);
++atomic_unchecked_t dcpage_flushes = ATOMIC_INIT(0);
+ #ifdef CONFIG_SMP
+-atomic_t dcpage_flushes_xcall = ATOMIC_INIT(0);
++atomic_unchecked_t dcpage_flushes_xcall = ATOMIC_INIT(0);
+ #endif
+ #endif
+ 
+@@ -198,7 +198,7 @@ inline void flush_dcache_page_impl(struc
+ {
+ 	BUG_ON(tlb_type == hypervisor);
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-	atomic_inc(&dcpage_flushes);
++	atomic_inc_unchecked(&dcpage_flushes);
+ #endif
+ 
+ #ifdef DCACHE_ALIASING_POSSIBLE
+@@ -466,10 +466,10 @@ void mmu_info(struct seq_file *m)
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+ 	seq_printf(m, "DCPageFlushes\t: %d\n",
+-		   atomic_read(&dcpage_flushes));
++		   atomic_read_unchecked(&dcpage_flushes));
+ #ifdef CONFIG_SMP
+ 	seq_printf(m, "DCPageFlushesXC\t: %d\n",
+-		   atomic_read(&dcpage_flushes_xcall));
++		   atomic_read_unchecked(&dcpage_flushes_xcall));
+ #endif /* CONFIG_SMP */
+ #endif /* CONFIG_DEBUG_DCFLUSH */
+ }
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/sparc/mm/Makefile linux-3.10.10-pax/arch/sparc/mm/Makefile
 --- linux-3.10.10/arch/sparc/mm/Makefile	2013-08-20 19:08:15.799833389 +0200
 +++ linux-3.10.10-pax/arch/sparc/mm/Makefile	2013-08-15 23:49:46.958696168 +0200
