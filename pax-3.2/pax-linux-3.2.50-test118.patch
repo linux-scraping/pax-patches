@@ -1,15 +1,7 @@
-- removed unnecessary mark_sym_for_renaming calls from the gcc plugins, reported by Emese Revfy
-- __copy_from_user_inatomic on amd64 will now return unsigned long like other userland accessors do
-- inspired by Dan Carpenter's recent fix (http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=909bd5926d474e275599094acad986af79671ac9)
-  Emese Revfy wrote a gcc plugin to find other instances of the same error, here's the fallout
-  (come to the 10th H2HC if you want to learn about the magic behind this and other plugins):
-  - icmpv6_filter: no memory corruption, probably just some logical error in the caller
-  - dccp_new/dccp_packet/dccp_error: probably remote kernel stack overflow (12 byte network data overwriting a local ptr variable)
-  - gigaset_brkchars: causes DMA on the kernel stack, some archs don't like it (more of this is to come)
-  - isdn_ioctl/IIOCDBGVAR: kernel heap address leak (by design), restricted to CAP_SYS_RAWIO now
-  - lowpan_header_create: leaks 3 bytes of a kernel heap address over the network
-- fixed a few more format strings
-- audited and fixed arm and sparc for proper atomic_unchecked_t usage
+- fixed a REFCOUNT false positive, by Mathias Krause <minipli@googlemail.com>
+- fixed a bunch more after a quick audit of atomic_inc_return users
+- fixed a few more REFCOUNT false positives, by Mathias Krause <minipli@googlemail.com>
+- got inet_getid and ipv6_select_ident rid of the cmpxchg loop
 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/alpha/include/asm/atomic.h linux-3.2.50-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.50/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -29995,6 +29987,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/cpuidle
  	.attrs = cpuclass_default_attrs,
  	.name = "cpuidle",
  };
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/crypto/hifn_795x.c linux-3.2.50-pax/drivers/crypto/hifn_795x.c
+--- linux-3.2.50/drivers/crypto/hifn_795x.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/crypto/hifn_795x.c	2013-09-01 19:52:53.411867298 +0200
+@@ -51,7 +51,7 @@ module_param_string(hifn_pll_ref, hifn_p
+ MODULE_PARM_DESC(hifn_pll_ref,
+ 		 "PLL reference clock (pci[freq] or ext[freq], default ext)");
+ 
+-static atomic_t hifn_dev_number;
++static atomic_unchecked_t hifn_dev_number;
+ 
+ #define ACRYPTO_OP_DECRYPT	0
+ #define ACRYPTO_OP_ENCRYPT	1
+@@ -2576,7 +2576,7 @@ static int __devinit hifn_probe(struct p
+ 		goto err_out_disable_pci_device;
+ 
+ 	snprintf(name, sizeof(name), "hifn%d",
+-			atomic_inc_return(&hifn_dev_number)-1);
++			atomic_inc_return_unchecked(&hifn_dev_number)-1);
+ 
+ 	err = pci_request_regions(pdev, name);
+ 	if (err)
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/devfreq/devfreq.c linux-3.2.50-pax/drivers/devfreq/devfreq.c
 --- linux-3.2.50/drivers/devfreq/devfreq.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/devfreq/devfreq.c	2013-06-21 19:50:19.074646395 +0200
@@ -30079,6 +30092,42 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/edac/e7
  	{
  	 PCI_VEND_DEV(INTEL, 7205_0), PCI_ANY_ID, PCI_ANY_ID, 0, 0,
  	 E7205},
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/edac/edac_device.c linux-3.2.50-pax/drivers/edac/edac_device.c
+--- linux-3.2.50/drivers/edac/edac_device.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/edac/edac_device.c	2013-09-01 19:57:33.055852367 +0200
+@@ -483,9 +483,9 @@ void edac_device_reset_delay_period(stru
+  */
+ int edac_device_alloc_index(void)
+ {
+-	static atomic_t device_indexes = ATOMIC_INIT(0);
++	static atomic_unchecked_t device_indexes = ATOMIC_INIT(0);
+ 
+-	return atomic_inc_return(&device_indexes) - 1;
++	return atomic_inc_return_unchecked(&device_indexes) - 1;
+ }
+ EXPORT_SYMBOL_GPL(edac_device_alloc_index);
+ 
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/edac/edac_pci.c linux-3.2.50-pax/drivers/edac/edac_pci.c
+--- linux-3.2.50/drivers/edac/edac_pci.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/edac/edac_pci.c	2013-09-01 19:57:57.711851051 +0200
+@@ -30,7 +30,7 @@
+ 
+ static DEFINE_MUTEX(edac_pci_ctls_mutex);
+ static LIST_HEAD(edac_pci_list);
+-static atomic_t pci_indexes = ATOMIC_INIT(0);
++static atomic_unchecked_t pci_indexes = ATOMIC_INIT(0);
+ 
+ /*
+  * edac_pci_alloc_ctl_info
+@@ -316,7 +316,7 @@ EXPORT_SYMBOL_GPL(edac_pci_reset_delay_p
+  */
+ int edac_pci_alloc_index(void)
+ {
+-	return atomic_inc_return(&pci_indexes) - 1;
++	return atomic_inc_return_unchecked(&pci_indexes) - 1;
+ }
+ EXPORT_SYMBOL_GPL(edac_pci_alloc_index);
+ 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/edac/edac_pci_sysfs.c linux-3.2.50-pax/drivers/edac/edac_pci_sysfs.c
 --- linux-3.2.50/drivers/edac/edac_pci_sysfs.c	2013-02-09 01:12:40.728782285 +0100
 +++ linux-3.2.50-pax/drivers/edac/edac_pci_sysfs.c	2013-03-28 01:35:23.124427957 +0100
@@ -30356,7 +30405,19 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/edac/x3
  	 X38},
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/firewire/core-card.c linux-3.2.50-pax/drivers/firewire/core-card.c
 --- linux-3.2.50/drivers/firewire/core-card.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/drivers/firewire/core-card.c	2012-07-04 19:24:48.348063007 +0200
++++ linux-3.2.50-pax/drivers/firewire/core-card.c	2013-09-01 19:43:49.227896353 +0200
+@@ -512,9 +512,9 @@ void fw_card_initialize(struct fw_card *
+ 			const struct fw_card_driver *driver,
+ 			struct device *device)
+ {
+-	static atomic_t index = ATOMIC_INIT(-1);
++	static atomic_unchecked_t index = ATOMIC_INIT(-1);
+ 
+-	card->index = atomic_inc_return(&index);
++	card->index = atomic_inc_return_unchecked(&index);
+ 	card->driver = driver;
+ 	card->device = device;
+ 	card->current_tlabel = 0;
 @@ -657,7 +657,7 @@ void fw_card_release(struct kref *kref)
  
  void fw_core_remove_card(struct fw_card *card)
@@ -33849,6 +33910,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/input/s
  	serio->dev.bus = &serio_bus;
  	serio->dev.release = serio_release_port;
  	serio->dev.groups = serio_device_attr_groups;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/input/serio/serio_raw.c linux-3.2.50-pax/drivers/input/serio/serio_raw.c
+--- linux-3.2.50/drivers/input/serio/serio_raw.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/input/serio/serio_raw.c	2013-09-01 20:04:19.179830683 +0200
+@@ -280,7 +280,7 @@ static irqreturn_t serio_raw_interrupt(s
+ 
+ static int serio_raw_connect(struct serio *serio, struct serio_driver *drv)
+ {
+-	static atomic_t serio_raw_no = ATOMIC_INIT(0);
++	static atomic_unchecked_t serio_raw_no = ATOMIC_INIT(0);
+ 	struct serio_raw *serio_raw;
+ 	int err;
+ 
+@@ -291,7 +291,7 @@ static int serio_raw_connect(struct seri
+ 	}
+ 
+ 	snprintf(serio_raw->name, sizeof(serio_raw->name),
+-		 "serio_raw%ld", (long)atomic_inc_return(&serio_raw_no) - 1);
++		 "serio_raw%ld", (long)atomic_inc_return_unchecked(&serio_raw_no) - 1);
+ 	kref_init(&serio_raw->kref);
+ 	INIT_LIST_HEAD(&serio_raw->client_list);
+ 	init_waitqueue_head(&serio_raw->wait);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/isdn/capi/capi.c linux-3.2.50-pax/drivers/isdn/capi/capi.c
 --- linux-3.2.50/drivers/isdn/capi/capi.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/isdn/capi/capi.c	2012-07-04 19:24:48.464063007 +0200
@@ -34840,6 +34922,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/r
  	mutex_lock(&dev->lock);
  	if (dev->rdsstat == 0) {
  		dev->rdsstat = 1;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/rc/rc-main.c linux-3.2.50-pax/drivers/media/rc/rc-main.c
+--- linux-3.2.50/drivers/media/rc/rc-main.c	2013-03-29 02:18:30.087676743 +0100
++++ linux-3.2.50-pax/drivers/media/rc/rc-main.c	2013-09-01 20:07:39.507819987 +0200
+@@ -1031,7 +1031,7 @@ EXPORT_SYMBOL_GPL(rc_free_device);
+ 
+ int rc_register_device(struct rc_dev *dev)
+ {
+-	static atomic_t devno = ATOMIC_INIT(0);
++	static atomic_unchecked_t devno = ATOMIC_INIT(0);
+ 	struct rc_map *rc_map;
+ 	const char *path;
+ 	int rc;
+@@ -1063,7 +1063,7 @@ int rc_register_device(struct rc_dev *de
+ 	 */
+ 	mutex_lock(&dev->lock);
+ 
+-	dev->devno = (unsigned long)(atomic_inc_return(&devno) - 1);
++	dev->devno = (unsigned long)(atomic_inc_return_unchecked(&devno) - 1);
+ 	dev_set_name(&dev->dev, "rc%ld", dev->devno);
+ 	dev_set_drvdata(&dev->dev, dev);
+ 	rc = device_add(&dev->dev);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/rc/redrat3.c linux-3.2.50-pax/drivers/media/rc/redrat3.c
 --- linux-3.2.50/drivers/media/rc/redrat3.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/media/rc/redrat3.c	2012-07-04 19:24:48.504063007 +0200
@@ -34880,6 +34983,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/v
  
  module_param_array(video_nr, int, NULL, 0444);
  module_param_array(vbi_nr,   int, NULL, 0444);
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/video/ivtv/ivtv-driver.c linux-3.2.50-pax/drivers/media/video/ivtv/ivtv-driver.c
+--- linux-3.2.50/drivers/media/video/ivtv/ivtv-driver.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/media/video/ivtv/ivtv-driver.c	2013-09-01 20:06:34.363823465 +0200
+@@ -80,7 +80,7 @@ static struct pci_device_id ivtv_pci_tbl
+ MODULE_DEVICE_TABLE(pci,ivtv_pci_tbl);
+ 
+ /* ivtv instance counter */
+-static atomic_t ivtv_instance = ATOMIC_INIT(0);
++static atomic_unchecked_t ivtv_instance = ATOMIC_INIT(0);
+ 
+ /* Parameter declarations */
+ static int cardtype[IVTV_MAX_CARDS];
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/video/omap/omap_vout.c linux-3.2.50-pax/drivers/media/video/omap/omap_vout.c
 --- linux-3.2.50/drivers/media/video/omap/omap_vout.c	2013-03-29 02:18:30.091676743 +0100
 +++ linux-3.2.50-pax/drivers/media/video/omap/omap_vout.c	2013-03-29 02:19:02.079675035 +0100
@@ -34981,6 +35096,21 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/v
  				enum v4l2_memory memory)
  {
  	if (copy_in_user(up32, up, 2 * sizeof(__u32)) ||
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/video/v4l2-device.c linux-3.2.50-pax/drivers/media/video/v4l2-device.c
+--- linux-3.2.50/drivers/media/video/v4l2-device.c	2013-03-29 02:18:30.091676743 +0100
++++ linux-3.2.50-pax/drivers/media/video/v4l2-device.c	2013-09-01 20:05:00.263828490 +0200
+@@ -74,9 +74,9 @@ int v4l2_device_put(struct v4l2_device *
+ EXPORT_SYMBOL_GPL(v4l2_device_put);
+ 
+ int v4l2_device_set_name(struct v4l2_device *v4l2_dev, const char *basename,
+-						atomic_t *instance)
++						atomic_unchecked_t *instance)
+ {
+-	int num = atomic_inc_return(instance) - 1;
++	int num = atomic_inc_return_unchecked(instance) - 1;
+ 	int len = strlen(basename);
+ 
+ 	if (basename[len - 1] >= '0' && basename[len - 1] <= '9')
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/media/video/v4l2-ioctl.c linux-3.2.50-pax/drivers/media/video/v4l2-ioctl.c
 --- linux-3.2.50/drivers/media/video/v4l2-ioctl.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/media/video/v4l2-ioctl.c	2013-06-21 19:34:10.602698104 +0200
@@ -36432,6 +36562,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/usb
  				result =
  				    hso_start_serial_device(serial_table[i], GFP_NOIO);
  				hso_kick_transmit(dev2ser(serial_table[i]));
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/usb/sierra_net.c linux-3.2.50-pax/drivers/net/usb/sierra_net.c
+--- linux-3.2.50/drivers/net/usb/sierra_net.c	2012-10-10 11:02:19.595865883 +0200
++++ linux-3.2.50-pax/drivers/net/usb/sierra_net.c	2013-09-01 20:08:25.543817529 +0200
+@@ -52,7 +52,7 @@ static const char driver_name[] = "sierr
+ /* atomic counter partially included in MAC address to make sure 2 devices
+  * do not end up with the same MAC - concept breaks in case of > 255 ifaces
+  */
+-static	atomic_t iface_counter = ATOMIC_INIT(0);
++static	atomic_unchecked_t iface_counter = ATOMIC_INIT(0);
+ 
+ /*
+  * SYNC Timer Delay definition used to set the expiry time
+@@ -738,7 +738,7 @@ static int sierra_net_bind(struct usbnet
+ 	dev->net->netdev_ops = &sierra_net_device_ops;
+ 
+ 	/* change MAC addr to include, ifacenum, and to be unique */
+-	dev->net->dev_addr[ETH_ALEN-2] = atomic_inc_return(&iface_counter);
++	dev->net->dev_addr[ETH_ALEN-2] = atomic_inc_return_unchecked(&iface_counter);
+ 	dev->net->dev_addr[ETH_ALEN-1] = ifacenum;
+ 
+ 	/* we will have to manufacture ethernet headers, prepare template */
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/vmxnet3/vmxnet3_ethtool.c linux-3.2.50-pax/drivers/net/vmxnet3/vmxnet3_ethtool.c
 --- linux-3.2.50/drivers/net/vmxnet3/vmxnet3_ethtool.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/net/vmxnet3/vmxnet3_ethtool.c	2012-07-04 19:24:48.564063008 +0200
@@ -37649,6 +37800,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/power/p
  	for (i = 0; i < ARRAY_SIZE(power_supply_attrs); i++)
  		__power_supply_attrs[i] = &power_supply_attrs[i].attr;
  }
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/regulator/core.c linux-3.2.50-pax/drivers/regulator/core.c
+--- linux-3.2.50/drivers/regulator/core.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/regulator/core.c	2013-09-01 20:08:48.023816329 +0200
+@@ -2639,7 +2639,7 @@ struct regulator_dev *regulator_register
+ 	struct device *dev, const struct regulator_init_data *init_data,
+ 	void *driver_data)
+ {
+-	static atomic_t regulator_no = ATOMIC_INIT(0);
++	static atomic_unchecked_t regulator_no = ATOMIC_INIT(0);
+ 	struct regulator_dev *rdev;
+ 	int ret, i;
+ 
+@@ -2698,7 +2698,7 @@ struct regulator_dev *regulator_register
+ 	rdev->dev.class = &regulator_class;
+ 	rdev->dev.parent = dev;
+ 	dev_set_name(&rdev->dev, "regulator.%d",
+-		     atomic_inc_return(&regulator_no) - 1);
++		     atomic_inc_return_unchecked(&regulator_no) - 1);
+ 	ret = device_register(&rdev->dev);
+ 	if (ret != 0) {
+ 		put_device(&rdev->dev);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/regulator/max8660.c linux-3.2.50-pax/drivers/regulator/max8660.c
 --- linux-3.2.50/drivers/regulator/max8660.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/regulator/max8660.c	2012-07-04 19:24:48.584063008 +0200
@@ -39231,6 +39403,102 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/hvc
  		return 0;
  
  	return HVCS_BUFF_LEN - hvcsd->chars_in_buffer;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/hvc/hvsi.c linux-3.2.50-pax/drivers/tty/hvc/hvsi.c
+--- linux-3.2.50/drivers/tty/hvc/hvsi.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/tty/hvc/hvsi.c	2013-09-01 20:11:55.247806333 +0200
+@@ -86,7 +86,7 @@ struct hvsi_struct {
+ 	int n_outbuf;
+ 	uint32_t vtermno;
+ 	uint32_t virq;
+-	atomic_t seqno; /* HVSI packet sequence number */
++	atomic_unchecked_t seqno; /* HVSI packet sequence number */
+ 	uint16_t mctrl;
+ 	uint8_t state;  /* HVSI protocol state */
+ 	uint8_t flags;
+@@ -297,7 +297,7 @@ static int hvsi_version_respond(struct h
+ 
+ 	packet.hdr.type = VS_QUERY_RESPONSE_PACKET_HEADER;
+ 	packet.hdr.len = sizeof(struct hvsi_query_response);
+-	packet.hdr.seqno = atomic_inc_return(&hp->seqno);
++	packet.hdr.seqno = atomic_inc_return_unchecked(&hp->seqno);
+ 	packet.verb = VSV_SEND_VERSION_NUMBER;
+ 	packet.u.version = HVSI_VERSION;
+ 	packet.query_seqno = query_seqno+1;
+@@ -581,7 +581,7 @@ static int hvsi_query(struct hvsi_struct
+ 
+ 	packet.hdr.type = VS_QUERY_PACKET_HEADER;
+ 	packet.hdr.len = sizeof(struct hvsi_query);
+-	packet.hdr.seqno = atomic_inc_return(&hp->seqno);
++	packet.hdr.seqno = atomic_inc_return_unchecked(&hp->seqno);
+ 	packet.verb = verb;
+ 
+ 	pr_debug("%s: sending %i bytes\n", __func__, packet.hdr.len);
+@@ -623,7 +623,7 @@ static int hvsi_set_mctrl(struct hvsi_st
+ 	int wrote;
+ 
+ 	packet.hdr.type = VS_CONTROL_PACKET_HEADER,
+-	packet.hdr.seqno = atomic_inc_return(&hp->seqno);
++	packet.hdr.seqno = atomic_inc_return_unchecked(&hp->seqno);
+ 	packet.hdr.len = sizeof(struct hvsi_control);
+ 	packet.verb = VSV_SET_MODEM_CTL;
+ 	packet.mask = HVSI_TSDTR;
+@@ -706,7 +706,7 @@ static int hvsi_put_chars(struct hvsi_st
+ 	BUG_ON(count > HVSI_MAX_OUTGOING_DATA);
+ 
+ 	packet.hdr.type = VS_DATA_PACKET_HEADER;
+-	packet.hdr.seqno = atomic_inc_return(&hp->seqno);
++	packet.hdr.seqno = atomic_inc_return_unchecked(&hp->seqno);
+ 	packet.hdr.len = count + sizeof(struct hvsi_header);
+ 	memcpy(&packet.data, buf, count);
+ 
+@@ -723,7 +723,7 @@ static void hvsi_close_protocol(struct h
+ 	struct hvsi_control packet __ALIGNED__;
+ 
+ 	packet.hdr.type = VS_CONTROL_PACKET_HEADER;
+-	packet.hdr.seqno = atomic_inc_return(&hp->seqno);
++	packet.hdr.seqno = atomic_inc_return_unchecked(&hp->seqno);
+ 	packet.hdr.len = 6;
+ 	packet.verb = VSV_CLOSE_PROTOCOL;
+ 
+@@ -755,7 +755,7 @@ static int hvsi_open(struct tty_struct *
+ 	spin_lock_irqsave(&hp->lock, flags);
+ 	hp->tty = tty;
+ 	hp->count++;
+-	atomic_set(&hp->seqno, 0);
++	atomic_set_unchecked(&hp->seqno, 0);
+ 	h_vio_signal(hp->vtermno, VIO_IRQ_ENABLE);
+ 	spin_unlock_irqrestore(&hp->lock, flags);
+ 
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/hvc/hvsi_lib.c linux-3.2.50-pax/drivers/tty/hvc/hvsi_lib.c
+--- linux-3.2.50/drivers/tty/hvc/hvsi_lib.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/tty/hvc/hvsi_lib.c	2013-09-01 20:12:26.931804641 +0200
+@@ -9,7 +9,7 @@
+ 
+ static int hvsi_send_packet(struct hvsi_priv *pv, struct hvsi_header *packet)
+ {
+-	packet->seqno = atomic_inc_return(&pv->seqno);
++	packet->seqno = atomic_inc_return_unchecked(&pv->seqno);
+ 
+ 	/* Assumes that always succeeds, works in practice */
+ 	return pv->put_chars(pv->termno, (char *)packet, packet->len);
+@@ -21,7 +21,7 @@ static void hvsi_start_handshake(struct
+ 
+ 	/* Reset state */
+ 	pv->established = 0;
+-	atomic_set(&pv->seqno, 0);
++	atomic_set_unchecked(&pv->seqno, 0);
+ 
+ 	pr_devel("HVSI@%x: Handshaking started\n", pv->termno);
+ 
+@@ -265,7 +265,7 @@ int hvsilib_read_mctrl(struct hvsi_priv
+ 	pv->mctrl_update = 0;
+ 	q.hdr.type = VS_QUERY_PACKET_HEADER;
+ 	q.hdr.len = sizeof(struct hvsi_query);
+-	q.hdr.seqno = atomic_inc_return(&pv->seqno);
++	q.hdr.seqno = atomic_inc_return_unchecked(&pv->seqno);
+ 	q.verb = VSV_SEND_MODEM_CTL_STATUS;
+ 	rc = hvsi_send_packet(pv, &q.hdr);
+ 	if (rc <= 0) {
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/ipwireless/tty.c linux-3.2.50-pax/drivers/tty/ipwireless/tty.c
 --- linux-3.2.50/drivers/tty/ipwireless/tty.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/tty/ipwireless/tty.c	2012-07-04 19:24:48.640063007 +0200
@@ -39395,6 +39663,36 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/pty
  
  	cdev_init(&ptmx_cdev, &ptmx_fops);
  	if (cdev_add(&ptmx_cdev, MKDEV(TTYAUX_MAJOR, 2), 1) ||
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/serial/ioc4_serial.c linux-3.2.50-pax/drivers/tty/serial/ioc4_serial.c
+--- linux-3.2.50/drivers/tty/serial/ioc4_serial.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/tty/serial/ioc4_serial.c	2013-09-01 20:14:13.143798970 +0200
+@@ -438,7 +438,7 @@ struct ioc4_soft {
+ 		} is_intr_info[MAX_IOC4_INTR_ENTS];
+ 
+ 		/* Number of entries active in the above array */
+-		atomic_t is_num_intrs;
++		atomic_unchecked_t is_num_intrs;
+ 	} is_intr_type[IOC4_NUM_INTR_TYPES];
+ 
+ 	/* is_ir_lock must be held while
+@@ -975,7 +975,7 @@ intr_connect(struct ioc4_soft *soft, int
+ 	BUG_ON(!((type == IOC4_SIO_INTR_TYPE)
+ 	       || (type == IOC4_OTHER_INTR_TYPE)));
+ 
+-	i = atomic_inc(&soft-> is_intr_type[type].is_num_intrs) - 1;
++	i = atomic_inc_return_unchecked(&soft-> is_intr_type[type].is_num_intrs) - 1;
+ 	BUG_ON(!(i < MAX_IOC4_INTR_ENTS || (printk("i %d\n", i), 0)));
+ 
+ 	/* Save off the lower level interrupt handler */
+@@ -1002,7 +1002,7 @@ static irqreturn_t ioc4_intr(int irq, vo
+ 
+ 	soft = arg;
+ 	for (intr_type = 0; intr_type < IOC4_NUM_INTR_TYPES; intr_type++) {
+-		num_intrs = (int)atomic_read(
++		num_intrs = (int)atomic_read_unchecked(
+ 				&soft->is_intr_type[intr_type].is_num_intrs);
+ 
+ 		this_mir = this_ir = pending_intrs(soft, intr_type);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/serial/kgdboc.c linux-3.2.50-pax/drivers/tty/serial/kgdboc.c
 --- linux-3.2.50/drivers/tty/serial/kgdboc.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/tty/serial/kgdboc.c	2012-07-04 19:24:48.644063008 +0200
@@ -39496,6 +39794,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/ser
  #ifdef CONFIG_KGDB_SERIAL_CONSOLE
  /* This is only available if kgdboc is a built in for early debugging */
  static int __init kgdboc_early_init(char *opt)
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/serial/msm_serial.c linux-3.2.50-pax/drivers/tty/serial/msm_serial.c
+--- linux-3.2.50/drivers/tty/serial/msm_serial.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/tty/serial/msm_serial.c	2013-09-01 20:15:26.815795036 +0200
+@@ -857,7 +857,7 @@ static struct uart_driver msm_uart_drive
+ 	.cons = MSM_CONSOLE,
+ };
+ 
+-static atomic_t msm_uart_next_id = ATOMIC_INIT(0);
++static atomic_unchecked_t msm_uart_next_id = ATOMIC_INIT(0);
+ 
+ static int __init msm_serial_probe(struct platform_device *pdev)
+ {
+@@ -867,7 +867,7 @@ static int __init msm_serial_probe(struc
+ 	int irq;
+ 
+ 	if (pdev->id == -1)
+-		pdev->id = atomic_inc_return(&msm_uart_next_id) - 1;
++		pdev->id = atomic_inc_return_unchecked(&msm_uart_next_id) - 1;
+ 
+ 	if (unlikely(pdev->id < 0 || pdev->id >= UART_NR))
+ 		return -ENXIO;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/tty/serial/samsung.c linux-3.2.50-pax/drivers/tty/serial/samsung.c
 --- linux-3.2.50/drivers/tty/serial/samsung.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/tty/serial/samsung.c	2013-01-16 21:46:29.474810031 +0100
@@ -39932,6 +40251,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/usb/gad
  
  	/* Find out how many LUNs there should be */
  	i = mod_data.nluns;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/usb/misc/appledisplay.c linux-3.2.50-pax/drivers/usb/misc/appledisplay.c
+--- linux-3.2.50/drivers/usb/misc/appledisplay.c	2013-05-14 13:33:40.620285673 +0200
++++ linux-3.2.50-pax/drivers/usb/misc/appledisplay.c	2013-09-01 20:15:45.747794026 +0200
+@@ -83,7 +83,7 @@ struct appledisplay {
+ 	spinlock_t lock;
+ };
+ 
+-static atomic_t count_displays = ATOMIC_INIT(0);
++static atomic_unchecked_t count_displays = ATOMIC_INIT(0);
+ static struct workqueue_struct *wq;
+ 
+ static void appledisplay_complete(struct urb *urb)
+@@ -281,7 +281,7 @@ static int appledisplay_probe(struct usb
+ 
+ 	/* Register backlight device */
+ 	snprintf(bl_name, sizeof(bl_name), "appledisplay%d",
+-		atomic_inc_return(&count_displays) - 1);
++		atomic_inc_return_unchecked(&count_displays) - 1);
+ 	memset(&props, 0, sizeof(struct backlight_properties));
+ 	props.type = BACKLIGHT_RAW;
+ 	props.max_brightness = 0xff;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/usb/storage/usb.h linux-3.2.50-pax/drivers/usb/storage/usb.h
 --- linux-3.2.50/drivers/usb/storage/usb.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/usb/storage/usb.h	2013-03-28 01:35:23.304427948 +0100
@@ -40707,6 +41047,27 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/9p/vfs_inode
  
  	P9_DPRINTK(P9_DEBUG_VFS, " %s %s\n", dentry->d_name.name,
  		IS_ERR(s) ? "<error>" : s);
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/afs/inode.c linux-3.2.50-pax/fs/afs/inode.c
+--- linux-3.2.50/fs/afs/inode.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/fs/afs/inode.c	2013-09-01 20:16:04.979792999 +0200
+@@ -141,7 +141,7 @@ struct inode *afs_iget_autocell(struct i
+ 	struct afs_vnode *vnode;
+ 	struct super_block *sb;
+ 	struct inode *inode;
+-	static atomic_t afs_autocell_ino;
++	static atomic_unchecked_t afs_autocell_ino;
+ 
+ 	_enter("{%x:%u},%*.*s,",
+ 	       AFS_FS_I(dir)->fid.vid, AFS_FS_I(dir)->fid.vnode,
+@@ -154,7 +154,7 @@ struct inode *afs_iget_autocell(struct i
+ 	data.fid.unique = 0;
+ 	data.fid.vnode = 0;
+ 
+-	inode = iget5_locked(sb, atomic_inc_return(&afs_autocell_ino),
++	inode = iget5_locked(sb, atomic_inc_return_unchecked(&afs_autocell_ino),
+ 			     afs_iget5_autocell_test, afs_iget5_set,
+ 			     &data);
+ 	if (!inode) {
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/aio.c linux-3.2.50-pax/fs/aio.c
 --- linux-3.2.50/fs/aio.c	2013-05-14 13:33:40.636285672 +0200
 +++ linux-3.2.50-pax/fs/aio.c	2013-05-14 13:33:46.576285355 +0200
@@ -43431,7 +43792,16 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/fifo.c linux
  err_nocleanup:
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/fscache/cookie.c linux-3.2.50-pax/fs/fscache/cookie.c
 --- linux-3.2.50/fs/fscache/cookie.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/fs/fscache/cookie.c	2012-07-04 19:24:48.696063008 +0200
++++ linux-3.2.50-pax/fs/fscache/cookie.c	2013-09-01 19:44:55.151892833 +0200
+@@ -19,7 +19,7 @@
+ 
+ struct kmem_cache *fscache_cookie_jar;
+ 
+-static atomic_t fscache_object_debug_id = ATOMIC_INIT(0);
++static atomic_unchecked_t fscache_object_debug_id = ATOMIC_INIT(0);
+ 
+ static int fscache_acquire_non_index_cookie(struct fscache_cookie *cookie);
+ static int fscache_alloc_object(struct fscache_cache *cache,
 @@ -68,11 +68,11 @@ struct fscache_cookie *__fscache_acquire
  	       parent ? (char *) parent->def->name : "<no-parent>",
  	       def->name, netfs_data);
@@ -43497,7 +43867,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/fscache/cook
  		_leave(" = -ENOMEDIUM [no cache]");
  		return -ENOMEDIUM;
  	}
-@@ -256,12 +256,12 @@ static int fscache_alloc_object(struct f
+@@ -256,14 +256,14 @@ static int fscache_alloc_object(struct f
  	object = cache->ops->alloc_object(cache, cookie);
  	fscache_stat_d(&fscache_n_cop_alloc_object);
  	if (IS_ERR(object)) {
@@ -43510,8 +43880,11 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/fscache/cook
 -	fscache_stat(&fscache_n_object_alloc);
 +	fscache_stat_unchecked(&fscache_n_object_alloc);
  
- 	object->debug_id = atomic_inc_return(&fscache_object_debug_id);
+-	object->debug_id = atomic_inc_return(&fscache_object_debug_id);
++	object->debug_id = atomic_inc_return_unchecked(&fscache_object_debug_id);
  
+ 	_debug("ALLOC OBJ%x: %s {%lx}",
+ 	       object->debug_id, cookie->def->name, object->events);
 @@ -377,10 +377,10 @@ void __fscache_update_cookie(struct fsca
  	struct fscache_object *object;
  	struct hlist_node *_p;
@@ -50653,6 +51026,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/media/v
  	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
  	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
  	unsigned int (*poll) (struct file *, struct poll_table_struct *);
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/media/v4l2-device.h linux-3.2.50-pax/include/media/v4l2-device.h
+--- linux-3.2.50/include/media/v4l2-device.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/include/media/v4l2-device.h	2013-09-01 20:05:21.255827369 +0200
+@@ -95,7 +95,7 @@ int __must_check v4l2_device_register(st
+    this function returns 0. If the name ends with a digit (e.g. cx18),
+    then the name will be set to cx18-0 since cx180 looks really odd. */
+ int v4l2_device_set_name(struct v4l2_device *v4l2_dev, const char *basename,
+-						atomic_t *instance);
++						atomic_unchecked_t *instance);
+ 
+ /* Set v4l2_dev->dev to NULL. Call when the USB parent disconnects.
+    Since the parent disappears this ensures that v4l2_dev doesn't have an
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/media/v4l2-ioctl.h linux-3.2.50-pax/include/media/v4l2-ioctl.h
 --- linux-3.2.50/include/media/v4l2-ioctl.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/include/media/v4l2-ioctl.h	2013-01-16 21:26:55.330837164 +0100
@@ -50748,7 +51133,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/net/ine
   *
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/net/inetpeer.h linux-3.2.50-pax/include/net/inetpeer.h
 --- linux-3.2.50/include/net/inetpeer.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/include/net/inetpeer.h	2012-07-04 19:24:48.808063008 +0200
++++ linux-3.2.50-pax/include/net/inetpeer.h	2013-09-01 20:21:28.075775748 +0200
 @@ -48,8 +48,8 @@ struct inet_peer {
  	 */
  	union {
@@ -50760,20 +51145,28 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/net/ine
  			__u32				tcp_ts;
  			__u32				tcp_ts_stamp;
  		};
-@@ -113,11 +113,11 @@ static inline int inet_getid(struct inet
+@@ -109,16 +109,13 @@ static inline void inet_peer_refcheck(co
+ /* can be called with or without local BH being disabled */
+ static inline int inet_getid(struct inet_peer *p, int more)
+ {
+-	int old, new;
++	int id;
  	more++;
  	inet_peer_refcheck(p);
- 	do {
+-	do {
 -		old = atomic_read(&p->ip_id_count);
-+		old = atomic_read_unchecked(&p->ip_id_count);
- 		new = old + more;
- 		if (!new)
- 			new = 1;
+-		new = old + more;
+-		if (!new)
+-			new = 1;
 -	} while (atomic_cmpxchg(&p->ip_id_count, old, new) != old);
-+	} while (atomic_cmpxchg_unchecked(&p->ip_id_count, old, new) != old);
- 	return new;
+-	return new;
++	id = atomic_add_return_unchecked(more, &p->ip_id_count);
++	if (!id)
++		id = atomic_inc_return_unchecked(&p->ip_id_count);
++	return id;
  }
  
+ #endif /* _NET_INETPEER_H */
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/net/ip_fib.h linux-3.2.50-pax/include/net/ip_fib.h
 --- linux-3.2.50/include/net/ip_fib.h	2013-03-29 02:18:43.447676030 +0100
 +++ linux-3.2.50-pax/include/net/ip_fib.h	2013-03-29 02:22:27.843664049 +0100
@@ -55698,6 +56091,25 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/trace/tr
  	static int once;
  	struct dentry *d_tracer;
  
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/trace/trace_clock.c linux-3.2.50-pax/kernel/trace/trace_clock.c
+--- linux-3.2.50/kernel/trace/trace_clock.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/kernel/trace/trace_clock.c	2013-09-01 20:23:25.911769456 +0200
+@@ -114,7 +114,7 @@ u64 notrace trace_clock_global(void)
+ 	return now;
+ }
+ 
+-static atomic64_t trace_counter;
++static atomic64_unchecked_t trace_counter;
+ 
+ /*
+  * trace_clock_counter(): simply an atomic counter.
+@@ -123,5 +123,5 @@ static atomic64_t trace_counter;
+  */
+ u64 notrace trace_clock_counter(void)
+ {
+-	return atomic64_add_return(1, &trace_counter);
++	return atomic64_add_return_unchecked(1, &trace_counter);
+ }
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/trace/trace_events.c linux-3.2.50-pax/kernel/trace/trace_events.c
 --- linux-3.2.50/kernel/trace/trace_events.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/kernel/trace/trace_events.c	2013-02-17 16:28:47.612320183 +0100
@@ -63387,6 +63799,38 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/ipv6/inet6_
  			__sk_dst_reset(sk);
  			dst = NULL;
  		}
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/ipv6/ip6_output.c linux-3.2.50-pax/net/ipv6/ip6_output.c
+--- linux-3.2.50/net/ipv6/ip6_output.c	2013-08-03 22:17:29.646408832 +0200
++++ linux-3.2.50-pax/net/ipv6/ip6_output.c	2013-09-01 20:24:11.603767017 +0200
+@@ -600,8 +600,8 @@ int ip6_find_1stfragopt(struct sk_buff *
+ 
+ void ipv6_select_ident(struct frag_hdr *fhdr, struct rt6_info *rt)
+ {
+-	static atomic_t ipv6_fragmentation_id;
+-	int old, new;
++	static atomic_unchecked_t ipv6_fragmentation_id;
++	int id;
+ 
+ 	if (rt && !(rt->dst.flags & DST_NOPEER)) {
+ 		struct inet_peer *peer;
+@@ -614,13 +614,10 @@ void ipv6_select_ident(struct frag_hdr *
+ 			return;
+ 		}
+ 	}
+-	do {
+-		old = atomic_read(&ipv6_fragmentation_id);
+-		new = old + 1;
+-		if (!new)
+-			new = 1;
+-	} while (atomic_cmpxchg(&ipv6_fragmentation_id, old, new) != old);
+-	fhdr->identification = htonl(new);
++	id = atomic_inc_return_unchecked(&ipv6_fragmentation_id);
++	if (!id)
++		id = atomic_inc_return_unchecked(&ipv6_fragmentation_id);
++	fhdr->identification = htonl(id);
+ }
+ 
+ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/ipv6/ipv6_sockglue.c linux-3.2.50-pax/net/ipv6/ipv6_sockglue.c
 --- linux-3.2.50/net/ipv6/ipv6_sockglue.c	2012-12-06 19:03:21.435211770 +0100
 +++ linux-3.2.50-pax/net/ipv6/ipv6_sockglue.c	2012-12-06 19:03:25.783213078 +0100
@@ -65753,7 +66197,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/xfrm/xfrm_p
  
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/xfrm/xfrm_state.c linux-3.2.50-pax/net/xfrm/xfrm_state.c
 --- linux-3.2.50/net/xfrm/xfrm_state.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/net/xfrm/xfrm_state.c	2013-03-28 01:35:23.236427951 +0100
++++ linux-3.2.50-pax/net/xfrm/xfrm_state.c	2013-09-01 19:51:01.567873269 +0200
 @@ -194,11 +194,13 @@ int xfrm_register_type(const struct xfrm
  
  	if (unlikely(afinfo == NULL))
@@ -65842,6 +66286,19 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/xfrm/xfrm_s
  		module_put(mode->afinfo->owner);
  		err = 0;
  	}
+@@ -1497,10 +1504,10 @@ EXPORT_SYMBOL(xfrm_find_acq_byseq);
+ u32 xfrm_get_acqseq(void)
+ {
+ 	u32 res;
+-	static atomic_t acqseq;
++	static atomic_unchecked_t acqseq;
+ 
+ 	do {
+-		res = atomic_inc_return(&acqseq);
++		res = atomic_inc_return_unchecked(&acqseq);
+ 	} while (!res);
+ 
+ 	return res;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/xfrm/xfrm_sysctl.c linux-3.2.50-pax/net/xfrm/xfrm_sysctl.c
 --- linux-3.2.50/net/xfrm/xfrm_sysctl.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/net/xfrm/xfrm_sysctl.c	2013-03-28 01:35:23.568427934 +0100
@@ -67210,6 +67667,36 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/security/securi
  
  	return 0;
  }
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/security/selinux/avc.c linux-3.2.50-pax/security/selinux/avc.c
+--- linux-3.2.50/security/selinux/avc.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/security/selinux/avc.c	2013-09-01 20:20:00.907780402 +0200
+@@ -59,7 +59,7 @@ struct avc_node {
+ struct avc_cache {
+ 	struct hlist_head	slots[AVC_CACHE_SLOTS]; /* head for avc_node->list */
+ 	spinlock_t		slots_lock[AVC_CACHE_SLOTS]; /* lock for writes */
+-	atomic_t		lru_hint;	/* LRU hint for reclaim scan */
++	atomic_unchecked_t	lru_hint;	/* LRU hint for reclaim scan */
+ 	atomic_t		active_nodes;
+ 	u32			latest_notif;	/* latest revocation notification */
+ };
+@@ -173,7 +173,7 @@ void __init avc_init(void)
+ 		spin_lock_init(&avc_cache.slots_lock[i]);
+ 	}
+ 	atomic_set(&avc_cache.active_nodes, 0);
+-	atomic_set(&avc_cache.lru_hint, 0);
++	atomic_set_unchecked(&avc_cache.lru_hint, 0);
+ 
+ 	avc_node_cachep = kmem_cache_create("avc_node", sizeof(struct avc_node),
+ 					     0, SLAB_PANIC, NULL);
+@@ -251,7 +251,7 @@ static inline int avc_reclaim_node(void)
+ 	spinlock_t *lock;
+ 
+ 	for (try = 0, ecx = 0; try < AVC_CACHE_SLOTS; try++) {
+-		hvalue = atomic_inc_return(&avc_cache.lru_hint) & (AVC_CACHE_SLOTS - 1);
++		hvalue = atomic_inc_return_unchecked(&avc_cache.lru_hint) & (AVC_CACHE_SLOTS - 1);
+ 		head = &avc_cache.slots[hvalue];
+ 		lock = &avc_cache.slots_lock[hvalue];
+ 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/security/selinux/hooks.c linux-3.2.50-pax/security/selinux/hooks.c
 --- linux-3.2.50/security/selinux/hooks.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/security/selinux/hooks.c	2012-07-04 19:24:49.052063009 +0200
