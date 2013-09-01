@@ -1,5 +1,15 @@
-- fixed timer_create kernel stack leak, reported by Roman Žilka (https://bugs.gentoo.org/show_bug.cgi?id=470214)
-- fixed some new REFCOUNT false positives, caught by inspection
+- removed unnecessary mark_sym_for_renaming calls from the gcc plugins, reported by Emese Revfy
+- __copy_from_user_inatomic on amd64 will now return unsigned long like other userland accessors do
+- inspired by Dan Carpenter's recent fix (http://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=909bd5926d474e275599094acad986af79671ac9)
+  Emese Revfy wrote a gcc plugin to find other instances of the same error, here's the fallout
+  (come to the 10th H2HC if you want to learn about the magic behind this and other plugins):
+  - icmpv6_filter: no memory corruption, probably just some logical error in the caller
+  - dccp_new/dccp_packet/dccp_error: probably remote kernel stack overflow (12 byte network data overwriting a local ptr variable)
+  - gigaset_brkchars: causes DMA on the kernel stack, some archs don't like it (more of this is to come)
+  - isdn_ioctl/IIOCDBGVAR: kernel heap address leak (by design), restricted to CAP_SYS_RAWIO now
+  - lowpan_header_create: leaks 3 bytes of a kernel heap address over the network
+- fixed a few more format strings
+- audited and fixed arm and sparc for proper atomic_unchecked_t usage
 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/alpha/include/asm/atomic.h linux-3.2.50-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.50/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -4771,6 +4781,56 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/kern
  	.nextprop = prom_common_nextprop,
  	.getproplen = prom_getproplen,
  	.getproperty = prom_getproperty,
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/kernel/smp_64.c linux-3.2.50-pax/arch/sparc/kernel/smp_64.c
+--- linux-3.2.50/arch/sparc/kernel/smp_64.c	2013-05-14 13:33:40.504285679 +0200
++++ linux-3.2.50-pax/arch/sparc/kernel/smp_64.c	2013-08-31 16:25:43.606027020 +0200
+@@ -871,8 +871,8 @@ extern unsigned long xcall_flush_dcache_
+ extern unsigned long xcall_flush_dcache_page_spitfire;
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-extern atomic_t dcpage_flushes;
+-extern atomic_t dcpage_flushes_xcall;
++extern atomic_unchecked_t dcpage_flushes;
++extern atomic_unchecked_t dcpage_flushes_xcall;
+ #endif
+ 
+ static inline void __local_flush_dcache_page(struct page *page)
+@@ -896,7 +896,7 @@ void smp_flush_dcache_page_impl(struct p
+ 		return;
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-	atomic_inc(&dcpage_flushes);
++	atomic_inc_unchecked(&dcpage_flushes);
+ #endif
+ 
+ 	this_cpu = get_cpu();
+@@ -920,7 +920,7 @@ void smp_flush_dcache_page_impl(struct p
+ 			xcall_deliver(data0, __pa(pg_addr),
+ 				      (u64) pg_addr, cpumask_of(cpu));
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-			atomic_inc(&dcpage_flushes_xcall);
++			atomic_inc_unchecked(&dcpage_flushes_xcall);
+ #endif
+ 		}
+ 	}
+@@ -939,7 +939,7 @@ void flush_dcache_page_all(struct mm_str
+ 	preempt_disable();
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-	atomic_inc(&dcpage_flushes);
++	atomic_inc_unchecked(&dcpage_flushes);
+ #endif
+ 	data0 = 0;
+ 	pg_addr = page_address(page);
+@@ -956,7 +956,7 @@ void flush_dcache_page_all(struct mm_str
+ 		xcall_deliver(data0, __pa(pg_addr),
+ 			      (u64) pg_addr, cpu_online_mask);
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-		atomic_inc(&dcpage_flushes_xcall);
++		atomic_inc_unchecked(&dcpage_flushes_xcall);
+ #endif
+ 	}
+ 	__local_flush_dcache_page(page);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/kernel/sysfs.c linux-3.2.50-pax/arch/sparc/kernel/sysfs.c
 --- linux-3.2.50/arch/sparc/kernel/sysfs.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/arch/sparc/kernel/sysfs.c	2013-02-20 01:19:15.014027369 +0100
@@ -4986,7 +5046,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/kern
  	}
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/kernel/traps_64.c linux-3.2.50-pax/arch/sparc/kernel/traps_64.c
 --- linux-3.2.50/arch/sparc/kernel/traps_64.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/arch/sparc/kernel/traps_64.c	2012-07-04 19:24:47.436063014 +0200
++++ linux-3.2.50-pax/arch/sparc/kernel/traps_64.c	2013-08-31 16:23:51.470033007 +0200
 @@ -95,6 +95,12 @@ void bad_trap(struct pt_regs *regs, long
  
  	lvl -= 0x100;
@@ -5018,6 +5078,55 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/kern
  	dump_tl1_traplog((struct tl1_traplog *)(regs + 1));
  
  	sprintf (buffer, "Bad trap %lx at tl>0", lvl);
+@@ -1786,8 +1797,8 @@ struct sun4v_error_entry {
+ 	u16		err_pad;
+ };
+ 
+-static atomic_t sun4v_resum_oflow_cnt = ATOMIC_INIT(0);
+-static atomic_t sun4v_nonresum_oflow_cnt = ATOMIC_INIT(0);
++static atomic_unchecked_t sun4v_resum_oflow_cnt = ATOMIC_INIT(0);
++static atomic_unchecked_t sun4v_nonresum_oflow_cnt = ATOMIC_INIT(0);
+ 
+ static const char *sun4v_err_type_to_str(u32 type)
+ {
+@@ -1807,7 +1818,7 @@ static const char *sun4v_err_type_to_str
+ 	}
+ }
+ 
+-static void sun4v_log_error(struct pt_regs *regs, struct sun4v_error_entry *ent, int cpu, const char *pfx, atomic_t *ocnt)
++static void sun4v_log_error(struct pt_regs *regs, struct sun4v_error_entry *ent, int cpu, const char *pfx, atomic_unchecked_t *ocnt)
+ {
+ 	int cnt;
+ 
+@@ -1842,8 +1853,8 @@ static void sun4v_log_error(struct pt_re
+ 
+ 	show_regs(regs);
+ 
+-	if ((cnt = atomic_read(ocnt)) != 0) {
+-		atomic_set(ocnt, 0);
++	if ((cnt = atomic_read_unchecked(ocnt)) != 0) {
++		atomic_set_unchecked(ocnt, 0);
+ 		wmb();
+ 		printk("%s: Queue overflowed %d times.\n",
+ 		       pfx, cnt);
+@@ -1895,7 +1906,7 @@ void sun4v_resum_error(struct pt_regs *r
+  */
+ void sun4v_resum_overflow(struct pt_regs *regs)
+ {
+-	atomic_inc(&sun4v_resum_oflow_cnt);
++	atomic_inc_unchecked(&sun4v_resum_oflow_cnt);
+ }
+ 
+ /* We run with %pil set to PIL_NORMAL_MAX and PSTATE_IE enabled in %pstate.
+@@ -1948,7 +1959,7 @@ void sun4v_nonresum_overflow(struct pt_r
+ 	/* XXX Actually even this can make not that much sense.  Perhaps
+ 	 * XXX we should just pull the plug and panic directly from here?
+ 	 */
+-	atomic_inc(&sun4v_nonresum_oflow_cnt);
++	atomic_inc_unchecked(&sun4v_nonresum_oflow_cnt);
+ }
+ 
+ unsigned long sun4v_err_itlb_vaddr;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/kernel/us3_cpufreq.c linux-3.2.50-pax/arch/sparc/kernel/us3_cpufreq.c
 --- linux-3.2.50/arch/sparc/kernel/us3_cpufreq.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/arch/sparc/kernel/us3_cpufreq.c	2013-05-10 01:14:35.699930484 +0200
@@ -6327,6 +6436,43 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/mm/i
  	protection_map[12] = PAGE_READONLY;
  	protection_map[13] = PAGE_READONLY;
  	protection_map[14] = PAGE_SHARED;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/mm/init_64.c linux-3.2.50-pax/arch/sparc/mm/init_64.c
+--- linux-3.2.50/arch/sparc/mm/init_64.c	2013-08-03 22:17:28.638408886 +0200
++++ linux-3.2.50-pax/arch/sparc/mm/init_64.c	2013-08-31 16:26:02.550026008 +0200
+@@ -170,9 +170,9 @@ unsigned long sparc64_kern_sec_context _
+ int num_kernel_image_mappings;
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-atomic_t dcpage_flushes = ATOMIC_INIT(0);
++atomic_unchecked_t dcpage_flushes = ATOMIC_INIT(0);
+ #ifdef CONFIG_SMP
+-atomic_t dcpage_flushes_xcall = ATOMIC_INIT(0);
++atomic_unchecked_t dcpage_flushes_xcall = ATOMIC_INIT(0);
+ #endif
+ #endif
+ 
+@@ -180,7 +180,7 @@ inline void flush_dcache_page_impl(struc
+ {
+ 	BUG_ON(tlb_type == hypervisor);
+ #ifdef CONFIG_DEBUG_DCFLUSH
+-	atomic_inc(&dcpage_flushes);
++	atomic_inc_unchecked(&dcpage_flushes);
+ #endif
+ 
+ #ifdef DCACHE_ALIASING_POSSIBLE
+@@ -417,10 +417,10 @@ void mmu_info(struct seq_file *m)
+ 
+ #ifdef CONFIG_DEBUG_DCFLUSH
+ 	seq_printf(m, "DCPageFlushes\t: %d\n",
+-		   atomic_read(&dcpage_flushes));
++		   atomic_read_unchecked(&dcpage_flushes));
+ #ifdef CONFIG_SMP
+ 	seq_printf(m, "DCPageFlushesXC\t: %d\n",
+-		   atomic_read(&dcpage_flushes_xcall));
++		   atomic_read_unchecked(&dcpage_flushes_xcall));
+ #endif /* CONFIG_SMP */
+ #endif /* CONFIG_DEBUG_DCFLUSH */
+ }
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/sparc/mm/Makefile linux-3.2.50-pax/arch/sparc/mm/Makefile
 --- linux-3.2.50/arch/sparc/mm/Makefile	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/arch/sparc/mm/Makefile	2012-07-04 19:24:47.440063015 +0200
@@ -11510,7 +11656,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/includ
  
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/include/asm/uaccess_64.h linux-3.2.50-pax/arch/x86/include/asm/uaccess_64.h
 --- linux-3.2.50/arch/x86/include/asm/uaccess_64.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/arch/x86/include/asm/uaccess_64.h	2013-03-30 21:38:37.455026845 +0100
++++ linux-3.2.50-pax/arch/x86/include/asm/uaccess_64.h	2013-09-01 01:48:23.144224522 +0200
 @@ -10,6 +10,9 @@
  #include <asm/alternative.h>
  #include <asm/cpufeature.h>
@@ -11835,8 +11981,9 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/x86/includ
 +__must_check unsigned long clear_user(void __user *mem, unsigned long len) __size_overflow(2);
 +__must_check unsigned long __clear_user(void __user *mem, unsigned long len) __size_overflow(2);
  
- static __must_check __always_inline int
+-static __must_check __always_inline int
 -__copy_from_user_inatomic(void *dst, const void __user *src, unsigned size)
++static __must_check __always_inline unsigned long
 +__copy_from_user_inatomic(void *dst, const void __user *src, unsigned long size)
  {
 -	return copy_user_generic(dst, (__force const void *)src, size);
@@ -33864,6 +34011,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/isdn/gi
  		dev_warn(cs->dev, "%s: device not opened\n", __func__);
  		goto out;
  	}
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/isdn/gigaset/usb-gigaset.c linux-3.2.50-pax/drivers/isdn/gigaset/usb-gigaset.c
+--- linux-3.2.50/drivers/isdn/gigaset/usb-gigaset.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/isdn/gigaset/usb-gigaset.c	2013-08-31 15:32:40.938196950 +0200
+@@ -546,7 +546,7 @@ static int gigaset_brkchars(struct cards
+ 	gigaset_dbg_buffer(DEBUG_USBREQ, "brkchars", 6, buf);
+ 	memcpy(cs->hw.usb->bchars, buf, 6);
+ 	return usb_control_msg(udev, usb_sndctrlpipe(udev, 0), 0x19, 0x41,
+-			       0, 0, &buf, 6, 2000);
++			       0, 0, buf, 6, 2000);
+ }
+ 
+ static int gigaset_freebcshw(struct bc_state *bcs)
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/isdn/hardware/avm/b1.c linux-3.2.50-pax/drivers/isdn/hardware/avm/b1.c
 --- linux-3.2.50/drivers/isdn/hardware/avm/b1.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/isdn/hardware/avm/b1.c	2012-07-04 19:24:48.476063007 +0200
@@ -33885,6 +34044,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/isdn/ha
  				return -EFAULT;
  		} else {
  			memcpy(buf, dp, left);
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/isdn/i4l/isdn_common.c linux-3.2.50-pax/drivers/isdn/i4l/isdn_common.c
+--- linux-3.2.50/drivers/isdn/i4l/isdn_common.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/isdn/i4l/isdn_common.c	2013-08-31 15:33:12.286195276 +0200
+@@ -1656,6 +1656,8 @@ isdn_ioctl(struct file *file, uint cmd,
+ 				} else
+ 					return -EINVAL;
+ 			case IIOCDBGVAR:
++				if (!capable(CAP_SYS_RAWIO))
++					return -EPERM;
+ 				if (arg) {
+ 					if (copy_to_user(argp, &dev, sizeof(ulong)))
+ 						return -EFAULT;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/isdn/icn/icn.c linux-3.2.50-pax/drivers/isdn/icn/icn.c
 --- linux-3.2.50/drivers/isdn/icn/icn.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/isdn/icn/icn.c	2012-07-04 19:24:48.476063007 +0200
@@ -36531,6 +36702,21 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/wir
  
  /* dongle iscan controller */
  struct brcmf_cfg80211_iscan_ctrl {
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/wireless/hostap/hostap_ioctl.c linux-3.2.50-pax/drivers/net/wireless/hostap/hostap_ioctl.c
+--- linux-3.2.50/drivers/net/wireless/hostap/hostap_ioctl.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/net/wireless/hostap/hostap_ioctl.c	2013-08-31 15:33:44.154193574 +0200
+@@ -522,9 +522,9 @@ static int prism2_ioctl_giwaplist(struct
+ 
+ 	data->length = prism2_ap_get_sta_qual(local, addr, qual, IW_MAX_AP, 1);
+ 
+-	memcpy(extra, &addr, sizeof(struct sockaddr) * data->length);
++	memcpy(extra, addr, sizeof(struct sockaddr) * data->length);
+ 	data->flags = 1; /* has quality information */
+-	memcpy(extra + sizeof(struct sockaddr) * data->length, &qual,
++	memcpy(extra + sizeof(struct sockaddr) * data->length, qual,
+ 	       sizeof(struct iw_quality) * data->length);
+ 
+ 	kfree(addr);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/net/wireless/iwlegacy/iwl3945-base.c linux-3.2.50-pax/drivers/net/wireless/iwlegacy/iwl3945-base.c
 --- linux-3.2.50/drivers/net/wireless/iwlegacy/iwl3945-base.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/net/wireless/iwlegacy/iwl3945-base.c	2012-07-04 19:24:48.568063008 +0200
@@ -37306,6 +37492,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/platfor
  
  /*
   * Polling driver
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/platform/x86/wmi.c linux-3.2.50-pax/drivers/platform/x86/wmi.c
+--- linux-3.2.50/drivers/platform/x86/wmi.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/drivers/platform/x86/wmi.c	2013-08-31 15:55:59.274122289 +0200
+@@ -743,7 +743,7 @@ static int wmi_create_device(const struc
+ 	wblock->dev.class = &wmi_class;
+ 
+ 	wmi_gtoa(gblock->guid, guid_string);
+-	dev_set_name(&wblock->dev, guid_string);
++	dev_set_name(&wblock->dev, "%s", guid_string);
+ 
+ 	dev_set_drvdata(&wblock->dev, wblock);
+ 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/pnp/pnpbios/bioscalls.c linux-3.2.50-pax/drivers/pnp/pnpbios/bioscalls.c
 --- linux-3.2.50/drivers/pnp/pnpbios/bioscalls.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/pnp/pnpbios/bioscalls.c	2012-07-04 19:24:48.584063008 +0200
@@ -38368,6 +38566,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/scsi/sc
  	dev_set_name(&rport->dev, "port-%d:%d", shost->host_no, id);
  
  	transport_setup_device(&rport->dev);
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/scsi/sd.c linux-3.2.50-pax/drivers/scsi/sd.c
+--- linux-3.2.50/drivers/scsi/sd.c	2013-08-03 22:17:29.194408856 +0200
++++ linux-3.2.50-pax/drivers/scsi/sd.c	2013-08-31 15:51:01.310138198 +0200
+@@ -2637,7 +2637,7 @@ static int sd_probe(struct device *dev)
+ 	device_initialize(&sdkp->dev);
+ 	sdkp->dev.parent = dev;
+ 	sdkp->dev.class = &sd_disk_class;
+-	dev_set_name(&sdkp->dev, dev_name(dev));
++	dev_set_name(&sdkp->dev, "%s", dev_name(dev));
+ 
+ 	if (device_add(&sdkp->dev))
+ 		goto out_free_index;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/drivers/scsi/sg.c linux-3.2.50-pax/drivers/scsi/sg.c
 --- linux-3.2.50/drivers/scsi/sg.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/drivers/scsi/sg.c	2012-07-04 19:24:48.620063007 +0200
@@ -45187,7 +45397,16 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ntfs/dir.c l
  		goto err_out;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ntfs/file.c linux-3.2.50-pax/fs/ntfs/file.c
 --- linux-3.2.50/fs/ntfs/file.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/fs/ntfs/file.c	2012-07-04 19:24:48.716063008 +0200
++++ linux-3.2.50-pax/fs/ntfs/file.c	2013-09-01 01:54:54.328203636 +0200
+@@ -1281,7 +1281,7 @@ static inline size_t ntfs_copy_from_user
+ 	char *addr;
+ 	size_t total = 0;
+ 	unsigned len;
+-	int left;
++	unsigned left;
+ 
+ 	do {
+ 		len = PAGE_CACHE_SIZE - ofs;
 @@ -2229,6 +2229,6 @@ const struct inode_operations ntfs_file_
  #endif /* NTFS_RW */
  };
@@ -45197,6 +45416,36 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ntfs/file.c 
  
 -const struct inode_operations ntfs_empty_inode_ops = {};
 +const struct inode_operations ntfs_empty_inode_ops __read_only;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ntfs/super.c linux-3.2.50-pax/fs/ntfs/super.c
+--- linux-3.2.50/fs/ntfs/super.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/fs/ntfs/super.c	2013-08-31 16:13:59.774064599 +0200
+@@ -661,7 +661,7 @@ static struct buffer_head *read_ntfs_boo
+ 		if (!silent)
+ 			ntfs_error(sb, "Primary boot sector is invalid.");
+ 	} else if (!silent)
+-		ntfs_error(sb, read_err_str, "primary");
++		ntfs_error(sb, read_err_str, "%s", "primary");
+ 	if (!(NTFS_SB(sb)->on_errors & ON_ERRORS_RECOVER)) {
+ 		if (bh_primary)
+ 			brelse(bh_primary);
+@@ -677,7 +677,7 @@ static struct buffer_head *read_ntfs_boo
+ 			goto hotfix_primary_boot_sector;
+ 		brelse(bh_backup);
+ 	} else if (!silent)
+-		ntfs_error(sb, read_err_str, "backup");
++		ntfs_error(sb, read_err_str, "%s", "backup");
+ 	/* Try to read NT3.51- backup boot sector. */
+ 	if ((bh_backup = sb_bread(sb, nr_blocks >> 1))) {
+ 		if (is_boot_sector_ntfs(sb, (NTFS_BOOT_SECTOR*)
+@@ -688,7 +688,7 @@ static struct buffer_head *read_ntfs_boo
+ 					"sector.");
+ 		brelse(bh_backup);
+ 	} else if (!silent)
+-		ntfs_error(sb, read_err_str, "backup");
++		ntfs_error(sb, read_err_str, "%s", "backup");
+ 	/* We failed. Cleanup and return. */
+ 	if (bh_primary)
+ 		brelse(bh_primary);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/ocfs2/localalloc.c linux-3.2.50-pax/fs/ocfs2/localalloc.c
 --- linux-3.2.50/fs/ocfs2/localalloc.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/fs/ocfs2/localalloc.c	2012-07-04 19:24:48.716063008 +0200
@@ -52171,6 +52420,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/events/c
  		     &parent_event->child_total_time_running);
  
  	/*
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/events/internal.h linux-3.2.50-pax/kernel/events/internal.h
+--- linux-3.2.50/kernel/events/internal.h	2013-07-27 11:12:22.459992796 +0200
++++ linux-3.2.50-pax/kernel/events/internal.h	2013-09-01 01:49:35.548220656 +0200
+@@ -78,7 +78,7 @@ static unsigned long perf_data_size(stru
+ 
+ static inline void
+ __output_copy(struct perf_output_handle *handle,
+-		   const void *buf, unsigned int len)
++		   const void *buf, unsigned long len)
+ {
+ 	do {
+ 		unsigned long size = min_t(unsigned long, handle->size, len);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/exit.c linux-3.2.50-pax/kernel/exit.c
 --- linux-3.2.50/kernel/exit.c	2012-10-10 11:02:19.611865897 +0200
 +++ linux-3.2.50-pax/kernel/exit.c	2012-10-10 11:02:25.483866429 +0200
@@ -52452,7 +52713,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/fork.c l
  				new_fs = fs;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/futex.c linux-3.2.50-pax/kernel/futex.c
 --- linux-3.2.50/kernel/futex.c	2013-07-27 11:12:22.459992796 +0200
-+++ linux-3.2.50-pax/kernel/futex.c	2013-07-27 11:12:26.615992574 +0200
++++ linux-3.2.50-pax/kernel/futex.c	2013-09-01 01:54:54.332203636 +0200
 @@ -240,6 +240,11 @@ get_futex_key(u32 __user *uaddr, int fsh
  	struct page *page, *page_head;
  	int err, ro = 0;
@@ -52465,6 +52726,15 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/kernel/futex.c 
  	/*
  	 * The futex address must be "naturally" aligned.
  	 */
+@@ -438,7 +443,7 @@ static int cmpxchg_futex_value_locked(u3
+ 
+ static int get_futex_value_locked(u32 *dest, u32 __user *from)
+ {
+-	int ret;
++	unsigned long ret;
+ 
+ 	pagefault_disable();
+ 	ret = __copy_from_user_inatomic(dest, from, sizeof(u32));
 @@ -2744,6 +2749,7 @@ static int __init futex_init(void)
  {
  	u32 curval;
@@ -56398,7 +56668,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/mm/backing-dev.
  		return err;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/mm/filemap.c linux-3.2.50-pax/mm/filemap.c
 --- linux-3.2.50/mm/filemap.c	2012-08-03 01:53:46.734140513 +0200
-+++ linux-3.2.50-pax/mm/filemap.c	2012-08-03 01:53:52.522140166 +0200
++++ linux-3.2.50-pax/mm/filemap.c	2013-09-01 01:51:58.904213002 +0200
 @@ -1773,7 +1773,7 @@ int generic_file_mmap(struct file * file
  	struct address_space *mapping = file->f_mapping;
  
@@ -56408,6 +56678,42 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/mm/filemap.c li
  	file_accessed(file);
  	vma->vm_ops = &generic_file_vm_ops;
  	vma->vm_flags |= VM_CAN_NONLINEAR;
+@@ -2021,7 +2021,7 @@ static size_t __iovec_copy_from_user_ina
+ 
+ 	while (bytes) {
+ 		char __user *buf = iov->iov_base + base;
+-		int copy = min(bytes, iov->iov_len - base);
++		size_t copy = min(bytes, iov->iov_len - base);
+ 
+ 		base = 0;
+ 		left = __copy_from_user_inatomic(vaddr, buf, copy);
+@@ -2050,7 +2050,7 @@ size_t iov_iter_copy_from_user_atomic(st
+ 	BUG_ON(!in_atomic());
+ 	kaddr = kmap_atomic(page, KM_USER0);
+ 	if (likely(i->nr_segs == 1)) {
+-		int left;
++		size_t left;
+ 		char __user *buf = i->iov->iov_base + i->iov_offset;
+ 		left = __copy_from_user_inatomic(kaddr + offset, buf, bytes);
+ 		copied = bytes - left;
+@@ -2078,7 +2078,7 @@ size_t iov_iter_copy_from_user(struct pa
+ 
+ 	kaddr = kmap(page);
+ 	if (likely(i->nr_segs == 1)) {
+-		int left;
++		size_t left;
+ 		char __user *buf = i->iov->iov_base + i->iov_offset;
+ 		left = __copy_from_user(kaddr + offset, buf, bytes);
+ 		copied = bytes - left;
+@@ -2108,7 +2108,7 @@ void iov_iter_advance(struct iov_iter *i
+ 		 * zero-length segments (without overruning the iovec).
+ 		 */
+ 		while (bytes || unlikely(i->count && !iov->iov_len)) {
+-			int copy;
++			size_t copy;
+ 
+ 			copy = min(bytes, iov->iov_len - base);
+ 			BUG_ON(!i->count || i->count < copy);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/mm/fremap.c linux-3.2.50-pax/mm/fremap.c
 --- linux-3.2.50/mm/fremap.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/mm/fremap.c	2012-07-04 19:24:48.920063009 +0200
@@ -62245,6 +62551,18 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/decnet/sysc
  		return -EFAULT;
  
  	*lenp = len;
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/ieee802154/6lowpan.c linux-3.2.50-pax/net/ieee802154/6lowpan.c
+--- linux-3.2.50/net/ieee802154/6lowpan.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.50-pax/net/ieee802154/6lowpan.c	2013-08-31 15:34:21.466191582 +0200
+@@ -329,7 +329,7 @@ static int lowpan_header_create(struct s
+ 			hc06_ptr += 3;
+ 		} else {
+ 			/* compress nothing */
+-			memcpy(hc06_ptr, &hdr, 4);
++			memcpy(hc06_ptr, hdr, 4);
+ 			/* replace the top byte with new ECN | DSCP format */
+ 			*hc06_ptr = tmp;
+ 			hc06_ptr += 4;
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/ipv4/af_inet.c linux-3.2.50-pax/net/ipv4/af_inet.c
 --- linux-3.2.50/net/ipv4/af_inet.c	2013-03-29 02:18:30.207676737 +0100
 +++ linux-3.2.50-pax/net/ipv4/af_inet.c	2013-03-29 04:00:53.151348751 +0100
@@ -63131,7 +63449,16 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/ipv6/netfil
  	case IP6T_SO_GET_ENTRIES:
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/ipv6/raw.c linux-3.2.50-pax/net/ipv6/raw.c
 --- linux-3.2.50/net/ipv6/raw.c	2012-10-10 11:02:19.623865900 +0200
-+++ linux-3.2.50-pax/net/ipv6/raw.c	2012-10-10 11:02:25.495866438 +0200
++++ linux-3.2.50-pax/net/ipv6/raw.c	2013-08-31 15:28:32.778210199 +0200
+@@ -109,7 +109,7 @@ found:
+  */
+ static int icmpv6_filter(const struct sock *sk, const struct sk_buff *skb)
+ {
+-	struct icmp6hdr *_hdr;
++	struct icmp6hdr _hdr;
+ 	const struct icmp6hdr *hdr;
+ 
+ 	hdr = skb_header_pointer(skb, skb_transport_offset(skb),
 @@ -376,7 +376,7 @@ static inline int rawv6_rcv_skb(struct s
  {
  	if ((raw6_sk(sk)->checksum || rcu_access_pointer(sk->sk_filter)) &&
@@ -63860,7 +64187,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/netfilter/n
  			GFP_KERNEL);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/netfilter/nf_conntrack_proto_dccp.c linux-3.2.50-pax/net/netfilter/nf_conntrack_proto_dccp.c
 --- linux-3.2.50/net/netfilter/nf_conntrack_proto_dccp.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/net/netfilter/nf_conntrack_proto_dccp.c	2013-06-21 20:15:56.438564312 +0200
++++ linux-3.2.50-pax/net/netfilter/nf_conntrack_proto_dccp.c	2013-08-31 15:31:27.346200879 +0200
 @@ -391,7 +391,7 @@ struct dccp_net {
  	unsigned int dccp_timeout[CT_DCCP_MAX + 1];
  #ifdef CONFIG_SYSCTL
@@ -63870,6 +64197,15 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/netfilter/n
  #endif
  };
  
+@@ -431,7 +431,7 @@ static bool dccp_new(struct nf_conn *ct,
+ 	const char *msg;
+ 	u_int8_t state;
+ 
+-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
++	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+ 	BUG_ON(dh == NULL);
+ 
+ 	state = dccp_state_table[CT_DCCP_ROLE_CLIENT][dh->dccph_type][CT_DCCP_NONE];
 @@ -459,7 +459,7 @@ static bool dccp_new(struct nf_conn *ct,
  
  out_invalid:
@@ -63879,6 +64215,24 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/net/netfilter/n
  	return false;
  }
  
+@@ -483,7 +483,7 @@ static int dccp_packet(struct nf_conn *c
+ 	u_int8_t type, old_state, new_state;
+ 	enum ct_dccp_roles role;
+ 
+-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
++	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+ 	BUG_ON(dh == NULL);
+ 	type = dh->dccph_type;
+ 
+@@ -575,7 +575,7 @@ static int dccp_error(struct net *net, s
+ 	unsigned int cscov;
+ 	const char *msg;
+ 
+-	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &dh);
++	dh = skb_header_pointer(skb, dataoff, sizeof(_dh), &_dh);
+ 	if (dh == NULL) {
+ 		msg = "nf_ct_dccp: short packet ";
+ 		goto out_invalid;
 @@ -612,7 +612,7 @@ static int dccp_error(struct net *net, s
  
  out_invalid:
@@ -67316,6 +67670,26 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/sound/oss/swarm
  
                  list_add(&s->list, &cs4297a_devs);
  
+diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/sound/pci/hda/hda_codec.c linux-3.2.50-pax/sound/pci/hda/hda_codec.c
+--- linux-3.2.50/sound/pci/hda/hda_codec.c	2013-06-09 18:04:43.509591744 +0200
++++ linux-3.2.50-pax/sound/pci/hda/hda_codec.c	2013-08-31 16:17:22.830053757 +0200
+@@ -850,14 +850,10 @@ find_codec_preset(struct hda_codec *code
+ 	mutex_unlock(&preset_mutex);
+ 
+ 	if (mod_requested < HDA_MODREQ_MAX_COUNT) {
+-		char name[32];
+ 		if (!mod_requested)
+-			snprintf(name, sizeof(name), "snd-hda-codec-id:%08x",
+-				 codec->vendor_id);
++			request_module("snd-hda-codec-id:%08x", codec->vendor_id);
+ 		else
+-			snprintf(name, sizeof(name), "snd-hda-codec-id:%04x*",
+-				 (codec->vendor_id >> 16) & 0xffff);
+-		request_module(name);
++			request_module("snd-hda-codec-id:%04x*", (codec->vendor_id >> 16) & 0xffff);
+ 		mod_requested++;
+ 		goto again;
+ 	}
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/sound/pci/ymfpci/ymfpci_main.c linux-3.2.50-pax/sound/pci/ymfpci/ymfpci_main.c
 --- linux-3.2.50/sound/pci/ymfpci/ymfpci_main.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.50-pax/sound/pci/ymfpci/ymfpci_main.c	2012-07-04 19:24:49.068063009 +0200
@@ -68603,8 +68977,8 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kallo
 +}
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kernexec_plugin.c linux-3.2.50-pax/tools/gcc/kernexec_plugin.c
 --- linux-3.2.50/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.50-pax/tools/gcc/kernexec_plugin.c	2013-02-12 02:26:57.293415370 +0100
-@@ -0,0 +1,465 @@
++++ linux-3.2.50-pax/tools/gcc/kernexec_plugin.c	2013-09-01 01:54:54.332203636 +0200
+@@ -0,0 +1,471 @@
 +/*
 + * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -68656,7 +69030,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kerne
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info kernexec_plugin_info = {
-+	.version	= "201302112000",
++	.version	= "201308230150",
 +	.help		= "method=[bts|or]\tinstrumentation method\n"
 +};
 +
@@ -68807,7 +69181,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kerne
 +static void kernexec_instrument_fptr_bts(gimple_stmt_iterator *gsi)
 +{
 +	gimple assign_intptr, assign_new_fptr, call_stmt;
-+	tree intptr, old_fptr, new_fptr, kernexec_mask;
++	tree intptr, orptr, old_fptr, new_fptr, kernexec_mask;
 +
 +	call_stmt = gsi_stmt(*gsi);
 +	old_fptr = gimple_call_fn(call_stmt);
@@ -68816,16 +69190,20 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kerne
 +	intptr = create_tmp_var(long_unsigned_type_node, "kernexec_bts");
 +#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(intptr);
-+	mark_sym_for_renaming(intptr);
 +#endif
++	intptr = make_ssa_name(intptr, NULL);
 +	assign_intptr = gimple_build_assign(intptr, fold_convert(long_unsigned_type_node, old_fptr));
++	SSA_NAME_DEF_STMT(intptr) = assign_intptr;
 +	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
 +
 +	// apply logical or to temporary unsigned long and bitmask
 +	kernexec_mask = build_int_cstu(long_long_unsigned_type_node, 0x8000000000000000LL);
 +//	kernexec_mask = build_int_cstu(long_long_unsigned_type_node, 0xffffffff80000000LL);
-+	assign_intptr = gimple_build_assign(intptr, fold_build2(BIT_IOR_EXPR, long_long_unsigned_type_node, intptr, kernexec_mask));
++	orptr = fold_build2(BIT_IOR_EXPR, long_long_unsigned_type_node, intptr, kernexec_mask);
++	intptr = make_ssa_name(SSA_NAME_VAR(intptr), NULL);
++	assign_intptr = gimple_build_assign(intptr, orptr);
++	SSA_NAME_DEF_STMT(intptr) = assign_intptr;
 +	gsi_insert_before(gsi, assign_intptr, GSI_SAME_STMT);
 +	update_stmt(assign_intptr);
 +
@@ -68833,9 +69211,10 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kerne
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_fptr");
 +#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
-+	mark_sym_for_renaming(new_fptr);
 +#endif
++	new_fptr = make_ssa_name(new_fptr, NULL);
 +	assign_new_fptr = gimple_build_assign(new_fptr, fold_convert(TREE_TYPE(old_fptr), intptr));
++	SSA_NAME_DEF_STMT(new_fptr) = assign_new_fptr;
 +	gsi_insert_before(gsi, assign_new_fptr, GSI_SAME_STMT);
 +	update_stmt(assign_new_fptr);
 +
@@ -68863,8 +69242,8 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kerne
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_or");
 +#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
-+	mark_sym_for_renaming(new_fptr);
 +#endif
++	new_fptr = make_ssa_name(new_fptr, NULL);
 +
 +	// build asm volatile("orq %%r10, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
 +	input = build_tree_list(NULL_TREE, build_string(2, "0"));
@@ -68879,6 +69258,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kerne
 +	vec_safe_push(outputs, output);
 +#endif
 +	asm_or_stmt = gimple_build_asm_vec("orq %%r10, %0\n\t", inputs, outputs, NULL, NULL);
++	SSA_NAME_DEF_STMT(new_fptr) = asm_or_stmt;
 +	gimple_asm_set_volatile(asm_or_stmt, true);
 +	gsi_insert_before(gsi, asm_or_stmt, GSI_SAME_STMT);
 +	update_stmt(asm_or_stmt);
@@ -69072,8 +69452,8 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/kerne
 +}
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/latent_entropy_plugin.c linux-3.2.50-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.2.50/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.50-pax/tools/gcc/latent_entropy_plugin.c	2013-03-11 00:24:57.736329521 +0100
-@@ -0,0 +1,327 @@
++++ linux-3.2.50-pax/tools/gcc/latent_entropy_plugin.c	2013-09-01 01:54:54.332203636 +0200
+@@ -0,0 +1,321 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -69125,7 +69505,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/laten
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201303102320",
++	.version	= "201308230230",
 +	.help		= NULL
 +};
 +
@@ -69234,13 +69614,10 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/laten
 +	op = get_op(&rhs);
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, op, unsigned_intDI_type_node, local_entropy, rhs);
 +	assign = gimple_build_assign(local_entropy, addxorrol);
-+#if BUILDING_GCC_VERSION <= 4007
-+	find_referenced_vars_in(assign);
-+#endif
-+//debug_bb(bb);
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_before(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
++//debug_bb(bb);
 +}
 +
 +static void perturb_latent_entropy(basic_block bb, tree rhs)
@@ -69253,13 +69630,14 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/laten
 +	temp = create_tmp_var(unsigned_intDI_type_node, "temp_latent_entropy");
 +#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(temp);
-+	mark_sym_for_renaming(temp);
 +#endif
 +
 +	// 2. read...
++	temp = make_ssa_name(temp, NULL);
 +	assign = gimple_build_assign(temp, latent_entropy_decl);
++	SSA_NAME_DEF_STMT(temp) = assign;
 +#if BUILDING_GCC_VERSION <= 4007
-+	find_referenced_vars_in(assign);
++	add_referenced_var(latent_entropy_decl);
 +#endif
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
@@ -69267,18 +69645,14 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/laten
 +
 +	// 3. ...modify...
 +	addxorrol = fold_build2_loc(UNKNOWN_LOCATION, get_op(NULL), unsigned_intDI_type_node, temp, rhs);
++	temp = make_ssa_name(SSA_NAME_VAR(temp), NULL);
 +	assign = gimple_build_assign(temp, addxorrol);
-+#if BUILDING_GCC_VERSION <= 4007
-+	find_referenced_vars_in(assign);
-+#endif
++	SSA_NAME_DEF_STMT(temp) = assign;
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +
 +	// 4. ...write latent_entropy
 +	assign = gimple_build_assign(latent_entropy_decl, temp);
-+#if BUILDING_GCC_VERSION <= 4007
-+	find_referenced_vars_in(assign);
-+#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +}
@@ -69329,21 +69703,21 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/laten
 +
 +	assign = gimple_build_assign(local_entropy, build_int_cstu(unsigned_intDI_type_node, get_random_const()));
 +//	gimple_set_location(assign, loc);
-+#if BUILDING_GCC_VERSION <= 4007
-+	find_referenced_vars_in(assign);
-+#endif
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
++//debug_bb(bb);
 +	bb = bb->next_bb;
 +
 +	// 3. instrument each BB with an operation on the local entropy variable
 +	while (bb != EXIT_BLOCK_PTR) {
 +		perturb_local_entropy(bb, local_entropy);
++//debug_bb(bb);
 +		bb = bb->next_bb;
 +	};
 +
 +	// 4. mix local entropy into the global entropy variable
 +	perturb_latent_entropy(EXIT_BLOCK_PTR->prev_bb, local_entropy);
++//debug_bb(EXIT_BLOCK_PTR->prev_bb);
 +	return 0;
 +}
 +
@@ -74240,8 +74614,8 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/size_
 +alloc_dr_65495 alloc_dr 2 65495 NULL
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/size_overflow_plugin.c linux-3.2.50-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.2.50/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.50-pax/tools/gcc/size_overflow_plugin.c	2013-04-09 17:49:09.494363416 +0200
-@@ -0,0 +1,2114 @@
++++ linux-3.2.50-pax/tools/gcc/size_overflow_plugin.c	2013-09-01 01:54:54.332203636 +0200
+@@ -0,0 +1,2113 @@
 +/*
 + * Copyright 2011, 2012, 2013 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -74331,7 +74705,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/size_
 +static void print_missing_msg(tree func, unsigned int argnum);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20130410beta",
++	.version	= "20130822beta",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -74711,7 +75085,6 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/tools/gcc/size_
 +
 +#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_var);
-+	mark_sym_for_renaming(new_var);
 +#endif
 +	return new_var;
 +}
