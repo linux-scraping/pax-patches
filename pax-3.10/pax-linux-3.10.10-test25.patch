@@ -1,5 +1,5 @@
-- fixed a REFCOUNT false positive, by Mathias Krause <minipli@googlemail.com>
-- fixed a bunch more after a quick audit of atomic_inc_return users
+- fixed a few more REFCOUNT false positives, by Mathias Krause <minipli@googlemail.com>
+- got inet_getid and ipv6_select_ident rid of the cmpxchg loop
 
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/alpha/include/asm/atomic.h linux-3.10.10-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.10/arch/alpha/include/asm/atomic.h	2013-08-20 19:08:15.659833397 +0200
@@ -31542,6 +31542,27 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/x86/xen/
  struct trap_info;
  void xen_copy_trap_info(struct trap_info *traps);
  
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/block/blk-cgroup.c linux-3.10.10-pax/block/blk-cgroup.c
+--- linux-3.10.10/block/blk-cgroup.c	2013-07-08 01:58:07.752266388 +0200
++++ linux-3.10.10-pax/block/blk-cgroup.c	2013-09-01 16:37:23.144972715 +0200
+@@ -825,7 +825,7 @@ static void blkcg_css_free(struct cgroup
+ 
+ static struct cgroup_subsys_state *blkcg_css_alloc(struct cgroup *cgroup)
+ {
+-	static atomic64_t id_seq = ATOMIC64_INIT(0);
++	static atomic64_unchecked_t id_seq = ATOMIC64_INIT(0);
+ 	struct blkcg *blkcg;
+ 	struct cgroup *parent = cgroup->parent;
+ 
+@@ -840,7 +840,7 @@ static struct cgroup_subsys_state *blkcg
+ 
+ 	blkcg->cfq_weight = CFQ_WEIGHT_DEFAULT;
+ 	blkcg->cfq_leaf_weight = CFQ_WEIGHT_DEFAULT;
+-	blkcg->id = atomic64_inc_return(&id_seq); /* root is 0, start from 1 */
++	blkcg->id = atomic64_inc_return_unchecked(&id_seq); /* root is 0, start from 1 */
+ done:
+ 	spin_lock_init(&blkcg->lock);
+ 	INIT_RADIX_TREE(&blkcg->blkg_tree, GFP_ATOMIC);
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/block/blk-iopoll.c linux-3.10.10-pax/block/blk-iopoll.c
 --- linux-3.10.10/block/blk-iopoll.c	2013-08-20 19:08:15.999833379 +0200
 +++ linux-3.10.10-pax/block/blk-iopoll.c	2013-08-15 23:49:47.214696154 +0200
@@ -45377,6 +45398,27 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/drivers/video
  			return -EINVAL;
  		if (!registered_fb[con2fb.framebuffer])
  			request_module("fb%d", con2fb.framebuffer);
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/drivers/video/hyperv_fb.c linux-3.10.10-pax/drivers/video/hyperv_fb.c
+--- linux-3.10.10/drivers/video/hyperv_fb.c	2013-07-08 01:58:46.372267523 +0200
++++ linux-3.10.10-pax/drivers/video/hyperv_fb.c	2013-09-01 16:37:23.144972715 +0200
+@@ -233,7 +233,7 @@ static uint screen_fb_size;
+ static inline int synthvid_send(struct hv_device *hdev,
+ 				struct synthvid_msg *msg)
+ {
+-	static atomic64_t request_id = ATOMIC64_INIT(0);
++	static atomic64_unchecked_t request_id = ATOMIC64_INIT(0);
+ 	int ret;
+ 
+ 	msg->pipe_hdr.type = PIPE_MSG_DATA;
+@@ -241,7 +241,7 @@ static inline int synthvid_send(struct h
+ 
+ 	ret = vmbus_sendpacket(hdev->channel, msg,
+ 			       msg->vid_hdr.size + sizeof(struct pipe_msg_hdr),
+-			       atomic64_inc_return(&request_id),
++			       atomic64_inc_return_unchecked(&request_id),
+ 			       VM_PKT_DATA_INBAND, 0);
+ 
+ 	if (ret)
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/drivers/video/i810/i810_accel.c linux-3.10.10-pax/drivers/video/i810/i810_accel.c
 --- linux-3.10.10/drivers/video/i810/i810_accel.c	2013-08-20 19:08:16.375833359 +0200
 +++ linux-3.10.10-pax/drivers/video/i810/i810_accel.c	2013-08-15 23:49:48.518696085 +0200
@@ -50436,7 +50478,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/namei.c li
  	return len;
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/namespace.c linux-3.10.10-pax/fs/namespace.c
 --- linux-3.10.10/fs/namespace.c	2013-08-30 01:54:32.591979241 +0200
-+++ linux-3.10.10-pax/fs/namespace.c	2013-08-30 01:54:40.219978833 +0200
++++ linux-3.10.10-pax/fs/namespace.c	2013-09-01 16:37:23.148972715 +0200
 @@ -1302,7 +1302,7 @@ static inline bool may_mount(void)
   * unixes. Our API is identical to OSF/1 to avoid making a mess of AMD
   */
@@ -50455,6 +50497,24 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/namespace.
  {
  	return sys_umount(name, 0);
  }
+@@ -2344,7 +2344,7 @@ static void free_mnt_ns(struct mnt_names
+  * number incrementing at 10Ghz will take 12,427 years to wrap which
+  * is effectively never, so we can ignore the possibility.
+  */
+-static atomic64_t mnt_ns_seq = ATOMIC64_INIT(1);
++static atomic64_unchecked_t mnt_ns_seq = ATOMIC64_INIT(1);
+ 
+ static struct mnt_namespace *alloc_mnt_ns(struct user_namespace *user_ns)
+ {
+@@ -2359,7 +2359,7 @@ static struct mnt_namespace *alloc_mnt_n
+ 		kfree(new_ns);
+ 		return ERR_PTR(ret);
+ 	}
+-	new_ns->seq = atomic64_add_return(1, &mnt_ns_seq);
++	new_ns->seq = atomic64_inc_return_unchecked(&mnt_ns_seq);
+ 	atomic_set(&new_ns->count, 1);
+ 	new_ns->root = NULL;
+ 	INIT_LIST_HEAD(&new_ns->list);
 @@ -2500,8 +2500,8 @@ struct dentry *mount_subtree(struct vfsm
  }
  EXPORT_SYMBOL(mount_subtree);
@@ -56362,7 +56422,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/include/net/i
   *
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/include/net/inetpeer.h linux-3.10.10-pax/include/net/inetpeer.h
 --- linux-3.10.10/include/net/inetpeer.h	2013-08-20 19:08:16.775833337 +0200
-+++ linux-3.10.10-pax/include/net/inetpeer.h	2013-08-15 23:49:51.858695906 +0200
++++ linux-3.10.10-pax/include/net/inetpeer.h	2013-09-01 16:12:24.804928661 +0200
 @@ -47,8 +47,8 @@ struct inet_peer {
  	 */
  	union {
@@ -56374,20 +56434,28 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/include/net/i
  		};
  		struct rcu_head         rcu;
  		struct inet_peer	*gc_next;
-@@ -182,11 +182,11 @@ static inline int inet_getid(struct inet
+@@ -178,16 +178,13 @@ static inline void inet_peer_refcheck(co
+ /* can be called with or without local BH being disabled */
+ static inline int inet_getid(struct inet_peer *p, int more)
+ {
+-	int old, new;
++	int id;
  	more++;
  	inet_peer_refcheck(p);
- 	do {
+-	do {
 -		old = atomic_read(&p->ip_id_count);
-+		old = atomic_read_unchecked(&p->ip_id_count);
- 		new = old + more;
- 		if (!new)
- 			new = 1;
+-		new = old + more;
+-		if (!new)
+-			new = 1;
 -	} while (atomic_cmpxchg(&p->ip_id_count, old, new) != old);
-+	} while (atomic_cmpxchg_unchecked(&p->ip_id_count, old, new) != old);
- 	return new;
+-	return new;
++	id = atomic_add_return_unchecked(more, &p->ip_id_count);
++	if (!id)
++		id = atomic_inc_return_unchecked(&p->ip_id_count);
++	return id;
  }
  
+ #endif /* _NET_INETPEER_H */
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/include/net/ip_fib.h linux-3.10.10-pax/include/net/ip_fib.h
 --- linux-3.10.10/include/net/ip_fib.h	2013-08-20 19:08:16.775833337 +0200
 +++ linux-3.10.10-pax/include/net/ip_fib.h	2013-08-15 23:49:51.866695906 +0200
@@ -61864,6 +61932,25 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/kernel/trace/
  {
  	/* do nothing if flag is already set */
  	if (!!(trace_flags & mask) == !!enabled)
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/kernel/trace/trace_clock.c linux-3.10.10-pax/kernel/trace/trace_clock.c
+--- linux-3.10.10/kernel/trace/trace_clock.c	2013-07-08 01:58:56.356267817 +0200
++++ linux-3.10.10-pax/kernel/trace/trace_clock.c	2013-09-01 16:37:23.160972716 +0200
+@@ -123,7 +123,7 @@ u64 notrace trace_clock_global(void)
+ 	return now;
+ }
+ 
+-static atomic64_t trace_counter;
++static atomic64_unchecked_t trace_counter;
+ 
+ /*
+  * trace_clock_counter(): simply an atomic counter.
+@@ -132,5 +132,5 @@ static atomic64_t trace_counter;
+  */
+ u64 notrace trace_clock_counter(void)
+ {
+-	return atomic64_add_return(1, &trace_counter);
++	return atomic64_inc_return_unchecked(&trace_counter);
+ }
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/kernel/trace/trace_events.c linux-3.10.10-pax/kernel/trace/trace_events.c
 --- linux-3.10.10/kernel/trace/trace_events.c	2013-08-30 01:54:32.603979240 +0200
 +++ linux-3.10.10-pax/kernel/trace/trace_events.c	2013-08-30 01:54:40.231978833 +0200
@@ -69528,6 +69615,38 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/net/ipv6/netf
  err_alloc:
  	return -ENOMEM;
  }
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/net/ipv6/output_core.c linux-3.10.10-pax/net/ipv6/output_core.c
+--- linux-3.10.10/net/ipv6/output_core.c	2013-02-19 01:13:23.273768364 +0100
++++ linux-3.10.10-pax/net/ipv6/output_core.c	2013-09-01 16:35:31.496969433 +0200
+@@ -8,8 +8,8 @@
+ 
+ void ipv6_select_ident(struct frag_hdr *fhdr, struct rt6_info *rt)
+ {
+-	static atomic_t ipv6_fragmentation_id;
+-	int old, new;
++	static atomic_unchecked_t ipv6_fragmentation_id;
++	int id;
+ 
+ #if IS_ENABLED(CONFIG_IPV6)
+ 	if (rt && !(rt->dst.flags & DST_NOPEER)) {
+@@ -25,13 +25,10 @@ void ipv6_select_ident(struct frag_hdr *
+ 		}
+ 	}
+ #endif
+-	do {
+-		old = atomic_read(&ipv6_fragmentation_id);
+-		new = old + 1;
+-		if (!new)
+-			new = 1;
+-	} while (atomic_cmpxchg(&ipv6_fragmentation_id, old, new) != old);
+-	fhdr->identification = htonl(new);
++	id = atomic_inc_return_unchecked(&ipv6_fragmentation_id);
++	if (!id)
++		id = atomic_inc_return_unchecked(&ipv6_fragmentation_id);
++	fhdr->identification = htonl(id);
+ }
+ EXPORT_SYMBOL(ipv6_select_ident);
+ 
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/net/ipv6/raw.c linux-3.10.10-pax/net/ipv6/raw.c
 --- linux-3.10.10/net/ipv6/raw.c	2013-08-20 19:08:17.015833324 +0200
 +++ linux-3.10.10-pax/net/ipv6/raw.c	2013-08-28 21:43:53.165395320 +0200
@@ -71395,6 +71514,27 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/net/socket.c 
  
  	set_fs(KERNEL_DS);
  	if (level == SOL_SOCKET)
+diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/net/sunrpc/auth_gss/svcauth_gss.c linux-3.10.10-pax/net/sunrpc/auth_gss/svcauth_gss.c
+--- linux-3.10.10/net/sunrpc/auth_gss/svcauth_gss.c	2013-07-08 01:59:01.376267965 +0200
++++ linux-3.10.10-pax/net/sunrpc/auth_gss/svcauth_gss.c	2013-09-01 16:37:23.164972716 +0200
+@@ -1144,7 +1144,7 @@ static int gss_proxy_save_rsc(struct cac
+ 				uint64_t *handle)
+ {
+ 	struct rsc rsci, *rscp = NULL;
+-	static atomic64_t ctxhctr;
++	static atomic64_unchecked_t ctxhctr = ATOMIC64_INIT(0);
+ 	long long ctxh;
+ 	struct gss_api_mech *gm = NULL;
+ 	time_t expiry;
+@@ -1155,7 +1155,7 @@ static int gss_proxy_save_rsc(struct cac
+ 	status = -ENOMEM;
+ 	/* the handle needs to be just a unique id,
+ 	 * use a static counter */
+-	ctxh = atomic64_inc_return(&ctxhctr);
++	ctxh = atomic64_inc_return_unchecked(&ctxhctr);
+ 
+ 	/* make a copy for the caller */
+ 	*handle = ctxh;
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/net/sunrpc/clnt.c linux-3.10.10-pax/net/sunrpc/clnt.c
 --- linux-3.10.10/net/sunrpc/clnt.c	2013-08-20 19:08:17.319833308 +0200
 +++ linux-3.10.10-pax/net/sunrpc/clnt.c	2013-08-15 23:49:55.438695715 +0200
