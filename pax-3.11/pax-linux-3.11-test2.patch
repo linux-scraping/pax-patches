@@ -1,4 +1,4 @@
-- forward port to 3.11
+- fixed KERNEXEC/bpf jit conflict
 
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/alpha/include/asm/atomic.h linux-3.11-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.11/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -29326,8 +29326,8 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/mm/uderef_
 +#endif
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/net/bpf_jit_comp.c linux-3.11-pax/arch/x86/net/bpf_jit_comp.c
 --- linux-3.11/arch/x86/net/bpf_jit_comp.c	2013-09-03 00:44:52.382912894 +0200
-+++ linux-3.11-pax/arch/x86/net/bpf_jit_comp.c	2013-09-03 00:47:52.730903265 +0200
-@@ -145,36 +145,34 @@ static int pkt_type_offset(void)
++++ linux-3.11-pax/arch/x86/net/bpf_jit_comp.c	2013-09-03 03:10:45.780066140 +0200
+@@ -145,36 +145,32 @@ static int pkt_type_offset(void)
  	return -1;
  }
  
@@ -29338,12 +29338,11 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/net/bpf_ji
 -	 */
 -	u8		image[];
 -};
+-
+-static struct bpf_binary_header *bpf_alloc_binary(unsigned int proglen,
 +/* Note : for security reasons, bpf code will follow a randomly
 + * sized amount of int3 instructions
 + */
-+u8 *bpf_binary_header;
- 
--static struct bpf_binary_header *bpf_alloc_binary(unsigned int proglen,
 +static u8 *bpf_alloc_binary(unsigned int proglen,
  						  u8 **image_ptr)
  {
@@ -29376,7 +29375,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/net/bpf_ji
  	return header;
  }
  
-@@ -187,7 +185,7 @@ void bpf_jit_compile(struct sk_filter *f
+@@ -187,7 +183,7 @@ void bpf_jit_compile(struct sk_filter *f
  	int t_offset, f_offset;
  	u8 t_op, f_op, seen = 0, pass;
  	u8 *image = NULL;
@@ -29385,7 +29384,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/net/bpf_ji
  	u8 *func;
  	int pc_ret0 = -1; /* bpf index of first RET #0 instruction (if any) */
  	unsigned int cleanup_addr; /* epilogue code offset */
-@@ -728,10 +726,12 @@ cond_branch:			f_offset = addrs[i + filt
+@@ -728,10 +724,12 @@ cond_branch:			f_offset = addrs[i + filt
  				if (unlikely(proglen + ilen > oldproglen)) {
  					pr_err("bpb_jit_compile fatal error\n");
  					kfree(addrs);
@@ -29399,7 +29398,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/net/bpf_ji
  			}
  			proglen += ilen;
  			addrs[i] = proglen;
-@@ -764,7 +764,6 @@ cond_branch:			f_offset = addrs[i + filt
+@@ -764,7 +762,6 @@ cond_branch:			f_offset = addrs[i + filt
  
  	if (image) {
  		bpf_flush_icache(header, image + proglen);
@@ -29407,7 +29406,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/net/bpf_ji
  		fp->bpf_func = (void *)image;
  	}
  out:
-@@ -776,9 +775,6 @@ void bpf_jit_free(struct sk_filter *fp)
+@@ -776,9 +773,7 @@ void bpf_jit_free(struct sk_filter *fp)
  {
  	if (fp->bpf_func != sk_run_filter) {
  		unsigned long addr = (unsigned long)fp->bpf_func & PAGE_MASK;
@@ -29415,6 +29414,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/net/bpf_ji
 -
 -		set_memory_rw(addr, header->pages);
 -		module_free(NULL, header);
++		set_memory_rw(addr, 1);
 +		module_free_exec(NULL, (void *)addr);
  	}
  }
@@ -36904,6 +36904,18 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/infiniband/
  		cpu_to_be64(0xff00000000000000LL);
  }
  
+diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/infiniband/hw/mlx4/mcg.c linux-3.11-pax/drivers/infiniband/hw/mlx4/mcg.c
+--- linux-3.11/drivers/infiniband/hw/mlx4/mcg.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.11-pax/drivers/infiniband/hw/mlx4/mcg.c	2013-09-03 01:37:17.774744954 +0200
+@@ -1040,7 +1040,7 @@ int mlx4_ib_mcg_port_init(struct mlx4_ib
+ {
+ 	char name[20];
+ 
+-	atomic_set(&ctx->tid, 0);
++	atomic_set_unchecked(&ctx->tid, 0);
+ 	sprintf(name, "mlx4_ib_mcg%d", ctx->port);
+ 	ctx->mcg_wq = create_singlethread_workqueue(name);
+ 	if (!ctx->mcg_wq)
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/infiniband/hw/mlx4/mlx4_ib.h linux-3.11-pax/drivers/infiniband/hw/mlx4/mlx4_ib.h
 --- linux-3.11/drivers/infiniband/hw/mlx4/mlx4_ib.h	2013-04-30 01:25:11.039586261 +0200
 +++ linux-3.11-pax/drivers/infiniband/hw/mlx4/mlx4_ib.h	2013-09-03 00:47:52.866903257 +0200
