@@ -1,5 +1,5 @@
-- fixed a few more REFCOUNT false positives, by Mathias Krause <minipli@googlemail.com>
-- got inet_getid and ipv6_select_ident rid of the cmpxchg loop
+- reworked __SC_LONG to care about only int and smaller types, this eliminates size overflow false positives reported by hunger
+- fixed an uninitialized read in splice, reported by hunger
 
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/arch/alpha/include/asm/atomic.h linux-3.10.10-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.10.10/arch/alpha/include/asm/atomic.h	2013-08-20 19:08:15.659833397 +0200
@@ -51696,7 +51696,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/seq_file.c
  	if (op) {
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/splice.c linux-3.10.10-pax/fs/splice.c
 --- linux-3.10.10/fs/splice.c	2013-08-20 19:08:16.475833353 +0200
-+++ linux-3.10.10-pax/fs/splice.c	2013-08-15 23:49:50.026696004 +0200
++++ linux-3.10.10-pax/fs/splice.c	2013-09-05 01:40:48.790389257 +0200
 @@ -196,7 +196,7 @@ ssize_t splice_to_pipe(struct pipe_inode
  	pipe_lock(pipe);
  
@@ -51785,7 +51785,15 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/splice.c l
  
  		current->splice_pipe = pipe;
  	}
-@@ -1769,9 +1769,9 @@ static int ipipe_prep(struct pipe_inode_
+@@ -1467,6 +1467,7 @@ static int get_iovec_page_array(const st
+ 
+ 			partial[buffers].offset = off;
+ 			partial[buffers].len = plen;
++			partial[buffers].private = 0;
+ 
+ 			off = 0;
+ 			len -= plen;
+@@ -1769,9 +1770,9 @@ static int ipipe_prep(struct pipe_inode_
  			ret = -ERESTARTSYS;
  			break;
  		}
@@ -51797,7 +51805,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/splice.c l
  			if (flags & SPLICE_F_NONBLOCK) {
  				ret = -EAGAIN;
  				break;
-@@ -1803,7 +1803,7 @@ static int opipe_prep(struct pipe_inode_
+@@ -1803,7 +1804,7 @@ static int opipe_prep(struct pipe_inode_
  	pipe_lock(pipe);
  
  	while (pipe->nrbufs >= pipe->buffers) {
@@ -51806,7 +51814,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/splice.c l
  			send_sig(SIGPIPE, current, 0);
  			ret = -EPIPE;
  			break;
-@@ -1816,9 +1816,9 @@ static int opipe_prep(struct pipe_inode_
+@@ -1816,9 +1817,9 @@ static int opipe_prep(struct pipe_inode_
  			ret = -ERESTARTSYS;
  			break;
  		}
@@ -51818,7 +51826,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/splice.c l
  	}
  
  	pipe_unlock(pipe);
-@@ -1854,14 +1854,14 @@ retry:
+@@ -1854,14 +1855,14 @@ retry:
  	pipe_double_lock(ipipe, opipe);
  
  	do {
@@ -51835,7 +51843,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/splice.c l
  			break;
  
  		/*
-@@ -1958,7 +1958,7 @@ static int link_pipe(struct pipe_inode_i
+@@ -1958,7 +1959,7 @@ static int link_pipe(struct pipe_inode_i
  	pipe_double_lock(ipipe, opipe);
  
  	do {
@@ -51844,7 +51852,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/fs/splice.c l
  			send_sig(SIGPIPE, current, 0);
  			if (!ret)
  				ret = -EPIPE;
-@@ -2003,7 +2003,7 @@ static int link_pipe(struct pipe_inode_i
+@@ -2003,7 +2004,7 @@ static int link_pipe(struct pipe_inode_i
  	 * return EAGAIN if we have the potential of some data in the
  	 * future, otherwise just return 0
  	 */
@@ -55785,23 +55793,24 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/include/linux
  				   unsigned long offset, size_t size,
 diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/include/linux/syscalls.h linux-3.10.10-pax/include/linux/syscalls.h
 --- linux-3.10.10/include/linux/syscalls.h	2013-08-20 19:08:28.803832695 +0200
-+++ linux-3.10.10-pax/include/linux/syscalls.h	2013-08-20 19:08:43.447831913 +0200
-@@ -97,8 +97,12 @@ struct sigaltstack;
++++ linux-3.10.10-pax/include/linux/syscalls.h	2013-09-05 01:40:49.822389313 +0200
+@@ -97,8 +97,14 @@ struct sigaltstack;
  #define __MAP(n,...) __MAP##n(__VA_ARGS__)
  
  #define __SC_DECL(t, a)	t a
--#define __TYPE_IS_LL(t) (__same_type((t)0, 0LL) || __same_type((t)0, 0ULL))
++#define __TYPE_IS_U(t) (__same_type((t)0, 0UL) || __same_type((t)0, 0U) || __same_type((t)0, (unsigned short)0) || __same_type((t)0, (unsigned char)0))
+ #define __TYPE_IS_LL(t) (__same_type((t)0, 0LL) || __same_type((t)0, 0ULL))
 -#define __SC_LONG(t, a) __typeof(__builtin_choose_expr(__TYPE_IS_LL(t), 0LL, 0L)) a
-+#define __TYPE_IS_SL(t) (__same_type((t)0, 0L))
-+#define __TYPE_IS_UL(t) (__same_type((t)0, 0UL))
-+#define __TYPE_IS_SLL(t) (__same_type((t)0, 0LL))
-+#define __TYPE_IS_ULL(t) (__same_type((t)0, 0ULL))
-+#define __TYPE_IS_LL(t) (__TYPE_IS_SLL(t) || __TYPE_IS_ULL(t))
-+#define __SC_LONG(t, a) __typeof(__builtin_choose_expr(__TYPE_IS_LL(t), __builtin_choose_expr(__TYPE_IS_ULL(t), 0ULL, 0LL), __builtin_choose_expr(__TYPE_IS_UL(t), 0UL, 0L))) a
++#define __SC_LONG(t, a)	__typeof(				\
++	__builtin_choose_expr(					\
++		sizeof(t) > sizeof(int),			\
++		(t) 0,						\
++		__builtin_choose_expr(__TYPE_IS_U(t), 0UL, 0L)	\
++	)) a
  #define __SC_CAST(t, a)	(t) a
  #define __SC_ARGS(t, a)	a
  #define __SC_TEST(t, a) (void)BUILD_BUG_ON_ZERO(!__TYPE_IS_LL(t) && sizeof(t) > sizeof(long))
-@@ -362,11 +366,11 @@ asmlinkage long sys_sync(void);
+@@ -362,11 +368,11 @@ asmlinkage long sys_sync(void);
  asmlinkage long sys_fsync(unsigned int fd);
  asmlinkage long sys_fdatasync(unsigned int fd);
  asmlinkage long sys_bdflush(int func, long data);
@@ -55817,7 +55826,7 @@ diff -NurpX linux-3.10.10-pax/Documentation/dontdiff linux-3.10.10/include/linux
  asmlinkage long sys_truncate(const char __user *path, long length);
  asmlinkage long sys_ftruncate(unsigned int fd, unsigned long length);
  asmlinkage long sys_stat(const char __user *filename,
-@@ -578,7 +582,7 @@ asmlinkage long sys_getsockname(int, str
+@@ -578,7 +584,7 @@ asmlinkage long sys_getsockname(int, str
  asmlinkage long sys_getpeername(int, struct sockaddr __user *, int __user *);
  asmlinkage long sys_send(int, void __user *, size_t, unsigned);
  asmlinkage long sys_sendto(int, void __user *, size_t, unsigned,
