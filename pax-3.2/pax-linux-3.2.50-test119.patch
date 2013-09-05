@@ -1,7 +1,5 @@
-- fixed a REFCOUNT false positive, by Mathias Krause <minipli@googlemail.com>
-- fixed a bunch more after a quick audit of atomic_inc_return users
-- fixed a few more REFCOUNT false positives, by Mathias Krause <minipli@googlemail.com>
-- got inet_getid and ipv6_select_ident rid of the cmpxchg loop
+- reworked __SC_LONG to care about only int and smaller types, this eliminates size overflow false positives reported by hunger
+- fixed an uninitialized read in splice, reported by hunger
 
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/arch/alpha/include/asm/atomic.h linux-3.2.50-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.50/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -46473,7 +46471,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/seq_file.c l
  	if (op) {
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/splice.c linux-3.2.50-pax/fs/splice.c
 --- linux-3.2.50/fs/splice.c	2013-02-20 12:30:42.064171943 +0100
-+++ linux-3.2.50-pax/fs/splice.c	2013-02-20 12:30:46.644171698 +0100
++++ linux-3.2.50-pax/fs/splice.c	2013-09-05 01:57:01.010442061 +0200
 @@ -195,7 +195,7 @@ ssize_t splice_to_pipe(struct pipe_inode
  	pipe_lock(pipe);
  
@@ -46544,7 +46542,15 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/splice.c lin
  
  		current->splice_pipe = pipe;
  	}
-@@ -1744,9 +1744,9 @@ static int ipipe_prep(struct pipe_inode_
+@@ -1459,6 +1459,7 @@ static int get_iovec_page_array(const st
+ 
+ 			partial[buffers].offset = off;
+ 			partial[buffers].len = plen;
++			partial[buffers].private = 0;
+ 
+ 			off = 0;
+ 			len -= plen;
+@@ -1744,9 +1745,9 @@ static int ipipe_prep(struct pipe_inode_
  			ret = -ERESTARTSYS;
  			break;
  		}
@@ -46556,7 +46562,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/splice.c lin
  			if (flags & SPLICE_F_NONBLOCK) {
  				ret = -EAGAIN;
  				break;
-@@ -1778,7 +1778,7 @@ static int opipe_prep(struct pipe_inode_
+@@ -1778,7 +1779,7 @@ static int opipe_prep(struct pipe_inode_
  	pipe_lock(pipe);
  
  	while (pipe->nrbufs >= pipe->buffers) {
@@ -46565,7 +46571,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/splice.c lin
  			send_sig(SIGPIPE, current, 0);
  			ret = -EPIPE;
  			break;
-@@ -1791,9 +1791,9 @@ static int opipe_prep(struct pipe_inode_
+@@ -1791,9 +1792,9 @@ static int opipe_prep(struct pipe_inode_
  			ret = -ERESTARTSYS;
  			break;
  		}
@@ -46577,7 +46583,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/splice.c lin
  	}
  
  	pipe_unlock(pipe);
-@@ -1829,14 +1829,14 @@ retry:
+@@ -1829,14 +1830,14 @@ retry:
  	pipe_double_lock(ipipe, opipe);
  
  	do {
@@ -46594,7 +46600,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/splice.c lin
  			break;
  
  		/*
-@@ -1933,7 +1933,7 @@ static int link_pipe(struct pipe_inode_i
+@@ -1933,7 +1934,7 @@ static int link_pipe(struct pipe_inode_i
  	pipe_double_lock(ipipe, opipe);
  
  	do {
@@ -46603,7 +46609,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/fs/splice.c lin
  			send_sig(SIGPIPE, current, 0);
  			if (!ret)
  				ret = -EPIPE;
-@@ -1978,7 +1978,7 @@ static int link_pipe(struct pipe_inode_i
+@@ -1978,7 +1979,7 @@ static int link_pipe(struct pipe_inode_i
  	 * return EAGAIN if we have the potential of some data in the
  	 * future, otherwise just return 0
  	 */
@@ -50505,8 +50511,35 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/s
  	return __arch_swab64(val);
 diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/syscalls.h linux-3.2.50-pax/include/linux/syscalls.h
 --- linux-3.2.50/include/linux/syscalls.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.50-pax/include/linux/syscalls.h	2013-06-21 19:34:10.614698103 +0200
-@@ -392,11 +392,11 @@ asmlinkage long sys_sync(void);
++++ linux-3.2.50-pax/include/linux/syscalls.h	2013-09-05 01:56:07.594439160 +0200
+@@ -83,12 +83,20 @@ struct file_handle;
+ #define __SC_DECL5(t5, a5, ...) t5 a5, __SC_DECL4(__VA_ARGS__)
+ #define __SC_DECL6(t6, a6, ...) t6 a6, __SC_DECL5(__VA_ARGS__)
+ 
+-#define __SC_LONG1(t1, a1) 	long a1
+-#define __SC_LONG2(t2, a2, ...) long a2, __SC_LONG1(__VA_ARGS__)
+-#define __SC_LONG3(t3, a3, ...) long a3, __SC_LONG2(__VA_ARGS__)
+-#define __SC_LONG4(t4, a4, ...) long a4, __SC_LONG3(__VA_ARGS__)
+-#define __SC_LONG5(t5, a5, ...) long a5, __SC_LONG4(__VA_ARGS__)
+-#define __SC_LONG6(t6, a6, ...) long a6, __SC_LONG5(__VA_ARGS__)
++#define __TYPE_IS_U(t) (__same_type((t)0, 0UL) || __same_type((t)0, 0U) || __same_type((t)0, (unsigned short)0) || __same_type((t)0, (unsigned char)0))
++#define __SC_TYPE(t, a) __typeof(				\
++	__builtin_choose_expr(					\
++		sizeof(t) > sizeof(int),			\
++		(t) 0,						\
++		__builtin_choose_expr(__TYPE_IS_U(t), 0UL, 0L)	\
++	)) a
++
++#define __SC_LONG1(t1, a1) 	__SC_TYPE(t1, a1)
++#define __SC_LONG2(t2, a2, ...) __SC_TYPE(t2, a2), __SC_LONG1(__VA_ARGS__)
++#define __SC_LONG3(t3, a3, ...) __SC_TYPE(t3, a3), __SC_LONG2(__VA_ARGS__)
++#define __SC_LONG4(t4, a4, ...) __SC_TYPE(t4, a4), __SC_LONG3(__VA_ARGS__)
++#define __SC_LONG5(t5, a5, ...) __SC_TYPE(t5, a5), __SC_LONG4(__VA_ARGS__)
++#define __SC_LONG6(t6, a6, ...) __SC_TYPE(t6, a6), __SC_LONG5(__VA_ARGS__)
+ 
+ #define __SC_CAST1(t1, a1)	(t1) a1
+ #define __SC_CAST2(t2, a2, ...) (t2) a2, __SC_CAST1(__VA_ARGS__)
+@@ -392,11 +400,11 @@ asmlinkage long sys_sync(void);
  asmlinkage long sys_fsync(unsigned int fd);
  asmlinkage long sys_fdatasync(unsigned int fd);
  asmlinkage long sys_bdflush(int func, long data);
@@ -50522,7 +50555,7 @@ diff -NurpX linux-3.2.50-pax/Documentation/dontdiff linux-3.2.50/include/linux/s
  asmlinkage long sys_truncate(const char __user *path, long length);
  asmlinkage long sys_ftruncate(unsigned int fd, unsigned long length);
  asmlinkage long sys_stat(const char __user *filename,
-@@ -608,7 +608,7 @@ asmlinkage long sys_getsockname(int, str
+@@ -608,7 +616,7 @@ asmlinkage long sys_getsockname(int, str
  asmlinkage long sys_getpeername(int, struct sockaddr __user *, int __user *);
  asmlinkage long sys_send(int, void __user *, size_t, unsigned);
  asmlinkage long sys_sendto(int, void __user *, size_t, unsigned,
