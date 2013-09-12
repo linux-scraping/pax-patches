@@ -1,5 +1,9 @@
-- reworked __SC_LONG to care about only int and smaller types, this eliminates size overflow false positives reported by hunger
-- fixed an uninitialized read in splice, reported by hunger
+- cleaned up some obsolete latent entropy logic
+- added some latent entropy extraction to fork
+- got rid of reset_security_ops
+- worked around a gcc 4.5/4.6 problem with __builtin_constant_p and kmalloc_array
+- one more REFCOUNT change to mips, it seems to be dead code though
+- added compile time checking for unavailable UDEREF/KERNEXEC accessors
 
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/alpha/include/asm/atomic.h linux-3.11-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.11/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -5313,6 +5317,17 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/mips/include/a
  #endif
  
  /*
+diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/mips/include/asm/smtc_proc.h linux-3.11-pax/arch/mips/include/asm/smtc_proc.h
+--- linux-3.11/arch/mips/include/asm/smtc_proc.h	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.11-pax/arch/mips/include/asm/smtc_proc.h	2013-09-06 14:12:28.203403630 +0200
+@@ -18,6 +18,6 @@ extern struct smtc_cpu_proc smtc_cpu_sta
+ 
+ /* Count of number of recoveries of "stolen" FPU access rights on 34K */
+ 
+-extern atomic_t smtc_fpu_recoveries;
++extern atomic_unchecked_t smtc_fpu_recoveries;
+ 
+ #endif /* __ASM_SMTC_PROC_H */
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/mips/kernel/binfmt_elfn32.c linux-3.11-pax/arch/mips/kernel/binfmt_elfn32.c
 --- linux-3.11/arch/mips/kernel/binfmt_elfn32.c	2013-08-20 19:08:15.747833392 +0200
 +++ linux-3.11-pax/arch/mips/kernel/binfmt_elfn32.c	2013-09-03 00:47:52.562903274 +0200
@@ -5390,6 +5405,48 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/mips/kernel/pr
 -
 -	return sp & ALMASK;
 -}
+diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/mips/kernel/smtc.c linux-3.11-pax/arch/mips/kernel/smtc.c
+--- linux-3.11/arch/mips/kernel/smtc.c	2013-09-03 00:44:49.118913068 +0200
++++ linux-3.11-pax/arch/mips/kernel/smtc.c	2013-09-06 14:12:32.011403742 +0200
+@@ -1359,7 +1359,7 @@ void smtc_soft_dump(void)
+ 	}
+ 	smtc_ipi_qdump();
+ 	printk("%d Recoveries of \"stolen\" FPU\n",
+-	       atomic_read(&smtc_fpu_recoveries));
++	       atomic_read_unchecked(&smtc_fpu_recoveries));
+ }
+ 
+ 
+diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/mips/kernel/smtc-proc.c linux-3.11-pax/arch/mips/kernel/smtc-proc.c
+--- linux-3.11/arch/mips/kernel/smtc-proc.c	2013-07-08 01:57:56.820266066 +0200
++++ linux-3.11-pax/arch/mips/kernel/smtc-proc.c	2013-09-06 14:12:39.291403956 +0200
+@@ -31,7 +31,7 @@ unsigned long selfipis[NR_CPUS];
+ 
+ struct smtc_cpu_proc smtc_cpu_stats[NR_CPUS];
+ 
+-atomic_t smtc_fpu_recoveries;
++atomic_unchecked_t smtc_fpu_recoveries;
+ 
+ static int smtc_proc_show(struct seq_file *m, void *v)
+ {
+@@ -48,7 +48,7 @@ static int smtc_proc_show(struct seq_fil
+ 	for(i = 0; i < NR_CPUS; i++)
+ 		seq_printf(m, "%d: %ld\n", i, smtc_cpu_stats[i].selfipis);
+ 	seq_printf(m, "%d Recoveries of \"stolen\" FPU\n",
+-		   atomic_read(&smtc_fpu_recoveries));
++		   atomic_read_unchecked(&smtc_fpu_recoveries));
+ 	return 0;
+ }
+ 
+@@ -73,7 +73,7 @@ void init_smtc_stats(void)
+ 		smtc_cpu_stats[i].selfipis = 0;
+ 	}
+ 
+-	atomic_set(&smtc_fpu_recoveries, 0);
++	atomic_set_unchecked(&smtc_fpu_recoveries, 0);
+ 
+ 	proc_create("smtc", 0444, NULL, &smtc_proc_fops);
+ }
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/mips/kernel/sync-r4k.c linux-3.11-pax/arch/mips/kernel/sync-r4k.c
 --- linux-3.11/arch/mips/kernel/sync-r4k.c	2013-09-03 00:44:49.118913068 +0200
 +++ linux-3.11-pax/arch/mips/kernel/sync-r4k.c	2013-09-03 00:47:52.566903273 +0200
@@ -20812,7 +20869,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/kernel/i38
  /*
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/x86/kernel/i8259.c linux-3.11-pax/arch/x86/kernel/i8259.c
 --- linux-3.11/arch/x86/kernel/i8259.c	2013-08-20 19:08:15.907833384 +0200
-+++ linux-3.11-pax/arch/x86/kernel/i8259.c	2013-09-03 00:47:52.678903267 +0200
++++ linux-3.11-pax/arch/x86/kernel/i8259.c	2013-09-12 02:36:58.831913832 +0200
 @@ -110,7 +110,7 @@ static int i8259A_irq_pending(unsigned i
  static void make_8259A_irq(unsigned int irq)
  {
@@ -40211,6 +40268,18 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/net/vxlan.c
  	.kind		= "vxlan",
  	.maxtype	= IFLA_VXLAN_MAX,
  	.policy		= vxlan_policy,
+diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/net/wimax/i2400m/rx.c linux-3.11-pax/drivers/net/wimax/i2400m/rx.c
+--- linux-3.11/drivers/net/wimax/i2400m/rx.c	2013-04-30 01:25:18.003585889 +0200
++++ linux-3.11-pax/drivers/net/wimax/i2400m/rx.c	2013-09-09 23:12:38.012410211 +0200
+@@ -1359,7 +1359,7 @@ int i2400m_rx_setup(struct i2400m *i2400
+ 		if (i2400m->rx_roq == NULL)
+ 			goto error_roq_alloc;
+ 
+-		rd = kcalloc(I2400M_RO_CIN + 1, sizeof(*i2400m->rx_roq[0].log),
++		rd = kcalloc(sizeof(*i2400m->rx_roq[0].log), I2400M_RO_CIN + 1,
+ 			     GFP_KERNEL);
+ 		if (rd == NULL) {
+ 			result = -ENOMEM;
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/net/wireless/at76c50x-usb.c linux-3.11-pax/drivers/net/wireless/at76c50x-usb.c
 --- linux-3.11/drivers/net/wireless/at76c50x-usb.c	2013-08-20 19:08:16.247833365 +0200
 +++ linux-3.11-pax/drivers/net/wireless/at76c50x-usb.c	2013-09-03 00:47:52.954903253 +0200
@@ -41160,7 +41229,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/platform/x8
  		.matches = {
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/drivers/platform/x86/msi-laptop.c linux-3.11-pax/drivers/platform/x86/msi-laptop.c
 --- linux-3.11/drivers/platform/x86/msi-laptop.c	2013-09-03 00:45:01.538912405 +0200
-+++ linux-3.11-pax/drivers/platform/x86/msi-laptop.c	2013-09-03 00:47:52.974903252 +0200
++++ linux-3.11-pax/drivers/platform/x86/msi-laptop.c	2013-09-12 02:36:51.851914205 +0200
 @@ -1000,12 +1000,14 @@ static int __init load_scm_model_init(st
  
  	if (!quirks->ec_read_only) {
@@ -49762,7 +49831,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/fs/namei.c linux-3.
  	return len;
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/fs/namespace.c linux-3.11-pax/fs/namespace.c
 --- linux-3.11/fs/namespace.c	2013-09-03 00:45:06.610912134 +0200
-+++ linux-3.11-pax/fs/namespace.c	2013-09-03 00:47:53.114903244 +0200
++++ linux-3.11-pax/fs/namespace.c	2013-09-12 02:59:37.695841279 +0200
 @@ -1302,7 +1302,7 @@ static inline bool may_mount(void)
   * unixes. Our API is identical to OSF/1 to avoid making a mess of AMD
   */
@@ -49799,6 +49868,15 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/fs/namespace.c linu
  	atomic_set(&new_ns->count, 1);
  	new_ns->root = NULL;
  	INIT_LIST_HEAD(&new_ns->list);
+@@ -2373,7 +2373,7 @@ static struct mnt_namespace *alloc_mnt_n
+  * Allocate a new namespace structure and populate it with contents
+  * copied from the namespace of the passed in task structure.
+  */
+-static struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
++static __latent_entropy struct mnt_namespace *dup_mnt_ns(struct mnt_namespace *mnt_ns,
+ 		struct user_namespace *user_ns, struct fs_struct *fs)
+ {
+ 	struct mnt_namespace *new_ns;
 @@ -2500,8 +2500,8 @@ struct dentry *mount_subtree(struct vfsm
  }
  EXPORT_SYMBOL(mount_subtree);
@@ -51825,17 +51903,25 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/asm-generic
  #define local_inc_not_zero(l) atomic_long_inc_not_zero(&(l)->a)
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/asm-generic/pgtable.h linux-3.11-pax/include/asm-generic/pgtable.h
 --- linux-3.11/include/asm-generic/pgtable.h	2013-09-03 00:45:09.522911979 +0200
-+++ linux-3.11-pax/include/asm-generic/pgtable.h	2013-09-03 00:47:53.154903242 +0200
-@@ -741,6 +741,14 @@ static inline pmd_t pmd_mknuma(pmd_t pmd
++++ linux-3.11-pax/include/asm-generic/pgtable.h	2013-09-11 11:49:02.646758367 +0200
+@@ -741,6 +741,22 @@ static inline pmd_t pmd_mknuma(pmd_t pmd
  }
  #endif /* CONFIG_NUMA_BALANCING */
  
 +#ifndef __HAVE_ARCH_PAX_OPEN_KERNEL
++#ifdef CONFIG_PAX_KERNEXEC
++#error KERNEXEC requires pax_open_kernel
++#else
 +static inline unsigned long pax_open_kernel(void) { return 0; }
++#endif
 +#endif
 +
 +#ifndef __HAVE_ARCH_PAX_CLOSE_KERNEL
++#ifdef CONFIG_PAX_KERNEXEC
++#error KERNEXEC requires pax_close_kernel
++#else
 +static inline unsigned long pax_close_kernel(void) { return 0; }
++#endif
 +#endif
 +
  #endif /* CONFIG_MMU */
@@ -51923,17 +52009,25 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/asm-generic
   * but the define is needed for a generic inline function.)
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/asm-generic/uaccess.h linux-3.11-pax/include/asm-generic/uaccess.h
 --- linux-3.11/include/asm-generic/uaccess.h	2013-09-03 00:45:09.522911979 +0200
-+++ linux-3.11-pax/include/asm-generic/uaccess.h	2013-09-03 00:47:53.154903242 +0200
-@@ -343,4 +343,12 @@ clear_user(void __user *to, unsigned lon
++++ linux-3.11-pax/include/asm-generic/uaccess.h	2013-09-11 11:51:43.818749762 +0200
+@@ -343,4 +343,20 @@ clear_user(void __user *to, unsigned lon
  	return __clear_user(to, n);
  }
  
 +#ifndef __HAVE_ARCH_PAX_OPEN_USERLAND
-+//static inline unsigned long pax_open_userland(void) { return 0; }
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++#error UDEREF requires pax_open_userland
++#else
++static inline unsigned long pax_open_userland(void) { return 0; }
++#endif
 +#endif
 +
 +#ifndef __HAVE_ARCH_PAX_CLOSE_USERLAND
-+//static inline unsigned long pax_close_userland(void) { return 0; }
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++#error UDEREF requires pax_close_userland
++#else
++static inline unsigned long pax_close_userland(void) { return 0; }
++#endif
 +#endif
 +
  #endif /* __ASM_GENERIC_UACCESS_H */
@@ -52256,7 +52350,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/compi
   * suppress control flow warnings after asm blocks that transfer
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/compiler.h linux-3.11-pax/include/linux/compiler.h
 --- linux-3.11/include/linux/compiler.h	2013-08-20 19:08:16.499833352 +0200
-+++ linux-3.11-pax/include/linux/compiler.h	2013-09-03 00:47:53.162903242 +0200
++++ linux-3.11-pax/include/linux/compiler.h	2013-09-12 02:40:50.495901463 +0200
 @@ -5,11 +5,14 @@
  
  #ifdef __CHECKER__
@@ -52707,6 +52801,18 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/fb.h 
  
  #ifdef CONFIG_FB_TILEBLITTING
  #define FB_TILE_CURSOR_NONE        0
+diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/fdtable.h linux-3.11-pax/include/linux/fdtable.h
+--- linux-3.11/include/linux/fdtable.h	2013-07-08 01:58:51.788267683 +0200
++++ linux-3.11-pax/include/linux/fdtable.h	2013-09-12 02:56:22.091851723 +0200
+@@ -95,7 +95,7 @@ struct files_struct *get_files_struct(st
+ void put_files_struct(struct files_struct *fs);
+ void reset_files_struct(struct files_struct *);
+ int unshare_files(struct files_struct **);
+-struct files_struct *dup_fd(struct files_struct *, int *);
++struct files_struct *dup_fd(struct files_struct *, int *) __latent_entropy;
+ void do_close_on_exec(struct files_struct *);
+ int iterate_fd(struct files_struct *, unsigned,
+ 		int (*)(const void *, struct file *, unsigned),
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/filter.h linux-3.11-pax/include/linux/filter.h
 --- linux-3.11/include/linux/filter.h	2013-09-03 00:45:09.546911977 +0200
 +++ linux-3.11-pax/include/linux/filter.h	2013-09-03 00:47:53.170903241 +0200
@@ -52958,30 +53064,16 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/if_pp
  extern void unregister_pppox_proto(int proto_num);
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/init.h linux-3.11-pax/include/linux/init.h
 --- linux-3.11/include/linux/init.h	2013-09-03 00:45:09.554911977 +0200
-+++ linux-3.11-pax/include/linux/init.h	2013-09-03 00:47:53.178903241 +0200
-@@ -39,9 +39,36 @@
++++ linux-3.11-pax/include/linux/init.h	2013-09-11 14:54:59.678162668 +0200
+@@ -39,9 +39,22 @@
   * Also note, that this data cannot be "const".
   */
  
 +#ifdef MODULE
 +#define add_init_latent_entropy
-+#define add_devinit_latent_entropy
-+#define add_cpuinit_latent_entropy
 +#define add_meminit_latent_entropy
 +#else
 +#define add_init_latent_entropy __latent_entropy
-+
-+#ifdef CONFIG_HOTPLUG
-+#define add_devinit_latent_entropy
-+#else
-+#define add_devinit_latent_entropy __latent_entropy
-+#endif
-+
-+#ifdef CONFIG_HOTPLUG_CPU
-+#define add_cpuinit_latent_entropy
-+#else
-+#define add_cpuinit_latent_entropy __latent_entropy
-+#endif
 +
 +#ifdef CONFIG_MEMORY_HOTPLUG
 +#define add_meminit_latent_entropy
@@ -52997,7 +53089,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/init.
  #define __initdata	__section(.init.data)
  #define __initconst	__constsection(.init.rodata)
  #define __exitdata	__section(.exit.data)
-@@ -102,7 +129,7 @@
+@@ -102,7 +115,7 @@
  #define __cpuexitconst
  
  /* Used for MEMORY_HOTPLUG */
@@ -54222,8 +54314,25 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/proc_
  	void *ns;
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/random.h linux-3.11-pax/include/linux/random.h
 --- linux-3.11/include/linux/random.h	2013-08-20 19:08:16.739833339 +0200
-+++ linux-3.11-pax/include/linux/random.h	2013-09-03 00:47:53.202903239 +0200
-@@ -32,6 +32,11 @@ void prandom_seed(u32 seed);
++++ linux-3.11-pax/include/linux/random.h	2013-09-11 15:57:55.025961094 +0200
+@@ -10,6 +10,16 @@
+ 
+ 
+ extern void add_device_randomness(const void *, unsigned int);
++
++static inline void add_latent_entropy(void)
++{
++
++#ifdef LATENT_ENTROPY_PLUGIN
++	add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
++#endif
++
++}
++
+ extern void add_input_randomness(unsigned int type, unsigned int code,
+ 				 unsigned int value);
+ extern void add_interrupt_randomness(int irq, int irq_flags);
+@@ -32,6 +42,11 @@ void prandom_seed(u32 seed);
  u32 prandom_u32_state(struct rnd_state *);
  void prandom_bytes_state(struct rnd_state *state, void *buf, int nbytes);
  
@@ -54384,7 +54493,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/sched
  extern unsigned int sysctl_sched_min_granularity;
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/sched.h linux-3.11-pax/include/linux/sched.h
 --- linux-3.11/include/linux/sched.h	2013-09-03 00:45:09.602911974 +0200
-+++ linux-3.11-pax/include/linux/sched.h	2013-09-03 00:47:53.206903239 +0200
++++ linux-3.11-pax/include/linux/sched.h	2013-09-12 02:51:23.839867647 +0200
 @@ -62,6 +62,7 @@ struct bio_list;
  struct fs_struct;
  struct perf_event_context;
@@ -54517,6 +54626,18 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/sched
  
  	return (obj >= stack) && (obj < (stack + THREAD_SIZE));
  }
+diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/security.h linux-3.11-pax/include/linux/security.h
+--- linux-3.11/include/linux/security.h	2013-09-03 00:45:09.602911974 +0200
++++ linux-3.11-pax/include/linux/security.h	2013-09-06 14:09:21.723398147 +0200
+@@ -116,7 +116,7 @@ struct seq_file;
+ 
+ extern int cap_netlink_send(struct sock *sk, struct sk_buff *skb);
+ 
+-void reset_security_ops(void);
++extern struct security_operations default_security_ops;
+ 
+ #ifdef CONFIG_MMU
+ extern unsigned long mmap_min_addr;
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/include/linux/seq_file.h linux-3.11-pax/include/linux/seq_file.h
 --- linux-3.11/include/linux/seq_file.h	2013-09-03 00:45:09.602911974 +0200
 +++ linux-3.11-pax/include/linux/seq_file.h	2013-09-03 00:47:53.206903239 +0200
@@ -56862,7 +56983,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/init/Kconfig linux-
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/init/main.c linux-3.11-pax/init/main.c
 --- linux-3.11/init/main.c	2013-09-03 00:45:09.762911966 +0200
-+++ linux-3.11-pax/init/main.c	2013-09-03 00:47:53.250903237 +0200
++++ linux-3.11-pax/init/main.c	2013-09-11 15:57:44.609961650 +0200
 @@ -154,6 +154,64 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -56957,39 +57078,31 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/init/main.c linux-3
  
  	return ret;
  }
-@@ -749,8 +805,14 @@ static void __init do_initcall_level(int
+@@ -749,8 +805,10 @@ static void __init do_initcall_level(int
  		   level, level,
  		   &repair_env_string);
  
 -	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
 +	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++) {
  		do_one_initcall(*fn);
-+
-+#ifdef LATENT_ENTROPY_PLUGIN
-+		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
-+#endif
-+
++		add_latent_entropy();
 +	}
  }
  
  static void __init do_initcalls(void)
-@@ -784,8 +846,14 @@ static void __init do_pre_smp_initcalls(
+@@ -784,8 +842,10 @@ static void __init do_pre_smp_initcalls(
  {
  	initcall_t *fn;
  
 -	for (fn = __initcall_start; fn < __initcall0_start; fn++)
 +	for (fn = __initcall_start; fn < __initcall0_start; fn++) {
  		do_one_initcall(*fn);
-+
-+#ifdef LATENT_ENTROPY_PLUGIN
-+		add_device_randomness((const void *)&latent_entropy, sizeof(latent_entropy));
-+#endif
-+
++		add_latent_entropy();
 +	}
  }
  
  /*
-@@ -803,8 +871,8 @@ static int run_init_process(const char *
+@@ -803,8 +863,8 @@ static int run_init_process(const char *
  {
  	argv_init[0] = init_filename;
  	return do_execve(init_filename,
@@ -57000,7 +57113,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/init/main.c linux-3
  }
  
  static noinline void __init kernel_init_freeable(void);
-@@ -881,7 +949,7 @@ static noinline void __init kernel_init_
+@@ -881,7 +941,7 @@ static noinline void __init kernel_init_
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -57009,7 +57122,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/init/main.c linux-3
  		pr_err("Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -894,7 +962,7 @@ static noinline void __init kernel_init_
+@@ -894,7 +954,7 @@ static noinline void __init kernel_init_
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -57680,7 +57793,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/kernel/exit.c linux
  	struct signal_struct *sig = current->signal;
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/kernel/fork.c linux-3.11-pax/kernel/fork.c
 --- linux-3.11/kernel/fork.c	2013-09-03 00:45:09.794911964 +0200
-+++ linux-3.11-pax/kernel/fork.c	2013-09-03 00:47:53.262903236 +0200
++++ linux-3.11-pax/kernel/fork.c	2013-09-12 03:03:33.407828694 +0200
 @@ -319,7 +319,7 @@ static struct task_struct *dup_task_stru
  	*stackend = STACK_END_MAGIC;	/* for overflow detection */
  
@@ -57694,6 +57807,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/kernel/fork.c linux
  }
  
  #ifdef CONFIG_MMU
+-static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 +static struct vm_area_struct *dup_vma(struct mm_struct *mm, struct mm_struct *oldmm, struct vm_area_struct *mpnt)
 +{
 +	struct vm_area_struct *tmp;
@@ -57764,7 +57878,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/kernel/fork.c linux
 +	return NULL;
 +}
 +
- static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
++static __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
  {
  	struct vm_area_struct *mpnt, *tmp, *prev, **pprev;
  	struct rb_node **rb_link, *rb_parent;
@@ -57892,7 +58006,24 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/kernel/fork.c linux
  		spin_unlock(&fs->lock);
  		return 0;
  	}
-@@ -1734,7 +1777,7 @@ void __init proc_caches_init(void)
+@@ -1131,7 +1174,7 @@ init_task_pid(struct task_struct *task,
+  * parts of the process environment (as per the clone
+  * flags). The actual kick-off is left to the caller.
+  */
+-static struct task_struct *copy_process(unsigned long clone_flags,
++static __latent_entropy struct task_struct *copy_process(unsigned long clone_flags,
+ 					unsigned long stack_start,
+ 					unsigned long stack_size,
+ 					int __user *child_tidptr,
+@@ -1604,6 +1647,7 @@ long do_fork(unsigned long clone_flags,
+ 
+ 	p = copy_process(clone_flags, stack_start, stack_size,
+ 			 child_tidptr, NULL, trace);
++	add_latent_entropy();
+ 	/*
+ 	 * Do this prior waking up the new thread - the thread pointer
+ 	 * might get invalid after that point, if the thread exits quickly.
+@@ -1734,7 +1778,7 @@ void __init proc_caches_init(void)
  	mm_cachep = kmem_cache_create("mm_struct",
  			sizeof(struct mm_struct), ARCH_MIN_MMSTRUCT_ALIGN,
  			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_NOTRACK, NULL);
@@ -57901,7 +58032,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/kernel/fork.c linux
  	mmap_init();
  	nsproxy_cache_init();
  }
-@@ -1774,7 +1817,7 @@ static int unshare_fs(unsigned long unsh
+@@ -1774,7 +1818,7 @@ static int unshare_fs(unsigned long unsh
  		return 0;
  
  	/* don't need lock here; in the worst case we'll do useless copy */
@@ -57910,7 +58041,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/kernel/fork.c linux
  		return 0;
  
  	*new_fsp = copy_fs_struct(fs);
-@@ -1886,7 +1929,7 @@ SYSCALL_DEFINE1(unshare, unsigned long,
+@@ -1886,7 +1930,7 @@ SYSCALL_DEFINE1(unshare, unsigned long,
  			fs = current->fs;
  			spin_lock(&fs->lock);
  			current->fs = new_fs;
@@ -72466,7 +72597,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/security/keys/keyri
  				buflen -= tmp;
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/security/security.c linux-3.11-pax/security/security.c
 --- linux-3.11/security/security.c	2013-09-03 00:45:11.622911867 +0200
-+++ linux-3.11-pax/security/security.c	2013-09-03 00:47:53.462903226 +0200
++++ linux-3.11-pax/security/security.c	2013-09-09 18:04:36.061397004 +0200
 @@ -21,6 +21,7 @@
  #include <linux/ima.h>
  #include <linux/evm.h>
@@ -72481,22 +72612,24 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/security/security.c
  
 -static struct security_operations *security_ops;
 -static struct security_operations default_security_ops = {
-+static struct security_operations *security_ops __read_only;
-+static struct security_operations default_security_ops __read_only = {
++struct security_operations *security_ops __read_only;
++struct security_operations default_security_ops __read_only = {
  	.name	= "default",
  };
  
-@@ -75,7 +76,9 @@ int __init security_init(void)
- 
- void reset_security_ops(void)
- {
-+	pax_open_kernel();
- 	security_ops = &default_security_ops;
-+	pax_close_kernel();
+@@ -73,11 +74,6 @@ int __init security_init(void)
+ 	return 0;
  }
  
+-void reset_security_ops(void)
+-{
+-	security_ops = &default_security_ops;
+-}
+-
  /* Save user chosen LSM */
-@@ -128,7 +131,9 @@ int __init register_security(struct secu
+ static int __init choose_lsm(char *str)
+ {
+@@ -128,7 +124,9 @@ int __init register_security(struct secu
  	if (security_ops != &default_security_ops)
  		return -EAGAIN;
  
@@ -72538,7 +72671,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/security/selinux/av
  
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/security/selinux/hooks.c linux-3.11-pax/security/selinux/hooks.c
 --- linux-3.11/security/selinux/hooks.c	2013-09-03 00:45:11.622911867 +0200
-+++ linux-3.11-pax/security/selinux/hooks.c	2013-09-03 00:47:53.466903225 +0200
++++ linux-3.11-pax/security/selinux/hooks.c	2013-09-06 13:52:38.619368654 +0200
 @@ -5609,7 +5609,7 @@ static int selinux_key_getsecurity(struc
  
  #endif
@@ -72548,6 +72681,17 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/security/selinux/ho
  	.name =				"selinux",
  
  	.ptrace_access_check =		selinux_ptrace_access_check,
+@@ -5978,7 +5978,9 @@ int selinux_disable(void)
+ 	selinux_disabled = 1;
+ 	selinux_enabled = 0;
+ 
+-	reset_security_ops();
++	pax_open_kernel();
++	security_ops = &default_security_ops;
++	pax_close_kernel();
+ 
+ 	/* Try to destroy the avc node cache */
+ 	avc_disable();
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/security/selinux/include/xfrm.h linux-3.11-pax/security/selinux/include/xfrm.h
 --- linux-3.11/security/selinux/include/xfrm.h	2013-08-20 19:08:17.347833307 +0200
 +++ linux-3.11-pax/security/selinux/include/xfrm.h	2013-09-03 00:47:53.466903225 +0200
@@ -73497,7 +73641,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/tools/gcc/colorize_
 +}
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/tools/gcc/constify_plugin.c linux-3.11-pax/tools/gcc/constify_plugin.c
 --- linux-3.11/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.11-pax/tools/gcc/constify_plugin.c	2013-09-03 00:47:53.482903225 +0200
++++ linux-3.11-pax/tools/gcc/constify_plugin.c	2013-09-11 14:25:58.986255608 +0200
 @@ -0,0 +1,560 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
