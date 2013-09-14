@@ -1,9 +1,5 @@
-- cleaned up some obsolete latent entropy logic
-- added some latent entropy extraction to fork
-- got rid of reset_security_ops
-- worked around a gcc 4.5/4.6 problem with __builtin_constant_p and kmalloc_array
-- one more REFCOUNT change to mips, it seems to be dead code though
-- added compile time checking for unavailable UDEREF/KERNEXEC accessors
+- backported 1ecfd533f4c528b0b4cc5bc115c4c47f0b5e4828 (pud leak in alloc_new_pmd)
+- build_string doesn't need to account for the null terminator, fix some usage in the kernexec plugin
 
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/arch/alpha/include/asm/atomic.h linux-3.11-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.11/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -64710,8 +64706,28 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mprotect.c linux
  		if (nstart < prev->vm_end)
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mremap.c linux-3.11-pax/mm/mremap.c
 --- linux-3.11/mm/mremap.c	2013-09-03 00:45:09.950911956 +0200
-+++ linux-3.11-pax/mm/mremap.c	2013-09-03 00:53:22.250885671 +0200
-@@ -144,6 +144,12 @@ static void move_ptes(struct vm_area_str
++++ linux-3.11-pax/mm/mremap.c	2013-09-13 15:12:55.892562226 +0200
+@@ -25,6 +25,7 @@
+ #include <asm/uaccess.h>
+ #include <asm/cacheflush.h>
+ #include <asm/tlbflush.h>
++#include <asm/pgalloc.h>
+ 
+ #include "internal.h"
+ 
+@@ -62,8 +63,10 @@ static pmd_t *alloc_new_pmd(struct mm_st
+ 		return NULL;
+ 
+ 	pmd = pmd_alloc(mm, pud, addr);
+-	if (!pmd)
++	if (!pmd) {
++		pud_free(mm, pud);
+ 		return NULL;
++	}
+ 
+ 	VM_BUG_ON(pmd_trans_huge(*pmd));
+ 
+@@ -144,6 +147,12 @@ static void move_ptes(struct vm_area_str
  			continue;
  		pte = ptep_get_and_clear(mm, old_addr, old_pte);
  		pte = move_pte(pte, new_vma->vm_page_prot, old_addr, new_addr);
@@ -64724,7 +64740,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mremap.c linux-3
  		pte = move_soft_dirty_pte(pte);
  		set_pte_at(mm, new_addr, new_pte, pte);
  	}
-@@ -337,6 +343,11 @@ static struct vm_area_struct *vma_to_res
+@@ -337,6 +346,11 @@ static struct vm_area_struct *vma_to_res
  	if (is_vm_hugetlb_page(vma))
  		goto Einval;
  
@@ -64736,7 +64752,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mremap.c linux-3
  	/* We can't remap across vm area boundaries */
  	if (old_len > vma->vm_end - addr)
  		goto Efault;
-@@ -392,20 +403,25 @@ static unsigned long mremap_to(unsigned
+@@ -392,20 +406,25 @@ static unsigned long mremap_to(unsigned
  	unsigned long ret = -EINVAL;
  	unsigned long charged = 0;
  	unsigned long map_flags;
@@ -64767,7 +64783,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mremap.c linux-3
  		goto out;
  
  	ret = do_munmap(mm, new_addr, new_len);
-@@ -474,6 +490,7 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
+@@ -474,6 +493,7 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
  	unsigned long ret = -EINVAL;
  	unsigned long charged = 0;
  	bool locked = false;
@@ -64775,7 +64791,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mremap.c linux-3
  
  	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE))
  		return ret;
-@@ -495,6 +512,17 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
+@@ -495,6 +515,17 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
  	if (!new_len)
  		return ret;
  
@@ -64793,7 +64809,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mremap.c linux-3
  	down_write(&current->mm->mmap_sem);
  
  	if (flags & MREMAP_FIXED) {
-@@ -545,6 +573,7 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
+@@ -545,6 +576,7 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
  				new_addr = addr;
  			}
  			ret = addr;
@@ -64801,7 +64817,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/mremap.c linux-3
  			goto out;
  		}
  	}
-@@ -568,7 +597,12 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
+@@ -568,7 +600,12 @@ SYSCALL_DEFINE5(mremap, unsigned long, a
  			goto out;
  		}
  
@@ -64882,7 +64898,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/nommu.c linux-3.
  
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/mm/page_alloc.c linux-3.11-pax/mm/page_alloc.c
 --- linux-3.11/mm/page_alloc.c	2013-09-03 00:45:09.954911956 +0200
-+++ linux-3.11-pax/mm/page_alloc.c	2013-09-03 00:47:53.330903233 +0200
++++ linux-3.11-pax/mm/page_alloc.c	2013-09-12 20:40:39.539759333 +0200
 @@ -60,6 +60,7 @@
  #include <linux/page-debug-flags.h>
  #include <linux/hugetlb.h>
@@ -74482,7 +74498,7 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/tools/gcc/kallocsta
 +}
 diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/tools/gcc/kernexec_plugin.c linux-3.11-pax/tools/gcc/kernexec_plugin.c
 --- linux-3.11/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.11-pax/tools/gcc/kernexec_plugin.c	2013-09-03 00:47:53.482903225 +0200
++++ linux-3.11-pax/tools/gcc/kernexec_plugin.c	2013-09-13 03:17:08.150489205 +0200
 @@ -0,0 +1,471 @@
 +/*
 + * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
@@ -74751,9 +74767,9 @@ diff -NurpX linux-3.11-pax/Documentation/dontdiff linux-3.11/tools/gcc/kernexec_
 +	new_fptr = make_ssa_name(new_fptr, NULL);
 +
 +	// build asm volatile("orq %%r10, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
-+	input = build_tree_list(NULL_TREE, build_string(2, "0"));
++	input = build_tree_list(NULL_TREE, build_string(1, "0"));
 +	input = chainon(NULL_TREE, build_tree_list(input, old_fptr));
-+	output = build_tree_list(NULL_TREE, build_string(3, "=r"));
++	output = build_tree_list(NULL_TREE, build_string(2, "=r"));
 +	output = chainon(NULL_TREE, build_tree_list(output, new_fptr));
 +#if BUILDING_GCC_VERSION <= 4007
 +	VEC_safe_push(tree, gc, inputs, input);
