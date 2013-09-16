@@ -1,7 +1,9 @@
-- forward port to 3.11.1
-- fixed some CONSTIFY fallout, reported by spender
-- fixed INVPCID on i386, reported by spender
-- simplified/consolidated the recent security_ops change
+- fixed arm compile error, reported by Arnaud Ebalard
+- fixed NULL deref due to some xfrm constification, reported by marcin1j (http://forums.grsecurity.net/viewtopic.php?f=3&t=3743)
+- fixed od_ops constification, fixes cpufreq ondemand on AMD
+- latent entropy will now be gathered from module init code as well (i.e., at module load/init time)
+- __read_only will now be enforced in modules as well
+- removed unneccessary __read_only from ntfs
 
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/alpha/include/asm/atomic.h linux-3.11.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.11.1/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -2665,7 +2667,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/lib/de
  	.udelay		= __loop_udelay,
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/lib/uaccess_with_memcpy.c linux-3.11.1-pax/arch/arm/lib/uaccess_with_memcpy.c
 --- linux-3.11.1/arch/arm/lib/uaccess_with_memcpy.c	2013-08-20 19:08:15.703833394 +0200
-+++ linux-3.11.1-pax/arch/arm/lib/uaccess_with_memcpy.c	2013-09-03 00:47:52.542903275 +0200
++++ linux-3.11.1-pax/arch/arm/lib/uaccess_with_memcpy.c	2013-09-17 00:08:35.174059437 +0200
 @@ -104,7 +104,7 @@ out:
  }
  
@@ -2675,6 +2677,15 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/lib/ua
  {
  	/*
  	 * This test is stubbed out of the main function above to keep
+@@ -155,7 +155,7 @@ out:
+ 	return n;
+ }
+ 
+-unsigned long __clear_user(void __user *addr, unsigned long n)
++unsigned long ___clear_user(void __user *addr, unsigned long n)
+ {
+ 	/* See rational for this in __copy_to_user() above. */
+ 	if (n < 64)
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mach-kirkwood/common.c linux-3.11.1-pax/arch/arm/mach-kirkwood/common.c
 --- linux-3.11.1/arch/arm/mach-kirkwood/common.c	2013-09-03 00:44:47.034913179 +0200
 +++ linux-3.11.1-pax/arch/arm/mach-kirkwood/common.c	2013-09-03 00:47:52.542903275 +0200
@@ -12376,8 +12387,8 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/x86/includ
  	else if (pg_flags == _PGMT_UC_MINUS)
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/x86/include/asm/cache.h linux-3.11.1-pax/arch/x86/include/asm/cache.h
 --- linux-3.11.1/arch/x86/include/asm/cache.h	2013-08-20 19:08:15.835833387 +0200
-+++ linux-3.11.1-pax/arch/x86/include/asm/cache.h	2013-09-03 00:47:52.626903270 +0200
-@@ -5,12 +5,13 @@
++++ linux-3.11.1-pax/arch/x86/include/asm/cache.h	2013-09-16 23:33:21.554172288 +0200
+@@ -5,12 +5,17 @@
  
  /* L1 cache line size */
  #define L1_CACHE_SHIFT	(CONFIG_X86_L1_CACHE_SHIFT)
@@ -12385,7 +12396,11 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/x86/includ
 +#define L1_CACHE_BYTES	(_AC(1,UL) << L1_CACHE_SHIFT)
  
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
++#ifdef MODULE
++#define __read_only __attribute__((__section__(".rodata")))
++#else
 +#define __read_only __attribute__((__section__(".data..read_only")))
++#endif
  
  #define INTERNODE_CACHE_SHIFT CONFIG_X86_INTERNODE_CACHE_SHIFT
 -#define INTERNODE_CACHE_BYTES (1 << INTERNODE_CACHE_SHIFT)
@@ -34181,7 +34196,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/cpufreq
  						CPUFREQ_TRANSITION_NOTIFIER);
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/cpufreq/cpufreq_governor.h linux-3.11.1-pax/drivers/cpufreq/cpufreq_governor.h
 --- linux-3.11.1/drivers/cpufreq/cpufreq_governor.h	2013-09-03 00:44:55.770912713 +0200
-+++ linux-3.11.1-pax/drivers/cpufreq/cpufreq_governor.h	2013-09-03 00:47:52.806903261 +0200
++++ linux-3.11.1-pax/drivers/cpufreq/cpufreq_governor.h	2013-09-17 01:03:33.465883334 +0200
 @@ -204,7 +204,7 @@ struct common_dbs_data {
  	void (*exit)(struct dbs_data *dbs_data);
  
@@ -34191,9 +34206,27 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/cpufreq
  };
  
  /* Governer Per policy data */
+@@ -224,7 +224,7 @@ struct od_ops {
+ 	unsigned int (*powersave_bias_target)(struct cpufreq_policy *policy,
+ 			unsigned int freq_next, unsigned int relation);
+ 	void (*freq_increase)(struct cpufreq_policy *p, unsigned int freq);
+-};
++} __no_const;
+ 
+ struct cs_ops {
+ 	struct notifier_block *notifier_block;
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/cpufreq/cpufreq_ondemand.c linux-3.11.1-pax/drivers/cpufreq/cpufreq_ondemand.c
 --- linux-3.11.1/drivers/cpufreq/cpufreq_ondemand.c	2013-09-03 00:44:55.770912713 +0200
-+++ linux-3.11.1-pax/drivers/cpufreq/cpufreq_ondemand.c	2013-09-03 00:47:52.806903261 +0200
++++ linux-3.11.1-pax/drivers/cpufreq/cpufreq_ondemand.c	2013-09-17 01:03:39.329883021 +0200
+@@ -560,7 +560,7 @@ static void od_exit(struct dbs_data *dbs
+ 
+ define_get_cpu_dbs_routines(od_cpu_dbs_info);
+ 
+-static struct od_ops od_ops = {
++static struct od_ops od_ops __read_only = {
+ 	.powersave_bias_init_cpu = ondemand_powersave_bias_init_cpu,
+ 	.powersave_bias_target = generic_powersave_bias_target,
+ 	.freq_increase = dbs_freq_increase,
 @@ -615,14 +615,18 @@ void od_register_powersave_bias_handler(
  		(struct cpufreq_policy *, unsigned int, unsigned int),
  		unsigned int powersave_bias)
@@ -50214,7 +50247,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/fs/ntfs/dir.c l
  		goto err_out;
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/fs/ntfs/file.c linux-3.11.1-pax/fs/ntfs/file.c
 --- linux-3.11.1/fs/ntfs/file.c	2013-08-20 19:08:16.455833354 +0200
-+++ linux-3.11.1-pax/fs/ntfs/file.c	2013-09-03 00:47:53.126903244 +0200
++++ linux-3.11.1-pax/fs/ntfs/file.c	2013-09-16 22:36:43.798353702 +0200
 @@ -1282,7 +1282,7 @@ static inline size_t ntfs_copy_from_user
  	char *addr;
  	size_t total = 0;
@@ -50224,15 +50257,6 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/fs/ntfs/file.c 
  
  	do {
  		len = PAGE_CACHE_SIZE - ofs;
-@@ -2241,6 +2241,6 @@ const struct inode_operations ntfs_file_
- #endif /* NTFS_RW */
- };
- 
--const struct file_operations ntfs_empty_file_ops = {};
-+const struct file_operations ntfs_empty_file_ops __read_only;
- 
--const struct inode_operations ntfs_empty_inode_ops = {};
-+const struct inode_operations ntfs_empty_inode_ops __read_only;
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/fs/ntfs/super.c linux-3.11.1-pax/fs/ntfs/super.c
 --- linux-3.11.1/fs/ntfs/super.c	2013-04-30 01:25:26.695585425 +0200
 +++ linux-3.11.1-pax/fs/ntfs/super.c	2013-09-03 00:47:53.126903244 +0200
@@ -53121,22 +53145,17 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/linux/i
  extern void unregister_pppox_proto(int proto_num);
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/linux/init.h linux-3.11.1-pax/include/linux/init.h
 --- linux-3.11.1/include/linux/init.h	2013-09-03 00:45:09.554911977 +0200
-+++ linux-3.11.1-pax/include/linux/init.h	2013-09-11 14:54:59.678162668 +0200
-@@ -39,9 +39,22 @@
++++ linux-3.11.1-pax/include/linux/init.h	2013-09-16 23:51:10.626115208 +0200
+@@ -39,9 +39,17 @@
   * Also note, that this data cannot be "const".
   */
  
-+#ifdef MODULE
-+#define add_init_latent_entropy
-+#define add_meminit_latent_entropy
-+#else
 +#define add_init_latent_entropy __latent_entropy
 +
 +#ifdef CONFIG_MEMORY_HOTPLUG
 +#define add_meminit_latent_entropy
 +#else
 +#define add_meminit_latent_entropy __latent_entropy
-+#endif
 +#endif
 +
  /* These are for everybody (although not all archs will actually
@@ -53146,7 +53165,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/linux/i
  #define __initdata	__section(.init.data)
  #define __initconst	__constsection(.init.rodata)
  #define __exitdata	__section(.exit.data)
-@@ -102,7 +115,7 @@
+@@ -102,7 +110,7 @@
  #define __cpuexitconst
  
  /* Used for MEMORY_HOTPLUG */
@@ -53249,7 +53268,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/linux/i
  		    u32 offset, struct device_node *);
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/linux/irq.h linux-3.11.1-pax/include/linux/irq.h
 --- linux-3.11.1/include/linux/irq.h	2013-09-03 00:45:09.554911977 +0200
-+++ linux-3.11.1-pax/include/linux/irq.h	2013-09-03 00:47:53.182903241 +0200
++++ linux-3.11.1-pax/include/linux/irq.h	2013-09-17 01:19:31.837832164 +0200
 @@ -333,7 +333,8 @@ struct irq_chip {
  	void		(*irq_print_chip)(struct irq_data *data, struct seq_file *p);
  
@@ -56288,8 +56307,16 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/net/tcp
  #define TCP_SKB_CB(__skb)	((struct tcp_skb_cb *)&((__skb)->cb[0]))
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/net/xfrm.h linux-3.11.1-pax/include/net/xfrm.h
 --- linux-3.11.1/include/net/xfrm.h	2013-09-03 00:45:09.634911973 +0200
-+++ linux-3.11.1-pax/include/net/xfrm.h	2013-09-03 00:48:57.282899818 +0200
-@@ -305,7 +305,7 @@ struct xfrm_policy_afinfo {
++++ linux-3.11.1-pax/include/net/xfrm.h	2013-09-17 01:30:53.489795769 +0200
+@@ -287,7 +287,6 @@ struct xfrm_dst;
+ struct xfrm_policy_afinfo {
+ 	unsigned short		family;
+ 	struct dst_ops		*dst_ops;
+-	void			(*garbage_collect)(struct net *net);
+ 	struct dst_entry	*(*dst_lookup)(struct net *net, int tos,
+ 					       const xfrm_address_t *saddr,
+ 					       const xfrm_address_t *daddr);
+@@ -305,7 +304,7 @@ struct xfrm_policy_afinfo {
  					    struct net_device *dev,
  					    const struct flowi *fl);
  	struct dst_entry	*(*blackhole_route)(struct net *net, struct dst_entry *orig);
@@ -56298,7 +56325,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/net/xfr
  
  extern int xfrm_policy_register_afinfo(struct xfrm_policy_afinfo *afinfo);
  extern int xfrm_policy_unregister_afinfo(struct xfrm_policy_afinfo *afinfo);
-@@ -342,7 +342,7 @@ struct xfrm_state_afinfo {
+@@ -342,7 +341,7 @@ struct xfrm_state_afinfo {
  	int			(*transport_finish)(struct sk_buff *skb,
  						    int async);
  	void			(*local_error)(struct sk_buff *skb, u32 mtu);
@@ -56307,7 +56334,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/net/xfr
  
  extern int xfrm_state_register_afinfo(struct xfrm_state_afinfo *afinfo);
  extern int xfrm_state_unregister_afinfo(struct xfrm_state_afinfo *afinfo);
-@@ -427,7 +427,7 @@ struct xfrm_mode {
+@@ -427,7 +426,7 @@ struct xfrm_mode {
  	struct module *owner;
  	unsigned int encap;
  	int flags;
@@ -56316,7 +56343,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/net/xfr
  
  /* Flags for xfrm_mode. */
  enum {
-@@ -524,7 +524,7 @@ struct xfrm_policy {
+@@ -524,7 +523,7 @@ struct xfrm_policy {
  	struct timer_list	timer;
  
  	struct flow_cache_object flo;
@@ -56325,6 +56352,24 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/net/xfr
  	u32			priority;
  	u32			index;
  	struct xfrm_mark	mark;
+@@ -1164,6 +1163,7 @@ static inline void xfrm_sk_free_policy(s
+ }
+ 
+ extern void xfrm_garbage_collect(struct net *net);
++extern void xfrm_garbage_collect_deferred(struct net *net);
+ 
+ #else
+ 
+@@ -1202,6 +1202,9 @@ static inline int xfrm6_policy_check_rev
+ static inline void xfrm_garbage_collect(struct net *net)
+ {
+ }
++static inline void xfrm_garbage_collect_deferred(struct net *net)
++{
++}
+ #endif
+ 
+ static __inline__
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/rdma/iw_cm.h linux-3.11.1-pax/include/rdma/iw_cm.h
 --- linux-3.11.1/include/rdma/iw_cm.h	2013-08-20 19:08:16.791833336 +0200
 +++ linux-3.11.1-pax/include/rdma/iw_cm.h	2013-09-03 00:47:53.238903238 +0200
@@ -57040,7 +57085,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/init/Kconfig li
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/init/main.c linux-3.11.1-pax/init/main.c
 --- linux-3.11.1/init/main.c	2013-09-03 00:45:09.762911966 +0200
-+++ linux-3.11.1-pax/init/main.c	2013-09-11 15:57:44.609961650 +0200
++++ linux-3.11.1-pax/init/main.c	2013-09-17 01:46:26.417745958 +0200
 @@ -154,6 +154,64 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -57106,7 +57151,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/init/main.c lin
  static const char * argv_init[MAX_INIT_ARGS+2] = { "init", NULL, };
  const char * envp_init[MAX_INIT_ENVS+2] = { "HOME=/", "TERM=linux", NULL, };
  static const char *panic_later, *panic_param;
-@@ -679,24 +737,22 @@ int __init_or_module do_one_initcall(ini
+@@ -679,25 +737,24 @@ int __init_or_module do_one_initcall(ini
  {
  	int count = preempt_count();
  	int ret;
@@ -57133,33 +57178,11 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/init/main.c lin
 -	WARN(msgbuf[0], "initcall %pF returned with %s\n", fn, msgbuf);
 +	WARN(*msg1 || *msg2, "initcall %pF returned with%s%s\n", fn, msg1, msg2);
  
++	add_latent_entropy();
  	return ret;
  }
-@@ -749,8 +805,10 @@ static void __init do_initcall_level(int
- 		   level, level,
- 		   &repair_env_string);
  
--	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++)
-+	for (fn = initcall_levels[level]; fn < initcall_levels[level+1]; fn++) {
- 		do_one_initcall(*fn);
-+		add_latent_entropy();
-+	}
- }
- 
- static void __init do_initcalls(void)
-@@ -784,8 +842,10 @@ static void __init do_pre_smp_initcalls(
- {
- 	initcall_t *fn;
- 
--	for (fn = __initcall_start; fn < __initcall0_start; fn++)
-+	for (fn = __initcall_start; fn < __initcall0_start; fn++) {
- 		do_one_initcall(*fn);
-+		add_latent_entropy();
-+	}
- }
- 
- /*
-@@ -803,8 +863,8 @@ static int run_init_process(const char *
+@@ -803,8 +860,8 @@ static int run_init_process(const char *
  {
  	argv_init[0] = init_filename;
  	return do_execve(init_filename,
@@ -57170,7 +57193,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/init/main.c lin
  }
  
  static noinline void __init kernel_init_freeable(void);
-@@ -881,7 +941,7 @@ static noinline void __init kernel_init_
+@@ -881,7 +938,7 @@ static noinline void __init kernel_init_
  	do_basic_setup();
  
  	/* Open the /dev/console on the rootfs, this should never fail */
@@ -57179,7 +57202,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/init/main.c lin
  		pr_err("Warning: unable to open an initial console.\n");
  
  	(void) sys_dup(0);
-@@ -894,7 +954,7 @@ static noinline void __init kernel_init_
+@@ -894,7 +951,7 @@ static noinline void __init kernel_init_
  	if (!ramdisk_execute_command)
  		ramdisk_execute_command = "/init";
  
@@ -58454,7 +58477,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/kernel/lockdep.
  		if (class->name_version > 1)
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/kernel/module.c linux-3.11.1-pax/kernel/module.c
 --- linux-3.11.1/kernel/module.c	2013-09-03 00:45:09.798911964 +0200
-+++ linux-3.11.1-pax/kernel/module.c	2013-09-03 00:47:53.270903236 +0200
++++ linux-3.11.1-pax/kernel/module.c	2013-09-17 01:44:56.613750753 +0200
 @@ -156,7 +156,8 @@ static BLOCKING_NOTIFIER_HEAD(module_not
  
  /* Bounds of module allocation, for speeding __module_address.
@@ -64959,7 +64982,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/mm/nommu.c linu
  
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/mm/page_alloc.c linux-3.11.1-pax/mm/page_alloc.c
 --- linux-3.11.1/mm/page_alloc.c	2013-09-03 00:45:09.954911956 +0200
-+++ linux-3.11.1-pax/mm/page_alloc.c	2013-09-12 20:40:39.539759333 +0200
++++ linux-3.11.1-pax/mm/page_alloc.c	2013-09-16 23:42:27.414143143 +0200
 @@ -60,6 +60,7 @@
  #include <linux/page-debug-flags.h>
  #include <linux/hugetlb.h>
@@ -65001,7 +65024,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/mm/page_alloc.c
  	arch_free_page(page, order);
  	kernel_map_pages(page, 1 << order, 0);
  
-@@ -747,6 +758,19 @@ static void __free_pages_ok(struct page
+@@ -747,6 +758,20 @@ static void __free_pages_ok(struct page
  	local_irq_restore(flags);
  }
  
@@ -65016,12 +65039,13 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/mm/page_alloc.c
 +early_param("pax_extra_latent_entropy", setup_pax_extra_latent_entropy);
 +
 +volatile u64 latent_entropy;
++EXPORT_SYMBOL(latent_entropy);
 +#endif
 +
  void __init __free_pages_bootmem(struct page *page, unsigned int order)
  {
  	unsigned int nr_pages = 1 << order;
-@@ -762,6 +786,19 @@ void __init __free_pages_bootmem(struct
+@@ -762,6 +787,19 @@ void __init __free_pages_bootmem(struct
  		set_page_count(p, 0);
  	}
  
@@ -65041,7 +65065,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/mm/page_alloc.c
  	page_zone(page)->managed_pages += 1 << order;
  	set_page_refcounted(page);
  	__free_pages(page, order);
-@@ -867,8 +904,10 @@ static int prep_new_page(struct page *pa
+@@ -867,8 +905,10 @@ static int prep_new_page(struct page *pa
  	arch_alloc_page(page, order);
  	kernel_map_pages(page, 1 << order, 1);
  
@@ -68559,7 +68583,21 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/ipv4/udp.c 
  int udp4_seq_show(struct seq_file *seq, void *v)
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/ipv4/xfrm4_policy.c linux-3.11.1-pax/net/ipv4/xfrm4_policy.c
 --- linux-3.11.1/net/ipv4/xfrm4_policy.c	2013-08-20 19:08:17.007833325 +0200
-+++ linux-3.11.1-pax/net/ipv4/xfrm4_policy.c	2013-09-03 00:47:53.386903230 +0200
++++ linux-3.11.1-pax/net/ipv4/xfrm4_policy.c	2013-09-17 01:32:35.545790320 +0200
+@@ -181,11 +181,11 @@ _decode_session4(struct sk_buff *skb, st
+ 	fl4->flowi4_tos = iph->tos;
+ }
+ 
+-static inline int xfrm4_garbage_collect(struct dst_ops *ops)
++static int xfrm4_garbage_collect(struct dst_ops *ops)
+ {
+ 	struct net *net = container_of(ops, struct net, xfrm.xfrm4_dst_ops);
+ 
+-	xfrm4_policy_afinfo.garbage_collect(net);
++	xfrm_garbage_collect_deferred(net);
+ 	return (dst_entries_get_slow(ops) > ops->gc_thresh * 2);
+ }
+ 
 @@ -264,19 +264,18 @@ static struct ctl_table xfrm4_policy_tab
  
  static int __net_init xfrm4_net_init(struct net *net)
@@ -69120,7 +69158,21 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/ipv6/udp.c 
  			UDP6_INC_STATS_BH(sock_net(sk), UDP_MIB_INERRORS,
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/ipv6/xfrm6_policy.c linux-3.11.1-pax/net/ipv6/xfrm6_policy.c
 --- linux-3.11.1/net/ipv6/xfrm6_policy.c	2013-08-20 19:08:17.019833324 +0200
-+++ linux-3.11.1-pax/net/ipv6/xfrm6_policy.c	2013-09-03 00:47:53.394903229 +0200
++++ linux-3.11.1-pax/net/ipv6/xfrm6_policy.c	2013-09-17 01:32:30.913790568 +0200
+@@ -207,11 +207,11 @@ _decode_session6(struct sk_buff *skb, st
+ 	}
+ }
+ 
+-static inline int xfrm6_garbage_collect(struct dst_ops *ops)
++static int xfrm6_garbage_collect(struct dst_ops *ops)
+ {
+ 	struct net *net = container_of(ops, struct net, xfrm.xfrm6_dst_ops);
+ 
+-	xfrm6_policy_afinfo.garbage_collect(net);
++	xfrm_garbage_collect_deferred(net);
+ 	return dst_entries_get_fast(ops) > ops->gc_thresh * 2;
+ }
+ 
 @@ -324,19 +324,19 @@ static struct ctl_table xfrm6_policy_tab
  
  static int __net_init xfrm6_net_init(struct net *net)
@@ -71118,7 +71170,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/wireless/we
  	iwp->length += essid_compat;
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/xfrm/xfrm_policy.c linux-3.11.1-pax/net/xfrm/xfrm_policy.c
 --- linux-3.11.1/net/xfrm/xfrm_policy.c	2013-09-03 00:45:11.410911878 +0200
-+++ linux-3.11.1-pax/net/xfrm/xfrm_policy.c	2013-09-03 00:47:53.450903226 +0200
++++ linux-3.11.1-pax/net/xfrm/xfrm_policy.c	2013-09-17 01:31:20.965794302 +0200
 @@ -332,7 +332,7 @@ static void xfrm_policy_kill(struct xfrm
  {
  	policy->walk.dead = 1;
@@ -71173,7 +71225,21 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/xfrm/xfrm_p
  
  	return xdst;
  }
-@@ -2611,7 +2611,7 @@ static int xfrm_bundle_ok(struct xfrm_ds
+@@ -2557,11 +2557,12 @@ void xfrm_garbage_collect(struct net *ne
+ }
+ EXPORT_SYMBOL(xfrm_garbage_collect);
+ 
+-static void xfrm_garbage_collect_deferred(struct net *net)
++void xfrm_garbage_collect_deferred(struct net *net)
+ {
+ 	flow_cache_flush_deferred();
+ 	__xfrm_garbage_collect(net);
+ }
++EXPORT_SYMBOL(xfrm_garbage_collect_deferred);
+ 
+ static void xfrm_init_pmtu(struct dst_entry *dst)
+ {
+@@ -2611,7 +2612,7 @@ static int xfrm_bundle_ok(struct xfrm_ds
  		if (xdst->xfrm_genid != dst->xfrm->genid)
  			return 0;
  		if (xdst->num_pols > 0 &&
@@ -71182,32 +71248,24 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/xfrm/xfrm_p
  			return 0;
  
  		mtu = dst_mtu(dst->child);
-@@ -2699,8 +2699,11 @@ int xfrm_policy_register_afinfo(struct x
+@@ -2699,8 +2700,6 @@ int xfrm_policy_register_afinfo(struct x
  			dst_ops->link_failure = xfrm_link_failure;
  		if (likely(dst_ops->neigh_lookup == NULL))
  			dst_ops->neigh_lookup = xfrm_neigh_lookup;
 -		if (likely(afinfo->garbage_collect == NULL))
 -			afinfo->garbage_collect = xfrm_garbage_collect_deferred;
-+		if (likely(afinfo->garbage_collect == NULL)) {
-+			pax_open_kernel();
-+			*(void **)&afinfo->garbage_collect = xfrm_garbage_collect_deferred;
-+			pax_close_kernel();
-+		}
  		rcu_assign_pointer(xfrm_policy_afinfo[afinfo->family], afinfo);
  	}
  	spin_unlock(&xfrm_policy_afinfo_lock);
-@@ -2754,7 +2757,9 @@ int xfrm_policy_unregister_afinfo(struct
+@@ -2754,7 +2753,6 @@ int xfrm_policy_unregister_afinfo(struct
  		dst_ops->check = NULL;
  		dst_ops->negative_advice = NULL;
  		dst_ops->link_failure = NULL;
 -		afinfo->garbage_collect = NULL;
-+		pax_open_kernel();
-+		*(void **)&afinfo->garbage_collect = NULL;
-+		pax_close_kernel();
  	}
  	return err;
  }
-@@ -3137,7 +3142,7 @@ static int xfrm_policy_migrate(struct xf
+@@ -3137,7 +3135,7 @@ static int xfrm_policy_migrate(struct xf
  			       sizeof(pol->xfrm_vec[i].saddr));
  			pol->xfrm_vec[i].encap_family = mp->new_family;
  			/* flush bundles */
