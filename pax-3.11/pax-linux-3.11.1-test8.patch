@@ -1,9 +1,5 @@
-- fixed arm compile error, reported by Arnaud Ebalard
-- fixed NULL deref due to some xfrm constification, reported by marcin1j (http://forums.grsecurity.net/viewtopic.php?f=3&t=3743)
-- fixed od_ops constification, fixes cpufreq ondemand on AMD
-- latent entropy will now be gathered from module init code as well (i.e., at module load/init time)
-- __read_only will now be enforced in modules as well
-- removed unneccessary __read_only from ntfs
+- fixed some arm compile regressions, reported by Arnaud Ebalard and Michael Tremer
+- better implementation of __read_only for modules
 
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/alpha/include/asm/atomic.h linux-3.11.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.11.1/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -2835,6 +2831,27 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mach-o
  
  /* omap_hwmod_list contains all registered struct omap_hwmods */
  static LIST_HEAD(omap_hwmod_list);
+diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mach-omap2/omap-mpuss-lowpower.c linux-3.11.1-pax/arch/arm/mach-omap2/omap-mpuss-lowpower.c
+--- linux-3.11.1/arch/arm/mach-omap2/omap-mpuss-lowpower.c	2013-09-03 00:44:47.118913175 +0200
++++ linux-3.11.1-pax/arch/arm/mach-omap2/omap-mpuss-lowpower.c	2013-09-17 14:04:22.559849659 +0200
+@@ -84,7 +84,7 @@ struct cpu_pm_ops {
+ 	int (*finish_suspend)(unsigned long cpu_state);
+ 	void (*resume)(void);
+ 	void (*scu_prepare)(unsigned int cpu_id, unsigned int cpu_state);
+-};
++} __no_const;
+ 
+ static DEFINE_PER_CPU(struct omap4_cpu_pm_info, omap4_pm_info);
+ static struct powerdomain *mpuss_pd;
+@@ -102,7 +102,7 @@ static void dummy_cpu_resume(void)
+ static void dummy_scu_prepare(unsigned int cpu_id, unsigned int cpu_state)
+ {}
+ 
+-struct cpu_pm_ops omap_pm_ops = {
++static struct cpu_pm_ops omap_pm_ops __read_only = {
+ 	.finish_suspend		= default_finish_suspend,
+ 	.resume			= dummy_cpu_resume,
+ 	.scu_prepare		= dummy_scu_prepare,
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mach-omap2/omap-wakeupgen.c linux-3.11.1-pax/arch/arm/mach-omap2/omap-wakeupgen.c
 --- linux-3.11.1/arch/arm/mach-omap2/omap-wakeupgen.c	2013-09-03 00:44:47.122913175 +0200
 +++ linux-3.11.1-pax/arch/arm/mach-omap2/omap-wakeupgen.c	2013-09-03 00:47:52.546903274 +0200
@@ -3012,7 +3029,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mm/con
  	}
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mm/fault.c linux-3.11.1-pax/arch/arm/mm/fault.c
 --- linux-3.11.1/arch/arm/mm/fault.c	2013-09-03 00:44:47.294913165 +0200
-+++ linux-3.11.1-pax/arch/arm/mm/fault.c	2013-09-03 00:47:52.550903274 +0200
++++ linux-3.11.1-pax/arch/arm/mm/fault.c	2013-09-17 16:15:19.787430143 +0200
 @@ -25,6 +25,7 @@
  #include <asm/system_misc.h>
  #include <asm/system_info.h>
@@ -3133,7 +3150,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mm/fau
 +			/*
 +			 * PaX: __kuser_get_tls emulation
 +			 */
-+			regs->ARM_r0 = current_thread_info()->tp_value;
++			regs->ARM_r0 = current_thread_info()->tp_value[0];
 +			regs->ARM_pc = regs->ARM_lr;
 +			return;
 +		}
@@ -12387,8 +12404,8 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/x86/includ
  	else if (pg_flags == _PGMT_UC_MINUS)
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/x86/include/asm/cache.h linux-3.11.1-pax/arch/x86/include/asm/cache.h
 --- linux-3.11.1/arch/x86/include/asm/cache.h	2013-08-20 19:08:15.835833387 +0200
-+++ linux-3.11.1-pax/arch/x86/include/asm/cache.h	2013-09-16 23:33:21.554172288 +0200
-@@ -5,12 +5,17 @@
++++ linux-3.11.1-pax/arch/x86/include/asm/cache.h	2013-09-17 22:17:36.722269560 +0200
+@@ -5,12 +5,13 @@
  
  /* L1 cache line size */
  #define L1_CACHE_SHIFT	(CONFIG_X86_L1_CACHE_SHIFT)
@@ -12396,11 +12413,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/x86/includ
 +#define L1_CACHE_BYTES	(_AC(1,UL) << L1_CACHE_SHIFT)
  
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
-+#ifdef MODULE
-+#define __read_only __attribute__((__section__(".rodata")))
-+#else
 +#define __read_only __attribute__((__section__(".data..read_only")))
-+#endif
  
  #define INTERNODE_CACHE_SHIFT CONFIG_X86_INTERNODE_CACHE_SHIFT
 -#define INTERNODE_CACHE_BYTES (1 << INTERNODE_CACHE_SHIFT)
@@ -33549,6 +33562,18 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/block/p
  
  static DEFINE_MUTEX(pktcdvd_mutex);
  static struct pktcdvd_device *pkt_devs[MAX_WRITERS];
+diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/bus/arm-cci.c linux-3.11.1-pax/drivers/bus/arm-cci.c
+--- linux-3.11.1/drivers/bus/arm-cci.c	2013-09-03 00:44:55.674912718 +0200
++++ linux-3.11.1-pax/drivers/bus/arm-cci.c	2013-09-17 16:25:16.151398302 +0200
+@@ -419,7 +419,7 @@ static int __init cci_probe(void)
+ 
+ 	nb_cci_ports = cci_config->nb_ace + cci_config->nb_ace_lite;
+ 
+-	ports = kcalloc(sizeof(*ports), nb_cci_ports, GFP_KERNEL);
++	ports = kcalloc(nb_cci_ports, sizeof(*ports), GFP_KERNEL);
+ 	if (!ports)
+ 		return -ENOMEM;
+ 
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/cdrom/cdrom.c linux-3.11.1-pax/drivers/cdrom/cdrom.c
 --- linux-3.11.1/drivers/cdrom/cdrom.c	2013-09-03 00:44:55.674912718 +0200
 +++ linux-3.11.1-pax/drivers/cdrom/cdrom.c	2013-09-03 00:47:52.786903262 +0200
@@ -34065,7 +34090,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/clk/clk
  	if (!composite) {
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/clk/socfpga/clk.c linux-3.11.1-pax/drivers/clk/socfpga/clk.c
 --- linux-3.11.1/drivers/clk/socfpga/clk.c	2013-09-03 00:44:55.750912714 +0200
-+++ linux-3.11.1-pax/drivers/clk/socfpga/clk.c	2013-09-03 00:47:52.806903261 +0200
++++ linux-3.11.1-pax/drivers/clk/socfpga/clk.c	2013-09-17 16:29:07.003385977 +0200
 @@ -22,6 +22,7 @@
  #include <linux/clk-provider.h>
  #include <linux/io.h>
@@ -34087,6 +34112,15 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/clk/soc
  	}
  
  	clk = clk_register(NULL, &socfpga_clk->hw.hw);
+@@ -244,7 +247,7 @@ static unsigned long socfpga_clk_recalc_
+ 	return parent_rate / div;
+ }
+ 
+-static struct clk_ops gateclk_ops = {
++static clk_ops_no_const gateclk_ops __read_only = {
+ 	.recalc_rate = socfpga_clk_recalc_rate,
+ 	.get_parent = socfpga_clk_get_parent,
+ 	.set_parent = socfpga_clk_set_parent,
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/cpufreq/acpi-cpufreq.c linux-3.11.1-pax/drivers/cpufreq/acpi-cpufreq.c
 --- linux-3.11.1/drivers/cpufreq/acpi-cpufreq.c	2013-09-03 00:44:55.770912713 +0200
 +++ linux-3.11.1-pax/drivers/cpufreq/acpi-cpufreq.c	2013-09-03 00:47:52.806903261 +0200
@@ -39684,6 +39718,20 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/mmc/hos
 -};
 +} __do_const;
  #endif /* _DW_MMC_H_ */
+diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/mmc/host/mmci.c linux-3.11.1-pax/drivers/mmc/host/mmci.c
+--- linux-3.11.1/drivers/mmc/host/mmci.c	2013-09-03 00:44:59.074912537 +0200
++++ linux-3.11.1-pax/drivers/mmc/host/mmci.c	2013-09-17 16:52:51.859309900 +0200
+@@ -1482,7 +1482,9 @@ static int mmci_probe(struct amba_device
+ 	}
+ 
+ 	if (variant->busy_detect) {
+-		mmci_ops.card_busy = mmci_card_busy;
++		pax_open_kernel();
++		*(void **)&mmci_ops.card_busy = mmci_card_busy;
++		pax_close_kernel();
+ 		mmci_write_datactrlreg(host, MCI_ST_DPSM_BUSYMODE);
+ 	}
+ 
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/mmc/host/sdhci-s3c.c linux-3.11.1-pax/drivers/mmc/host/sdhci-s3c.c
 --- linux-3.11.1/drivers/mmc/host/sdhci-s3c.c	2013-09-03 00:44:59.082912536 +0200
 +++ linux-3.11.1-pax/drivers/mmc/host/sdhci-s3c.c	2013-09-03 00:47:52.926903254 +0200
@@ -39836,6 +39884,18 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/net/eth
  
  #define L2T_SKB_CB(skb) ((struct l2t_skb_cb *)(skb)->cb)
  
+diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/net/ethernet/chelsio/cxgb3/sge.c linux-3.11.1-pax/drivers/net/ethernet/chelsio/cxgb3/sge.c
+--- linux-3.11.1/drivers/net/ethernet/chelsio/cxgb3/sge.c	2013-09-17 16:48:07.715325071 +0200
++++ linux-3.11.1-pax/drivers/net/ethernet/chelsio/cxgb3/sge.c	2013-09-17 16:47:56.683325660 +0200
+@@ -1599,7 +1599,7 @@ static void write_ofld_wr(struct adapter
+ 	flits = skb_transport_offset(skb) / 8;
+ 	sgp = ndesc == 1 ? (struct sg_ent *)&d->flit[flits] : sgl;
+ 	sgl_flits = make_sgl(skb, sgp, skb_transport_header(skb),
+-			     skb->tail - skb->transport_header,
++			     skb_tail_pointer(skb) - skb_transport_header(skb),
+ 			     adap->pdev);
+ 	if (need_skb_unmap()) {
+ 		setup_deferred_unmapping(skb, adap->pdev, sgp, sgl_flits);
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/drivers/net/ethernet/dec/tulip/de4x5.c linux-3.11.1-pax/drivers/net/ethernet/dec/tulip/de4x5.c
 --- linux-3.11.1/drivers/net/ethernet/dec/tulip/de4x5.c	2013-08-20 19:08:16.227833366 +0200
 +++ linux-3.11.1-pax/drivers/net/ethernet/dec/tulip/de4x5.c	2013-09-03 00:47:52.934903254 +0200
@@ -52321,13 +52381,17 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/linux/b
  extern int blk_trace_ioctl(struct block_device *, unsigned, char __user *);
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/include/linux/cache.h linux-3.11.1-pax/include/linux/cache.h
 --- linux-3.11.1/include/linux/cache.h	2013-08-20 19:08:16.495833352 +0200
-+++ linux-3.11.1-pax/include/linux/cache.h	2013-09-03 00:47:53.158903242 +0200
-@@ -16,6 +16,10 @@
++++ linux-3.11.1-pax/include/linux/cache.h	2013-09-17 22:09:27.418295685 +0200
+@@ -16,6 +16,14 @@
  #define __read_mostly
  #endif
  
 +#ifndef __read_only
++#ifdef CONFIG_PAX_KERNEXEC
++#error KERNEXEC requires __read_only
++#else
 +#define __read_only __read_mostly
++#endif
 +#endif
 +
  #ifndef ____cacheline_aligned
@@ -69671,25 +69735,25 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/netfilter/i
  	spin_lock_init(&ipvs->dropentry_lock);
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/netfilter/ipvs/ip_vs_lblc.c linux-3.11.1-pax/net/netfilter/ipvs/ip_vs_lblc.c
 --- linux-3.11.1/net/netfilter/ipvs/ip_vs_lblc.c	2013-09-03 00:45:10.166911944 +0200
-+++ linux-3.11.1-pax/net/netfilter/ipvs/ip_vs_lblc.c	2013-09-03 00:47:53.410903228 +0200
++++ linux-3.11.1-pax/net/netfilter/ipvs/ip_vs_lblc.c	2013-09-17 16:34:11.307369729 +0200
 @@ -118,7 +118,7 @@ struct ip_vs_lblc_table {
   *      IPVS LBLC sysctl table
   */
  #ifdef CONFIG_SYSCTL
 -static struct ctl_table vs_vars_table[] = {
-+static struct ctl_table vs_vars_table[] __read_only = {
++static ctl_table_no_const vs_vars_table[] __read_only = {
  	{
  		.procname	= "lblc_expiration",
  		.data		= NULL,
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/net/netfilter/ipvs/ip_vs_lblcr.c linux-3.11.1-pax/net/netfilter/ipvs/ip_vs_lblcr.c
 --- linux-3.11.1/net/netfilter/ipvs/ip_vs_lblcr.c	2013-09-03 00:45:10.166911944 +0200
-+++ linux-3.11.1-pax/net/netfilter/ipvs/ip_vs_lblcr.c	2013-09-03 00:47:53.410903228 +0200
++++ linux-3.11.1-pax/net/netfilter/ipvs/ip_vs_lblcr.c	2013-09-17 16:34:01.247370266 +0200
 @@ -299,7 +299,7 @@ struct ip_vs_lblcr_table {
   *      IPVS LBLCR sysctl table
   */
  
 -static struct ctl_table vs_vars_table[] = {
-+static struct ctl_table vs_vars_table[] __read_only = {
++static ctl_table_no_const vs_vars_table[] __read_only = {
  	{
  		.procname	= "lblcr_expiration",
  		.data		= NULL,
@@ -71757,6 +71821,20 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/scripts/mod/sum
  		warn("writing sum in %s failed: %s\n",
  			filename, strerror(errno));
  		goto out;
+diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/scripts/module-common.lds linux-3.11.1-pax/scripts/module-common.lds
+--- linux-3.11.1/scripts/module-common.lds	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.11.1-pax/scripts/module-common.lds	2013-09-17 22:21:12.014258065 +0200
+@@ -6,6 +6,10 @@
+ SECTIONS {
+ 	/DISCARD/ : { *(.discard) }
+ 
++	.rodata : {
++		*(.rodata) *(.rodata.*)
++		*(.data..read_only)
++	}
+ 	__ksymtab		: { *(SORT(___ksymtab+*)) }
+ 	__ksymtab_gpl		: { *(SORT(___ksymtab_gpl+*)) }
+ 	__ksymtab_unused	: { *(SORT(___ksymtab_unused+*)) }
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/scripts/package/builddeb linux-3.11.1-pax/scripts/package/builddeb
 --- linux-3.11.1/scripts/package/builddeb	2013-08-20 19:08:17.335833307 +0200
 +++ linux-3.11.1-pax/scripts/package/builddeb	2013-09-03 00:47:53.458903226 +0200
