@@ -1,12 +1,4 @@
-- added some latent entropy extraction to fork
-- got rid of reset_security_ops
-- added compile time checking for unavailable KERNEXEC accessors
-- backported 1ecfd533f4c528b0b4cc5bc115c4c47f0b5e4828 (pud leak in alloc_new_pmd)
-- build_string doesn't need to account for the null terminator, fix some usage in the kernexec plugin
-- fixed NULL deref due to some xfrm constification, reported by marcin1j (http://forums.grsecurity.net/viewtopic.php?f=3&t=3743)
-- latent entropy will now be gathered from module init code as well (i.e., at module load/init time)
-- __read_only will now be enforced in modules as well
-- removed unneccessary __read_only from ntfs
+- better implementation of __read_only for modules
 
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/arch/alpha/include/asm/atomic.h linux-3.2.51-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.51/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -8809,8 +8801,8 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/arch/x86/includ
  	else if (pg_flags == _PGMT_UC_MINUS)
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/arch/x86/include/asm/cache.h linux-3.2.51-pax/arch/x86/include/asm/cache.h
 --- linux-3.2.51/arch/x86/include/asm/cache.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.51-pax/arch/x86/include/asm/cache.h	2013-09-17 02:16:32.009649554 +0200
-@@ -5,12 +5,17 @@
++++ linux-3.2.51-pax/arch/x86/include/asm/cache.h	2013-09-19 00:29:52.269652797 +0200
+@@ -5,12 +5,13 @@
  
  /* L1 cache line size */
  #define L1_CACHE_SHIFT	(CONFIG_X86_L1_CACHE_SHIFT)
@@ -8818,11 +8810,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/arch/x86/includ
 +#define L1_CACHE_BYTES	(_AC(1,UL) << L1_CACHE_SHIFT)
  
  #define __read_mostly __attribute__((__section__(".data..read_mostly")))
-+#ifdef MODULE
-+#define __read_only __attribute__((__section__(".rodata")))
-+#else
 +#define __read_only __attribute__((__section__(".data..read_only")))
-+#endif
  
  #define INTERNODE_CACHE_SHIFT CONFIG_X86_INTERNODE_CACHE_SHIFT
 -#define INTERNODE_CACHE_BYTES (1 << INTERNODE_CACHE_SHIFT)
@@ -35938,6 +35926,30 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/drivers/net/eth
  
  #define L2T_SKB_CB(skb) ((struct l2t_skb_cb *)(skb)->cb)
  
+diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/drivers/net/ethernet/chelsio/cxgb3/sge.c linux-3.2.51-pax/drivers/net/ethernet/chelsio/cxgb3/sge.c
+--- linux-3.2.51/drivers/net/ethernet/chelsio/cxgb3/sge.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.51-pax/drivers/net/ethernet/chelsio/cxgb3/sge.c	2013-09-19 00:44:23.289606292 +0200
+@@ -1537,9 +1537,9 @@ static void deferred_unmap_destructor(st
+ 	dui = (struct deferred_unmap_info *)skb->head;
+ 	p = dui->addr;
+ 
+-	if (skb->tail - skb->transport_header)
++	if (skb_tail_pointer(skb) - skb_transport_header(skb))
+ 		pci_unmap_single(dui->pdev, *p++,
+-				 skb->tail - skb->transport_header,
++				 skb_tail_pointer(skb) - skb_transport_header(skb),
+ 				 PCI_DMA_TODEVICE);
+ 
+ 	si = skb_shinfo(skb);
+@@ -1600,7 +1600,7 @@ static void write_ofld_wr(struct adapter
+ 	flits = skb_transport_offset(skb) / 8;
+ 	sgp = ndesc == 1 ? (struct sg_ent *)&d->flit[flits] : sgl;
+ 	sgl_flits = make_sgl(skb, sgp, skb_transport_header(skb),
+-			     skb->tail - skb->transport_header,
++			     skb_tail_pointer(skb) - skb_transport_header(skb),
+ 			     adap->pdev);
+ 	if (need_skb_unmap()) {
+ 		setup_deferred_unmapping(skb, adap->pdev, sgp, sgl_flits);
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/drivers/net/ethernet/dec/tulip/de4x5.c linux-3.2.51-pax/drivers/net/ethernet/dec/tulip/de4x5.c
 --- linux-3.2.51/drivers/net/ethernet/dec/tulip/de4x5.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.51-pax/drivers/net/ethernet/dec/tulip/de4x5.c	2012-07-04 19:24:48.536063007 +0200
@@ -47701,13 +47713,17 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/b
  #define __le64_to_cpus(x) do { (void)(x); } while (0)
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/cache.h linux-3.2.51-pax/include/linux/cache.h
 --- linux-3.2.51/include/linux/cache.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.51-pax/include/linux/cache.h	2012-07-04 19:24:48.748063008 +0200
-@@ -16,6 +16,10 @@
++++ linux-3.2.51-pax/include/linux/cache.h	2013-09-19 00:30:35.721650477 +0200
+@@ -16,6 +16,14 @@
  #define __read_mostly
  #endif
  
 +#ifndef __read_only
++#ifdef CONFIG_PAX_KERNEXEC
++#error KERNEXEC requires __read_only
++#else
 +#define __read_only __read_mostly
++#endif
 +#endif
 +
  #ifndef ____cacheline_aligned
@@ -66833,6 +66849,20 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/scripts/mod/sum
  		warn("writing sum in %s failed: %s\n",
  			filename, strerror(errno));
  		goto out;
+diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/scripts/module-common.lds linux-3.2.51-pax/scripts/module-common.lds
+--- linux-3.2.51/scripts/module-common.lds	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.51-pax/scripts/module-common.lds	2013-09-19 00:44:46.157605071 +0200
+@@ -6,6 +6,10 @@
+ SECTIONS {
+ 	/DISCARD/ : { *(.discard) }
+ 
++	.rodata : {
++		*(.rodata) *(.rodata.*)
++		*(.data..read_only)
++	}
+ 	__ksymtab		: { *(SORT(___ksymtab+*)) }
+ 	__ksymtab_gpl		: { *(SORT(___ksymtab_gpl+*)) }
+ 	__ksymtab_unused	: { *(SORT(___ksymtab_unused+*)) }
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/scripts/package/builddeb linux-3.2.51-pax/scripts/package/builddeb
 --- linux-3.2.51/scripts/package/builddeb	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.51-pax/scripts/package/builddeb	2013-03-27 22:39:54.556990101 +0100
