@@ -1,5 +1,4 @@
-- fixed some arm compile regressions, reported by Arnaud Ebalard and Michael Tremer
-- better implementation of __read_only for modules
+- fixed a regression and an apparently needed kuser emulation on arm, reported by Arnaud Ebalard
 
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/alpha/include/asm/atomic.h linux-3.11.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.11.1/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -1947,7 +1946,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/kernel
  	mov	r5, r0
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/kernel/entry-common.S linux-3.11.1-pax/arch/arm/kernel/entry-common.S
 --- linux-3.11.1/arch/arm/kernel/entry-common.S	2013-09-03 00:44:46.882913187 +0200
-+++ linux-3.11.1-pax/arch/arm/kernel/entry-common.S	2013-09-03 00:47:52.534903275 +0200
++++ linux-3.11.1-pax/arch/arm/kernel/entry-common.S	2013-09-18 21:31:42.182223565 +0200
 @@ -10,18 +10,46 @@
  
  #include <asm/unistd.h>
@@ -1998,9 +1997,9 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/kernel
  	.align	5
  /*
   * This is the fast syscall return path.  We do as little as
-@@ -366,6 +394,12 @@ ENTRY(vector_swi)
+@@ -413,6 +441,12 @@ ENTRY(vector_swi)
+  USER(	ldr	scno, [lr, #-4]		)	@ get SWI instruction
  #endif
- 	zero_fp
  
 +	/*
 +	 * do this here to avoid a performance hit of wrapping the code above
@@ -2008,9 +2007,9 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/kernel
 +	 */
 +	pax_enter_kernel_user
 +
- #ifdef CONFIG_ALIGNMENT_TRAP
- 	ldr	ip, __cr_alignment
- 	ldr	ip, [ip]
+ 	adr	tbl, sys_call_table		@ load syscall table pointer
+ 
+ #if defined(CONFIG_OABI_COMPAT)
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/kernel/entry-header.S linux-3.11.1-pax/arch/arm/kernel/entry-header.S
 --- linux-3.11.1/arch/arm/kernel/entry-header.S	2013-09-03 00:44:46.882913187 +0200
 +++ linux-3.11.1-pax/arch/arm/kernel/entry-header.S	2013-09-03 00:47:52.534903275 +0200
@@ -3029,7 +3028,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mm/con
  	}
 diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mm/fault.c linux-3.11.1-pax/arch/arm/mm/fault.c
 --- linux-3.11.1/arch/arm/mm/fault.c	2013-09-03 00:44:47.294913165 +0200
-+++ linux-3.11.1-pax/arch/arm/mm/fault.c	2013-09-17 16:15:19.787430143 +0200
++++ linux-3.11.1-pax/arch/arm/mm/fault.c	2013-09-18 02:46:15.933408919 +0200
 @@ -25,6 +25,7 @@
  #include <asm/system_misc.h>
  #include <asm/system_info.h>
@@ -3122,7 +3121,7 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mm/fau
  	printk(KERN_ALERT "Unhandled fault: %s (0x%03x) at 0x%08lx\n",
  		inf->name, fsr, addr);
  
-@@ -571,15 +625,65 @@ hook_ifault_code(int nr, int (*fn)(unsig
+@@ -571,15 +625,89 @@ hook_ifault_code(int nr, int (*fn)(unsig
  	ifsr_info[nr].name = name;
  }
  
@@ -3145,6 +3144,30 @@ diff -NurpX linux-3.11.1-pax/Documentation/dontdiff linux-3.11.1/arch/arm/mm/fau
 +			else
 +				sys_rt_sigreturn(regs);
 +			return;
++		}
++		if (pc == 0xffff0f60UL) {
++			/*
++			 * PaX: __kuser_cmpxchg64 emulation
++			 */
++			// TODO
++			//regs->ARM_pc = regs->ARM_lr;
++			//return;
++		}
++		if (pc == 0xffff0fa0UL) {
++			/*
++			 * PaX: __kuser_memory_barrier emulation
++			 */
++			// dmb(); implied by the exception
++			regs->ARM_pc = regs->ARM_lr;
++			return;
++		}
++		if (pc == 0xffff0fc0UL) {
++			/*
++			 * PaX: __kuser_cmpxchg emulation
++			 */
++			// TODO
++			//regs->ARM_pc = regs->ARM_lr;
++			//return;
 +		}
 +		if (pc == 0xffff0fe0UL) {
 +			/*
