@@ -1,4 +1,7 @@
-- better implementation of __read_only for modules
+- fixed an integer overflow in the ELF loader that happens to be harmless due to another overflow, found by Emese Revfy's new size overflow plugin (not yet released)
+- beefed up latent entropy extraction
+  - latent_entropy itself will be initialized to a compile-time random value (instead of 0)
+  - entropy will be collected from various irq and softirq handlers
 
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/arch/alpha/include/asm/atomic.h linux-3.2.51-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.51/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -26992,13 +26995,13 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/arch/x86/xen/xe
  
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/block/blk-iopoll.c linux-3.2.51-pax/block/blk-iopoll.c
 --- linux-3.2.51/block/blk-iopoll.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.51-pax/block/blk-iopoll.c	2013-02-20 01:19:12.098027524 +0100
++++ linux-3.2.51-pax/block/blk-iopoll.c	2013-09-27 19:55:59.940207777 +0200
 @@ -77,7 +77,7 @@ void blk_iopoll_complete(struct blk_iopo
  }
  EXPORT_SYMBOL(blk_iopoll_complete);
  
 -static void blk_iopoll_softirq(struct softirq_action *h)
-+static void blk_iopoll_softirq(void)
++static __latent_entropy void blk_iopoll_softirq(void)
  {
  	struct list_head *list = &__get_cpu_var(blk_cpu_iopoll);
  	int rearm = 0, budget = blk_iopoll_budget;
@@ -27025,13 +27028,13 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/block/blk-map.c
  	else
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/block/blk-softirq.c linux-3.2.51-pax/block/blk-softirq.c
 --- linux-3.2.51/block/blk-softirq.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.51-pax/block/blk-softirq.c	2013-02-20 01:19:12.134027522 +0100
++++ linux-3.2.51-pax/block/blk-softirq.c	2013-09-27 19:55:53.260208133 +0200
 @@ -17,7 +17,7 @@ static DEFINE_PER_CPU(struct list_head,
   * Softirq action handler - move entries to local list and loop over them
   * while passing them to the queue registered handler.
   */
 -static void blk_done_softirq(struct softirq_action *h)
-+static void blk_done_softirq(void)
++static __latent_entropy void blk_done_softirq(void)
  {
  	struct list_head *cpu_list, local_list;
  
@@ -41187,7 +41190,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c linux-3.2.51-pax/fs/binfmt_elf.c
 --- linux-3.2.51/fs/binfmt_elf.c	2012-10-24 01:05:57.304814639 +0200
-+++ linux-3.2.51-pax/fs/binfmt_elf.c	2013-08-17 01:59:52.980238359 +0200
++++ linux-3.2.51-pax/fs/binfmt_elf.c	2013-09-27 19:57:03.636204376 +0200
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -41331,7 +41334,26 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  				error = -ENOMEM;
  				goto out_close;
  			}
-@@ -528,6 +549,315 @@ out:
+@@ -513,11 +534,13 @@ static unsigned long load_elf_interp(str
+ 		elf_bss = ELF_PAGESTART(elf_bss + ELF_MIN_ALIGN - 1);
+ 
+ 		/* Map the last of the bss segment */
+-		down_write(&current->mm->mmap_sem);
+-		error = do_brk(elf_bss, last_bss - elf_bss);
+-		up_write(&current->mm->mmap_sem);
+-		if (BAD_ADDR(error))
+-			goto out_close;
++		if (last_bss > elf_bss) {
++			down_write(&current->mm->mmap_sem);
++			error = do_brk(elf_bss, last_bss - elf_bss);
++			up_write(&current->mm->mmap_sem);
++			if (BAD_ADDR(error))
++				goto out_close;
++		}
+ 	}
+ 
+ 	error = load_addr;
+@@ -528,6 +551,315 @@ out:
  	return error;
  }
  
@@ -41647,7 +41669,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -544,6 +874,11 @@ static unsigned long randomize_stack_top
+@@ -544,6 +876,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -41659,7 +41681,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -562,7 +897,7 @@ static int load_elf_binary(struct linux_
+@@ -562,7 +899,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -41668,7 +41690,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -572,11 +907,11 @@ static int load_elf_binary(struct linux_
+@@ -572,11 +909,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -41681,7 +41703,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -713,11 +1048,81 @@ static int load_elf_binary(struct linux_
+@@ -713,11 +1050,81 @@ static int load_elf_binary(struct linux_
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -41764,7 +41786,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -808,6 +1213,20 @@ static int load_elf_binary(struct linux_
+@@ -808,6 +1215,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -41785,7 +41807,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -840,9 +1259,9 @@ static int load_elf_binary(struct linux_
+@@ -840,9 +1261,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -41798,7 +41820,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -881,17 +1300,44 @@ static int load_elf_binary(struct linux_
+@@ -881,17 +1302,44 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -41849,7 +41871,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1098,7 +1544,7 @@ out:
+@@ -1098,7 +1546,7 @@ out:
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -41858,7 +41880,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1132,7 +1578,7 @@ static unsigned long vma_dump_size(struc
+@@ -1132,7 +1580,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -41867,7 +41889,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  		goto whole;
  
  	/*
-@@ -1354,9 +1800,9 @@ static void fill_auxv_note(struct memelf
+@@ -1354,9 +1802,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -41879,7 +41901,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1851,14 +2297,14 @@ static void fill_extnum_info(struct elfh
+@@ -1851,14 +2299,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -41896,7 +41918,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  	return size;
  }
  
-@@ -1952,7 +2398,7 @@ static int elf_core_dump(struct coredump
+@@ -1952,7 +2400,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -41905,7 +41927,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -1983,7 +2429,7 @@ static int elf_core_dump(struct coredump
+@@ -1983,7 +2431,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -41914,7 +41936,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2018,7 +2464,7 @@ static int elf_core_dump(struct coredump
+@@ -2018,7 +2466,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -41923,7 +41945,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/fs/binfmt_elf.c
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2064,6 +2510,137 @@ out:
+@@ -2064,6 +2512,137 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -48428,7 +48450,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/f
  
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/genhd.h linux-3.2.51-pax/include/linux/genhd.h
 --- linux-3.2.51/include/linux/genhd.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.51-pax/include/linux/genhd.h	2012-07-04 19:24:48.760063008 +0200
++++ linux-3.2.51-pax/include/linux/genhd.h	2013-09-27 19:59:05.828197852 +0200
 @@ -185,7 +185,7 @@ struct gendisk {
  	struct kobject *slave_dir;
  
@@ -48438,6 +48460,15 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/g
  	struct disk_events *ev;
  #ifdef  CONFIG_BLK_DEV_INTEGRITY
  	struct blk_integrity *integrity;
+@@ -420,7 +420,7 @@ extern void disk_flush_events(struct gen
+ extern unsigned int disk_clear_events(struct gendisk *disk, unsigned int mask);
+ 
+ /* drivers/char/random.c */
+-extern void add_disk_randomness(struct gendisk *disk);
++extern void add_disk_randomness(struct gendisk *disk) __latent_entropy;
+ extern void rand_initialize_disk(struct gendisk *disk);
+ 
+ static inline sector_t get_start_sect(struct block_device *bdev)
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/gfp.h linux-3.2.51-pax/include/linux/gfp.h
 --- linux-3.2.51/include/linux/gfp.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.51-pax/include/linux/gfp.h	2012-07-27 21:28:07.474301346 +0200
@@ -49698,8 +49729,8 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/p
  extern const struct proc_ns_operations ipcns_operations;
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/random.h linux-3.2.51-pax/include/linux/random.h
 --- linux-3.2.51/include/linux/random.h	2012-08-12 12:28:43.045231782 +0200
-+++ linux-3.2.51-pax/include/linux/random.h	2013-09-17 02:07:54.449677187 +0200
-@@ -51,6 +51,16 @@ struct rnd_state {
++++ linux-3.2.51-pax/include/linux/random.h	2013-09-27 19:57:51.904201798 +0200
+@@ -51,9 +51,19 @@ struct rnd_state {
  extern void rand_initialize_irq(int irq);
  
  extern void add_device_randomness(const void *, unsigned int);
@@ -49714,8 +49745,13 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/include/linux/r
 +}
 +
  extern void add_input_randomness(unsigned int type, unsigned int code,
- 				 unsigned int value);
- extern void add_interrupt_randomness(int irq, int irq_flags);
+-				 unsigned int value);
+-extern void add_interrupt_randomness(int irq, int irq_flags);
++				 unsigned int value) __latent_entropy;
++extern void add_interrupt_randomness(int irq, int irq_flags) __latent_entropy;
+ 
+ extern void get_random_bytes(void *buf, int nbytes);
+ extern void get_random_bytes_arch(void *buf, int nbytes);
 @@ -71,12 +81,17 @@ void srandom32(u32 seed);
  
  u32 prandom32(struct rnd_state *);
@@ -53270,13 +53306,13 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/gcov/bas
  			else
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/hrtimer.c linux-3.2.51-pax/kernel/hrtimer.c
 --- linux-3.2.51/kernel/hrtimer.c	2013-05-14 13:33:40.664285670 +0200
-+++ linux-3.2.51-pax/kernel/hrtimer.c	2013-05-14 13:33:46.596285354 +0200
++++ linux-3.2.51-pax/kernel/hrtimer.c	2013-09-27 19:55:41.192208778 +0200
 @@ -1414,7 +1414,7 @@ void hrtimer_peek_ahead_timers(void)
  	local_irq_restore(flags);
  }
  
 -static void run_hrtimer_softirq(struct softirq_action *h)
-+static void run_hrtimer_softirq(void)
++static __latent_entropy void run_hrtimer_softirq(void)
  {
  	struct hrtimer_cpu_base *cpu_base = &__get_cpu_var(hrtimer_bases);
  
@@ -54629,7 +54665,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/ptrace.c
  	long ret;
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/rcutiny.c linux-3.2.51-pax/kernel/rcutiny.c
 --- linux-3.2.51/kernel/rcutiny.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.51-pax/kernel/rcutiny.c	2012-07-04 19:24:48.868063009 +0200
++++ linux-3.2.51-pax/kernel/rcutiny.c	2013-09-27 19:55:15.336210158 +0200
 @@ -46,7 +46,7 @@
  struct rcu_ctrlblk;
  static void invoke_rcu_callbacks(void);
@@ -54644,7 +54680,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/rcutiny.
  }
  
 -static void rcu_process_callbacks(struct softirq_action *unused)
-+static void rcu_process_callbacks(void)
++static __latent_entropy void rcu_process_callbacks(void)
  {
  	__rcu_process_callbacks(&rcu_sched_ctrlblk);
  	__rcu_process_callbacks(&rcu_bh_ctrlblk);
@@ -54825,7 +54861,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/rcutortu
  			per_cpu(rcu_torture_count, cpu)[i] = 0;
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/rcutree.c linux-3.2.51-pax/kernel/rcutree.c
 --- linux-3.2.51/kernel/rcutree.c	2013-01-03 19:05:14.788036863 +0100
-+++ linux-3.2.51-pax/kernel/rcutree.c	2013-01-03 19:05:22.124037079 +0100
++++ linux-3.2.51-pax/kernel/rcutree.c	2013-09-27 19:55:18.928209966 +0200
 @@ -369,9 +369,9 @@ void rcu_enter_nohz(void)
  	trace_rcu_dyntick("Start");
  	/* CPUs seeing atomic_inc() must see prior RCU read-side crit sects */
@@ -54904,7 +54940,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/rcutree.
   * Do RCU core processing for the current CPU.
   */
 -static void rcu_process_callbacks(struct softirq_action *unused)
-+static void rcu_process_callbacks(void)
++static __latent_entropy void rcu_process_callbacks(void)
  {
  	trace_rcu_utilization("Start RCU core");
  	__rcu_process_callbacks(&rcu_sched_state,
@@ -55284,13 +55320,13 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/sched.c 
  };
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/sched_fair.c linux-3.2.51-pax/kernel/sched_fair.c
 --- linux-3.2.51/kernel/sched_fair.c	2013-09-10 17:24:55.609739112 +0200
-+++ linux-3.2.51-pax/kernel/sched_fair.c	2013-09-10 17:24:59.097738926 +0200
++++ linux-3.2.51-pax/kernel/sched_fair.c	2013-09-27 19:55:00.968210925 +0200
 @@ -4801,7 +4801,7 @@ static void nohz_idle_balance(int this_c
   * run_rebalance_domains is triggered when needed from the scheduler tick.
   * Also triggered for nohz idle balancing (with nohz_balancing_kick set).
   */
 -static void run_rebalance_domains(struct softirq_action *h)
-+static void run_rebalance_domains(void)
++static __latent_entropy void run_rebalance_domains(void)
  {
  	int this_cpu = smp_processor_id();
  	struct rq *this_rq = cpu_rq(this_cpu);
@@ -55371,7 +55407,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/smp.c li
  }
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/softirq.c linux-3.2.51-pax/kernel/softirq.c
 --- linux-3.2.51/kernel/softirq.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.51-pax/kernel/softirq.c	2013-02-20 01:19:12.186027520 +0100
++++ linux-3.2.51-pax/kernel/softirq.c	2013-09-27 19:54:48.892211570 +0200
 @@ -52,11 +52,11 @@ irq_cpustat_t irq_stat[NR_CPUS] ____cach
  EXPORT_SYMBOL(irq_stat);
  #endif
@@ -55409,7 +55445,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/softirq.
  EXPORT_SYMBOL(__tasklet_hi_schedule_first);
  
 -static void tasklet_action(struct softirq_action *a)
-+static void tasklet_action(void)
++static __latent_entropy void tasklet_action(void)
  {
  	struct tasklet_struct *list;
  
@@ -55418,7 +55454,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/softirq.
  }
  
 -static void tasklet_hi_action(struct softirq_action *a)
-+static void tasklet_hi_action(void)
++static __latent_entropy void tasklet_hi_action(void)
  {
  	struct tasklet_struct *list;
  
@@ -55750,13 +55786,13 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/time.c l
  	unsigned long sec = value->tv_sec;
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/kernel/timer.c linux-3.2.51-pax/kernel/timer.c
 --- linux-3.2.51/kernel/timer.c	2013-07-27 11:12:22.459992796 +0200
-+++ linux-3.2.51-pax/kernel/timer.c	2013-07-27 11:12:26.615992574 +0200
++++ linux-3.2.51-pax/kernel/timer.c	2013-09-27 19:54:32.104212466 +0200
 @@ -1308,7 +1308,7 @@ void update_process_times(int user_tick)
  /*
   * This function runs timers and the timer-tq in bottom half context.
   */
 -static void run_timer_softirq(struct softirq_action *h)
-+static void run_timer_softirq(void)
++static __latent_entropy void run_timer_softirq(void)
  {
  	struct tvec_base *base = __this_cpu_read(tvec_bases);
  
@@ -62547,7 +62583,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/net/core/dev_ad
  };
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/net/core/dev.c linux-3.2.51-pax/net/core/dev.c
 --- linux-3.2.51/net/core/dev.c	2013-05-14 13:33:40.696285669 +0200
-+++ linux-3.2.51-pax/net/core/dev.c	2013-05-14 13:33:46.608285353 +0200
++++ linux-3.2.51-pax/net/core/dev.c	2013-09-27 19:54:19.436213143 +0200
 @@ -1597,7 +1597,7 @@ int dev_forward_skb(struct net_device *d
  {
  	if (skb_shinfo(skb)->tx_flags & SKBTX_DEV_ZEROCOPY) {
@@ -62589,7 +62625,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/net/core/dev.c 
  EXPORT_SYMBOL(netif_rx_ni);
  
 -static void net_tx_action(struct softirq_action *h)
-+static void net_tx_action(void)
++static __latent_entropy void net_tx_action(void)
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  
@@ -62607,7 +62643,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/net/core/dev.c 
  EXPORT_SYMBOL(netif_napi_del);
  
 -static void net_rx_action(struct softirq_action *h)
-+static void net_rx_action(void)
++static __latent_entropy void net_rx_action(void)
  {
  	struct softnet_data *sd = &__get_cpu_var(softnet_data);
  	unsigned long time_limit = jiffies + 2;
@@ -70120,7 +70156,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/tools/gcc/kerne
 +}
 diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/tools/gcc/latent_entropy_plugin.c linux-3.2.51-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.2.51/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.51-pax/tools/gcc/latent_entropy_plugin.c	2013-09-01 01:54:54.332203636 +0200
++++ linux-3.2.51-pax/tools/gcc/latent_entropy_plugin.c	2013-09-27 20:00:13.456194241 +0200
 @@ -0,0 +1,321 @@
 +/*
 + * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
@@ -70414,7 +70450,7 @@ diff -NurpX linux-3.2.51-pax/Documentation/dontdiff linux-3.2.51/tools/gcc/laten
 +	TREE_THIS_VOLATILE(latent_entropy_decl) = 1;
 +	DECL_EXTERNAL(latent_entropy_decl) = 1;
 +	DECL_ARTIFICIAL(latent_entropy_decl) = 1;
-+	DECL_INITIAL(latent_entropy_decl) = NULL;
++	DECL_INITIAL(latent_entropy_decl) = build_int_cstu(long_long_unsigned_type_node, get_random_const());
 +	lang_hooks.decls.pushdecl(latent_entropy_decl);
 +//	DECL_ASSEMBLER_NAME(latent_entropy_decl);
 +//	varpool_finalize_decl(latent_entropy_decl);
