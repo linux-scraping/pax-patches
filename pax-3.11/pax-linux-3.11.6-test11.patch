@@ -1,4 +1,4 @@
-- forward port to 3.11.6
+- fixed weak UDEREF on haswell/invpcid thanks to the relentless help from Olivér Pintér (op@crysys.hu)
 
 diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/alpha/include/asm/atomic.h linux-3.11.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.11.6/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -13427,7 +13427,7 @@ diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/x86/includ
 +#endif /* X86_MMAN_H */
 diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/x86/include/asm/mmu_context.h linux-3.11.6-pax/arch/x86/include/asm/mmu_context.h
 --- linux-3.11.6/arch/x86/include/asm/mmu_context.h	2013-09-27 13:23:00.025466761 +0200
-+++ linux-3.11.6-pax/arch/x86/include/asm/mmu_context.h	2013-09-27 19:03:32.740375813 +0200
++++ linux-3.11.6-pax/arch/x86/include/asm/mmu_context.h	2013-10-22 01:08:10.357665780 +0200
 @@ -24,6 +24,20 @@ void destroy_context(struct mm_struct *m
  
  static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
@@ -13449,7 +13449,7 @@ diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/x86/includ
  #ifdef CONFIG_SMP
  	if (this_cpu_read(cpu_tlbstate.state) == TLBSTATE_OK)
  		this_cpu_write(cpu_tlbstate.state, TLBSTATE_LAZY);
-@@ -34,16 +48,55 @@ static inline void switch_mm(struct mm_s
+@@ -34,16 +48,59 @@ static inline void switch_mm(struct mm_s
  			     struct task_struct *tsk)
  {
  	unsigned cpu = smp_processor_id();
@@ -13488,6 +13488,10 @@ diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/x86/includ
 +				u64 descriptor[2];
 +				descriptor[0] = PCID_USER;
 +				asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_CONTEXT) : "memory");
++				if (!static_cpu_has(X86_FEATURE_STRONGUDEREF)) {
++					descriptor[0] = PCID_KERNEL;
++					asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_CONTEXT) : "memory");
++				}
 +			} else {
 +				write_cr3(__pa(get_cpu_pgd(cpu, user)) | PCID_USER);
 +				if (static_cpu_has(X86_FEATURE_STRONGUDEREF))
@@ -13505,7 +13509,7 @@ diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/x86/includ
  
  		/* Stop flush ipis for the previous mm */
  		cpumask_clear_cpu(cpu, mm_cpumask(prev));
-@@ -51,9 +104,63 @@ static inline void switch_mm(struct mm_s
+@@ -51,9 +108,67 @@ static inline void switch_mm(struct mm_s
  		/* Load the LDT, if the LDT is different: */
  		if (unlikely(prev->context.ldt != next->context.ldt))
  			load_LDT_nolock(&next->context);
@@ -13552,6 +13556,10 @@ diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/x86/includ
 +				u64 descriptor[2];
 +				descriptor[0] = PCID_USER;
 +				asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_CONTEXT) : "memory");
++				if (!static_cpu_has(X86_FEATURE_STRONGUDEREF)) {
++					descriptor[0] = PCID_KERNEL;
++					asm volatile(__ASM_INVPCID : : "d"(&descriptor), "a"(INVPCID_SINGLE_CONTEXT) : "memory");
++				}
 +			} else {
 +				write_cr3(__pa(get_cpu_pgd(cpu, user)) | PCID_USER);
 +				if (static_cpu_has(X86_FEATURE_STRONGUDEREF))
@@ -13570,7 +13578,7 @@ diff -NurpX linux-3.11.6-pax/Documentation/dontdiff linux-3.11.6/arch/x86/includ
  		this_cpu_write(cpu_tlbstate.state, TLBSTATE_OK);
  		BUG_ON(this_cpu_read(cpu_tlbstate.active_mm) != next);
  
-@@ -70,11 +177,28 @@ static inline void switch_mm(struct mm_s
+@@ -70,11 +185,28 @@ static inline void switch_mm(struct mm_s
  			 * tlb flush IPI delivery. We must reload CR3
  			 * to make sure to use no freed page tables.
  			 */
