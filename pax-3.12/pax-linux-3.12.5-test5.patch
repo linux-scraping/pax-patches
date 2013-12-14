@@ -1,4 +1,4 @@
-- forward port to 3.12.5
+- properly fix the use-after-free in sys_remap_file_pages, by Rik van Riel (http://www.spinics.net/lists/linux-mm/msg66710.html)
 
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/alpha/include/asm/atomic.h linux-3.12.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.12.5/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -63812,7 +63812,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/mm/filemap.c li
  			BUG_ON(!i->count || i->count < copy);
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/mm/fremap.c linux-3.12.5-pax/mm/fremap.c
 --- linux-3.12.5/mm/fremap.c	2013-09-03 00:45:09.942911956 +0200
-+++ linux-3.12.5-pax/mm/fremap.c	2013-12-12 01:52:37.926621810 +0100
++++ linux-3.12.5-pax/mm/fremap.c	2013-12-13 17:08:14.111571948 +0100
 @@ -163,6 +163,11 @@ SYSCALL_DEFINE5(remap_file_pages, unsign
   retry:
  	vma = find_vma(mm, start);
@@ -63825,15 +63825,36 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/mm/fremap.c lin
  	/*
  	 * Make sure the vma is shared, that it supports prefaulting,
  	 * and that the remapped range is valid and fully within
-@@ -218,6 +223,8 @@ get_write_lock:
+@@ -208,9 +213,10 @@ get_write_lock:
+ 		if (mapping_cap_account_dirty(mapping)) {
+ 			unsigned long addr;
+ 			struct file *file = get_file(vma->vm_file);
++			/* mmap_region may free vma; grab the info now */
++			vm_flags = ACCESS_ONCE(vma->vm_flags);
+ 
+-			addr = mmap_region(file, start, size,
+-					vma->vm_flags, pgoff);
++			addr = mmap_region(file, start, size, vm_flags, pgoff);
+ 			fput(file);
+ 			if (IS_ERR_VALUE(addr)) {
+ 				err = addr;
+@@ -218,7 +224,7 @@ get_write_lock:
  				BUG_ON(addr != start);
  				err = 0;
  			}
-+			vm_flags = vma->vm_flags;
-+			vma = NULL;
- 			goto out;
+-			goto out;
++			goto out_freed;
  		}
  		mutex_lock(&mapping->i_mmap_mutex);
+ 		flush_dcache_mmap_lock(mapping);
+@@ -253,6 +259,7 @@ get_write_lock:
+ out:
+ 	if (vma)
+ 		vm_flags = vma->vm_flags;
++out_freed:
+ 	if (likely(!has_write_lock))
+ 		up_read(&mm->mmap_sem);
+ 	else
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/mm/highmem.c linux-3.12.5-pax/mm/highmem.c
 --- linux-3.12.5/mm/highmem.c	2013-08-20 19:08:16.915833330 +0200
 +++ linux-3.12.5-pax/mm/highmem.c	2013-12-08 14:40:05.785442174 +0100
