@@ -1,4 +1,6 @@
-- Emese fixed a bug in the size overflow plugin resulting in false positives on downcasts from 64 bit variables on i386, reported by Huub Reuver
+- fixed some more size overflow reports
+  - gratuitous int/uint conversion in expand_files and expand_fdtable, reported by wizeman (http://forums.grsecurity.net/viewtopic.php?f=3&t=3898)
+  - better fix for the gcc induced intentional overflow in usbdev_read
 
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/alpha/include/asm/atomic.h linux-3.12.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.12.5/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -11895,7 +11897,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
  		"popl %%edi\n\t"
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/include/asm/atomic64_32.h linux-3.12.5-pax/arch/x86/include/asm/atomic64_32.h
 --- linux-3.12.5/arch/x86/include/asm/atomic64_32.h	2013-08-20 19:08:15.831833388 +0200
-+++ linux-3.12.5-pax/arch/x86/include/asm/atomic64_32.h	2013-12-08 14:40:04.241442128 +0100
++++ linux-3.12.5-pax/arch/x86/include/asm/atomic64_32.h	2013-12-19 02:20:32.900772571 +0100
 @@ -12,6 +12,14 @@ typedef struct {
  	u64 __aligned(8) counter;
  } atomic64_t;
@@ -11997,7 +11999,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
 + *
 + * Atomically reads the value of @v and returns it.
 + */
-+static inline long long atomic64_read_unchecked(atomic64_unchecked_t *v)
++static inline long long __intentional_overflow(-1) atomic64_read_unchecked(atomic64_unchecked_t *v)
 +{
 +	long long r;
 +	alternative_atomic64(read, "=&A" (r), "c" (v) : "memory");
@@ -12069,7 +12071,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
  /**
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/include/asm/atomic64_64.h linux-3.12.5-pax/arch/x86/include/asm/atomic64_64.h
 --- linux-3.12.5/arch/x86/include/asm/atomic64_64.h	2013-08-20 19:08:15.835833387 +0200
-+++ linux-3.12.5-pax/arch/x86/include/asm/atomic64_64.h	2013-12-08 14:40:04.241442128 +0100
++++ linux-3.12.5-pax/arch/x86/include/asm/atomic64_64.h	2013-12-19 02:20:12.460773662 +0100
 @@ -18,7 +18,19 @@
   */
  static inline long atomic64_read(const atomic64_t *v)
@@ -12085,7 +12087,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
 + * Atomically reads the value of @v.
 + * Doesn't imply a read memory barrier.
 + */
-+static inline long atomic64_read_unchecked(const atomic64_unchecked_t *v)
++static inline long __intentional_overflow(-1) atomic64_read_unchecked(const atomic64_unchecked_t *v)
 +{
 +	return (*(volatile const long *)&(v)->counter);
  }
@@ -12379,7 +12381,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
  #define atomic64_inc_not_zero(v) atomic64_add_unless((v), 1, 0)
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/include/asm/atomic.h linux-3.12.5-pax/arch/x86/include/asm/atomic.h
 --- linux-3.12.5/arch/x86/include/asm/atomic.h	2013-08-20 19:08:15.835833387 +0200
-+++ linux-3.12.5-pax/arch/x86/include/asm/atomic.h	2013-12-08 14:40:04.241442128 +0100
++++ linux-3.12.5-pax/arch/x86/include/asm/atomic.h	2013-12-19 02:19:22.316776339 +0100
 @@ -22,7 +22,18 @@
   */
  static inline int atomic_read(const atomic_t *v)
@@ -12394,7 +12396,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
 + *
 + * Atomically reads the value of @v.
 + */
-+static inline int atomic_read_unchecked(const atomic_unchecked_t *v)
++static inline int __intentional_overflow(-1) atomic_read_unchecked(const atomic_unchecked_t *v)
 +{
 +	return (*(volatile const int *)&(v)->counter);
  }
@@ -12649,7 +12651,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
  	return i + xadd(&v->counter, i);
  }
  
-@@ -188,6 +362,10 @@ static inline int atomic_sub_return(int
+@@ -188,9 +362,18 @@ static inline int atomic_sub_return(int
  }
  
  #define atomic_inc_return(v)  (atomic_add_return(1, v))
@@ -12659,18 +12661,17 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
 +}
  #define atomic_dec_return(v)  (atomic_sub_return(1, v))
  
- static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
-@@ -195,11 +373,21 @@ static inline int atomic_cmpxchg(atomic_
- 	return cmpxchg(&v->counter, old, new);
- }
- 
-+static inline int atomic_cmpxchg_unchecked(atomic_unchecked_t *v, int old, int new)
+-static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
++static inline int __intentional_overflow(-1) atomic_cmpxchg(atomic_t *v, int old, int new)
 +{
 +	return cmpxchg(&v->counter, old, new);
 +}
 +
- static inline int atomic_xchg(atomic_t *v, int new)
++static inline int atomic_cmpxchg_unchecked(atomic_unchecked_t *v, int old, int new)
  {
+ 	return cmpxchg(&v->counter, old, new);
+ }
+@@ -200,6 +383,11 @@ static inline int atomic_xchg(atomic_t *
  	return xchg(&v->counter, new);
  }
  
@@ -12682,9 +12683,12 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/arch/x86/includ
  /**
   * __atomic_add_unless - add unless the number is already a given value
   * @v: pointer of type atomic_t
-@@ -211,12 +399,25 @@ static inline int atomic_xchg(atomic_t *
+@@ -209,14 +397,27 @@ static inline int atomic_xchg(atomic_t *
+  * Atomically adds @a to @v, so long as @v was not already @u.
+  * Returns the old value of @v.
   */
- static inline int __atomic_add_unless(atomic_t *v, int a, int u)
+-static inline int __atomic_add_unless(atomic_t *v, int a, int u)
++static inline int __intentional_overflow(-1) __atomic_add_unless(atomic_t *v, int a, int u)
  {
 -	int c, old;
 +	int c, old, new;
@@ -45663,7 +45667,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/drivers/usb/cor
  		return POLLIN | POLLRDNORM;
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/drivers/usb/core/devio.c linux-3.12.5-pax/drivers/usb/core/devio.c
 --- linux-3.12.5/drivers/usb/core/devio.c	2013-11-04 01:46:45.423115037 +0100
-+++ linux-3.12.5-pax/drivers/usb/core/devio.c	2013-12-08 15:00:33.449478269 +0100
++++ linux-3.12.5-pax/drivers/usb/core/devio.c	2013-12-19 15:09:46.750963102 +0100
 @@ -187,7 +187,7 @@ static ssize_t usbdev_read(struct file *
  	struct dev_state *ps = file->private_data;
  	struct usb_device *dev = ps->dev;
@@ -45673,7 +45677,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/drivers/usb/cor
  	loff_t pos;
  	int i;
  
-@@ -229,13 +229,13 @@ static ssize_t usbdev_read(struct file *
+@@ -229,16 +229,16 @@ static ssize_t usbdev_read(struct file *
  	for (i = 0; nbytes && i < dev->descriptor.bNumConfigurations; i++) {
  		struct usb_config_descriptor *config =
  			(struct usb_config_descriptor *)dev->rawdescriptors[i];
@@ -45688,7 +45692,11 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/drivers/usb/cor
 +			size_t alloclen =
  				le16_to_cpu(dev->config[i].desc.wTotalLength);
  
- 			len = length - (*ppos - pos);
+-			len = length - (*ppos - pos);
++			len = length + pos - *ppos;
+ 			if (len > nbytes)
+ 				len = nbytes;
+ 
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/drivers/usb/core/hcd.c linux-3.12.5-pax/drivers/usb/core/hcd.c
 --- linux-3.12.5/drivers/usb/core/hcd.c	2013-11-21 00:28:05.331914074 +0100
 +++ linux-3.12.5-pax/drivers/usb/core/hcd.c	2013-12-08 14:40:05.413442163 +0100
@@ -49595,6 +49603,27 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/fs/fhandle.c li
  	    copy_to_user(ufh, handle,
  			 sizeof(struct file_handle) + handle_bytes))
  		retval = -EFAULT;
+diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/fs/file.c linux-3.12.5-pax/fs/file.c
+--- linux-3.12.5/fs/file.c	2013-07-08 01:58:49.372267612 +0200
++++ linux-3.12.5-pax/fs/file.c	2013-12-19 02:35:54.412723369 +0100
+@@ -141,7 +141,7 @@ out:
+  * Return <0 error code on error; 1 on successful completion.
+  * The files->file_lock should be held on entry, and will be held on exit.
+  */
+-static int expand_fdtable(struct files_struct *files, int nr)
++static int expand_fdtable(struct files_struct *files, unsigned int nr)
+ 	__releases(files->file_lock)
+ 	__acquires(files->file_lock)
+ {
+@@ -186,7 +186,7 @@ static int expand_fdtable(struct files_s
+  * expanded and execution may have blocked.
+  * The files->file_lock should be held on entry, and will be held on exit.
+  */
+-static int expand_files(struct files_struct *files, int nr)
++static int expand_files(struct files_struct *files, unsigned int nr)
+ {
+ 	struct fdtable *fdt;
+ 
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/fs/fscache/cookie.c linux-3.12.5-pax/fs/fscache/cookie.c
 --- linux-3.12.5/fs/fscache/cookie.c	2013-11-04 01:46:47.291114937 +0100
 +++ linux-3.12.5-pax/fs/fscache/cookie.c	2013-12-08 14:40:05.485442165 +0100
@@ -52969,7 +52998,7 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/include/asm-gen
  
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/include/asm-generic/atomic-long.h linux-3.12.5-pax/include/asm-generic/atomic-long.h
 --- linux-3.12.5/include/asm-generic/atomic-long.h	2013-08-20 19:08:16.487833353 +0200
-+++ linux-3.12.5-pax/include/asm-generic/atomic-long.h	2013-12-08 14:40:05.549442167 +0100
++++ linux-3.12.5-pax/include/asm-generic/atomic-long.h	2013-12-19 02:19:49.036774913 +0100
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -53079,7 +53108,15 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/include/asm-gen
  static inline int atomic_long_sub_and_test(long i, atomic_long_t *l)
  {
  	atomic64_t *v = (atomic64_t *)l;
-@@ -101,6 +161,15 @@ static inline long atomic_long_add_retur
+@@ -94,13 +154,22 @@ static inline int atomic_long_add_negati
+ 	return atomic64_add_negative(i, v);
+ }
+ 
+-static inline long atomic_long_add_return(long i, atomic_long_t *l)
++static inline long __intentional_overflow(-1) atomic_long_add_return(long i, atomic_long_t *l)
+ {
+ 	atomic64_t *v = (atomic64_t *)l;
+ 
  	return (long)atomic64_add_return(i, v);
  }
  
@@ -77106,8 +77143,8 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/tools/gcc/Makef
 +targets += size_overflow_hash.h
 diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/tools/gcc/size_overflow_hash.data linux-3.12.5-pax/tools/gcc/size_overflow_hash.data
 --- linux-3.12.5/tools/gcc/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.12.5-pax/tools/gcc/size_overflow_hash.data	2013-12-12 22:58:02.000000000 +0100
-@@ -0,0 +1,7690 @@
++++ linux-3.12.5-pax/tools/gcc/size_overflow_hash.data	2013-12-19 02:09:28.000000000 +0100
+@@ -0,0 +1,7687 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +ocfs2_get_refcount_tree_3 ocfs2_get_refcount_tree 0 3 NULL
 +batadv_orig_node_del_if_4 batadv_orig_node_del_if 2 4 NULL
@@ -79706,7 +79743,6 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/tools/gcc/size_
 +mem_write_22232 mem_write 3 22232 NULL
 +p9_virtio_zc_request_22240 p9_virtio_zc_request 6-5 22240 NULL
 +fsnotify_parent_22243 fsnotify_parent 0 22243 NULL
-+atomic64_xchg_22246 atomic64_xchg 0 22246 NULL
 +compat_process_vm_rw_22254 compat_process_vm_rw 3-5 22254 NULL
 +ping_common_sendmsg_22261 ping_common_sendmsg 5 22261 NULL
 +add_res_tree_22263 add_res_tree 7 22263 NULL
@@ -81071,7 +81107,6 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/tools/gcc/size_
 +get_user_pages_33908 get_user_pages 0-3-4 33908 NULL
 +ath6kl_roam_mode_write_33912 ath6kl_roam_mode_write 3 33912 NULL
 +queue_logical_block_size_33918 queue_logical_block_size 0 33918 NULL
-+atomic64_add_return_33927 atomic64_add_return 0-1 33927 NULL
 +sel_read_avc_cache_threshold_33942 sel_read_avc_cache_threshold 3 33942 NULL
 +lpfc_idiag_ctlacc_read_33943 lpfc_idiag_ctlacc_read 3 33943 NULL
 +read_file_tgt_rx_stats_33944 read_file_tgt_rx_stats 3 33944 NULL nohasharray
@@ -81710,7 +81745,6 @@ diff -NurpX linux-3.12.5-pax/Documentation/dontdiff linux-3.12.5/tools/gcc/size_
 +do_write_kmem_39051 do_write_kmem 1-3-0 39051 NULL
 +gen_pool_create_39064 gen_pool_create 2 39064 NULL
 +ext4_init_block_bitmap_39071 ext4_init_block_bitmap 3 39071 NULL
-+atomic64_add_negative_39098 atomic64_add_negative 1 39098 NULL
 +ReadHFC_39104 ReadHFC 0 39104 NULL
 +tomoyo_truncate_39105 tomoyo_truncate 0 39105 NULL
 +leb_write_lock_39111 leb_write_lock 0 39111 NULL
