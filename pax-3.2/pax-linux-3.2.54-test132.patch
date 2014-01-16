@@ -1,4 +1,11 @@
-- forward port to 3.2.54
+- fixed an inconsistency in handling softmode and user.pax.flags, reported by jacekalex (http://forums.grsecurity.net/viewtopic.php?f=3&t=3877)
+- fixed silly code in kvm_clear_guest_page detected by USERCOPY, reported by remnix (http://forums.grsecurity.net/viewtopic.php?f=3&t=3899)
+- Emese worked around a few intentional overflows that triggered the size overflow plugin
+  - in cpuset_common_file_read, reported by Alexander Tsoy (https://bugs.gentoo.org/show_bug.cgi?id=496490) and boris64 (http://forums.grsecurity.net/viewtopic.php?f=3&t=3907)
+- fixed powerpc compilation, by Purushothama Siddaiah <psiddaiah@mvista.com>
+- fixed incorrent module parameter type in vivi, caught by the size overflow plugin
+- use plugins while building more kernel targets (asm-offsets.c, etc)
+- small cleanup in no_const attribute handling, reported by spender
 
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/alpha/include/asm/atomic.h linux-3.2.54-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.54/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -3306,7 +3313,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/powerpc/ke
  		}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/powerpc/kernel/module_32.c linux-3.2.54-pax/arch/powerpc/kernel/module_32.c
 --- linux-3.2.54/arch/powerpc/kernel/module_32.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/arch/powerpc/kernel/module_32.c	2012-07-04 19:24:47.408063045 +0200
++++ linux-3.2.54-pax/arch/powerpc/kernel/module_32.c	2014-01-16 02:55:45.870178862 +0100
 @@ -162,7 +162,7 @@ int module_frob_arch_sections(Elf32_Ehdr
  			me->arch.core_plt_section = i;
  	}
@@ -3336,6 +3343,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/powerpc/ke
  
  	/* Find this entry, or if that fails, the next avail. entry */
  	while (entry->jump[0]) {
+@@ -300,7 +305,7 @@ int apply_relocate_add(Elf32_Shdr *sechd
+ 	}
+ #ifdef CONFIG_DYNAMIC_FTRACE
+ 	module->arch.tramp =
+-		do_plt_call(module->module_core,
++		do_plt_call(module->module_core_rx,
+ 			    (unsigned long)ftrace_caller,
+ 			    sechdrs, module);
+ #endif
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/powerpc/kernel/process.c linux-3.2.54-pax/arch/powerpc/kernel/process.c
 --- linux-3.2.54/arch/powerpc/kernel/process.c	2012-09-20 01:42:17.146672774 +0200
 +++ linux-3.2.54-pax/arch/powerpc/kernel/process.c	2012-09-20 01:42:29.882672813 +0200
@@ -31707,16 +31723,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/gpu/drm
  	*sequence = cur_fence;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/gpu/drm/nouveau/nouveau_bios.c linux-3.2.54-pax/drivers/gpu/drm/nouveau/nouveau_bios.c
 --- linux-3.2.54/drivers/gpu/drm/nouveau/nouveau_bios.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/drivers/gpu/drm/nouveau/nouveau_bios.c	2012-07-04 19:24:48.376063007 +0200
-@@ -201,7 +201,7 @@ struct methods {
- 	const char desc[8];
- 	void (*loadbios)(struct drm_device *, uint8_t *);
- 	const bool rw;
--};
-+} __do_const;
- 
- static struct methods shadow_methods[] = {
- 	{ "PRAMIN", load_vbios_pramin, true },
++++ linux-3.2.54-pax/drivers/gpu/drm/nouveau/nouveau_bios.c	2014-01-16 03:23:24.818140526 +0100
 @@ -5474,7 +5474,7 @@ parse_bit_U_tbl_entry(struct drm_device
  struct bit_table {
  	const char id;
@@ -35577,6 +35584,20 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/v
  			*kernel_ptr = (void *)&ctrls->controls;
  			*array_size = sizeof(struct v4l2_ext_control)
  				    * ctrls->count;
+diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/video/vivi.c linux-3.2.54-pax/drivers/media/video/vivi.c
+--- linux-3.2.54/drivers/media/video/vivi.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.54-pax/drivers/media/video/vivi.c	2014-01-16 02:57:52.238175942 +0100
+@@ -51,8 +51,8 @@ MODULE_AUTHOR("Mauro Carvalho Chehab, Te
+ MODULE_LICENSE("Dual BSD/GPL");
+ MODULE_VERSION(VIVI_VERSION);
+ 
+-static unsigned video_nr = -1;
+-module_param(video_nr, uint, 0644);
++static int video_nr = -1;
++module_param(video_nr, int, 0644);
+ MODULE_PARM_DESC(video_nr, "videoX start number, -1 is autodetect");
+ 
+ static unsigned n_devs = 1;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/message/fusion/mptsas.c linux-3.2.54-pax/drivers/message/fusion/mptsas.c
 --- linux-3.2.54/drivers/message/fusion/mptsas.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.54-pax/drivers/message/fusion/mptsas.c	2012-07-04 19:24:48.512063007 +0200
@@ -40760,7 +40781,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/usb/cor
  		return POLLIN | POLLRDNORM;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/usb/core/devio.c linux-3.2.54-pax/drivers/usb/core/devio.c
 --- linux-3.2.54/drivers/usb/core/devio.c	2013-10-27 17:59:57.924642349 +0100
-+++ linux-3.2.54-pax/drivers/usb/core/devio.c	2013-12-19 15:03:05.598984521 +0100
++++ linux-3.2.54-pax/drivers/usb/core/devio.c	2014-01-16 02:54:06.794181152 +0100
 @@ -147,7 +147,7 @@ static ssize_t usbdev_read(struct file *
  	struct dev_state *ps = file->private_data;
  	struct usb_device *dev = ps->dev;
@@ -40770,7 +40791,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/usb/cor
  	loff_t pos;
  	int i;
  
-@@ -189,16 +189,16 @@ static ssize_t usbdev_read(struct file *
+@@ -189,22 +189,22 @@ static ssize_t usbdev_read(struct file *
  	for (i = 0; nbytes && i < dev->descriptor.bNumConfigurations; i++) {
  		struct usb_config_descriptor *config =
  			(struct usb_config_descriptor *)dev->rawdescriptors[i];
@@ -40790,6 +40811,13 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/usb/cor
  			if (len > nbytes)
  				len = nbytes;
  
+ 			/* Simply don't write (skip over) unallocated parts */
+ 			if (alloclen > (*ppos - pos)) {
+-				alloclen -= (*ppos - pos);
++				alloclen = alloclen + pos - *ppos;
+ 				if (copy_to_user(buf,
+ 				    dev->rawdescriptors[i] + (*ppos - pos),
+ 				    min(len, alloclen))) {
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/usb/core/hcd.c linux-3.2.54-pax/drivers/usb/core/hcd.c
 --- linux-3.2.54/drivers/usb/core/hcd.c	2012-10-10 11:02:19.607865896 +0200
 +++ linux-3.2.54-pax/drivers/usb/core/hcd.c	2012-12-03 22:33:35.103763926 +0100
@@ -41896,7 +41924,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_aout.
  		up_write(&current->mm->mmap_sem);
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c linux-3.2.54-pax/fs/binfmt_elf.c
 --- linux-3.2.54/fs/binfmt_elf.c	2012-10-24 01:05:57.304814639 +0200
-+++ linux-3.2.54-pax/fs/binfmt_elf.c	2013-12-14 13:27:41.472643750 +0100
++++ linux-3.2.54-pax/fs/binfmt_elf.c	2014-01-16 02:49:19.922187781 +0100
 @@ -32,6 +32,7 @@
  #include <linux/elf.h>
  #include <linux/utsname.h>
@@ -42059,7 +42087,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  	}
  
  	error = load_addr;
-@@ -528,6 +551,315 @@ out:
+@@ -528,6 +551,322 @@ out:
  	return error;
  }
  
@@ -42293,34 +42321,41 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
 +	xattr_size = pax_getxattr(file->f_path.dentry, xattr_value, sizeof xattr_value);
-+	if (xattr_size <= 0 || xattr_size > sizeof xattr_value)
++	switch (xattr_size) {
++	default:
 +		return ~0UL;
 +
-+	for (i = 0; i < xattr_size; i++)
-+		switch (xattr_value[i]) {
-+		default:
-+			return ~0UL;
++	case -ENODATA:
++		break;
 +
-+#define parse_flag(option1, option2, flag)			\
-+		case option1:					\
-+			if (pax_flags_hardmode & MF_PAX_##flag)	\
-+				return ~0UL;			\
-+			pax_flags_hardmode |= MF_PAX_##flag;	\
-+			break;					\
-+		case option2:					\
-+			if (pax_flags_softmode & MF_PAX_##flag)	\
-+				return ~0UL;			\
-+			pax_flags_softmode |= MF_PAX_##flag;	\
-+			break;
++	case 0 ... sizeof xattr_value:
++		for (i = 0; i < xattr_size; i++)
++			switch (xattr_value[i]) {
++			default:
++				return ~0UL;
 +
-+		parse_flag('p', 'P', PAGEEXEC);
-+		parse_flag('e', 'E', EMUTRAMP);
-+		parse_flag('m', 'M', MPROTECT);
-+		parse_flag('r', 'R', RANDMMAP);
-+		parse_flag('s', 'S', SEGMEXEC);
++#define parse_flag(option1, option2, flag)				\
++			case option1:					\
++				if (pax_flags_hardmode & MF_PAX_##flag)	\
++					return ~0UL;			\
++				pax_flags_hardmode |= MF_PAX_##flag;	\
++				break;					\
++			case option2:					\
++				if (pax_flags_softmode & MF_PAX_##flag)	\
++					return ~0UL;			\
++				pax_flags_softmode |= MF_PAX_##flag;	\
++				break;
++
++			parse_flag('p', 'P', PAGEEXEC);
++			parse_flag('e', 'E', EMUTRAMP);
++			parse_flag('m', 'M', MPROTECT);
++			parse_flag('r', 'R', RANDMMAP);
++			parse_flag('s', 'S', SEGMEXEC);
 +
 +#undef parse_flag
-+		}
++			}
++		break;
++	}
 +
 +	if (pax_flags_hardmode & pax_flags_softmode)
 +		return ~0UL;
@@ -42375,7 +42410,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -544,6 +876,11 @@ static unsigned long randomize_stack_top
+@@ -544,6 +883,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -42387,7 +42422,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -562,7 +899,7 @@ static int load_elf_binary(struct linux_
+@@ -562,7 +906,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -42396,7 +42431,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -572,11 +909,11 @@ static int load_elf_binary(struct linux_
+@@ -572,11 +916,11 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -42409,7 +42444,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -713,11 +1050,82 @@ static int load_elf_binary(struct linux_
+@@ -713,11 +1057,82 @@ static int load_elf_binary(struct linux_
  
  	/* OK, This is the point of no return */
  	current->flags &= ~PF_FORKNOEXEC;
@@ -42493,7 +42528,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -808,6 +1216,20 @@ static int load_elf_binary(struct linux_
+@@ -808,6 +1223,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -42514,7 +42549,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -840,9 +1262,9 @@ static int load_elf_binary(struct linux_
+@@ -840,9 +1269,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -42527,7 +42562,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -881,17 +1303,44 @@ static int load_elf_binary(struct linux_
+@@ -881,17 +1310,44 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -42578,7 +42613,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1098,7 +1547,7 @@ out:
+@@ -1098,7 +1554,7 @@ out:
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -42587,7 +42622,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1132,7 +1581,7 @@ static unsigned long vma_dump_size(struc
+@@ -1132,7 +1588,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -42596,7 +42631,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  		goto whole;
  
  	/*
-@@ -1354,9 +1803,9 @@ static void fill_auxv_note(struct memelf
+@@ -1354,9 +1810,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -42608,7 +42643,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1851,14 +2300,14 @@ static void fill_extnum_info(struct elfh
+@@ -1851,14 +2307,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -42625,7 +42660,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  	return size;
  }
  
-@@ -1952,7 +2401,7 @@ static int elf_core_dump(struct coredump
+@@ -1952,7 +2408,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -42634,7 +42669,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -1983,7 +2432,7 @@ static int elf_core_dump(struct coredump
+@@ -1983,7 +2439,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -42643,7 +42678,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2018,7 +2467,7 @@ static int elf_core_dump(struct coredump
+@@ -2018,7 +2474,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -42652,7 +42687,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/binfmt_elf.c
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2064,6 +2513,137 @@ out:
+@@ -2064,6 +2520,137 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -49083,18 +49118,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/d
  #define free(a) kfree(a)
  
  #define large_malloc(a) vmalloc(a)
-diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/devfreq.h linux-3.2.54-pax/include/linux/devfreq.h
---- linux-3.2.54/include/linux/devfreq.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/include/linux/devfreq.h	2013-03-28 01:47:09.888390222 +0100
-@@ -100,7 +100,7 @@ struct devfreq_governor {
- 	int (*init)(struct devfreq *this);
- 	void (*exit)(struct devfreq *this);
- 	const bool no_central_polling;
--};
-+} __do_const;
- 
- /**
-  * struct devfreq - Device devfreq structure
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/device.h linux-3.2.54-pax/include/linux/device.h
 --- linux-3.2.54/include/linux/device.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.54-pax/include/linux/device.h	2013-03-28 01:44:16.192399496 +0100
@@ -50470,18 +50493,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/n
  
  static inline u32 dev_ethtool_get_rx_csum(struct net_device *dev)
  {
-diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/netfilter/ipset/ip_set.h linux-3.2.54-pax/include/linux/netfilter/ipset/ip_set.h
---- linux-3.2.54/include/linux/netfilter/ipset/ip_set.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/include/linux/netfilter/ipset/ip_set.h	2013-01-16 21:27:15.898836688 +0100
-@@ -274,7 +274,7 @@ struct ip_set_type_variant {
- 	/* Return true if "b" set is the same as "a"
- 	 * according to the create set parameters */
- 	bool (*same_set)(const struct ip_set *a, const struct ip_set *b);
--};
-+} __do_const;
- 
- /* The core set type structure */
- struct ip_set_type {
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/netfilter/nfnetlink.h linux-3.2.54-pax/include/linux/netfilter/nfnetlink.h
 --- linux-3.2.54/include/linux/netfilter/nfnetlink.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.54-pax/include/linux/netfilter/nfnetlink.h	2013-01-16 21:27:15.898836688 +0100
@@ -57858,7 +57869,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/lib/vsprintf.c 
  
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-3.2.54-pax/Makefile
 --- linux-3.2.54/Makefile	2014-01-03 15:48:44.508070590 +0100
-+++ linux-3.2.54-pax/Makefile	2014-01-03 15:48:49.464070326 +0100
++++ linux-3.2.54-pax/Makefile	2014-01-16 03:04:07.718167265 +0100
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -57964,7 +57975,13 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  	$(Q)$(MAKE) $(build)=$@
  
  # Store (new) KERNELRELASE string in include/config/kernel.release
-@@ -985,6 +1045,7 @@ prepare0: archprepare FORCE
+@@ -981,10 +1041,13 @@ prepare1: prepare2 include/linux/version
+ 
+ archprepare: archscripts prepare1 scripts_basic
+ 
++prepare0: KBUILD_CFLAGS += $(GCC_PLUGINS_CFLAGS)
++prepare0: KBUILD_AFLAGS += $(GCC_PLUGINS_AFLAGS)
+ prepare0: archprepare FORCE
  	$(Q)$(MAKE) $(build)=.
  
  # All the preparing..
@@ -57972,7 +57989,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  prepare: prepare0
  
  # Generate some files
-@@ -1089,6 +1150,8 @@ all: modules
+@@ -1089,6 +1152,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -57981,7 +57998,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -1104,7 +1167,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
+@@ -1104,7 +1169,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -57990,7 +58007,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  
  # Target to install modules
  PHONY += modules_install
-@@ -1163,7 +1226,7 @@ CLEAN_FILES +=	vmlinux System.map \
+@@ -1163,7 +1228,7 @@ CLEAN_FILES +=	vmlinux System.map \
  MRPROPER_DIRS  += include/config usr/include include/generated          \
                    arch/*/include/generated
  MRPROPER_FILES += .config .config.old .version .old_version             \
@@ -57999,7 +58016,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS
  
  # clean - Delete most, but leave enough to build external modules
-@@ -1201,6 +1264,7 @@ distclean: mrproper
+@@ -1201,6 +1266,7 @@ distclean: mrproper
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
  		-o -name '.*.rej' \
@@ -58007,7 +58024,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1361,6 +1425,8 @@ PHONY += $(module-dirs) modules
+@@ -1361,6 +1427,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -58016,7 +58033,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1487,17 +1553,21 @@ else
+@@ -1487,17 +1555,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -58042,7 +58059,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/Makefile linux-
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1507,11 +1577,15 @@ endif
+@@ -1507,11 +1579,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -67942,8 +67959,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/security/integr
  	return 0;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/security/Kconfig linux-3.2.54-pax/security/Kconfig
 --- linux-3.2.54/security/Kconfig	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/security/Kconfig	2013-12-02 21:29:49.902189542 +0100
-@@ -4,6 +4,689 @@
++++ linux-3.2.54-pax/security/Kconfig	2014-01-16 02:54:06.798181152 +0100
+@@ -4,6 +4,688 @@
  
  menu "Security options"
  
@@ -68033,7 +68050,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/security/Kconfi
 +	select CIFS_XATTR if CIFS
 +	select EXT2_FS_XATTR if EXT2_FS
 +	select EXT3_FS_XATTR if EXT3_FS
-+	select EXT4_FS_XATTR if EXT4_FS
 +	select JFFS2_FS_XATTR if JFFS2_FS
 +	select REISERFS_FS_XATTR if REISERFS_FS
 +	select SQUASHFS_XATTR if SQUASHFS
@@ -68633,7 +68649,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/security/Kconfi
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +852,7 @@ config INTEL_TXT
+@@ -169,7 +851,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -69761,8 +69777,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/color
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/constify_plugin.c linux-3.2.54-pax/tools/gcc/constify_plugin.c
 --- linux-3.2.54/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/constify_plugin.c	2013-05-23 23:03:18.274325309 +0200
-@@ -0,0 +1,560 @@
++++ linux-3.2.54-pax/tools/gcc/constify_plugin.c	2014-01-12 14:14:08.874835294 +0100
+@@ -0,0 +1,559 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -69809,7 +69825,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201305231310",
++	.version	= "201401121315",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -69974,22 +69990,21 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +
 +	*no_add_attrs = true;
 +	if (TREE_CODE(*node) == FUNCTION_DECL) {
-+		error("%qE attribute does not apply to functions", name);
++		error("%qE attribute does not apply to functions (%qF)", name, *node);
 +		return NULL_TREE;
 +	}
 +
 +	if (TREE_CODE(*node) == PARM_DECL) {
-+		error("%qE attribute does not apply to function parameters", name);
++		error("%qE attribute does not apply to function parameters (%qD)", name, *node);
 +		return NULL_TREE;
 +	}
 +
 +	if (TREE_CODE(*node) == VAR_DECL) {
-+		error("%qE attribute does not apply to variables", name);
++		error("%qE attribute does not apply to variables (%qD)", name, *node);
 +		return NULL_TREE;
 +	}
 +
 +	if (TYPE_P(*node)) {
-+		*no_add_attrs = false;
 +		type = *node;
 +	} else {
 +		gcc_assert(TREE_CODE(*node) == TYPE_DECL);
@@ -69997,18 +70012,20 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +	}
 +
 +	if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE) {
-+		error("%qE attribute applies to struct and union types only", name);
++		error("%qE attribute used on %qT applies to struct and union types only", name, type);
 +		return NULL_TREE;
 +	}
 +
 +	if (lookup_attribute(IDENTIFIER_POINTER(name), TYPE_ATTRIBUTES(type))) {
-+		error("%qE attribute is already applied to the type", name);
++		error("%qE attribute is already applied to the type %qT", name, type);
 +		return NULL_TREE;
 +	}
 +
 +	if (TYPE_P(*node)) {
 +		if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type)))
-+			error("%qE attribute is incompatible with 'do_const'", name);
++			error("%qE attribute used on type %qT is incompatible with 'do_const'", name, type);
++		else
++			*no_add_attrs = false;
 +		return NULL_TREE;
 +	}
 +
@@ -70019,7 +70036,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +		return NULL_TREE;
 +	}
 +
-+	error("%qE attribute used on type that is not constified", name);
++	error("%qE attribute used on type %qT that is not constified", name, type);
 +	return NULL_TREE;
 +}
 +
@@ -70035,22 +70052,22 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +{
 +	*no_add_attrs = true;
 +	if (!TYPE_P(*node)) {
-+		error("%qE attribute applies to types only", name);
++		error("%qE attribute applies to types only (%qD)", name, *node);
 +		return NULL_TREE;
 +	}
 +
 +	if (TREE_CODE(*node) != RECORD_TYPE && TREE_CODE(*node) != UNION_TYPE) {
-+		error("%qE attribute applies to struct and union types only", name);
++		error("%qE attribute used on %qT applies to struct and union types only", name, *node);
 +		return NULL_TREE;
 +	}
 +
 +	if (lookup_attribute(IDENTIFIER_POINTER(name), TYPE_ATTRIBUTES(*node))) {
-+		error("%qE attribute is already applied to the type", name);
++		error("%qE attribute used on %qT is already applied to the type", name, *node);
 +		return NULL_TREE;
 +	}
 +
 +	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(*node))) {
-+		error("%qE attribute is incompatible with 'no_const'", name);
++		error("%qE attribute used on %qT is incompatible with 'no_const'", name, *node);
 +		return NULL_TREE;
 +	}
 +
@@ -70108,30 +70125,29 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +
 +	constifiable(type, &cinfo);
 +
-+	if (TYPE_READONLY(type) && C_TYPE_FIELDS_READONLY(type)) {
-+		if (!lookup_attribute("do_const", TYPE_ATTRIBUTES(type)))
-+			return;
-+		if (cinfo.has_writable_field)
-+			return;
-+		error("'do_const' attribute used on type that is%sconstified", cinfo.has_fptr_field ? " " : " not ");
-+		return;
-+	}
-+
 +	if (lookup_attribute("no_const", TYPE_ATTRIBUTES(type))) {
 +		if ((cinfo.has_fptr_field && !cinfo.has_writable_field) || cinfo.has_do_const_field) {
 +			deconstify_type(type);
 +			TYPE_CONSTIFY_VISITED(type) = 1;
 +		} else
-+			error("'no_const' attribute used on type that is not constified");
++			error("'no_const' attribute used on type %qT that is not constified", type);
 +		return;
 +	}
 +
 +	if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type))) {
++		if (!cinfo.has_writable_field) {
++			error("'do_const' attribute used on type %qT that is%sconstified", type, cinfo.has_fptr_field ? " " : " not ");
++			return;
++		}
 +		constify_type(type);
 +		return;
 +	}
 +
 +	if (cinfo.has_fptr_field && !cinfo.has_writable_field) {
++		if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type))) {
++			error("'do_const' attribute used on type %qT that is constified", type);
++			return;
++		}
 +		constify_type(type);
 +		return;
 +	}
@@ -70219,7 +70235,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +	return check_local_variables();
 +}
 +
-+	unsigned int ret = 0;
 +static struct gimple_opt_pass pass_local_variable = {
 +	{
 +		.type			= GIMPLE_PASS,
@@ -71468,8 +71483,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/Makef
 +targets += size_overflow_hash.h
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_overflow_hash.data linux-3.2.54-pax/tools/gcc/size_overflow_hash.data
 --- linux-3.2.54/tools/gcc/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/size_overflow_hash.data	2013-12-19 01:34:57.000000000 +0100
-@@ -0,0 +1,5995 @@
++++ linux-3.2.54-pax/tools/gcc/size_overflow_hash.data	2014-01-05 23:11:10.000000000 +0100
+@@ -0,0 +1,5998 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +ocfs2_get_refcount_tree_3 ocfs2_get_refcount_tree 0 3 NULL
 +storvsc_connect_to_vsp_22 storvsc_connect_to_vsp 2 22 NULL
@@ -72093,8 +72108,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +send_mpa_reject_7135 send_mpa_reject 3 7135 NULL
 +ipv6_recv_rxpmtu_7142 ipv6_recv_rxpmtu 3 7142 NULL
 +ocfs2_get_left_path_7159 ocfs2_get_left_path 0 7159 NULL
-+utf16_strsize_7203 utf16_strsize 0 7203 NULL nohasharray
-+__alloc_objio_seg_7203 __alloc_objio_seg 1 7203 &utf16_strsize_7203
++__alloc_objio_seg_7203 __alloc_objio_seg 1 7203 NULL nohasharray
++utf16_strsize_7203 utf16_strsize 0 7203 &__alloc_objio_seg_7203
 +sys32_ipc_7238 sys32_ipc 3 7238 NULL
 +hdlc_loop_7255 hdlc_loop 0 7255 NULL
 +snd_mask_refine_7267 snd_mask_refine 0 7267 NULL
@@ -72260,8 +72275,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +usb_allocate_stream_buffers_8964 usb_allocate_stream_buffers 3 8964 NULL
 +qib_qsfp_dump_8966 qib_qsfp_dump 0-3 8966 NULL
 +venus_mkdir_8967 venus_mkdir 4 8967 NULL
-+seq_open_net_8968 seq_open_net 4 8968 NULL nohasharray
-+vol_cdev_read_8968 vol_cdev_read 3 8968 &seq_open_net_8968
++vol_cdev_read_8968 vol_cdev_read 3 8968 NULL nohasharray
++seq_open_net_8968 seq_open_net 4 8968 &vol_cdev_read_8968
 +bio_integrity_get_tag_8974 bio_integrity_get_tag 3 8974 NULL
 +btrfs_alloc_free_block_8986 btrfs_alloc_free_block 8 8986 NULL
 +get_pipes_9008 get_pipes 0 9008 NULL
@@ -72413,8 +72428,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +do_compat_pselect_10398 do_compat_pselect 1 10398 NULL
 +event_phy_transmit_error_read_10471 event_phy_transmit_error_read 3 10471 NULL
 +qib_alloc_fast_reg_page_list_10507 qib_alloc_fast_reg_page_list 2 10507 NULL
-+rbd_get_segment_10511 rbd_get_segment 0-3-4 10511 NULL nohasharray
-+sel_write_disable_10511 sel_write_disable 3 10511 &rbd_get_segment_10511
++sel_write_disable_10511 sel_write_disable 3 10511 NULL nohasharray
++rbd_get_segment_10511 rbd_get_segment 0-3-4 10511 &sel_write_disable_10511
 +osd_req_write_sg_kern_10514 osd_req_write_sg_kern 5 10514 NULL
 +rds_message_alloc_10517 rds_message_alloc 1 10517 NULL
 +snd_pcm_hw_params_user_10520 snd_pcm_hw_params_user 0 10520 NULL
@@ -72809,8 +72824,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +cmd_complete_14502 cmd_complete 5 14502 NULL
 +ocfs2_debug_read_14507 ocfs2_debug_read 3 14507 NULL
 +prepare_data_14536 prepare_data 3 14536 NULL nohasharray
-+dataflash_read_user_otp_14536 dataflash_read_user_otp 3-2 14536 &prepare_data_14536 nohasharray
-+ep0_write_14536 ep0_write 3 14536 &dataflash_read_user_otp_14536
++ep0_write_14536 ep0_write 3 14536 &prepare_data_14536 nohasharray
++dataflash_read_user_otp_14536 dataflash_read_user_otp 3-2 14536 &ep0_write_14536
 +register_trace_sched_switch_14545 register_trace_sched_switch 0 14545 NULL
 +l2cap_send_cmd_14548 l2cap_send_cmd 4 14548 NULL
 +picolcd_debug_eeprom_read_14549 picolcd_debug_eeprom_read 3 14549 NULL
@@ -72836,8 +72851,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +ext4_kvmalloc_14796 ext4_kvmalloc 1 14796 NULL
 +__kfifo_in_14797 __kfifo_in 3-0 14797 NULL
 +nfs_parse_server_name_14800 nfs_parse_server_name 2 14800 NULL
-+hpet_readl_14801 hpet_readl 0 14801 NULL nohasharray
-+snd_als300_gcr_read_14801 snd_als300_gcr_read 0 14801 &hpet_readl_14801
++snd_als300_gcr_read_14801 snd_als300_gcr_read 0 14801 NULL nohasharray
++hpet_readl_14801 hpet_readl 0 14801 &snd_als300_gcr_read_14801
 +__i2400ms_rx_get_size_14826 __i2400ms_rx_get_size 0 14826 NULL
 +do_tune_cpucache_14828 do_tune_cpucache 2 14828 NULL
 +__mutex_fastpath_lock_retval_14844 __mutex_fastpath_lock_retval 0 14844 NULL
@@ -73609,8 +73624,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +pipe_iov_copy_from_user_23102 pipe_iov_copy_from_user 3 23102 NULL
 +dgram_recvmsg_23104 dgram_recvmsg 4 23104 NULL
 +ip_recv_error_23109 ip_recv_error 3 23109 NULL
-+mwl8k_cmd_set_beacon_23110 mwl8k_cmd_set_beacon 4 23110 NULL nohasharray
-+msix_setup_entries_23110 msix_setup_entries 0 23110 &mwl8k_cmd_set_beacon_23110
++msix_setup_entries_23110 msix_setup_entries 0 23110 NULL nohasharray
++mwl8k_cmd_set_beacon_23110 mwl8k_cmd_set_beacon 4 23110 &msix_setup_entries_23110
 +nl80211_send_rx_auth_23111 nl80211_send_rx_auth 4 23111 NULL
 +__clear_user_23118 __clear_user 0-2 23118 NULL
 +iwl_legacy_dbgfs_interrupt_write_23122 iwl_legacy_dbgfs_interrupt_write 3 23122 NULL nohasharray
@@ -74027,9 +74042,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +cxio_hal_pblpool_alloc_27714 cxio_hal_pblpool_alloc 2 27714 NULL
 +evm_write_key_27715 evm_write_key 3 27715 NULL
 +ieee80211_if_fmt_dot11MeshGateAnnouncementProtocol_27722 ieee80211_if_fmt_dot11MeshGateAnnouncementProtocol 3 27722 NULL
-+reg_w_buf_27724 reg_w_buf 3 27724 NULL nohasharray
-+pstore_write_27724 pstore_write 3 27724 &reg_w_buf_27724 nohasharray
-+iwl_dbgfs_traffic_log_write_27724 iwl_dbgfs_traffic_log_write 3 27724 &pstore_write_27724
++pstore_write_27724 pstore_write 3 27724 NULL nohasharray
++iwl_dbgfs_traffic_log_write_27724 iwl_dbgfs_traffic_log_write 3 27724 &pstore_write_27724 nohasharray
++reg_w_buf_27724 reg_w_buf 3 27724 &iwl_dbgfs_traffic_log_write_27724
 +xfs_dir2_block_sfsize_27727 xfs_dir2_block_sfsize 0 27727 NULL
 +kcalloc_27770 kcalloc 2-1 27770 NULL
 +ttm_object_file_init_27804 ttm_object_file_init 2 27804 NULL
@@ -74146,8 +74161,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +hci_sock_setsockopt_28993 hci_sock_setsockopt 5 28993 NULL
 +bin_uuid_28999 bin_uuid 3 28999 NULL
 +sys_fcntl64_29031 sys_fcntl64 3 29031 NULL
-+ProcessGetHostMibs_29049 ProcessGetHostMibs 0 29049 NULL nohasharray
-+rxrpc_sendmsg_29049 rxrpc_sendmsg 4 29049 &ProcessGetHostMibs_29049
++rxrpc_sendmsg_29049 rxrpc_sendmsg 4 29049 NULL nohasharray
++ProcessGetHostMibs_29049 ProcessGetHostMibs 0 29049 &rxrpc_sendmsg_29049
 +tso_fragment_29050 tso_fragment 3 29050 NULL
 +split_bvec_29058 split_bvec 5 29058 NULL
 +iso_packets_buffer_init_29061 iso_packets_buffer_init 3-4 29061 NULL
@@ -74226,7 +74241,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +pin_code_reply_29893 pin_code_reply 4 29893 NULL
 +write_file_queue_29922 write_file_queue 3 29922 NULL
 +ext4_xattr_set_acl_29930 ext4_xattr_set_acl 4 29930 NULL
-+__btrfs_getxattr_29947 __btrfs_getxattr 0 29947 NULL
++__btrfs_getxattr_29947 __btrfs_getxattr 0 29947 NULL nohasharray
++ipv6_recv_error_29947 ipv6_recv_error 3 29947 &__btrfs_getxattr_29947
 +xfrm_count_auth_supported_29957 xfrm_count_auth_supported 0 29957 NULL
 +irias_add_octseq_attrib_29983 irias_add_octseq_attrib 4 29983 NULL
 +arch_setup_dmar_msi_29992 arch_setup_dmar_msi 1-0 29992 NULL
@@ -74960,8 +74976,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +snd_pcm_playback_rewind_38249 snd_pcm_playback_rewind 0-2 38249 NULL
 +ieee80211_if_read_auto_open_plinks_38268 ieee80211_if_read_auto_open_plinks 3 38268 NULL nohasharray
 +mthca_alloc_icm_table_38268 mthca_alloc_icm_table 3-4 38268 &ieee80211_if_read_auto_open_plinks_38268
-+xfs_bmdr_to_bmbt_38275 xfs_bmdr_to_bmbt 5 38275 NULL nohasharray
-+xfs_bmbt_to_bmdr_38275 xfs_bmbt_to_bmdr 3 38275 &xfs_bmdr_to_bmbt_38275
++xfs_bmbt_to_bmdr_38275 xfs_bmbt_to_bmdr 3 38275 NULL nohasharray
++xfs_bmdr_to_bmbt_38275 xfs_bmdr_to_bmbt 5 38275 &xfs_bmbt_to_bmdr_38275
 +zd_mac_rx_38296 zd_mac_rx 3 38296 NULL
 +isr_rx_headers_read_38325 isr_rx_headers_read 3 38325 NULL
 +ida_simple_get_38326 ida_simple_get 2 38326 NULL
@@ -75458,8 +75474,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +msi_capability_init_43423 msi_capability_init 0 43423 &__alloc_bootmem_low_43423
 +usb_alloc_urb_43436 usb_alloc_urb 1 43436 NULL
 +ocfs2_rotate_tree_left_43442 ocfs2_rotate_tree_left 0 43442 NULL
-+usemap_size_43443 usemap_size 0-2-1 43443 NULL nohasharray
-+usb_string_43443 usb_string 0 43443 &usemap_size_43443
++usb_string_43443 usb_string 0 43443 NULL nohasharray
++usemap_size_43443 usemap_size 0-2-1 43443 &usb_string_43443
 +__data_list_add_eb_43472 __data_list_add_eb 0 43472 NULL
 +alloc_new_reservation_43480 alloc_new_reservation 4-0-2 43480 NULL
 +nf_nat_ftp_fmt_cmd_43495 nf_nat_ftp_fmt_cmd 0 43495 NULL
@@ -75676,6 +75692,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +pcpu_alloc_alloc_info_45813 pcpu_alloc_alloc_info 1-2 45813 NULL
 +fm_v4l2_init_video_device_45821 fm_v4l2_init_video_device 2 45821 NULL
 +r600_texture_size_45823 r600_texture_size 6-5-4 45823 NULL
++ipv6_recv_rxpmtu_45830 ipv6_recv_rxpmtu 3 45830 NULL
 +amthi_read_45831 amthi_read 4 45831 NULL
 +audit_make_reply_45835 audit_make_reply 7 45835 NULL
 +__ip_select_ident_45851 __ip_select_ident 3 45851 NULL
@@ -75864,8 +75881,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +iwl_dbgfs_ucode_tracing_read_47983 iwl_dbgfs_ucode_tracing_read 3 47983 NULL nohasharray
 +mempool_resize_47983 mempool_resize 2 47983 &iwl_dbgfs_ucode_tracing_read_47983
 +pnpacpi_parse_allocated_irqresource_47986 pnpacpi_parse_allocated_irqresource 2 47986 NULL
-+dbg_port_buf_47990 dbg_port_buf 2 47990 NULL nohasharray
-+mgmt_pending_add_47990 mgmt_pending_add 5 47990 &dbg_port_buf_47990
++mgmt_pending_add_47990 mgmt_pending_add 5 47990 NULL nohasharray
++dbg_port_buf_47990 dbg_port_buf 2 47990 &mgmt_pending_add_47990
 +ib_umad_write_47993 ib_umad_write 3 47993 NULL
 +ocfs2_find_refcount_split_pos_48001 ocfs2_find_refcount_split_pos 0 48001 NULL
 +ffs_epfile_write_48014 ffs_epfile_write 3 48014 NULL
@@ -75910,8 +75927,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +r8712_usbctrl_vendorreq_48489 r8712_usbctrl_vendorreq 6 48489 NULL
 +send_control_msg_48498 send_control_msg 6 48498 NULL
 +mlx4_en_create_tx_ring_48501 mlx4_en_create_tx_ring 4 48501 NULL
-+iwl_legacy_dbgfs_status_read_48508 iwl_legacy_dbgfs_status_read 3 48508 NULL nohasharray
-+diva_os_copy_to_user_48508 diva_os_copy_to_user 4 48508 &iwl_legacy_dbgfs_status_read_48508
++diva_os_copy_to_user_48508 diva_os_copy_to_user 4 48508 NULL nohasharray
++iwl_legacy_dbgfs_status_read_48508 iwl_legacy_dbgfs_status_read 3 48508 &diva_os_copy_to_user_48508
 +phantom_get_free_48514 phantom_get_free 0 48514 NULL
 +ubi_dbg_check_write_48525 ubi_dbg_check_write 0 48525 NULL
 +wiimote_hid_send_48528 wiimote_hid_send 3 48528 NULL
@@ -76470,8 +76487,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +pn_raw_send_54330 pn_raw_send 2 54330 NULL
 +br_fdb_fillbuf_54339 br_fdb_fillbuf 0 54339 NULL
 +__alloc_dev_table_54343 __alloc_dev_table 2 54343 NULL
-+__get_free_pages_54352 __get_free_pages 0 54352 NULL nohasharray
-+_osd_realloc_seg_54352 _osd_realloc_seg 3 54352 &__get_free_pages_54352
++_osd_realloc_seg_54352 _osd_realloc_seg 3 54352 NULL nohasharray
++__get_free_pages_54352 __get_free_pages 0 54352 &_osd_realloc_seg_54352
 +tcf_hash_create_54360 tcf_hash_create 4 54360 NULL
 +read_file_credit_dist_stats_54367 read_file_credit_dist_stats 3 54367 NULL
 +vfs_readlink_54368 vfs_readlink 3 54368 NULL
@@ -76699,8 +76716,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +pvr2_debugifc_print_status_56890 pvr2_debugifc_print_status 3 56890 NULL
 +__bitmap_clear_bits_56912 __bitmap_clear_bits 3 56912 NULL
 +__kfifo_out_56927 __kfifo_out 0-3 56927 NULL
-+CopyBufferToControlPacket_56933 CopyBufferToControlPacket 0 56933 NULL nohasharray
-+journal_init_revoke_56933 journal_init_revoke 2 56933 &CopyBufferToControlPacket_56933
++journal_init_revoke_56933 journal_init_revoke 2 56933 NULL nohasharray
++CopyBufferToControlPacket_56933 CopyBufferToControlPacket 0 56933 &journal_init_revoke_56933
 +diva_get_driver_info_56967 diva_get_driver_info 0 56967 NULL
 +vlsi_alloc_ring_57003 vlsi_alloc_ring 3-4 57003 NULL
 +btrfs_super_csum_size_57004 btrfs_super_csum_size 0 57004 NULL
@@ -76794,8 +76811,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +tt_response_fill_table_57902 tt_response_fill_table 1 57902 NULL
 +xt_alloc_table_info_57903 xt_alloc_table_info 1 57903 NULL
 +emi26_writememory_57908 emi26_writememory 4 57908 NULL
-+iio_read_first_n_kfifo_57910 iio_read_first_n_kfifo 2 57910 NULL nohasharray
-+atomic_add_return_unchecked_57910 atomic_add_return_unchecked 0-1 57910 &iio_read_first_n_kfifo_57910
++atomic_add_return_unchecked_57910 atomic_add_return_unchecked 0-1 57910 NULL nohasharray
++iio_read_first_n_kfifo_57910 iio_read_first_n_kfifo 2 57910 &atomic_add_return_unchecked_57910
 +__snd_gf1_look16_57925 __snd_gf1_look16 0 57925 NULL
 +sel_read_handle_unknown_57933 sel_read_handle_unknown 3 57933 NULL
 +xfs_mru_cache_create_57943 xfs_mru_cache_create 3 57943 NULL
@@ -76988,8 +77005,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +sys_sched_getaffinity_60033 sys_sched_getaffinity 2 60033 NULL
 +bio_integrity_hw_sectors_60039 bio_integrity_hw_sectors 0-2 60039 NULL
 +do_ip6t_set_ctl_60040 do_ip6t_set_ctl 4 60040 NULL
-+pin_2_irq_60050 pin_2_irq 0-3 60050 NULL nohasharray
-+vcs_size_60050 vcs_size 0 60050 &pin_2_irq_60050
++vcs_size_60050 vcs_size 0 60050 NULL nohasharray
++pin_2_irq_60050 pin_2_irq 0-3 60050 &vcs_size_60050
 +load_module_60056 load_module 2 60056 NULL nohasharray
 +gru_alloc_gts_60056 gru_alloc_gts 3-2 60056 &load_module_60056
 +compat_writev_60063 compat_writev 3 60063 NULL
@@ -77169,6 +77186,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +pcpu_alloc_bootmem_62074 pcpu_alloc_bootmem 2 62074 NULL
 +get_domain_for_dev_62099 get_domain_for_dev 2 62099 NULL
 +jffs2_security_setxattr_62107 jffs2_security_setxattr 4 62107 NULL
++ip_recv_error_62117 ip_recv_error 3 62117 NULL
 +generic_block_fiemap_62122 generic_block_fiemap 4 62122 NULL
 +llc_ui_header_len_62131 llc_ui_header_len 0 62131 NULL
 +qib_diag_write_62133 qib_diag_write 3 62133 NULL nohasharray
@@ -77467,10 +77485,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +selnl_msglen_65499 selnl_msglen 0 65499 NULL
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_overflow_plugin.c linux-3.2.54-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.2.54/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/size_overflow_plugin.c	2013-12-15 15:47:34.492129582 +0100
-@@ -0,0 +1,3927 @@
++++ linux-3.2.54-pax/tools/gcc/size_overflow_plugin.c	2014-01-16 02:54:06.802181152 +0100
+@@ -0,0 +1,4050 @@
 +/*
-+ * Copyright 2011, 2012, 2013 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011, 2012, 2013, 2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
@@ -77598,7 +77616,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20131214beta",
++	.version	= "20140102beta",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -81045,6 +81063,141 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	create_asm_stmt(str, build_string(1, "0"), build_string(3, "=rm"), &asm_data);
 +}
 +
++// Insert an asm stmt with "MARK_TURN_OFF", "MARK_YES" or "MARK_NOT_INTENTIONAL".
++static bool create_mark_asm(gimple stmt, enum mark mark)
++{
++	struct asm_data asm_data;
++	const char *asm_str;
++
++	switch (mark) {
++	case MARK_TURN_OFF:
++		asm_str = TURN_OFF_ASM_STR;
++		break;
++	case MARK_NOT_INTENTIONAL:
++	case MARK_YES:
++		asm_str = YES_ASM_STR;
++		break;
++	default:
++		gcc_unreachable();
++	}
++
++	asm_data.def_stmt = stmt;
++	asm_data.output = gimple_call_lhs(stmt);
++
++	if (asm_data.output == NULL_TREE) {
++		asm_data.input = gimple_call_arg(stmt, 0);
++		if (is_gimple_constant(asm_data.input))
++			return false;
++		asm_data.output = NULL;
++		create_asm_stmt(asm_str, build_string(2, "rm"), NULL, &asm_data);
++		return true;
++	}
++
++	create_asm_input(stmt, 0, &asm_data);
++	gcc_assert(asm_data.input != NULL_TREE);
++
++	create_asm_stmt(asm_str, build_string(1, "0"), build_string(3, "=rm"), &asm_data);
++	return true;
++}
++
++static bool is_from_cast(const_tree node)
++{
++	gimple def_stmt = get_def_stmt(node);
++
++	if (!def_stmt)
++		return false;
++
++	if (gimple_assign_cast_p(def_stmt))
++		return true;
++
++	return false;
++}
++
++// Skip duplication when there is a minus expr and the type of rhs1 or rhs2 is a pointer_type.
++static bool skip_ptr_minus(gimple stmt)
++{
++	const_tree rhs1, rhs2, ptr1_rhs, ptr2_rhs;
++
++	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR)
++		return false;
++
++	rhs1 = gimple_assign_rhs1(stmt);
++	if (!is_from_cast(rhs1))
++		return false;
++
++	rhs2 = gimple_assign_rhs2(stmt);
++	if (!is_from_cast(rhs2))
++		return false;
++
++	ptr1_rhs = gimple_assign_rhs1(get_def_stmt(rhs1));
++	ptr2_rhs = gimple_assign_rhs1(get_def_stmt(rhs2));
++
++	if (TREE_CODE(TREE_TYPE(ptr1_rhs)) != POINTER_TYPE && TREE_CODE(TREE_TYPE(ptr2_rhs)) != POINTER_TYPE)
++		return false;
++
++	create_mark_asm(stmt, MARK_YES);
++	return true;
++}
++
++static void walk_use_def_ptr(struct pointer_set_t *visited, const_tree lhs)
++{
++	gimple def_stmt;
++
++	def_stmt = get_def_stmt(lhs);
++	if (!def_stmt)
++		return;
++
++	if (pointer_set_insert(visited, def_stmt))
++		return;
++
++	switch (gimple_code(def_stmt)) {
++	case GIMPLE_NOP:
++	case GIMPLE_ASM:
++	case GIMPLE_CALL:
++		break;
++	case GIMPLE_PHI: {
++		unsigned int i, n = gimple_phi_num_args(def_stmt);
++
++		pointer_set_insert(visited, def_stmt);
++
++		for (i = 0; i < n; i++) {
++			tree arg = gimple_phi_arg_def(def_stmt, i);
++
++			walk_use_def_ptr(visited, arg);
++		}
++	}
++	case GIMPLE_ASSIGN:
++		switch (gimple_num_ops(def_stmt)) {
++		case 2:
++			walk_use_def_ptr(visited, gimple_assign_rhs1(def_stmt));
++			return;
++		case 3:
++			if (skip_ptr_minus(def_stmt))
++				return;
++
++			walk_use_def_ptr(visited, gimple_assign_rhs1(def_stmt));
++			walk_use_def_ptr(visited, gimple_assign_rhs2(def_stmt));
++			return;
++		default:
++			return;
++		}
++	default:
++		debug_gimple_stmt((gimple)def_stmt);
++		error("%s: unknown gimple code", __func__);
++		gcc_unreachable();
++	}
++}
++
++// Look for a ptr - ptr expression (e.g., cpuset_common_file_read() s - page)
++static void insert_mark_not_intentional_asm_at_ptr(const_tree arg)
++{
++	struct pointer_set_t *visited;
++
++	visited = pointer_set_create();
++	walk_use_def_ptr(visited, arg);
++	pointer_set_destroy(visited);
++}
++
 +// Determine the return value and insert the asm stmt to mark the return stmt.
 +static void insert_asm_ret(gimple stmt)
 +{
@@ -81067,6 +81220,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +
 +	arg = gimple_call_arg(stmt, argnum - 1);
 +	gcc_assert(arg != NULL_TREE);
++
++	// skip all ptr - ptr expressions
++	insert_mark_not_intentional_asm_at_ptr(arg);
++
 +	create_size_overflow_asm(stmt, arg, argnum);
 +}
 +
@@ -81126,35 +81283,17 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +
 +/*
 + * Look up the intentional_overflow attribute that turns off ipa based duplication
-+ * on the callee function, if found insert an asm stmt with "MARK_TURN_OFF".
++ * on the callee function.
 + */
-+static bool create_mark_turn_off_asm(gimple stmt)
++static bool is_mark_turn_off_attribute(gimple stmt)
 +{
 +	enum mark mark;
-+	struct asm_data asm_data;
 +	const_tree fndecl = gimple_call_fndecl(stmt);
 +
 +	mark = get_intentional_attr_type(DECL_ORIGIN(fndecl));
-+	if (mark != MARK_TURN_OFF)
-+		return false;
-+
-+	asm_data.def_stmt = stmt;
-+	asm_data.output = gimple_call_lhs(stmt);
-+
-+	if (asm_data.output == NULL_TREE) {
-+		asm_data.input = gimple_call_arg(stmt, 0);
-+		if (is_gimple_constant(asm_data.input))
-+			return false;
-+		asm_data.output = NULL;
-+		create_asm_stmt(TURN_OFF_ASM_STR, build_string(2, "rm"), NULL, &asm_data);
++	if (mark == MARK_TURN_OFF)
 +		return true;
-+	}
-+
-+	create_asm_input(stmt, 0, &asm_data);
-+	gcc_assert(asm_data.input != NULL_TREE);
-+
-+	create_asm_stmt(TURN_OFF_ASM_STR, build_string(1, "0"), build_string(3, "=rm"), &asm_data);
-+	return true;
++	return false;
 +}
 +
 +// If the argument(s) of the callee function is/are in the hash table or are marked by an attribute then mark the call stmt with an asm stmt
@@ -81171,8 +81310,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +		return;
 +	fndecl = DECL_ORIGIN(fndecl);
 +
-+	if (create_mark_turn_off_asm(stmt))
++	if (is_mark_turn_off_attribute(stmt)) {
++		create_mark_asm(stmt, MARK_TURN_OFF);
 +		return;
++	}
 +
 +	search_interesting_args(fndecl, orig_argnums);
 +
@@ -82037,7 +82178,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/perf/util
  #endif
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_main.c linux-3.2.54-pax/virt/kvm/kvm_main.c
 --- linux-3.2.54/virt/kvm/kvm_main.c	2014-01-03 15:48:45.280070549 +0100
-+++ linux-3.2.54-pax/virt/kvm/kvm_main.c	2014-01-03 15:48:49.664070315 +0100
++++ linux-3.2.54-pax/virt/kvm/kvm_main.c	2014-01-16 02:50:19.390186407 +0100
 @@ -75,12 +75,17 @@ LIST_HEAD(vm_list);
  
  static cpumask_var_t cpus_hardware_enabled;
@@ -82067,7 +82208,27 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  			(void __user *)(unsigned long)mem->userspace_addr,
  			mem->memory_size)))
  		goto out;
-@@ -1660,7 +1665,7 @@ static int kvm_vcpu_release(struct inode
+@@ -1493,8 +1498,17 @@ EXPORT_SYMBOL_GPL(kvm_read_guest_cached)
+ 
+ int kvm_clear_guest_page(struct kvm *kvm, gfn_t gfn, int offset, int len)
+ {
+-	return kvm_write_guest_page(kvm, gfn, (const void *) empty_zero_page,
+-				    offset, len);
++	int r;
++	unsigned long addr;
++
++	addr = gfn_to_hva(kvm, gfn);
++	if (kvm_is_error_hva(addr))
++		return -EFAULT;
++	r = __clear_user((void __user *)addr + offset, len);
++	if (r)
++		return -EFAULT;
++	mark_page_dirty(kvm, gfn);
++	return 0;
+ }
+ EXPORT_SYMBOL_GPL(kvm_clear_guest_page);
+ 
+@@ -1660,7 +1674,7 @@ static int kvm_vcpu_release(struct inode
  	return 0;
  }
  
@@ -82076,7 +82237,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  	.release        = kvm_vcpu_release,
  	.unlocked_ioctl = kvm_vcpu_ioctl,
  #ifdef CONFIG_COMPAT
-@@ -2183,7 +2188,7 @@ static int kvm_vm_mmap(struct file *file
+@@ -2183,7 +2197,7 @@ static int kvm_vm_mmap(struct file *file
  	return 0;
  }
  
@@ -82085,7 +82246,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  	.release        = kvm_vm_release,
  	.unlocked_ioctl = kvm_vm_ioctl,
  #ifdef CONFIG_COMPAT
-@@ -2281,7 +2286,7 @@ out:
+@@ -2281,7 +2295,7 @@ out:
  	return r;
  }
  
@@ -82094,7 +82255,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  	.unlocked_ioctl = kvm_dev_ioctl,
  	.compat_ioctl   = kvm_dev_ioctl,
  	.llseek		= noop_llseek,
-@@ -2307,7 +2312,7 @@ static void hardware_enable_nolock(void
+@@ -2307,7 +2321,7 @@ static void hardware_enable_nolock(void
  
  	if (r) {
  		cpumask_clear_cpu(cpu, cpus_hardware_enabled);
@@ -82103,7 +82264,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  		printk(KERN_INFO "kvm: enabling virtualization on "
  				 "CPU%d failed\n", cpu);
  	}
-@@ -2361,10 +2366,10 @@ static int hardware_enable_all(void)
+@@ -2361,10 +2375,10 @@ static int hardware_enable_all(void)
  
  	kvm_usage_count++;
  	if (kvm_usage_count == 1) {
@@ -82116,7 +82277,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  			hardware_disable_all_nolock();
  			r = -EBUSY;
  		}
-@@ -2715,7 +2720,7 @@ static void kvm_sched_out(struct preempt
+@@ -2715,7 +2729,7 @@ static void kvm_sched_out(struct preempt
  	kvm_arch_vcpu_put(vcpu);
  }
  
@@ -82125,7 +82286,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  		  struct module *module)
  {
  	int r;
-@@ -2778,7 +2783,7 @@ int kvm_init(void *opaque, unsigned vcpu
+@@ -2778,7 +2792,7 @@ int kvm_init(void *opaque, unsigned vcpu
  	if (!vcpu_align)
  		vcpu_align = __alignof__(struct kvm_vcpu);
  	kvm_vcpu_cache = kmem_cache_create("kvm_vcpu", vcpu_size, vcpu_align,
@@ -82134,7 +82295,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  	if (!kvm_vcpu_cache) {
  		r = -ENOMEM;
  		goto out_free_3;
-@@ -2788,9 +2793,11 @@ int kvm_init(void *opaque, unsigned vcpu
+@@ -2788,9 +2802,11 @@ int kvm_init(void *opaque, unsigned vcpu
  	if (r)
  		goto out_free;
  
@@ -82146,7 +82307,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/virt/kvm/kvm_ma
  
  	r = misc_register(&kvm_dev);
  	if (r) {
-@@ -2800,9 +2807,6 @@ int kvm_init(void *opaque, unsigned vcpu
+@@ -2800,9 +2816,6 @@ int kvm_init(void *opaque, unsigned vcpu
  
  	register_syscore_ops(&kvm_syscore_ops);
  
