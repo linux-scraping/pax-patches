@@ -1,4 +1,5 @@
-- forward port to 3.12.8
+- reworked the interaction between the various PaX control flag mechanisms for better consistency
+- fixed type attribute handling in the constify plugin, reported by spender
 
 diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/arch/alpha/include/asm/atomic.h linux-3.12.8-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.12.8/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -46871,7 +46872,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_aout.
  		if (error != N_DATADDR(ex)) {
 diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c linux-3.12.8-pax/fs/binfmt_elf.c
 --- linux-3.12.8/fs/binfmt_elf.c	2013-11-04 01:46:46.975114954 +0100
-+++ linux-3.12.8-pax/fs/binfmt_elf.c	2013-12-19 23:54:34.493281901 +0100
++++ linux-3.12.8-pax/fs/binfmt_elf.c	2014-01-17 02:51:09.360761827 +0100
 @@ -34,6 +34,7 @@
  #include <linux/utsname.h>
  #include <linux/coredump.h>
@@ -47030,7 +47031,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	}
  
  	error = load_addr;
-@@ -538,6 +561,322 @@ out:
+@@ -538,6 +561,336 @@ out:
  	return error;
  }
  
@@ -47171,11 +47172,47 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +#endif
 +
 +#if defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR)
-+static unsigned long pax_parse_ei_pax(const struct elfhdr * const elf_ex)
++static unsigned long pax_parse_defaults(void)
 +{
 +	unsigned long pax_flags = 0UL;
 +
++#ifdef CONFIG_PAX_SOFTMODE
++	if (pax_softmode)
++		return pax_flags;
++#endif
++
++#ifdef CONFIG_PAX_PAGEEXEC
++	pax_flags |= MF_PAX_PAGEEXEC;
++#endif
++
++#ifdef CONFIG_PAX_SEGMEXEC
++	pax_flags |= MF_PAX_SEGMEXEC;
++#endif
++
++#ifdef CONFIG_PAX_MPROTECT
++	pax_flags |= MF_PAX_MPROTECT;
++#endif
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (randomize_va_space)
++		pax_flags |= MF_PAX_RANDMMAP;
++#endif
++
++	return pax_flags;
++}
++
++static unsigned long pax_parse_ei_pax(const struct elfhdr * const elf_ex)
++{
++	unsigned long pax_flags = PAX_PARSE_FLAGS_FALLBACK;
++
 +#ifdef CONFIG_PAX_EI_PAX
++
++#ifdef CONFIG_PAX_SOFTMODE
++	if (pax_softmode)
++		return pax_flags;
++#endif
++
++	pax_flags = 0UL;
 +
 +#ifdef CONFIG_PAX_PAGEEXEC
 +	if (!(elf_ex->e_ident[EI_PAX] & EF_PAX_PAGEEXEC))
@@ -47202,28 +47239,10 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +		pax_flags |= MF_PAX_RANDMMAP;
 +#endif
 +
-+#else
-+
-+#ifdef CONFIG_PAX_PAGEEXEC
-+	pax_flags |= MF_PAX_PAGEEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_SEGMEXEC
-+	pax_flags |= MF_PAX_SEGMEXEC;
-+#endif
-+
-+#ifdef CONFIG_PAX_MPROTECT
-+	pax_flags |= MF_PAX_MPROTECT;
-+#endif
-+
-+#ifdef CONFIG_PAX_RANDMMAP
-+	if (randomize_va_space)
-+		pax_flags |= MF_PAX_RANDMMAP;
-+#endif
-+
 +#endif
 +
 +	return pax_flags;
++
 +}
 +
 +static unsigned long pax_parse_pt_pax(const struct elfhdr * const elf_ex, const struct elf_phdr * const elf_phdata)
@@ -47239,7 +47258,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +			    ((elf_phdata[i].p_flags & PF_EMUTRAMP) && (elf_phdata[i].p_flags & PF_NOEMUTRAMP)) ||
 +			    ((elf_phdata[i].p_flags & PF_MPROTECT) && (elf_phdata[i].p_flags & PF_NOMPROTECT)) ||
 +			    ((elf_phdata[i].p_flags & PF_RANDMMAP) && (elf_phdata[i].p_flags & PF_NORANDMMAP)))
-+				return ~0UL;
++				return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#ifdef CONFIG_PAX_SOFTMODE
 +			if (pax_softmode)
@@ -47252,7 +47271,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +		}
 +#endif
 +
-+	return ~0UL;
++	return PAX_PARSE_FLAGS_FALLBACK;
 +}
 +
 +static unsigned long pax_parse_xattr_pax(struct file * const file)
@@ -47264,44 +47283,37 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +	unsigned long pax_flags_hardmode = 0UL, pax_flags_softmode = 0UL;
 +
 +	xattr_size = pax_getxattr(file->f_path.dentry, xattr_value, sizeof xattr_value);
-+	switch (xattr_size) {
-+	default:
-+		return ~0UL;
++	if (xattr_size < 0 || xattr_size > sizeof xattr_value)
++		return PAX_PARSE_FLAGS_FALLBACK;
 +
-+	case -ENODATA:
-+		break;
++	for (i = 0; i < xattr_size; i++)
++		switch (xattr_value[i]) {
++		default:
++			return PAX_PARSE_FLAGS_FALLBACK;
 +
-+	case 0 ... sizeof xattr_value:
-+		for (i = 0; i < xattr_size; i++)
-+			switch (xattr_value[i]) {
-+			default:
-+				return ~0UL;
++#define parse_flag(option1, option2, flag)			\
++		case option1:					\
++			if (pax_flags_hardmode & MF_PAX_##flag)	\
++				return PAX_PARSE_FLAGS_FALLBACK;\
++			pax_flags_hardmode |= MF_PAX_##flag;	\
++			break;					\
++		case option2:					\
++			if (pax_flags_softmode & MF_PAX_##flag)	\
++				return PAX_PARSE_FLAGS_FALLBACK;\
++			pax_flags_softmode |= MF_PAX_##flag;	\
++			break;
 +
-+#define parse_flag(option1, option2, flag)				\
-+			case option1:					\
-+				if (pax_flags_hardmode & MF_PAX_##flag)	\
-+					return ~0UL;			\
-+				pax_flags_hardmode |= MF_PAX_##flag;	\
-+				break;					\
-+			case option2:					\
-+				if (pax_flags_softmode & MF_PAX_##flag)	\
-+					return ~0UL;			\
-+				pax_flags_softmode |= MF_PAX_##flag;	\
-+				break;
-+
-+			parse_flag('p', 'P', PAGEEXEC);
-+			parse_flag('e', 'E', EMUTRAMP);
-+			parse_flag('m', 'M', MPROTECT);
-+			parse_flag('r', 'R', RANDMMAP);
-+			parse_flag('s', 'S', SEGMEXEC);
++		parse_flag('p', 'P', PAGEEXEC);
++		parse_flag('e', 'E', EMUTRAMP);
++		parse_flag('m', 'M', MPROTECT);
++		parse_flag('r', 'R', RANDMMAP);
++		parse_flag('s', 'S', SEGMEXEC);
 +
 +#undef parse_flag
-+			}
-+		break;
-+	}
++		}
 +
 +	if (pax_flags_hardmode & pax_flags_softmode)
-+		return ~0UL;
++		return PAX_PARSE_FLAGS_FALLBACK;
 +
 +#ifdef CONFIG_PAX_SOFTMODE
 +	if (pax_softmode)
@@ -47311,27 +47323,30 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +
 +		return pax_parse_xattr_pax_hardmode(pax_flags_hardmode);
 +#else
-+	return ~0UL;
++	return PAX_PARSE_FLAGS_FALLBACK;
 +#endif
 +
 +}
 +
 +static long pax_parse_pax_flags(const struct elfhdr * const elf_ex, const struct elf_phdr * const elf_phdata, struct file * const file)
 +{
-+	unsigned long pax_flags, pt_pax_flags, xattr_pax_flags;
++	unsigned long pax_flags, ei_pax_flags,  pt_pax_flags, xattr_pax_flags;
 +
-+	pax_flags = pax_parse_ei_pax(elf_ex);
++	pax_flags = pax_parse_defaults();
++	ei_pax_flags = pax_parse_ei_pax(elf_ex);
 +	pt_pax_flags = pax_parse_pt_pax(elf_ex, elf_phdata);
 +	xattr_pax_flags = pax_parse_xattr_pax(file);
 +
-+	if (pt_pax_flags == ~0UL)
-+		pt_pax_flags = xattr_pax_flags;
-+	else if (xattr_pax_flags == ~0UL)
-+		xattr_pax_flags = pt_pax_flags;
-+	if (pt_pax_flags != xattr_pax_flags)
++	if (pt_pax_flags != PAX_PARSE_FLAGS_FALLBACK &&
++	    xattr_pax_flags != PAX_PARSE_FLAGS_FALLBACK &&
++	    pt_pax_flags != xattr_pax_flags)
 +		return -EINVAL;
-+	if (pt_pax_flags != ~0UL)
++	if (xattr_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
++		pax_flags = xattr_pax_flags;
++	else if (pt_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
 +		pax_flags = pt_pax_flags;
++	else if (ei_pax_flags != PAX_PARSE_FLAGS_FALLBACK)
++		pax_flags = ei_pax_flags;
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_PAX_SEGMEXEC)
 +	if ((pax_flags & (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) == (MF_PAX_PAGEEXEC | MF_PAX_SEGMEXEC)) {
@@ -47353,7 +47368,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  /*
   * These are the functions used to load ELF style executables and shared
   * libraries.  There is no binary dependent code anywhere else.
-@@ -554,6 +893,11 @@ static unsigned long randomize_stack_top
+@@ -554,6 +907,11 @@ static unsigned long randomize_stack_top
  {
  	unsigned int random_variable = 0;
  
@@ -47365,7 +47380,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	if ((current->flags & PF_RANDOMIZE) &&
  		!(current->personality & ADDR_NO_RANDOMIZE)) {
  		random_variable = get_random_int() & STACK_RND_MASK;
-@@ -572,7 +916,7 @@ static int load_elf_binary(struct linux_
+@@ -572,7 +930,7 @@ static int load_elf_binary(struct linux_
   	unsigned long load_addr = 0, load_bias = 0;
  	int load_addr_set = 0;
  	char * elf_interpreter = NULL;
@@ -47374,7 +47389,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	struct elf_phdr *elf_ppnt, *elf_phdata;
  	unsigned long elf_bss, elf_brk;
  	int retval, i;
-@@ -582,12 +926,12 @@ static int load_elf_binary(struct linux_
+@@ -582,12 +940,12 @@ static int load_elf_binary(struct linux_
  	unsigned long start_code, end_code, start_data, end_data;
  	unsigned long reloc_func_desc __maybe_unused = 0;
  	int executable_stack = EXSTACK_DEFAULT;
@@ -47388,7 +47403,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  
  	loc = kmalloc(sizeof(*loc), GFP_KERNEL);
  	if (!loc) {
-@@ -723,11 +1067,82 @@ static int load_elf_binary(struct linux_
+@@ -723,11 +1081,82 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  
  	/* OK, This is the point of no return */
@@ -47472,7 +47487,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	if (elf_read_implies_exec(loc->elf_ex, executable_stack))
  		current->personality |= READ_IMPLIES_EXEC;
  
-@@ -817,6 +1232,20 @@ static int load_elf_binary(struct linux_
+@@ -817,6 +1246,20 @@ static int load_elf_binary(struct linux_
  #else
  			load_bias = ELF_PAGESTART(ELF_ET_DYN_BASE - vaddr);
  #endif
@@ -47493,7 +47508,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  		}
  
  		error = elf_map(bprm->file, load_bias + vaddr, elf_ppnt,
-@@ -849,9 +1278,9 @@ static int load_elf_binary(struct linux_
+@@ -849,9 +1292,9 @@ static int load_elf_binary(struct linux_
  		 * allowed task size. Note that p_filesz must always be
  		 * <= p_memsz so it is only necessary to check p_memsz.
  		 */
@@ -47506,7 +47521,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  			/* set_brk can never work. Avoid overflows. */
  			send_sig(SIGKILL, current, 0);
  			retval = -EINVAL;
-@@ -890,17 +1319,45 @@ static int load_elf_binary(struct linux_
+@@ -890,17 +1333,45 @@ static int load_elf_binary(struct linux_
  		goto out_free_dentry;
  	}
  	if (likely(elf_bss != elf_brk) && unlikely(padzero(elf_bss))) {
@@ -47531,7 +47546,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +		size = PAGE_SIZE + ((pax_get_random_long() & ((1UL << 22) - 1UL)) << 4);
 +		flags = MAP_FIXED | MAP_PRIVATE;
 +		vm_flags = VM_NONE | VM_DONTEXPAND | VM_DONTDUMP;
- 
++
 +		down_write(&current->mm->mmap_sem);
 +		start = get_unmapped_area(NULL, start, PAGE_ALIGN(size), 0, flags);
 +		retval = -ENOMEM;
@@ -47550,7 +47565,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
 +		}
 +	}
 +#endif
-+
+ 
 +	if (elf_interpreter) {
  		elf_entry = load_elf_interp(&loc->interp_elf_ex,
  					    interpreter,
@@ -47558,7 +47573,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  					    load_bias);
  		if (!IS_ERR((void *)elf_entry)) {
  			/*
-@@ -1122,7 +1579,7 @@ static bool always_dump_vma(struct vm_ar
+@@ -1122,7 +1593,7 @@ static bool always_dump_vma(struct vm_ar
   * Decide what to dump of a segment, part, all or none.
   */
  static unsigned long vma_dump_size(struct vm_area_struct *vma,
@@ -47567,7 +47582,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  {
  #define FILTER(type)	(mm_flags & (1UL << MMF_DUMP_##type))
  
-@@ -1160,7 +1617,7 @@ static unsigned long vma_dump_size(struc
+@@ -1160,7 +1631,7 @@ static unsigned long vma_dump_size(struc
  	if (vma->vm_file == NULL)
  		return 0;
  
@@ -47576,7 +47591,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  		goto whole;
  
  	/*
-@@ -1385,9 +1842,9 @@ static void fill_auxv_note(struct memelf
+@@ -1385,9 +1856,9 @@ static void fill_auxv_note(struct memelf
  {
  	elf_addr_t *auxv = (elf_addr_t *) mm->saved_auxv;
  	int i = 0;
@@ -47588,7 +47603,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	fill_note(note, "CORE", NT_AUXV, i * sizeof(elf_addr_t), auxv);
  }
  
-@@ -1396,7 +1853,7 @@ static void fill_siginfo_note(struct mem
+@@ -1396,7 +1867,7 @@ static void fill_siginfo_note(struct mem
  {
  	mm_segment_t old_fs = get_fs();
  	set_fs(KERNEL_DS);
@@ -47597,7 +47612,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	set_fs(old_fs);
  	fill_note(note, "CORE", NT_SIGINFO, sizeof(*csigdata), csigdata);
  }
-@@ -2023,14 +2480,14 @@ static void fill_extnum_info(struct elfh
+@@ -2023,14 +2494,14 @@ static void fill_extnum_info(struct elfh
  }
  
  static size_t elf_core_vma_data_size(struct vm_area_struct *gate_vma,
@@ -47614,7 +47629,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	return size;
  }
  
-@@ -2123,7 +2580,7 @@ static int elf_core_dump(struct coredump
+@@ -2123,7 +2594,7 @@ static int elf_core_dump(struct coredump
  
  	dataoff = offset = roundup(offset, ELF_EXEC_PAGESIZE);
  
@@ -47623,7 +47638,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  	offset += elf_core_extra_data_size();
  	e_shoff = offset;
  
-@@ -2154,7 +2611,7 @@ static int elf_core_dump(struct coredump
+@@ -2154,7 +2625,7 @@ static int elf_core_dump(struct coredump
  		phdr.p_offset = offset;
  		phdr.p_vaddr = vma->vm_start;
  		phdr.p_paddr = 0;
@@ -47632,7 +47647,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  		phdr.p_memsz = vma->vm_end - vma->vm_start;
  		offset += phdr.p_filesz;
  		phdr.p_flags = vma->vm_flags & VM_READ ? PF_R : 0;
-@@ -2189,7 +2646,7 @@ static int elf_core_dump(struct coredump
+@@ -2189,7 +2660,7 @@ static int elf_core_dump(struct coredump
  		unsigned long addr;
  		unsigned long end;
  
@@ -47641,7 +47656,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/fs/binfmt_elf.c
  
  		for (addr = vma->vm_start; addr < end; addr += PAGE_SIZE) {
  			struct page *page;
-@@ -2235,6 +2692,137 @@ out:
+@@ -2235,6 +2706,137 @@ out:
  
  #endif		/* CONFIG_ELF_CORE */
  
@@ -56232,7 +56247,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/linux/s
  extern unsigned int sysctl_sched_min_granularity;
 diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/linux/sched.h linux-3.12.8-pax/include/linux/sched.h
 --- linux-3.12.8/include/linux/sched.h	2013-12-08 14:39:25.397440986 +0100
-+++ linux-3.12.8-pax/include/linux/sched.h	2013-12-08 14:40:05.621442169 +0100
++++ linux-3.12.8-pax/include/linux/sched.h	2014-01-17 01:53:19.024947116 +0100
 @@ -62,6 +62,7 @@ struct bio_list;
  struct fs_struct;
  struct perf_event_context;
@@ -56281,7 +56296,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/linux/s
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
-@@ -1413,6 +1420,52 @@ struct task_struct {
+@@ -1413,6 +1420,53 @@ struct task_struct {
  #endif
  };
  
@@ -56297,6 +56312,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/linux/s
 +#endif
 +
 +extern int pax_check_flags(unsigned long *);
++#define PAX_PARSE_FLAGS_FALLBACK	(~0UL)
 +
 +/* if tsk != current then task_lock must be held on it */
 +#if defined(CONFIG_PAX_NOEXEC) || defined(CONFIG_PAX_ASLR)
@@ -56334,7 +56350,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/linux/s
  /* Future-safe accessor for struct task_struct's cpus_allowed. */
  #define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
  
-@@ -1921,7 +1974,9 @@ void yield(void);
+@@ -1921,7 +1975,9 @@ void yield(void);
  extern struct exec_domain	default_exec_domain;
  
  union thread_union {
@@ -56344,7 +56360,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/linux/s
  	unsigned long stack[THREAD_SIZE/sizeof(long)];
  };
  
-@@ -2118,7 +2173,7 @@ extern void __cleanup_sighand(struct sig
+@@ -2118,7 +2174,7 @@ extern void __cleanup_sighand(struct sig
  extern void exit_itimers(struct signal_struct *);
  extern void flush_itimer_signals(void);
  
@@ -56353,7 +56369,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/linux/s
  
  extern int allow_signal(int);
  extern int disallow_signal(int);
-@@ -2309,9 +2364,9 @@ static inline unsigned long *end_of_stac
+@@ -2309,9 +2365,9 @@ static inline unsigned long *end_of_stac
  
  #endif
  
@@ -58306,20 +58322,16 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/uapi/li
  	return __builtin_bswap64(val);
 diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/uapi/linux/sysctl.h linux-3.12.8-pax/include/uapi/linux/sysctl.h
 --- linux-3.12.8/include/uapi/linux/sysctl.h	2013-08-20 19:08:16.799833336 +0200
-+++ linux-3.12.8-pax/include/uapi/linux/sysctl.h	2013-12-08 14:40:05.693442171 +0100
-@@ -155,7 +155,11 @@ enum
++++ linux-3.12.8-pax/include/uapi/linux/sysctl.h	2014-01-17 01:59:24.976927577 +0100
+@@ -155,8 +155,6 @@ enum
  	KERN_PANIC_ON_NMI=76, /* int: whether we will panic on an unrecovered */
  };
  
 -
-+#ifdef CONFIG_PAX_SOFTMODE
-+enum {
-+	PAX_SOFTMODE=1		/* PaX: disable/enable soft mode */
-+};
-+#endif
- 
+-
  /* CTL_VM names: */
  enum
+ {
 diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/include/uapi/linux/xattr.h linux-3.12.8-pax/include/uapi/linux/xattr.h
 --- linux-3.12.8/include/uapi/linux/xattr.h	2013-08-20 19:08:16.803833336 +0200
 +++ linux-3.12.8-pax/include/uapi/linux/xattr.h	2013-12-08 14:40:05.693442171 +0100
@@ -75441,8 +75453,8 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/color
 +}
 diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/constify_plugin.c linux-3.12.8-pax/tools/gcc/constify_plugin.c
 --- linux-3.12.8/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.12.8-pax/tools/gcc/constify_plugin.c	2014-01-12 14:14:08.874835294 +0100
-@@ -0,0 +1,559 @@
++++ linux-3.12.8-pax/tools/gcc/constify_plugin.c	2014-01-17 03:05:12.612716804 +0100
+@@ -0,0 +1,557 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
@@ -75489,7 +75501,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/const
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201401121315",
++	.version	= "201401140130",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -75615,8 +75627,10 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/const
 +	}
 +	TYPE_READONLY(type) = 0;
 +	C_TYPE_FIELDS_READONLY(type) = 0;
-+	if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type)))
++	if (lookup_attribute("do_const", TYPE_ATTRIBUTES(type))) {
++		TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
 +		TYPE_ATTRIBUTES(type) = remove_attribute("do_const", TYPE_ATTRIBUTES(type));
++	}
 +}
 +
 +static void deconstify_tree(tree node)
@@ -75709,6 +75723,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/const
 +	TYPE_READONLY(type) = 1;
 +	C_TYPE_FIELDS_READONLY(type) = 1;
 +	TYPE_CONSTIFY_VISITED(type) = 1;
++//	TYPE_ATTRIBUTES(type) = copy_list(TYPE_ATTRIBUTES(type));
 +//	TYPE_ATTRIBUTES(type) = tree_cons(get_identifier("do_const"), NULL_TREE, TYPE_ATTRIBUTES(type));
 +}
 +
@@ -75820,7 +75835,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/const
 +	TYPE_CONSTIFY_VISITED(type) = 1;
 +}
 +
-+static void check_global_variables(void)
++static void check_global_variables(void *event_data, void *data)
 +{
 +	struct varpool_node *node;
 +
@@ -75893,21 +75908,15 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/const
 +	return ret;
 +}
 +
-+static unsigned int check_variables(void)
-+{
-+	check_global_variables();
-+	return check_local_variables();
-+}
-+
 +static struct gimple_opt_pass pass_local_variable = {
 +	{
 +		.type			= GIMPLE_PASS,
-+		.name			= "check_variables",
++		.name			= "check_local_variables",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
 +		.gate			= NULL,
-+		.execute		= check_variables,
++		.execute		= check_local_variables,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
@@ -75994,6 +76003,7 @@ diff -NurpX linux-3.12.8-pax/Documentation/dontdiff linux-3.12.8/tools/gcc/const
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &const_plugin_info);
 +	if (constify) {
++		register_callback(plugin_name, PLUGIN_ALL_IPA_PASSES_START, check_global_variables, NULL);
 +		register_callback(plugin_name, PLUGIN_FINISH_TYPE, finish_type, NULL);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &local_variable_pass_info);
 +		register_callback(plugin_name, PLUGIN_START_UNIT, constify_start_unit, NULL);
