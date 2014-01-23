@@ -1,4 +1,5 @@
-- forward port to 3.13
+- fixed a new REFCOUNT false positive in parallel_data, by Mathias Krause <minipli@googlemail.com>
+- fixed a KERNEXEC/or interference with TRACE_IRQFLAGS, reported by minipli
 
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/alpha/include/asm/atomic.h linux-3.13-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -26978,7 +26979,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/x86/lib/rwsem.
  ENDPROC(call_rwsem_downgrade_wake)
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/x86/lib/thunk_64.S linux-3.13-pax/arch/x86/lib/thunk_64.S
 --- linux-3.13/arch/x86/lib/thunk_64.S	2013-08-20 19:08:15.959833381 +0200
-+++ linux-3.13-pax/arch/x86/lib/thunk_64.S	2014-01-20 12:46:09.692968102 +0100
++++ linux-3.13-pax/arch/x86/lib/thunk_64.S	2014-01-24 00:10:02.071666971 +0100
 @@ -8,6 +8,7 @@
  #include <linux/linkage.h>
  #include <asm/dwarf2.h>
@@ -27011,7 +27012,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/x86/lib/thunk_
  restore:
 -	RESTORE_ARGS
 +	RESTORE_ARGS 1,8
-+	pax_force_retaddr
++	pax_force_retaddr_bts
  	ret
  	CFI_ENDPROC
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/x86/lib/usercopy_32.c linux-3.13-pax/arch/x86/lib/usercopy_32.c
@@ -55939,6 +55940,18 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/include/linux/oprof
   
  /** create a directory */
  struct dentry *oprofilefs_mkdir(struct dentry *parent, char const *name);
+diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/include/linux/padata.h linux-3.13-pax/include/linux/padata.h
+--- linux-3.13/include/linux/padata.h	2014-01-20 12:36:48.072998089 +0100
++++ linux-3.13-pax/include/linux/padata.h	2014-01-24 00:14:45.835675315 +0100
+@@ -129,7 +129,7 @@ struct parallel_data {
+ 	struct padata_serial_queue	__percpu *squeue;
+ 	atomic_t			reorder_objects;
+ 	atomic_t			refcnt;
+-	atomic_t			seq_nr;
++	atomic_unchecked_t		seq_nr;
+ 	struct padata_cpumask		cpumask;
+ 	spinlock_t                      lock ____cacheline_aligned;
+ 	unsigned int			processed;
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/include/linux/pci_hotplug.h linux-3.13-pax/include/linux/pci_hotplug.h
 --- linux-3.13/include/linux/pci_hotplug.h	2014-01-20 12:36:48.236998080 +0100
 +++ linux-3.13-pax/include/linux/pci_hotplug.h	2014-01-20 12:46:10.796968043 +0100
@@ -61136,6 +61149,27 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/kernel/notifier.c l
  	}
  	return -ENOENT;
  }
+diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/kernel/padata.c linux-3.13-pax/kernel/padata.c
+--- linux-3.13/kernel/padata.c	2014-01-20 12:36:50.444997962 +0100
++++ linux-3.13-pax/kernel/padata.c	2014-01-24 00:15:09.791676019 +0100
+@@ -54,7 +54,7 @@ static int padata_cpu_hash(struct parall
+ 	 * seq_nr mod. number of cpus in use.
+ 	 */
+ 
+-	seq_nr = atomic_inc_return(&pd->seq_nr);
++	seq_nr = atomic_inc_return_unchecked(&pd->seq_nr);
+ 	cpu_index = seq_nr % cpumask_weight(pd->cpumask.pcpu);
+ 
+ 	return padata_index_to_cpu(pd, cpu_index);
+@@ -428,7 +428,7 @@ static struct parallel_data *padata_allo
+ 	padata_init_pqueues(pd);
+ 	padata_init_squeues(pd);
+ 	setup_timer(&pd->timer, padata_reorder_timer, (unsigned long)pd);
+-	atomic_set(&pd->seq_nr, -1);
++	atomic_set_unchecked(&pd->seq_nr, -1);
+ 	atomic_set(&pd->reorder_objects, 0);
+ 	atomic_set(&pd->refcnt, 0);
+ 	pd->pinst = pinst;
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/kernel/panic.c linux-3.13-pax/kernel/panic.c
 --- linux-3.13/kernel/panic.c	2014-01-20 12:36:50.444997962 +0100
 +++ linux-3.13-pax/kernel/panic.c	2014-01-20 12:46:10.900968038 +0100
