@@ -1,6 +1,14 @@
-- new size overflow plugin and hash table from Emese
-- reworked the interaction between the various PaX control flag mechanisms for better consistency
-- fixed type attribute handling in the constify plugin, reported by spender
+- gcc plugin updates
+  - ported them to gcc trunk (future 4.9)
+  - introduced gcc-common.h to simplify gcc version dependencies
+  - updated size overflow hash table from spender
+  - fixed kallocstat to detect constant size arguments early
+  - fixed constify to preserve type qualifiers on pointer-to-self fields
+- added a few sparse/checker annotations and changes to satisfy gcc's address space logic
+- fixed the TRACE_IRQFLAGS problem reported by minipli again
+- fixed a constify plugin regression, reported by spender
+- updated gcc-common.h
+- fixed the size overflow plugin for gcc 4.9, by Emese Revfy
 
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/alpha/include/asm/atomic.h linux-3.2.54-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.54/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -7861,7 +7869,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/ia32/i
  	
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/ia32/ia32_signal.c linux-3.2.54-pax/arch/x86/ia32/ia32_signal.c
 --- linux-3.2.54/arch/x86/ia32/ia32_signal.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/arch/x86/ia32/ia32_signal.c	2012-07-04 19:24:47.460062997 +0200
++++ linux-3.2.54-pax/arch/x86/ia32/ia32_signal.c	2014-01-28 04:21:56.113073863 +0100
 @@ -169,7 +169,7 @@ asmlinkage long sys32_sigaltstack(const
  	}
  	seg = get_fs();
@@ -7871,6 +7879,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/ia32/i
  	set_fs(seg);
  	if (ret >= 0 && uoss_ptr)  {
  		if (!access_ok(VERIFY_WRITE, uoss_ptr, sizeof(stack_ia32_t)))
+@@ -276,7 +276,7 @@ asmlinkage long sys32_sigreturn(struct p
+ 	if (__get_user(set.sig[0], &frame->sc.oldmask)
+ 	    || (_COMPAT_NSIG_WORDS > 1
+ 		&& __copy_from_user((((char *) &set.sig) + 4),
+-				    &frame->extramask,
++				    frame->extramask,
+ 				    sizeof(frame->extramask))))
+ 		goto badframe;
+ 
 @@ -370,7 +370,7 @@ static int ia32_setup_sigcontext(struct
   */
  static void __user *get_sigframe(struct k_sigaction *ka, struct pt_regs *regs,
@@ -7898,6 +7915,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/ia32/i
  	return (void __user *) sp;
  }
  
+@@ -447,7 +447,7 @@ int ia32_setup_frame(int sig, struct k_s
+ 			restorer = VDSO32_SYMBOL(current->mm->context.vdso,
+ 						 sigreturn);
+ 		else
+-			restorer = &frame->retcode;
++			restorer = frame->retcode;
+ 	}
+ 
+ 	put_user_try {
 @@ -457,7 +457,7 @@ int ia32_setup_frame(int sig, struct k_s
  		 * These are actually not used anymore, but left because some
  		 * gdb versions depend on them as a marker.
@@ -7926,7 +7952,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/ia32/i
  		else
 -			restorer = VDSO32_SYMBOL(current->mm->context.vdso,
 -						 rt_sigreturn);
-+			restorer = &frame->retcode;
++			restorer = frame->retcode;
  		put_user_ex(ptr_to_compat(restorer), &frame->pretcode);
  
  		/*
@@ -15248,7 +15274,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  /*
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel/entry_64.S linux-3.2.54-pax/arch/x86/kernel/entry_64.S
 --- linux-3.2.54/arch/x86/kernel/entry_64.S	2012-10-31 13:04:03.411702825 +0100
-+++ linux-3.2.54-pax/arch/x86/kernel/entry_64.S	2013-12-15 17:47:05.707746695 +0100
++++ linux-3.2.54-pax/arch/x86/kernel/entry_64.S	2014-01-28 04:52:22.960976323 +0100
 @@ -55,6 +55,8 @@
  #include <asm/paravirt.h>
  #include <asm/ftrace.h>
@@ -15686,20 +15712,32 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -386,9 +677,10 @@ ENTRY(save_paranoid)
+@@ -386,10 +677,21 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
 -1:	ret
-+1:	pax_force_retaddr_bts
++1:
++#ifdef CONFIG_PAX_MEMORY_UDEREF
++	testb $3, CS+8(%rsp)
++	jnz 1f
++	pax_enter_kernel
++	jmp 2f
++1:	pax_enter_kernel_user
++2:
++#else
++	pax_enter_kernel
++#endif
++	pax_force_retaddr
 +	ret
  	CFI_ENDPROC
 -END(save_paranoid)
+-	.popsection
 +ENDPROC(save_paranoid)
- 	.popsection
  
  /*
-@@ -410,7 +702,7 @@ ENTRY(ret_from_fork)
+  * A newly forked process directly context switches into this address.
+@@ -410,7 +712,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -15708,7 +15746,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -420,7 +712,7 @@ ENTRY(ret_from_fork)
+@@ -420,7 +722,7 @@ ENTRY(ret_from_fork)
  	jmp ret_from_sys_call			# go to the SYSRET fastpath
  
  	CFI_ENDPROC
@@ -15717,7 +15755,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /*
   * System call entry. Up to 6 arguments in registers are supported.
-@@ -456,7 +748,7 @@ END(ret_from_fork)
+@@ -456,7 +758,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -15726,7 +15764,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -469,12 +761,18 @@ ENTRY(system_call_after_swapgs)
+@@ -469,12 +771,18 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -15746,7 +15784,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -503,6 +801,8 @@ sysret_check:
+@@ -503,6 +811,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -15755,7 +15793,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -561,6 +861,9 @@ auditsys:
+@@ -561,6 +871,9 @@ auditsys:
  	movq %rax,%rsi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -15765,7 +15803,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	LOAD_ARGS 0		/* reload call-clobbered registers */
  	jmp system_call_fastpath
  
-@@ -591,12 +894,15 @@ tracesys:
+@@ -591,12 +904,15 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -15782,7 +15820,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	RESTORE_REST
  	cmpq $__NR_syscall_max,%rax
  	ja   int_ret_from_sys_call	/* RAX(%rsp) set to -ENOSYS above */
-@@ -612,7 +918,7 @@ tracesys:
+@@ -612,7 +928,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -15791,7 +15829,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -623,7 +929,9 @@ GLOBAL(int_with_check)
+@@ -623,7 +939,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -15802,7 +15840,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -669,7 +977,7 @@ int_restore_rest:
+@@ -669,7 +987,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -15811,7 +15849,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /*
   * Certain special system calls that need to save a complete full stack frame.
-@@ -677,15 +985,13 @@ END(system_call)
+@@ -677,15 +995,13 @@ END(system_call)
  	.macro PTREGSCALL label,func,arg
  ENTRY(\label)
  	PARTIAL_FRAME 1 8		/* offset 8: return address */
@@ -15828,7 +15866,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	.endm
  
  	PTREGSCALL stub_clone, sys_clone, %r8
-@@ -700,12 +1006,17 @@ ENTRY(ptregscall_common)
+@@ -700,12 +1016,17 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R15+8, r15
  	movq_cfi_restore R14+8, r14
  	movq_cfi_restore R13+8, r13
@@ -15848,7 +15886,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -720,7 +1031,7 @@ ENTRY(stub_execve)
+@@ -720,7 +1041,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -15857,7 +15895,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -738,7 +1049,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -738,7 +1059,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -15866,7 +15904,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /*
   * Build the entry stubs and pointer table with some assembler magic.
-@@ -773,7 +1084,7 @@ vector=vector+1
+@@ -773,7 +1094,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -15875,7 +15913,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  .previous
  END(interrupt)
-@@ -790,9 +1101,19 @@ END(interrupt)
+@@ -790,9 +1111,19 @@ END(interrupt)
  /* 0(%rsp): ~(interrupt number) */
  	.macro interrupt func
  	/* reserve pt_regs for scratch regs and rbp */
@@ -15897,7 +15935,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	call \func
  	.endm
  
-@@ -818,13 +1139,13 @@ ret_from_intr:
+@@ -818,13 +1149,13 @@ ret_from_intr:
  	/* Restore saved previous stack */
  	popq %rsi
  	CFI_DEF_CFA_REGISTER	rsi
@@ -15914,7 +15952,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -846,12 +1167,16 @@ retint_swapgs:		/* return to user-space
+@@ -846,12 +1177,16 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -15931,7 +15969,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -940,7 +1265,7 @@ ENTRY(retint_kernel)
+@@ -940,7 +1275,7 @@ ENTRY(retint_kernel)
  #endif
  
  	CFI_ENDPROC
@@ -15940,7 +15978,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  /*
   * End of kprobes section
   */
-@@ -956,7 +1281,7 @@ ENTRY(\sym)
+@@ -956,7 +1291,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -15949,22 +15987,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1021,12 +1346,22 @@ ENTRY(\sym)
- 	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
- 	call error_entry
- 	DEFAULT_FRAME 0
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testb $3, CS(%rsp)
-+	jnz 1f
-+	pax_enter_kernel
-+	jmp 2f
-+1:	pax_enter_kernel_user
-+2:
-+#else
-+	pax_enter_kernel
-+#endif
- 	movq %rsp,%rdi		/* pt_regs pointer */
- 	xorl %esi,%esi		/* no error code */
+@@ -1026,7 +1361,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -15973,22 +15996,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1038,15 +1373,25 @@ ENTRY(\sym)
- 	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
- 	call save_paranoid
- 	TRACE_IRQS_OFF
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testb $3, CS(%rsp)
-+	jnz 1f
-+	pax_enter_kernel
-+	jmp 2f
-+1:	pax_enter_kernel_user
-+2:
-+#else
-+	pax_enter_kernel
-+#endif
- 	movq %rsp,%rdi		/* pt_regs pointer */
- 	xorl %esi,%esi		/* no error code */
+@@ -1043,10 +1378,10 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit	/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -16001,20 +16009,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1056,14 +1401,30 @@ ENTRY(\sym)
- 	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
- 	call save_paranoid
+@@ -1058,12 +1393,18 @@ ENTRY(\sym)
  	TRACE_IRQS_OFF
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testb $3, CS(%rsp)
-+	jnz 1f
-+	pax_enter_kernel
-+	jmp 2f
-+1:	pax_enter_kernel_user
-+2:
-+#else
-+	pax_enter_kernel
-+#endif
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
 +#ifdef CONFIG_SMP
@@ -16033,23 +16029,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  .endm
  
  .macro errorentry sym do_sym
-@@ -1074,13 +1435,23 @@ ENTRY(\sym)
- 	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
- 	call error_entry
- 	DEFAULT_FRAME 0
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testb $3, CS(%rsp)
-+	jnz 1f
-+	pax_enter_kernel
-+	jmp 2f
-+1:	pax_enter_kernel_user
-+2:
-+#else
-+	pax_enter_kernel
-+#endif
- 	movq %rsp,%rdi			/* pt_regs pointer */
- 	movq ORIG_RAX(%rsp),%rsi	/* get error code */
- 	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
+@@ -1080,7 +1421,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit			/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -16058,23 +16038,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  .endm
  
  	/* error code is on the stack already */
-@@ -1093,13 +1464,23 @@ ENTRY(\sym)
- 	call save_paranoid
- 	DEFAULT_FRAME 0
- 	TRACE_IRQS_OFF
-+#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testb $3, CS(%rsp)
-+	jnz 1f
-+	pax_enter_kernel
-+	jmp 2f
-+1:	pax_enter_kernel_user
-+2:
-+#else
-+	pax_enter_kernel
-+#endif
- 	movq %rsp,%rdi			/* pt_regs pointer */
- 	movq ORIG_RAX(%rsp),%rsi	/* get error code */
- 	movq $-1,ORIG_RAX(%rsp)		/* no syscall to restart */
+@@ -1099,7 +1440,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -16083,7 +16047,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1129,9 +1510,10 @@ gs_change:
+@@ -1129,9 +1470,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -16095,7 +16059,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  	.section __ex_table,"a"
  	.align 8
-@@ -1153,13 +1535,14 @@ ENTRY(kernel_thread_helper)
+@@ -1153,13 +1495,14 @@ ENTRY(kernel_thread_helper)
  	 * Here we are in the child and the registers are set as they were
  	 * at kernel_thread() invocation in the parent.
  	 */
@@ -16111,7 +16075,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1186,11 +1569,11 @@ ENTRY(kernel_execve)
+@@ -1186,11 +1529,11 @@ ENTRY(kernel_execve)
  	RESTORE_REST
  	testq %rax,%rax
  	je int_ret_from_sys_call
@@ -16125,7 +16089,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1208,9 +1591,10 @@ ENTRY(call_softirq)
+@@ -1208,9 +1551,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -16137,7 +16101,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1248,7 +1632,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1248,7 +1592,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -16146,7 +16110,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1307,7 +1691,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1307,7 +1651,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -16155,7 +16119,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  apicinterrupt XEN_HVM_EVTCHN_CALLBACK \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1356,16 +1740,31 @@ ENTRY(paranoid_exit)
+@@ -1356,16 +1700,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -16188,7 +16152,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1394,7 +1793,7 @@ paranoid_schedule:
+@@ -1394,7 +1753,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -16197,7 +16161,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1421,12 +1820,13 @@ ENTRY(error_entry)
+@@ -1421,12 +1780,23 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -16207,35 +16171,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  error_swapgs:
  	SWAPGS
  error_sti:
- 	TRACE_IRQS_OFF
-+	pax_force_retaddr_bts
- 	ret
- 
- /*
-@@ -1453,7 +1853,7 @@ bstep_iret:
- 	movq %rcx,RIP+8(%rsp)
- 	jmp error_swapgs
- 	CFI_ENDPROC
--END(error_entry)
-+ENDPROC(error_entry)
- 
- 
- /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1473,7 +1873,7 @@ ENTRY(error_exit)
- 	jnz retint_careful
- 	jmp retint_swapgs
- 	CFI_ENDPROC
--END(error_exit)
-+ENDPROC(error_exit)
- 
- 
- 	/* runs on exception stack */
-@@ -1485,6 +1885,17 @@ ENTRY(nmi)
- 	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
- 	call save_paranoid
- 	DEFAULT_FRAME 0
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
-+	testb $3, CS(%rsp)
++	testb $3, CS+8(%rsp)
 +	jnz 1f
 +	pax_enter_kernel
 +	jmp 2f
@@ -16244,11 +16181,38 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
 +#else
 +	pax_enter_kernel
 +#endif
+ 	TRACE_IRQS_OFF
++	pax_force_retaddr
+ 	ret
+ 
+ /*
+@@ -1453,7 +1823,7 @@ bstep_iret:
+ 	movq %rcx,RIP+8(%rsp)
+ 	jmp error_swapgs
+ 	CFI_ENDPROC
+-END(error_entry)
++ENDPROC(error_entry)
+ 
+ 
+ /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
+@@ -1473,7 +1843,7 @@ ENTRY(error_exit)
+ 	jnz retint_careful
+ 	jmp retint_swapgs
+ 	CFI_ENDPROC
+-END(error_exit)
++ENDPROC(error_exit)
+ 
+ 
+ 	/* runs on exception stack */
+@@ -1485,6 +1855,7 @@ ENTRY(nmi)
+ 	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
+ 	call save_paranoid
+ 	DEFAULT_FRAME 0
 +
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1495,12 +1906,28 @@ ENTRY(nmi)
+@@ -1495,12 +1866,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -16278,7 +16242,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1529,14 +1956,14 @@ nmi_schedule:
+@@ -1529,14 +1916,14 @@ nmi_schedule:
  	jmp paranoid_exit
  	CFI_ENDPROC
  #endif
@@ -19492,7 +19456,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	return addr;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel/tboot.c linux-3.2.54-pax/arch/x86/kernel/tboot.c
 --- linux-3.2.54/arch/x86/kernel/tboot.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/arch/x86/kernel/tboot.c	2013-02-20 01:19:12.090027525 +0100
++++ linux-3.2.54-pax/arch/x86/kernel/tboot.c	2014-01-28 04:21:56.121073862 +0100
 @@ -219,7 +219,7 @@ static int tboot_setup_sleep(void)
  
  void tboot_shutdown(u32 shutdown_type)
@@ -19507,7 +19471,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	switch_to_tboot_pt();
  
 -	shutdown = (void(*)(void))(unsigned long)tboot->shutdown_entry;
-+	shutdown = (void *)tboot->shutdown_entry;
++	shutdown = (void *)(unsigned long)tboot->shutdown_entry;
  	shutdown();
  
  	/* should not reach here */
@@ -20196,7 +20160,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel
  	.teardown_msi_irqs = default_teardown_msi_irqs,
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/kernel/xsave.c linux-3.2.54-pax/arch/x86/kernel/xsave.c
 --- linux-3.2.54/arch/x86/kernel/xsave.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/arch/x86/kernel/xsave.c	2012-12-01 02:29:42.464012819 +0100
++++ linux-3.2.54-pax/arch/x86/kernel/xsave.c	2014-01-28 04:55:33.312966160 +0100
 @@ -130,7 +130,7 @@ int check_for_xstate(struct i387_fxsave_
  	    fx_sw_user->xstate_size > fx_sw_user->extended_size)
  		return -EINVAL;
@@ -22584,7 +22548,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/lib/rw
  ENDPROC(call_rwsem_downgrade_wake)
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/arch/x86/lib/thunk_64.S linux-3.2.54-pax/arch/x86/lib/thunk_64.S
 --- linux-3.2.54/arch/x86/lib/thunk_64.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/arch/x86/lib/thunk_64.S	2013-12-10 22:41:21.295125545 +0100
++++ linux-3.2.54-pax/arch/x86/lib/thunk_64.S	2014-01-27 22:40:30.878167615 +0100
 @@ -8,6 +8,7 @@
  #include <linux/linkage.h>
  #include <asm/dwarf2.h>
@@ -27446,7 +27410,16 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/block/bsg.c lin
  			return -EPERM;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/block/compat_ioctl.c linux-3.2.54-pax/block/compat_ioctl.c
 --- linux-3.2.54/block/compat_ioctl.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/block/compat_ioctl.c	2012-07-04 19:24:47.664063005 +0200
++++ linux-3.2.54-pax/block/compat_ioctl.c	2014-01-28 04:21:56.121073862 +0100
+@@ -155,7 +155,7 @@ static int compat_cdrom_generic_command(
+ 	cgc = compat_alloc_user_space(sizeof(*cgc));
+ 	cgc32 = compat_ptr(arg);
+ 
+-	if (copy_in_user(&cgc->cmd, &cgc32->cmd, sizeof(cgc->cmd)) ||
++	if (copy_in_user(cgc->cmd, cgc32->cmd, sizeof(cgc->cmd)) ||
+ 	    get_user(data, &cgc32->buffer) ||
+ 	    put_user(compat_ptr(data), &cgc->buffer) ||
+ 	    copy_in_user(&cgc->buflen, &cgc32->buflen,
 @@ -340,7 +340,7 @@ static int compat_fd_ioctl(struct block_
  		err |= __get_user(f->spec1, &uf->spec1);
  		err |= __get_user(f->fmt_gap, &uf->fmt_gap);
@@ -30928,7 +30901,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/gpio/gp
  }
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/gpu/drm/drm_crtc.c linux-3.2.54-pax/drivers/gpu/drm/drm_crtc.c
 --- linux-3.2.54/drivers/gpu/drm/drm_crtc.c	2012-09-20 01:42:17.174672773 +0200
-+++ linux-3.2.54-pax/drivers/gpu/drm/drm_crtc.c	2012-09-20 01:42:29.886672814 +0200
++++ linux-3.2.54-pax/drivers/gpu/drm/drm_crtc.c	2014-01-28 04:21:56.481073843 +0100
 @@ -1379,7 +1379,7 @@ int drm_mode_getconnector(struct drm_dev
  	 */
  	if ((out_resp->count_modes >= mode_count) && mode_count) {
@@ -30994,6 +30967,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/gpu/drm
  			list_for_each_entry(prop_enum, &property->enum_blob_list, head) {
  
  				if (copy_to_user(&enum_ptr[copied].value, &prop_enum->value, sizeof(uint64_t))) {
+@@ -2293,7 +2293,7 @@ int drm_mode_getproperty_ioctl(struct dr
+ 					goto done;
+ 				}
+ 
+-				if (copy_to_user(&enum_ptr[copied].name,
++				if (copy_to_user(enum_ptr[copied].name,
+ 						 &prop_enum->name, DRM_PROP_NAME_LEN)) {
+ 					ret = -EFAULT;
+ 					goto done;
 @@ -2308,7 +2308,7 @@ int drm_mode_getproperty_ioctl(struct dr
  		if ((out_resp->count_enum_blobs >= blob_count) && blob_count) {
  			copied = 0;
@@ -35515,7 +35497,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/v
  	.release	= timblogiw_close,
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/video/v4l2-compat-ioctl32.c linux-3.2.54-pax/drivers/media/video/v4l2-compat-ioctl32.c
 --- linux-3.2.54/drivers/media/video/v4l2-compat-ioctl32.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/drivers/media/video/v4l2-compat-ioctl32.c	2013-06-21 19:34:10.638698102 +0200
++++ linux-3.2.54-pax/drivers/media/video/v4l2-compat-ioctl32.c	2014-01-28 04:21:56.125073862 +0100
 @@ -332,7 +332,7 @@ struct v4l2_buffer32 {
  	__u32			reserved;
  };
@@ -35534,6 +35516,65 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/v
  				enum v4l2_memory memory)
  {
  	if (copy_in_user(up32, up, 2 * sizeof(__u32)) ||
+@@ -424,7 +424,7 @@ static int get_v4l2_buffer32(struct v4l2
+ 		 * by passing a very big num_planes value */
+ 		uplane = compat_alloc_user_space(num_planes *
+ 						sizeof(struct v4l2_plane));
+-		kp->m.planes = uplane;
++		kp->m.planes = (struct v4l2_plane __force_kernel *)uplane;
+ 
+ 		while (--num_planes >= 0) {
+ 			ret = get_v4l2_plane32(uplane, uplane32, kp->memory);
+@@ -491,7 +491,7 @@ static int put_v4l2_buffer32(struct v4l2
+ 		if (num_planes == 0)
+ 			return 0;
+ 
+-		uplane = kp->m.planes;
++		uplane = (struct v4l2_plane __force_user *)kp->m.planes;
+ 		if (get_user(p, &up->m.planes))
+ 			return -EFAULT;
+ 		uplane32 = compat_ptr(p);
+@@ -541,7 +541,7 @@ static int get_v4l2_framebuffer32(struct
+ 		get_user(kp->capability, &up->capability) ||
+ 		get_user(kp->flags, &up->flags))
+ 			return -EFAULT;
+-	kp->base = compat_ptr(tmp);
++	kp->base = (void __force_kernel *)compat_ptr(tmp);
+ 	get_v4l2_pix_format(&kp->fmt, &up->fmt);
+ 	return 0;
+ }
+@@ -647,7 +647,7 @@ static int get_v4l2_ext_controls32(struc
+ 			n * sizeof(struct v4l2_ext_control32)))
+ 		return -EFAULT;
+ 	kcontrols = compat_alloc_user_space(n * sizeof(struct v4l2_ext_control));
+-	kp->controls = kcontrols;
++	kp->controls = (struct v4l2_ext_control __force_kernel *)kcontrols;
+ 	while (--n >= 0) {
+ 		if (copy_in_user(kcontrols, ucontrols, sizeof(*ucontrols)))
+ 			return -EFAULT;
+@@ -669,7 +669,7 @@ static int get_v4l2_ext_controls32(struc
+ static int put_v4l2_ext_controls32(struct v4l2_ext_controls *kp, struct v4l2_ext_controls32 __user *up)
+ {
+ 	struct v4l2_ext_control32 __user *ucontrols;
+-	struct v4l2_ext_control __user *kcontrols = kp->controls;
++	struct v4l2_ext_control __user *kcontrols = (struct v4l2_ext_control __force_user *)kp->controls;
+ 	int n = kp->count;
+ 	compat_caddr_t p;
+ 
+diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/video/v4l2-ctrls.c linux-3.2.54-pax/drivers/media/video/v4l2-ctrls.c
+--- linux-3.2.54/drivers/media/video/v4l2-ctrls.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.54-pax/drivers/media/video/v4l2-ctrls.c	2014-01-28 03:55:24.421158847 +0100
+@@ -1075,8 +1075,8 @@ static int validate_new(const struct v4l
+ 		return 0;
+ 
+ 	case V4L2_CTRL_TYPE_STRING:
+-		len = strlen(s);
+-		if (len < ctrl->minimum)
++		len = strlen_user(s);
++		if (!len || len < ctrl->minimum)
+ 			return -ERANGE;
+ 		if ((len - ctrl->minimum) % ctrl->step)
+ 			return -ERANGE;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/video/v4l2-device.c linux-3.2.54-pax/drivers/media/video/v4l2-device.c
 --- linux-3.2.54/drivers/media/video/v4l2-device.c	2013-03-29 02:18:30.091676743 +0100
 +++ linux-3.2.54-pax/drivers/media/video/v4l2-device.c	2013-09-01 20:05:00.263828490 +0200
@@ -35551,7 +35592,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/v
  	if (basename[len - 1] >= '0' && basename[len - 1] <= '9')
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/video/v4l2-ioctl.c linux-3.2.54-pax/drivers/media/video/v4l2-ioctl.c
 --- linux-3.2.54/drivers/media/video/v4l2-ioctl.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.54-pax/drivers/media/video/v4l2-ioctl.c	2013-06-21 19:34:10.602698104 +0200
++++ linux-3.2.54-pax/drivers/media/video/v4l2-ioctl.c	2014-01-28 04:20:33.957078249 +0100
 @@ -2197,7 +2197,7 @@ static unsigned long cmd_input_size(unsi
  }
  
@@ -35579,6 +35620,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/v
  			*kernel_ptr = (void *)&ctrls->controls;
  			*array_size = sizeof(struct v4l2_ext_control)
  				    * ctrls->count;
+@@ -2312,7 +2312,7 @@ video_usercopy(struct file *file, unsign
+ 		err = -EINVAL;
+ 
+ 	if (has_array_args) {
+-		*kernel_ptr = user_ptr;
++		*kernel_ptr = (void __force_kernel *)user_ptr;
+ 		if (copy_to_user(user_ptr, mbuf, array_size))
+ 			err = -EFAULT;
+ 		goto out_array_args;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/media/video/vivi.c linux-3.2.54-pax/drivers/media/video/vivi.c
 --- linux-3.2.54/drivers/media/video/vivi.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.54-pax/drivers/media/video/vivi.c	2014-01-16 02:57:52.238175942 +0100
@@ -36268,6 +36318,18 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/misc/sg
  
  extern struct xpc_interface xpc_interface;
  
+diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/mmc/card/block.c linux-3.2.54-pax/drivers/mmc/card/block.c
+--- linux-3.2.54/drivers/mmc/card/block.c	2014-01-03 15:48:44.844070572 +0100
++++ linux-3.2.54-pax/drivers/mmc/card/block.c	2014-01-28 04:21:56.485073843 +0100
+@@ -399,7 +399,7 @@ static int mmc_blk_ioctl_cmd(struct bloc
+ 	if (idata->ic.postsleep_min_us)
+ 		usleep_range(idata->ic.postsleep_min_us, idata->ic.postsleep_max_us);
+ 
+-	if (copy_to_user(&(ic_ptr->response), cmd.resp, sizeof(cmd.resp))) {
++	if (copy_to_user(ic_ptr->response, cmd.resp, sizeof(cmd.resp))) {
+ 		err = -EFAULT;
+ 		goto cmd_rel_host;
+ 	}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/mmc/host/sdhci-pci.c linux-3.2.54-pax/drivers/mmc/host/sdhci-pci.c
 --- linux-3.2.54/drivers/mmc/host/sdhci-pci.c	2012-08-03 01:53:47.266140443 +0200
 +++ linux-3.2.54-pax/drivers/mmc/host/sdhci-pci.c	2012-08-03 01:53:52.762140150 +0200
@@ -36863,7 +36925,16 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/net/mac
  
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/net/macvtap.c linux-3.2.54-pax/drivers/net/macvtap.c
 --- linux-3.2.54/drivers/net/macvtap.c	2013-10-27 17:59:57.460642374 +0100
-+++ linux-3.2.54-pax/drivers/net/macvtap.c	2013-10-27 18:00:09.496641731 +0100
++++ linux-3.2.54-pax/drivers/net/macvtap.c	2014-01-28 04:19:24.277081969 +0100
+@@ -924,7 +924,7 @@ static long macvtap_ioctl(struct file *f
+ 			return -ENOLINK;
+ 
+ 		ret = 0;
+-		if (copy_to_user(&ifr->ifr_name, vlan->dev->name, IFNAMSIZ) ||
++		if (copy_to_user(ifr->ifr_name, vlan->dev->name, IFNAMSIZ) ||
+ 		    put_user(q->flags, &ifr->ifr_flags))
+ 			ret = -EFAULT;
+ 		dev_put(vlan->dev);
 @@ -1085,7 +1085,7 @@ static int macvtap_device_event(struct n
  	return NOTIFY_DONE;
  }
@@ -41176,7 +41247,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/video/f
  EXPORT_SYMBOL_GPL(fb_deferred_io_cleanup);
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/video/fbmem.c linux-3.2.54-pax/drivers/video/fbmem.c
 --- linux-3.2.54/drivers/video/fbmem.c	2013-05-14 13:33:40.636285672 +0200
-+++ linux-3.2.54-pax/drivers/video/fbmem.c	2013-05-14 13:33:46.576285355 +0200
++++ linux-3.2.54-pax/drivers/video/fbmem.c	2014-01-28 04:21:56.129073862 +0100
 @@ -428,7 +428,7 @@ static void fb_do_show_logo(struct fb_in
  			image->dx += image->width + 8;
  		}
@@ -41204,6 +41275,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/video/f
  			return -EINVAL;
  		if (!registered_fb[con2fb.framebuffer])
  			request_module("fb%d", con2fb.framebuffer);
+@@ -1260,7 +1260,7 @@ static int do_fscreeninfo_to_user(struct
+ 	__u32 data;
+ 	int err;
+ 
+-	err = copy_to_user(&fix32->id, &fix->id, sizeof(fix32->id));
++	err = copy_to_user(fix32->id, &fix->id, sizeof(fix32->id));
+ 
+ 	data = (__u32) (unsigned long) fix->smem_start;
+ 	err |= put_user(data, &fix32->smem_start);
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/drivers/video/geode/gx1fb_core.c linux-3.2.54-pax/drivers/video/geode/gx1fb_core.c
 --- linux-3.2.54/drivers/video/geode/gx1fb_core.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.54-pax/drivers/video/geode/gx1fb_core.c	2012-07-04 19:24:48.656063007 +0200
@@ -43558,7 +43638,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/compat.c lin
  		else
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/compat_ioctl.c linux-3.2.54-pax/fs/compat_ioctl.c
 --- linux-3.2.54/fs/compat_ioctl.c	2012-10-31 13:04:04.555702982 +0100
-+++ linux-3.2.54-pax/fs/compat_ioctl.c	2013-06-21 19:34:10.606698104 +0200
++++ linux-3.2.54-pax/fs/compat_ioctl.c	2014-01-28 04:21:56.409073847 +0100
 @@ -623,7 +623,7 @@ static int serial_struct_ioctl(unsigned
  			return -EFAULT;
                  if (__get_user(udata, &ss32->iomem_base))
@@ -43584,7 +43664,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/compat_ioctl
  	    copy_in_user(&p->l_sysid,	&p32->l_sysid,	sizeof(s32)) ||
  	    copy_in_user(&p->l_pid,	&p32->l_pid,	sizeof(u32)) ||
 -	    copy_in_user(&p->l_pad,	&p32->l_pad,	4*sizeof(u32)))
-+	    copy_in_user(p->l_pad,	&p32->l_pad,	4*sizeof(u32)))
++	    copy_in_user(p->l_pad,	p32->l_pad,	4*sizeof(u32)))
  		return -EFAULT;
  
  	return ioctl_preallocate(file, p);
@@ -43704,7 +43784,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/ecryptfs/rea
  }
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/exec.c linux-3.2.54-pax/fs/exec.c
 --- linux-3.2.54/fs/exec.c	2014-01-03 15:48:45.028070563 +0100
-+++ linux-3.2.54-pax/fs/exec.c	2014-01-03 15:48:49.584070319 +0100
++++ linux-3.2.54-pax/fs/exec.c	2014-01-28 04:21:56.413073847 +0100
 @@ -55,12 +55,32 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -43854,7 +43934,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/fs/exec.c linux
  	mm_segment_t oldfs = get_fs();
  	struct user_arg_ptr argv = {
 -		.ptr.native = (const char __user *const  __user *)__argv,
-+		.ptr.native = (const char __force_user * const __force_user *)__argv,
++		.ptr.native = (const char __user * const __force_user *)__argv,
  	};
  
  	set_fs(KERNEL_DS);
@@ -51877,6 +51957,18 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/v
 -	MODULE_ARCH_VERMAGIC
 +	MODULE_ARCH_VERMAGIC						\
 +	MODULE_PAX_REFCOUNT MODULE_CONSTIFY_PLUGIN MODULE_STACKLEAK_PLUGIN
+ 
+diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/videodev2.h linux-3.2.54-pax/include/linux/videodev2.h
+--- linux-3.2.54/include/linux/videodev2.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.54-pax/include/linux/videodev2.h	2014-01-28 04:21:56.485073843 +0100
+@@ -1062,7 +1062,7 @@ struct v4l2_ext_control {
+ 	union {
+ 		__s32 value;
+ 		__s64 value64;
+-		char *string;
++		char __user *string;
+ 	};
+ } __attribute__ ((packed));
  
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/include/linux/vmalloc.h linux-3.2.54-pax/include/linux/vmalloc.h
 --- linux-3.2.54/include/linux/vmalloc.h	2012-07-04 06:44:35.000000000 +0200
@@ -62693,6 +62785,36 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/8021q/vlan.
  			struct vlan_net *vn;
  
  			vn = net_generic(net, vlan_net_id);
+diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/9p/client.c linux-3.2.54-pax/net/9p/client.c
+--- linux-3.2.54/net/9p/client.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.54-pax/net/9p/client.c	2014-01-28 00:06:49.269891129 +0100
+@@ -582,7 +582,7 @@ static int p9_check_zc_errors(struct p9_
+ 				       len - inline_len);
+ 			} else {
+ 				err = copy_from_user(ename + inline_len,
+-						     uidata, len - inline_len);
++						     (char __force_user *)uidata, len - inline_len);
+ 				if (err) {
+ 					err = -EFAULT;
+ 					goto out_free;
+@@ -1528,7 +1528,7 @@ p9_client_read(struct p9_fid *fid, char
+ 			kernel_buf = 1;
+ 			indata = data;
+ 		} else
+-			indata = (char *)udata;
++			indata = (__force_kernel char *)udata;
+ 		/*
+ 		 * response header len is 11
+ 		 * PDU Header(7) + IO Size (4)
+@@ -1603,7 +1603,7 @@ p9_client_write(struct p9_fid *fid, char
+ 			kernel_buf = 1;
+ 			odata = data;
+ 		} else
+-			odata = (char *)udata;
++			odata = (char __force_kernel *)udata;
+ 		req = p9_client_zc_rpc(clnt, P9_TWRITE, NULL, odata, 0, rsize,
+ 				       P9_ZC_HDR_SZ, kernel_buf, "dqd",
+ 				       fid->fid, offset, rsize);
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/9p/mod.c linux-3.2.54-pax/net/9p/mod.c
 --- linux-3.2.54/net/9p/mod.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.54-pax/net/9p/mod.c	2013-03-28 01:35:23.512427937 +0100
@@ -66676,12 +66798,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/sctp/socket
  		to += addrlen;
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/socket.c linux-3.2.54-pax/net/socket.c
 --- linux-3.2.54/net/socket.c	2014-01-03 15:48:45.208070553 +0100
-+++ linux-3.2.54-pax/net/socket.c	2014-01-03 15:51:06.328063018 +0100
++++ linux-3.2.54-pax/net/socket.c	2014-01-28 04:21:56.417073846 +0100
 @@ -1671,6 +1671,8 @@ SYSCALL_DEFINE3(getpeername, int, fd, st
   *	the protocol.
   */
  
-+asmlinkage long sys_sendto(int, void *, size_t, unsigned, struct sockaddr *, int);
++asmlinkage long sys_sendto(int, void __user *, size_t, unsigned, struct sockaddr __user *, int);
 +
  SYSCALL_DEFINE6(sendto, int, fd, void __user *, buff, size_t, len,
  		unsigned, flags, struct sockaddr __user *, addr,
@@ -66705,15 +66827,18 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/socket.c li
  	uaddr_len = COMPAT_NAMELEN(msg);
  	if (MSG_CMSG_COMPAT & flags)
  		err = verify_compat_iovec(msg_sys, iov,
-@@ -2792,7 +2795,7 @@ static int ethtool_ioctl(struct net *net
+@@ -2792,9 +2795,9 @@ static int ethtool_ioctl(struct net *net
  	}
  
  	ifr = compat_alloc_user_space(buf_size);
 -	rxnfc = (void *)ifr + ALIGN(sizeof(struct ifreq), 8);
 +	rxnfc = (void __user *)ifr + ALIGN(sizeof(struct ifreq), 8);
  
- 	if (copy_in_user(&ifr->ifr_name, &ifr32->ifr_name, IFNAMSIZ))
+-	if (copy_in_user(&ifr->ifr_name, &ifr32->ifr_name, IFNAMSIZ))
++	if (copy_in_user(ifr->ifr_name, ifr32->ifr_name, IFNAMSIZ))
  		return -EFAULT;
+ 
+ 	if (put_user(convert_in ? rxnfc : compat_ptr(data),
 @@ -2816,12 +2819,12 @@ static int ethtool_ioctl(struct net *net
  			offsetof(struct ethtool_rxnfc, fs.ring_cookie));
  
@@ -66748,7 +66873,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/socket.c li
  		    copy_in_user(&compat_rxnfc->rule_cnt, &rxnfc->rule_cnt,
  				 sizeof(rxnfc->rule_cnt)))
  			return -EFAULT;
-@@ -2908,7 +2911,7 @@ static int bond_ioctl(struct net *net, u
+@@ -2908,14 +2911,14 @@ static int bond_ioctl(struct net *net, u
  		old_fs = get_fs();
  		set_fs(KERNEL_DS);
  		err = dev_ioctl(net, cmd,
@@ -66757,6 +66882,14 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/net/socket.c li
  		set_fs(old_fs);
  
  		return err;
+ 	case SIOCBONDSLAVEINFOQUERY:
+ 	case SIOCBONDINFOQUERY:
+ 		uifr = compat_alloc_user_space(sizeof(*uifr));
+-		if (copy_in_user(&uifr->ifr_name, &ifr32->ifr_name, IFNAMSIZ))
++		if (copy_in_user(uifr->ifr_name, ifr32->ifr_name, IFNAMSIZ))
+ 			return -EFAULT;
+ 
+ 		if (get_user(data, &ifr32->ifr_ifru.ifru_data))
 @@ -3017,7 +3020,7 @@ static int compat_sioc_ifmap(struct net
  
  	old_fs = get_fs();
@@ -69452,10 +69585,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/sound/usb/card.
  };
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/checker_plugin.c linux-3.2.54-pax/tools/gcc/checker_plugin.c
 --- linux-3.2.54/tools/gcc/checker_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/checker_plugin.c	2013-06-21 19:34:10.618698103 +0200
-@@ -0,0 +1,172 @@
++++ linux-3.2.54-pax/tools/gcc/checker_plugin.c	2014-01-28 04:21:56.417073846 +0100
+@@ -0,0 +1,150 @@
 +/*
-+ * Copyright 2011 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -69471,27 +69604,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/check
 + * BUGS:
 + * - none known
 + */
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "flags.h"
-+#include "intl.h"
-+#include "toplev.h"
-+#include "plugin.h"
-+//#include "expr.h" where are you...
-+#include "diagnostic.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "function.h"
-+#include "basic-block.h"
-+#include "gimple.h"
-+#include "rtl.h"
-+#include "emit-rtl.h"
-+#include "tree-flow.h"
-+#include "target.h"
++
++#include "gcc-common.h"
 +
 +extern void c_register_addr_space (const char *str, addr_space_t as);
 +extern enum machine_mode default_addr_space_pointer_mode (addr_space_t);
@@ -69500,13 +69614,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/check
 +extern bool default_addr_space_legitimate_address_p(enum machine_mode mode, rtx mem, bool strict, addr_space_t as);
 +extern rtx default_addr_space_legitimize_address(rtx x, rtx oldx, enum machine_mode mode, addr_space_t as);
 +
-+extern void print_gimple_stmt(FILE *, gimple, int, int);
-+extern rtx emit_move_insn(rtx x, rtx y);
-+
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info checker_plugin_info = {
-+	.version	= "201111150100",
++	.version	= "201304082245",
 +	.help		= NULL,
 +};
 +
@@ -69628,10 +69739,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/check
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/colorize_plugin.c linux-3.2.54-pax/tools/gcc/colorize_plugin.c
 --- linux-3.2.54/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/colorize_plugin.c	2013-02-12 02:26:57.289415370 +0100
-@@ -0,0 +1,151 @@
++++ linux-3.2.54-pax/tools/gcc/colorize_plugin.c	2014-01-28 04:21:56.421073846 +0100
+@@ -0,0 +1,169 @@
 +/*
-+ * Copyright 2012-2013 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2014 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -69643,24 +69754,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/color
 + *
 + */
 +
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "flags.h"
-+#include "intl.h"
-+#include "toplev.h"
-+#include "plugin.h"
-+#include "diagnostic.h"
-+#include "plugin-version.h"
-+#include "tm.h"
++#include "gcc-common.h"
 +
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info colorize_plugin_info = {
-+	.version	= "201302112000",
++	.version	= "201401260140",
 +	.help		= NULL,
 +};
 +
@@ -69735,26 +69834,56 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/color
 +	return 0;
 +}
 +
-+struct simple_ipa_opt_pass pass_ipa_colorize_rearm = {
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data colorize_rearm_pass_data = {
++#else
++struct simple_ipa_opt_pass colorize_rearm_pass = {
 +	.pass = {
++#endif
 +		.type			= SIMPLE_IPA_PASS,
 +		.name			= "colorize_rearm",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
 +		.gate			= NULL,
 +		.execute		= execute_colorize_rearm,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
++#endif
 +		.tv_id			= TV_NONE,
 +		.properties_required	= 0,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
 +		.todo_flags_finish	= 0
++#if BUILDING_GCC_VERSION < 4009
 +	}
++#endif
 +};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class colorize_rearm_pass : public simple_ipa_opt_pass {
++public:
++	colorize_rearm_pass() : simple_ipa_opt_pass(colorize_rearm_pass_data, g) {}
++	unsigned int execute() { return execute_colorize_rearm(); }
++};
++}
++#endif
++
++static struct opt_pass *make_colorize_rearm_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new colorize_rearm_pass();
++#else
++	return &colorize_rearm_pass.pass;
++#endif
++}
 +
 +static void colorize_start_unit(void *gcc_data, void *user_data)
 +{
@@ -69764,12 +69893,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/color
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
-+	struct register_pass_info colorize_rearm_pass_info = {
-+		.pass				= &pass_ipa_colorize_rearm.pass,
-+		.reference_pass_name		= "*free_lang_data",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_AFTER
-+	};
++	struct register_pass_info colorize_rearm_pass_info;
++
++	colorize_rearm_pass_info.pass				= make_colorize_rearm_pass();
++	colorize_rearm_pass_info.reference_pass_name		= "*free_lang_data";
++	colorize_rearm_pass_info.ref_pass_instance_number	= 1;
++	colorize_rearm_pass_info.pos_op 			= PASS_POS_INSERT_AFTER;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -69783,11 +69912,11 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/color
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/constify_plugin.c linux-3.2.54-pax/tools/gcc/constify_plugin.c
 --- linux-3.2.54/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/constify_plugin.c	2014-01-17 03:05:12.612716804 +0100
-@@ -0,0 +1,557 @@
++++ linux-3.2.54-pax/tools/gcc/constify_plugin.c	2014-01-28 04:21:56.421073846 +0100
+@@ -0,0 +1,552 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
-+ * Copyright 2011-2013 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2014 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * This gcc plugin constifies all structures which contain only function pointers or are explicitly marked for constification.
@@ -69800,38 +69929,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 + * $ gcc -fplugin=constify_plugin.so test.c -O2
 + */
 +
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "flags.h"
-+#include "intl.h"
-+#include "toplev.h"
-+#include "plugin.h"
-+#include "diagnostic.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "function.h"
-+#include "basic-block.h"
-+#include "gimple.h"
-+#include "rtl.h"
-+#include "emit-rtl.h"
-+#include "tree-flow.h"
-+#include "target.h"
-+#include "langhooks.h"
++#include "gcc-common.h"
 +
-+// should come from c-tree.h if only it were installed for gcc 4.5...
-+#define C_TYPE_FIELDS_READONLY(TYPE) TREE_LANG_FLAG_1(TYPE)
-+
-+// unused type flag in all versions 4.5-4.8
++// unused C type flag in all versions 4.5-4.9
 +#define TYPE_CONSTIFY_VISITED(TYPE) TYPE_LANG_FLAG_4(TYPE)
 +
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info const_plugin_info = {
-+	.version	= "201401140130",
++	.version	= "201401260725",
 +	.help		= "no-constify\tturn off constification\n",
 +};
 +
@@ -69935,15 +70041,17 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +
 +		// special case handling of simple ptr-to-same-array-type members
 +		if (TREE_CODE(TREE_TYPE(field)) == POINTER_TYPE) {
-+			const_tree ptrtype = TREE_TYPE(TREE_TYPE(field));
++			tree ptrtype = TREE_TYPE(TREE_TYPE(field));
 +
++			if (TREE_TYPE(TREE_TYPE(field)) == type)
++				continue;
 +			if (TREE_CODE(ptrtype) != RECORD_TYPE && TREE_CODE(ptrtype) != UNION_TYPE)
 +				continue;
-+			if (TREE_TYPE(TREE_TYPE(field)) == type)
++			if (!constified(ptrtype))
 +				continue;
 +			if (TYPE_MAIN_VARIANT(ptrtype) == TYPE_MAIN_VARIANT(type)) {
 +				TREE_TYPE(field) = copy_node(TREE_TYPE(field));
-+				TREE_TYPE(TREE_TYPE(field)) = type;
++				TREE_TYPE(TREE_TYPE(field)) = build_qualified_type(type, TYPE_QUALS(ptrtype) & ~TYPE_QUAL_CONST);
 +			}
 +			continue;
 +		}
@@ -70169,13 +70277,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +{
 +	struct varpool_node *node;
 +
-+#if BUILDING_GCC_VERSION <= 4007
-+	for (node = varpool_nodes; node; node = node->next) {
-+		tree var = node->decl;
-+#else
 +	FOR_EACH_VARIABLE(node) {
-+		tree var = node->symbol.decl;
-+#endif
++		tree var = NODE_DECL(node);
 +		tree type = TREE_TYPE(var);
 +
 +		if (TREE_CODE(type) != RECORD_TYPE && TREE_CODE(type) != UNION_TYPE)
@@ -70205,18 +70308,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +	unsigned int ret = 0;
 +	tree var;
 +
-+#if BUILDING_GCC_VERSION == 4005
-+	tree vars;
-+#else
 +	unsigned int i;
-+#endif
 +
-+#if BUILDING_GCC_VERSION == 4005
-+	for (vars = cfun->local_decls; vars; vars = TREE_CHAIN(vars)) {
-+		var = TREE_VALUE(vars);
-+#else
 +	FOR_EACH_LOCAL_DECL(cfun, i, var) {
-+#endif
 +		tree type = TREE_TYPE(var);
 +
 +		gcc_assert(DECL_P(var));
@@ -70238,26 +70332,56 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +	return ret;
 +}
 +
-+static struct gimple_opt_pass pass_local_variable = {
-+	{
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data check_local_variables_pass_data = {
++#else
++static struct gimple_opt_pass check_local_variables_pass = {
++	.pass = {
++#endif
 +		.type			= GIMPLE_PASS,
 +		.name			= "check_local_variables",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
 +		.gate			= NULL,
 +		.execute		= check_local_variables,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
++#endif
 +		.tv_id			= TV_NONE,
 +		.properties_required	= 0,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
 +		.todo_flags_finish	= 0
++#if BUILDING_GCC_VERSION < 4009
 +	}
++#endif
 +};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class check_local_variables_pass : public gimple_opt_pass {
++public:
++	check_local_variables_pass() : gimple_opt_pass(check_local_variables_pass_data, g) {}
++	unsigned int execute() { return check_local_variables(); }
++};
++}
++#endif
++
++static struct opt_pass *make_check_local_variables_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new check_local_variables_pass();
++#else
++	return &check_local_variables_pass.pass;
++#endif
++}
 +
 +static struct {
 +	const char *name;
@@ -70306,12 +70430,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +	int i;
 +	bool constify = true;
 +
-+	struct register_pass_info local_variable_pass_info = {
-+		.pass				= &pass_local_variable.pass,
-+		.reference_pass_name		= "ssa",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op				= PASS_POS_INSERT_BEFORE
-+	};
++	struct register_pass_info check_local_variables_pass_info;
++
++	check_local_variables_pass_info.pass				= make_check_local_variables_pass();
++	check_local_variables_pass_info.reference_pass_name		= "ssa";
++	check_local_variables_pass_info.ref_pass_instance_number	= 1;
++	check_local_variables_pass_info.pos_op				= PASS_POS_INSERT_BEFORE;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -70335,13 +70459,284 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/const
 +	if (constify) {
 +		register_callback(plugin_name, PLUGIN_ALL_IPA_PASSES_START, check_global_variables, NULL);
 +		register_callback(plugin_name, PLUGIN_FINISH_TYPE, finish_type, NULL);
-+		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &local_variable_pass_info);
++		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &check_local_variables_pass_info);
 +		register_callback(plugin_name, PLUGIN_START_UNIT, constify_start_unit, NULL);
 +	}
 +	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
 +	return 0;
 +}
+diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/gcc-common.h linux-3.2.54-pax/tools/gcc/gcc-common.h
+--- linux-3.2.54/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-3.2.54-pax/tools/gcc/gcc-common.h	2014-01-28 04:46:24.124995482 +0100
+@@ -0,0 +1,267 @@
++#ifndef GCC_COMMON_H_INCLUDED
++#define GCC_COMMON_H_INCLUDED
++
++#include "plugin.h"
++#include "bversion.h"
++#include "plugin-version.h"
++#include "config.h"
++#include "system.h"
++#include "coretypes.h"
++#include "tm.h"
++#include "line-map.h"
++#include "input.h"
++#include "tree.h"
++
++#include "tree-inline.h"
++#include "version.h"
++#include "rtl.h"
++#include "tm_p.h"
++#include "flags.h"
++//#include "insn-attr.h"
++//#include "insn-config.h"
++//#include "insn-flags.h"
++#include "hard-reg-set.h"
++//#include "recog.h"
++#include "output.h"
++#include "except.h"
++#include "function.h"
++#include "toplev.h"
++//#include "expr.h"
++#include "basic-block.h"
++#include "intl.h"
++#include "ggc.h"
++//#include "regs.h"
++#include "timevar.h"
++
++#include "params.h"
++#include "pointer-set.h"
++#include "emit-rtl.h"
++//#include "reload.h"
++//#include "ira.h"
++//#include "dwarf2asm.h"
++#include "debug.h"
++#include "target.h"
++#include "langhooks.h"
++#include "cfgloop.h"
++//#include "hosthooks.h"
++#include "cgraph.h"
++#include "opts.h"
++//#include "coverage.h"
++//#include "value-prof.h"
++
++#if BUILDING_GCC_VERSION >= 4007
++#include "tree-pretty-print.h"
++#include "gimple-pretty-print.h"
++#include "c-tree.h"
++//#include "alloc-pool.h"
++#endif
++
++#if BUILDING_GCC_VERSION <= 4008
++#include "tree-flow.h"
++#endif
++
++#include "diagnostic.h"
++//#include "tree-diagnostic.h"
++#include "tree-dump.h"
++#include "tree-pass.h"
++//#include "df.h"
++#include "predict.h"
++//#include "lto-streamer.h"
++#include "ipa-utils.h"
++
++#if BUILDING_GCC_VERSION >= 4009
++#include "varasm.h"
++#include "stor-layout.h"
++#include "internal-fn.h"
++#include "gimple-expr.h"
++//#include "diagnostic-color.h"
++#include "context.h"
++#include "tree-ssa-alias.h"
++#include "stringpool.h"
++#include "tree-ssanames.h"
++#include "print-tree.h"
++#include "tree-eh.h"
++#endif
++
++#include "gimple.h"
++
++#if BUILDING_GCC_VERSION >= 4009
++#include "tree-ssa-operands.h"
++#include "tree-phinodes.h"
++#include "gimple-iterator.h"
++#include "gimple-ssa.h"
++#include "ssa-iterators.h"
++#endif
++
++//#include "expr.h" where are you...
++extern rtx emit_move_insn(rtx x, rtx y);
++
++#define __unused __attribute__((__unused__))
++
++#define DECL_NAME_POINTER(node) IDENTIFIER_POINTER(DECL_NAME(node))
++#define DECL_NAME_LENGTH(node) IDENTIFIER_LENGTH(DECL_NAME(node))
++
++#if BUILDING_GCC_VERSION == 4005
++#define FOR_EACH_LOCAL_DECL(FUN, I, D) for (tree vars = (FUN)->local_decls; vars && (D = TREE_VALUE(vars)); vars = TREE_CHAIN(vars), I)
++#define DECL_CHAIN(NODE) (TREE_CHAIN(DECL_MINIMAL_CHECK(NODE)))
++#define FOR_EACH_VEC_ELT(T, V, I, P) for (I = 0; VEC_iterate(T, (V), (I), (P)); ++(I))
++
++static inline bool gimple_call_builtin_p(gimple stmt, enum built_in_function code)
++{
++	tree fndecl;
++
++	if (!is_gimple_call(stmt))
++		return false;
++	fndecl = gimple_call_fndecl(stmt);
++	if (!fndecl || DECL_BUILT_IN_CLASS(fndecl) != BUILT_IN_NORMAL)
++		return false;
++//	print_node(stderr, "pax", fndecl, 4);
++	return DECL_FUNCTION_CODE(fndecl) == code;
++}
++
++static inline bool is_simple_builtin(tree decl)
++{
++	if (decl && DECL_BUILT_IN_CLASS(decl) != BUILT_IN_NORMAL)
++		return false;
++
++	switch (DECL_FUNCTION_CODE(decl)) {
++	/* Builtins that expand to constants. */
++	case BUILT_IN_CONSTANT_P:
++	case BUILT_IN_EXPECT:
++	case BUILT_IN_OBJECT_SIZE:
++	case BUILT_IN_UNREACHABLE:
++	/* Simple register moves or loads from stack. */
++	case BUILT_IN_RETURN_ADDRESS:
++	case BUILT_IN_EXTRACT_RETURN_ADDR:
++	case BUILT_IN_FROB_RETURN_ADDR:
++	case BUILT_IN_RETURN:
++	case BUILT_IN_AGGREGATE_INCOMING_ADDRESS:
++	case BUILT_IN_FRAME_ADDRESS:
++	case BUILT_IN_VA_END:
++	case BUILT_IN_STACK_SAVE:
++	case BUILT_IN_STACK_RESTORE:
++	/* Exception state returns or moves registers around. */
++	case BUILT_IN_EH_FILTER:
++	case BUILT_IN_EH_POINTER:
++	case BUILT_IN_EH_COPY_VALUES:
++	return true;
++
++	default:
++	return false;
++	}
++}
++#endif
++
++#if BUILDING_GCC_VERSION <= 4006
++#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
++#define C_DECL_REGISTER(EXP) DECL_LANG_FLAG_4(EXP)
++
++// should come from c-tree.h if only it were installed for gcc 4.5...
++#define C_TYPE_FIELDS_READONLY(TYPE) TREE_LANG_FLAG_1(TYPE)
++
++#define get_random_seed(noinit) ({						\
++	unsigned HOST_WIDE_INT seed;						\
++	sscanf(get_random_seed(noinit), "%" HOST_WIDE_INT_PRINT "x", &seed);	\
++	seed * seed; })
++
++static inline bool gimple_clobber_p(gimple s)
++{
++	return false;
++}
++
++static inline tree builtin_decl_implicit(enum built_in_function fncode)
++{
++	return implicit_built_in_decls[fncode];
++}
++
++static inline struct cgraph_node *cgraph_get_create_node(tree decl)
++{
++	struct cgraph_node *node = cgraph_get_node(decl);
++
++	return node ? node : cgraph_node(decl);
++}
++
++static inline bool cgraph_function_with_gimple_body_p(struct cgraph_node *node)
++{
++	return node->analyzed && !node->thunk.thunk_p && !node->alias;
++}
++
++static inline struct cgraph_node *cgraph_first_function_with_gimple_body(void)
++{
++	struct cgraph_node *node;
++
++	for (node = cgraph_nodes; node; node = node->next)
++		if (cgraph_function_with_gimple_body_p(node))
++			return node;
++	return NULL;
++}
++
++static inline struct cgraph_node *cgraph_next_function_with_gimple_body(struct cgraph_node *node)
++{
++	for (node = node->next; node; node = node->next)
++		if (cgraph_function_with_gimple_body_p(node))
++			return node;
++	return NULL;
++}
++
++#define FOR_EACH_FUNCTION_WITH_GIMPLE_BODY(node) \
++	for ((node) = cgraph_first_function_with_gimple_body(); (node); \
++		(node) = cgraph_next_function_with_gimple_body(node))
++#endif
++
++#if BUILDING_GCC_VERSION == 4006
++extern void debug_gimple_stmt(gimple);
++extern void debug_gimple_seq(gimple_seq);
++extern void print_gimple_seq(FILE *, gimple_seq, int, int);
++extern void print_gimple_stmt(FILE *, gimple, int, int);
++extern void print_gimple_expr(FILE *, gimple, int, int);
++extern void dump_gimple_stmt(pretty_printer *, gimple, int, int);
++#endif
++
++#if BUILDING_GCC_VERSION <= 4007
++#define FOR_EACH_VARIABLE(node) for (node = varpool_nodes; node; node = node->next)
++
++static inline bool gimple_store_p(gimple gs)
++{
++	tree lhs = gimple_get_lhs(gs);
++	return lhs && !is_gimple_reg(lhs);
++}
++#endif
++
++#if BUILDING_GCC_VERSION >= 4007
++#define cgraph_create_edge(caller, callee, call_stmt, count, freq, nest) \
++	cgraph_create_edge((caller), (callee), (call_stmt), (count), (freq))
++#endif
++
++#if BUILDING_GCC_VERSION <= 4008
++#define ENTRY_BLOCK_PTR_FOR_FN(FN) ENTRY_BLOCK_PTR_FOR_FUNCTION(FN)
++#define EXIT_BLOCK_PTR_FOR_FN(FN) EXIT_BLOCK_PTR_FOR_FUNCTION(FN)
++
++static inline const char *get_tree_code_name(enum tree_code code)
++{
++	gcc_assert(code < MAX_TREE_CODES);
++	return tree_code_name[code];
++}
++
++#define ipa_remove_stmt_references(cnode, stmt)
++#endif
++
++#if BUILDING_GCC_VERSION == 4008
++#define NODE_DECL(node) node->symbol.decl
++#else
++#define NODE_DECL(node) node->decl
++#endif
++
++#if BUILDING_GCC_VERSION >= 4008
++#define add_referenced_var(var)
++#define mark_sym_for_renaming(var)
++#define varpool_mark_needed_node(node)
++#define TODO_dump_func 0
++#define TODO_dump_cgraph 0
++#endif
++
++#if BUILDING_GCC_VERSION >= 4009
++#define TODO_ggc_collect 0
++#endif
++
++#endif
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/generate_size_overflow_hash.sh linux-3.2.54-pax/tools/gcc/generate_size_overflow_hash.sh
 --- linux-3.2.54/tools/gcc/generate_size_overflow_hash.sh	1970-01-01 01:00:00.000000000 +0100
 +++ linux-3.2.54-pax/tools/gcc/generate_size_overflow_hash.sh	2012-12-12 16:46:55.048275630 +0100
@@ -70447,10 +70842,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/.giti
 +size_overflow_hash.h
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kallocstat_plugin.c linux-3.2.54-pax/tools/gcc/kallocstat_plugin.c
 --- linux-3.2.54/tools/gcc/kallocstat_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/kallocstat_plugin.c	2013-02-12 02:26:57.289415370 +0100
-@@ -0,0 +1,170 @@
++++ linux-3.2.54-pax/tools/gcc/kallocstat_plugin.c	2014-01-28 04:21:56.445073845 +0100
+@@ -0,0 +1,182 @@
 +/*
-+ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -70465,29 +70860,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kallo
 + * BUGS:
 + * - none known
 + */
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "flags.h"
-+#include "intl.h"
-+#include "toplev.h"
-+#include "plugin.h"
-+//#include "expr.h" where are you...
-+#include "diagnostic.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "function.h"
-+#include "basic-block.h"
-+#include "gimple.h"
-+#include "rtl.h"
-+#include "emit-rtl.h"
 +
-+extern void print_gimple_stmt(FILE *, gimple, int, int);
++#include "gcc-common.h"
 +
 +int plugin_is_GPL_compatible;
++
++static struct plugin_info kallocstat_plugin_info = {
++	.version	= "201401260140",
++	.help		= NULL
++};
 +
 +static const char * const kalloc_functions[] = {
 +	"__kmalloc",
@@ -70499,33 +70880,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kallo
 +	"kmalloc_slab",
 +	"kzalloc",
 +	"kzalloc_node",
-+};
-+
-+static struct plugin_info kallocstat_plugin_info = {
-+	.version	= "201302112000",
-+};
-+
-+static unsigned int execute_kallocstat(void);
-+
-+static struct gimple_opt_pass kallocstat_pass = {
-+	.pass = {
-+		.type			= GIMPLE_PASS,
-+		.name			= "kallocstat",
-+#if BUILDING_GCC_VERSION >= 4008
-+		.optinfo_flags		= OPTGROUP_NONE,
-+#endif
-+		.gate			= NULL,
-+		.execute		= execute_kallocstat,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= 0,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0,
-+		.todo_flags_finish	= 0
-+	}
 +};
 +
 +static bool is_kalloc(const char *fnname)
@@ -70543,52 +70897,54 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kallo
 +	basic_block bb;
 +
 +	// 1. loop through BBs and GIMPLE statements
-+	FOR_EACH_BB(bb) {
++	FOR_EACH_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator gsi;
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +			// gimple match: 
 +			tree fndecl, size;
-+			gimple call_stmt;
++			gimple stmt;
 +			const char *fnname;
 +
 +			// is it a call
-+			call_stmt = gsi_stmt(gsi);
-+			if (!is_gimple_call(call_stmt))
++			stmt = gsi_stmt(gsi);
++			if (!is_gimple_call(stmt))
 +				continue;
-+			fndecl = gimple_call_fndecl(call_stmt);
++			fndecl = gimple_call_fndecl(stmt);
 +			if (fndecl == NULL_TREE)
 +				continue;
 +			if (TREE_CODE(fndecl) != FUNCTION_DECL)
 +				continue;
 +
 +			// is it a call to k*alloc
-+			fnname = IDENTIFIER_POINTER(DECL_NAME(fndecl));
++			fnname = DECL_NAME_POINTER(fndecl);
 +			if (!is_kalloc(fnname))
 +				continue;
 +
-+			// is the size arg the result of a simple const assignment
-+			size = gimple_call_arg(call_stmt, 0);
++			// is the size arg const or the result of a simple const assignment
++			size = gimple_call_arg(stmt, 0);
 +			while (true) {
-+				gimple def_stmt;
 +				expanded_location xloc;
 +				size_t size_val;
 +
++				if (TREE_CONSTANT(size)) {
++					xloc = expand_location(gimple_location(stmt));
++					if (!xloc.file)
++						xloc = expand_location(DECL_SOURCE_LOCATION(current_function_decl));
++					size_val = TREE_INT_CST_LOW(size);
++					fprintf(stderr, "kallocsize: %8zu %8zx %s %s:%u\n", size_val, size_val, fnname, xloc.file, xloc.line);
++					break;
++				}
++
 +				if (TREE_CODE(size) != SSA_NAME)
 +					break;
-+				def_stmt = SSA_NAME_DEF_STMT(size);
-+				if (!def_stmt || !is_gimple_assign(def_stmt))
++				stmt = SSA_NAME_DEF_STMT(size);
++//debug_gimple_stmt(stmt);
++//debug_tree(size);
++				if (!stmt || !is_gimple_assign(stmt))
 +					break;
-+				if (gimple_num_ops(def_stmt) != 2)
++				if (gimple_num_ops(stmt) != 2)
 +					break;
-+				size = gimple_assign_rhs1(def_stmt);
-+				if (!TREE_CONSTANT(size))
-+					continue;
-+				xloc = expand_location(gimple_location(def_stmt));
-+				if (!xloc.file)
-+					xloc = expand_location(DECL_SOURCE_LOCATION(current_function_decl));
-+				size_val = TREE_INT_CST_LOW(size);
-+				fprintf(stderr, "kallocsize: %8zu %8zx %s %s:%u\n", size_val, size_val, fnname, xloc.file, xloc.line);
-+				break;
++				size = gimple_assign_rhs1(stmt);
 +			}
 +//print_gimple_stmt(stderr, call_stmt, 0, TDF_LINENO);
 +//debug_tree(gimple_call_fn(call_stmt));
@@ -70599,15 +70955,66 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kallo
 +	return 0;
 +}
 +
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data kallocstat_pass_data = {
++#else
++static struct gimple_opt_pass kallocstat_pass = {
++	.pass = {
++#endif
++		.type			= GIMPLE_PASS,
++		.name			= "kallocstat",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
++		.gate			= NULL,
++		.execute		= execute_kallocstat,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= 0
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class kallocstat_pass : public gimple_opt_pass {
++public:
++	kallocstat_pass() : gimple_opt_pass(kallocstat_pass_data, g) {}
++	unsigned int execute() { return execute_kallocstat(); }
++};
++}
++#endif
++
++static struct opt_pass *make_kallocstat_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new kallocstat_pass();
++#else
++	return &kallocstat_pass.pass;
++#endif
++}
++
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
-+	struct register_pass_info kallocstat_pass_info = {
-+		.pass				= &kallocstat_pass.pass,
-+		.reference_pass_name		= "ssa",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_AFTER
-+	};
++	struct register_pass_info kallocstat_pass_info;
++
++	kallocstat_pass_info.pass			= make_kallocstat_pass();
++	kallocstat_pass_info.reference_pass_name	= "ssa";
++	kallocstat_pass_info.ref_pass_instance_number	= 1;
++	kallocstat_pass_info.pos_op 			= PASS_POS_INSERT_AFTER;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -70621,10 +71028,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kallo
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kernexec_plugin.c linux-3.2.54-pax/tools/gcc/kernexec_plugin.c
 --- linux-3.2.54/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/kernexec_plugin.c	2013-12-14 13:33:02.200626626 +0100
-@@ -0,0 +1,474 @@
++++ linux-3.2.54-pax/tools/gcc/kernexec_plugin.c	2014-01-28 04:21:56.445073845 +0100
+@@ -0,0 +1,519 @@
 +/*
-+ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -70639,133 +71046,18 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 + * BUGS:
 + * - none known
 + */
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "flags.h"
-+#include "intl.h"
-+#include "toplev.h"
-+#include "plugin.h"
-+//#include "expr.h" where are you...
-+#include "diagnostic.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "function.h"
-+#include "basic-block.h"
-+#include "gimple.h"
-+#include "rtl.h"
-+#include "emit-rtl.h"
-+#include "tree-flow.h"
 +
-+extern void print_gimple_stmt(FILE *, gimple, int, int);
-+extern rtx emit_move_insn(rtx x, rtx y);
-+
-+#if BUILDING_GCC_VERSION <= 4006
-+#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
-+#endif
-+
-+#if BUILDING_GCC_VERSION >= 4008
-+#define TODO_dump_func 0
-+#endif
++#include "gcc-common.h"
 +
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info kernexec_plugin_info = {
-+	.version	= "201308230150",
++	.version	= "201401260140",
 +	.help		= "method=[bts|or]\tinstrumentation method\n"
 +};
 +
-+static unsigned int execute_kernexec_reload(void);
-+static unsigned int execute_kernexec_fptr(void);
-+static unsigned int execute_kernexec_retaddr(void);
-+static bool kernexec_cmodel_check(void);
-+
 +static void (*kernexec_instrument_fptr)(gimple_stmt_iterator *);
 +static void (*kernexec_instrument_retaddr)(rtx);
-+
-+static struct gimple_opt_pass kernexec_reload_pass = {
-+	.pass = {
-+		.type			= GIMPLE_PASS,
-+		.name			= "kernexec_reload",
-+#if BUILDING_GCC_VERSION >= 4008
-+		.optinfo_flags		= OPTGROUP_NONE,
-+#endif
-+		.gate			= kernexec_cmodel_check,
-+		.execute		= execute_kernexec_reload,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= 0,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0,
-+		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_remove_unused_locals | TODO_update_ssa_no_phi
-+	}
-+};
-+
-+static struct gimple_opt_pass kernexec_fptr_pass = {
-+	.pass = {
-+		.type			= GIMPLE_PASS,
-+		.name			= "kernexec_fptr",
-+#if BUILDING_GCC_VERSION >= 4008
-+		.optinfo_flags		= OPTGROUP_NONE,
-+#endif
-+		.gate			= kernexec_cmodel_check,
-+		.execute		= execute_kernexec_fptr,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= 0,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0,
-+		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_remove_unused_locals | TODO_update_ssa_no_phi
-+	}
-+};
-+
-+static struct rtl_opt_pass kernexec_retaddr_pass = {
-+	.pass = {
-+		.type			= RTL_PASS,
-+		.name			= "kernexec_retaddr",
-+#if BUILDING_GCC_VERSION >= 4008
-+		.optinfo_flags		= OPTGROUP_NONE,
-+#endif
-+		.gate			= kernexec_cmodel_check,
-+		.execute		= execute_kernexec_retaddr,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= 0,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0,
-+		.todo_flags_finish	= TODO_dump_func | TODO_ggc_collect
-+	}
-+};
-+
-+static bool kernexec_cmodel_check(void)
-+{
-+	tree section;
-+
-+	if (ix86_cmodel != CM_KERNEL)
-+		return false;
-+
-+	section = lookup_attribute("section", DECL_ATTRIBUTES(current_function_decl));
-+	if (!section || !TREE_VALUE(section))
-+		return true;
-+
-+	section = TREE_VALUE(TREE_VALUE(section));
-+	if (strncmp(TREE_STRING_POINTER(section), ".vsyscall_", 10))
-+		return true;
-+
-+	return false;
-+}
 +
 +/*
 + * add special KERNEXEC instrumentation: reload %r12 after it has been clobbered
@@ -70789,7 +71081,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 +	basic_block bb;
 +
 +	// 1. loop through BBs and GIMPLE statements
-+	FOR_EACH_BB(bb) {
++	FOR_EACH_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator gsi;
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
@@ -70832,9 +71124,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 +
 +	// create temporary unsigned long variable used for bitops and cast fptr to it
 +	intptr = create_tmp_var(long_unsigned_type_node, "kernexec_bts");
-+#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(intptr);
-+#endif
 +	intptr = make_ssa_name(intptr, NULL);
 +	assign_intptr = gimple_build_assign(intptr, fold_convert(long_unsigned_type_node, old_fptr));
 +	SSA_NAME_DEF_STMT(intptr) = assign_intptr;
@@ -70853,9 +71143,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 +
 +	// cast temporary unsigned long back to a temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_fptr");
-+#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
-+#endif
 +	new_fptr = make_ssa_name(new_fptr, NULL);
 +	assign_new_fptr = gimple_build_assign(new_fptr, fold_convert(TREE_TYPE(old_fptr), intptr));
 +	SSA_NAME_DEF_STMT(new_fptr) = assign_new_fptr;
@@ -70884,9 +71172,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 +
 +	// create temporary fptr variable
 +	new_fptr = create_tmp_var(TREE_TYPE(old_fptr), "kernexec_or");
-+#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_fptr);
-+#endif
 +	new_fptr = make_ssa_name(new_fptr, NULL);
 +
 +	// build asm volatile("orq %%r12, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
@@ -70920,7 +71206,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 +	basic_block bb;
 +
 +	// 1. loop through BBs and GIMPLE statements
-+	FOR_EACH_BB(bb) {
++	FOR_EACH_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator gsi;
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
@@ -71033,30 +71319,196 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 +	return 0;
 +}
 +
++static bool kernexec_cmodel_check(void)
++{
++	tree section;
++
++	if (ix86_cmodel != CM_KERNEL)
++		return false;
++
++	section = lookup_attribute("section", DECL_ATTRIBUTES(current_function_decl));
++	if (!section || !TREE_VALUE(section))
++		return true;
++
++	section = TREE_VALUE(TREE_VALUE(section));
++	if (strncmp(TREE_STRING_POINTER(section), ".vsyscall_", 10))
++		return true;
++
++	return false;
++}
++
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data kernexec_reload_pass_data = {
++#else
++static struct gimple_opt_pass kernexec_reload_pass = {
++	.pass = {
++#endif
++		.type			= GIMPLE_PASS,
++		.name			= "kernexec_reload",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= true,
++		.has_execute		= true,
++#else
++		.gate			= kernexec_cmodel_check,
++		.execute		= execute_kernexec_reload,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_remove_unused_locals | TODO_update_ssa_no_phi
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data kernexec_fptr_pass_data = {
++#else
++static struct gimple_opt_pass kernexec_fptr_pass = {
++	.pass = {
++#endif
++		.type			= GIMPLE_PASS,
++		.name			= "kernexec_fptr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= true,
++		.has_execute		= true,
++#else
++		.gate			= kernexec_cmodel_check,
++		.execute		= execute_kernexec_fptr,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_remove_unused_locals | TODO_update_ssa_no_phi
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data kernexec_retaddr_pass_data = {
++#else
++static struct rtl_opt_pass kernexec_retaddr_pass = {
++	.pass = {
++#endif
++		.type			= RTL_PASS,
++		.name			= "kernexec_retaddr",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= true,
++		.has_execute		= true,
++#else
++		.gate			= kernexec_cmodel_check,
++		.execute		= execute_kernexec_retaddr,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= TODO_dump_func | TODO_ggc_collect
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class kernexec_reload_pass : public gimple_opt_pass {
++public:
++	kernexec_reload_pass() : gimple_opt_pass(kernexec_reload_pass_data, g) {}
++	bool gate() { return kernexec_cmodel_check(); }
++	unsigned int execute() { return execute_kernexec_reload(); }
++};
++
++class kernexec_fptr_pass : public gimple_opt_pass {
++public:
++	kernexec_fptr_pass() : gimple_opt_pass(kernexec_fptr_pass_data, g) {}
++	bool gate() { return kernexec_cmodel_check(); }
++	unsigned int execute() { return execute_kernexec_fptr(); }
++};
++
++class kernexec_retaddr_pass : public rtl_opt_pass {
++public:
++	kernexec_retaddr_pass() : rtl_opt_pass(kernexec_retaddr_pass_data, g) {}
++	bool gate() { return kernexec_cmodel_check(); }
++	unsigned int execute() { return execute_kernexec_retaddr(); }
++};
++}
++#endif
++
++static struct opt_pass *make_kernexec_reload_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new kernexec_reload_pass();
++#else
++	return &kernexec_reload_pass.pass;
++#endif
++}
++
++static struct opt_pass *make_kernexec_fptr_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new kernexec_fptr_pass();
++#else
++	return &kernexec_fptr_pass.pass;
++#endif
++}
++
++static struct opt_pass *make_kernexec_retaddr_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new kernexec_retaddr_pass();
++#else
++	return &kernexec_retaddr_pass.pass;
++#endif
++}
++
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
 +	const int argc = plugin_info->argc;
 +	const struct plugin_argument * const argv = plugin_info->argv;
 +	int i;
-+	struct register_pass_info kernexec_reload_pass_info = {
-+		.pass				= &kernexec_reload_pass.pass,
-+		.reference_pass_name		= "ssa",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_AFTER
-+	};
-+	struct register_pass_info kernexec_fptr_pass_info = {
-+		.pass				= &kernexec_fptr_pass.pass,
-+		.reference_pass_name		= "ssa",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_AFTER
-+	};
-+	struct register_pass_info kernexec_retaddr_pass_info = {
-+		.pass				= &kernexec_retaddr_pass.pass,
-+		.reference_pass_name		= "pro_and_epilogue",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_AFTER
-+	};
++	struct register_pass_info kernexec_reload_pass_info;
++	struct register_pass_info kernexec_fptr_pass_info;
++	struct register_pass_info kernexec_retaddr_pass_info;
++
++	kernexec_reload_pass_info.pass				= make_kernexec_reload_pass();
++	kernexec_reload_pass_info.reference_pass_name		= "ssa";
++	kernexec_reload_pass_info.ref_pass_instance_number	= 1;
++	kernexec_reload_pass_info.pos_op 			= PASS_POS_INSERT_AFTER;
++
++	kernexec_fptr_pass_info.pass				= make_kernexec_fptr_pass();
++	kernexec_fptr_pass_info.reference_pass_name		= "ssa";
++	kernexec_fptr_pass_info.ref_pass_instance_number	= 1;
++	kernexec_fptr_pass_info.pos_op 				= PASS_POS_INSERT_AFTER;
++
++	kernexec_retaddr_pass_info.pass				= make_kernexec_retaddr_pass();
++	kernexec_retaddr_pass_info.reference_pass_name		= "pro_and_epilogue";
++	kernexec_retaddr_pass_info.ref_pass_instance_number	= 1;
++	kernexec_retaddr_pass_info.pos_op 			= PASS_POS_INSERT_AFTER;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -71099,10 +71551,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/kerne
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/latent_entropy_plugin.c linux-3.2.54-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.2.54/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/latent_entropy_plugin.c	2013-11-18 13:46:51.623570908 +0100
-@@ -0,0 +1,335 @@
++++ linux-3.2.54-pax/tools/gcc/latent_entropy_plugin.c	2014-01-28 04:21:56.449073845 +0100
+@@ -0,0 +1,325 @@
 +/*
-+ * Copyright 2012-2013 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -71121,63 +71573,16 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 + * BUGS:
 + * - LTO needs -flto-partition=none for now
 + */
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "flags.h"
-+#include "intl.h"
-+#include "toplev.h"
-+#include "plugin.h"
-+//#include "expr.h" where are you...
-+#include "diagnostic.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "function.h"
-+#include "basic-block.h"
-+#include "gimple.h"
-+#include "rtl.h"
-+#include "emit-rtl.h"
-+#include "tree-flow.h"
-+#include "langhooks.h"
 +
-+#if BUILDING_GCC_VERSION >= 4008
-+#define TODO_dump_func 0
-+#endif
++#include "gcc-common.h"
 +
 +int plugin_is_GPL_compatible;
 +
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201308230230",
++	.version	= "201401260140",
 +	.help		= NULL
-+};
-+
-+static unsigned int execute_latent_entropy(void);
-+static bool gate_latent_entropy(void);
-+
-+static struct gimple_opt_pass latent_entropy_pass = {
-+	.pass = {
-+		.type			= GIMPLE_PASS,
-+		.name			= "latent_entropy",
-+#if BUILDING_GCC_VERSION >= 4008
-+		.optinfo_flags		= OPTGROUP_NONE,
-+#endif
-+		.gate			= gate_latent_entropy,
-+		.execute		= execute_latent_entropy,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= PROP_gimple_leh | PROP_cfg,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0, //TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts,
-+		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_update_ssa
-+	}
 +};
 +
 +static unsigned HOST_WIDE_INT seed;
@@ -71290,17 +71695,13 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 +
 +	// 1. create temporary copy of latent_entropy
 +	temp = create_tmp_var(unsigned_intDI_type_node, "temp_latent_entropy");
-+#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(temp);
-+#endif
 +
 +	// 2. read...
 +	temp = make_ssa_name(temp, NULL);
 +	assign = gimple_build_assign(temp, latent_entropy_decl);
 +	SSA_NAME_DEF_STMT(temp) = assign;
-+#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(latent_entropy_decl);
-+#endif
 +	gsi = gsi_after_labels(bb);
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
@@ -71329,13 +71730,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 +	if (!latent_entropy_decl) {
 +		struct varpool_node *node;
 +
-+#if BUILDING_GCC_VERSION <= 4007
-+		for (node = varpool_nodes; node; node = node->next) {
-+			tree var = node->decl;
-+#else
 +		FOR_EACH_VARIABLE(node) {
-+			tree var = node->symbol.decl;
-+#endif
++			tree var = NODE_DECL(node);
++
 +			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
 +				continue;
 +			latent_entropy_decl = var;
@@ -71352,15 +71749,13 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 +
 +	// 1. create local entropy variable
 +	local_entropy = create_tmp_var(unsigned_intDI_type_node, "local_entropy");
-+#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(local_entropy);
 +	mark_sym_for_renaming(local_entropy);
-+#endif
 +
 +	// 2. initialize local entropy variable
-+	bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
++	bb = split_block_after_labels(ENTRY_BLOCK_PTR_FOR_FN(cfun))->dest;
 +	if (dom_info_available_p(CDI_DOMINATORS))
-+		set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR);
++		set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR_FOR_FN(cfun));
 +	gsi = gsi_start_bb(bb);
 +
 +	assign = gimple_build_assign(local_entropy, build_int_cstu(unsigned_intDI_type_node, get_random_const()));
@@ -71371,15 +71766,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 +	bb = bb->next_bb;
 +
 +	// 3. instrument each BB with an operation on the local entropy variable
-+	while (bb != EXIT_BLOCK_PTR) {
++	while (bb != EXIT_BLOCK_PTR_FOR_FN(cfun)) {
 +		perturb_local_entropy(bb, local_entropy);
 +//debug_bb(bb);
 +		bb = bb->next_bb;
 +	};
 +
 +	// 4. mix local entropy into the global entropy variable
-+	perturb_latent_entropy(EXIT_BLOCK_PTR->prev_bb, local_entropy);
-+//debug_bb(EXIT_BLOCK_PTR->prev_bb);
++	perturb_latent_entropy(EXIT_BLOCK_PTR_FOR_FN(cfun)->prev_bb, local_entropy);
++//debug_bb(EXIT_BLOCK_PTR_FOR_FN(cfun)->prev_bb);
 +	return 0;
 +}
 +
@@ -71387,12 +71782,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 +{
 +	tree latent_entropy_type;
 +
-+#if BUILDING_GCC_VERSION >= 4007
 +	seed = get_random_seed(false);
-+#else
-+	sscanf(get_random_seed(false), "%" HOST_WIDE_INT_PRINT "x", &seed);
-+	seed *= seed;
-+#endif
 +
 +	if (in_lto_p)
 +		return;
@@ -71414,15 +71804,67 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 +//	varpool_mark_needed_node(latent_entropy_decl);
 +}
 +
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data latent_entropy_pass_data = {
++#else
++static struct gimple_opt_pass latent_entropy_pass = {
++	.pass = {
++#endif
++		.type			= GIMPLE_PASS,
++		.name			= "latent_entropy",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= true,
++		.has_execute		= true,
++#else
++		.gate			= gate_latent_entropy,
++		.execute		= execute_latent_entropy,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= PROP_gimple_leh | PROP_cfg,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0, //TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts,
++		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_update_ssa
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class latent_entropy_pass : public gimple_opt_pass {
++public:
++	latent_entropy_pass() : gimple_opt_pass(latent_entropy_pass_data, g) {}
++	bool gate() { return gate_latent_entropy(); }
++	unsigned int execute() { return execute_latent_entropy(); }
++};
++}
++#endif
++
++static struct opt_pass *make_latent_entropy_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new latent_entropy_pass();
++#else
++	return &latent_entropy_pass.pass;
++#endif
++}
++
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
-+	struct register_pass_info latent_entropy_pass_info = {
-+		.pass				= &latent_entropy_pass.pass,
-+		.reference_pass_name		= "optimized",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_BEFORE
-+	};
++	struct register_pass_info latent_entropy_pass_info;
++
++	latent_entropy_pass_info.pass				= make_latent_entropy_pass();
++	latent_entropy_pass_info.reference_pass_name		= "optimized";
++	latent_entropy_pass_info.ref_pass_instance_number	= 1;
++	latent_entropy_pass_info.pos_op 			= PASS_POS_INSERT_BEFORE;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -71438,7 +71880,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/laten
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/Makefile linux-3.2.54-pax/tools/gcc/Makefile
 --- linux-3.2.54/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/Makefile	2013-03-28 05:01:27.015767821 +0100
++++ linux-3.2.54-pax/tools/gcc/Makefile	2014-01-28 04:21:56.449073845 +0100
 @@ -0,0 +1,45 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
@@ -71451,7 +71893,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/Makef
 +HOST_EXTRACFLAGS += -I$(GCCPLUGINS_DIR)/include -std=gnu99 -ggdb
 +else
 +HOSTLIBS := hostcxxlibs
-+HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -std=gnu++98 -ggdb -Wno-unused-parameter
++HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -std=gnu++98 -fno-rtti -ggdb -Wno-unused-parameter
 +endif
 +
 +$(HOSTLIBS)-$(CONFIG_PAX_CONSTIFY_PLUGIN) := constify_plugin.so
@@ -77489,10 +77931,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +selnl_msglen_65499 selnl_msglen 0 65499 NULL
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_overflow_plugin.c linux-3.2.54-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.2.54/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/size_overflow_plugin.c	2014-01-11 22:29:33.000000000 +0100
-@@ -0,0 +1,4072 @@
++++ linux-3.2.54-pax/tools/gcc/size_overflow_plugin.c	2014-01-28 02:52:09.000000000 +0100
+@@ -0,0 +1,4040 @@
 +/*
-+ * Copyright 2011, 2012, 2013, 2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
@@ -77510,32 +77952,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 + * $ gcc -fplugin=size_overflow_plugin.so test.c  -O2
 + */
 +
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "intl.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "toplev.h"
-+#include "function.h"
-+#include "tree-flow.h"
-+#include "plugin.h"
-+#include "gimple.h"
-+#include "diagnostic.h"
-+#include "cfgloop.h"
++#include "gcc-common.h"
 +
-+#if BUILDING_GCC_VERSION >= 4008
-+#define TODO_dump_func 0
-+#define TODO_dump_cgraph 0
-+#endif
++int plugin_is_GPL_compatible;
 +
-+#define __unused __attribute__((__unused__))
-+#define ASM_NAME(node) IDENTIFIER_POINTER(DECL_ASSEMBLER_NAME(node))
-+#define NAME(node) IDENTIFIER_POINTER(DECL_NAME(node))
-+#define NAME_LEN(node) IDENTIFIER_LENGTH(DECL_NAME(node))
++static struct plugin_info size_overflow_plugin_info = {
++	.version	= "20140128",
++	.help		= "no-size-overflow\tturn off size overflow checking\n",
++};
++
 +#define BEFORE_STMT true
 +#define AFTER_STMT false
 +#define CREATE_NEW_VAR NULL_TREE
@@ -77555,10 +77980,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +#define YES_ASM_STR "# size_overflow MARK_YES "
 +#define OK_ASM_STR "# size_overflow "
 +
-+#if BUILDING_GCC_VERSION == 4005
-+#define DECL_CHAIN(NODE) (TREE_CHAIN(DECL_MINIMAL_CHECK(NODE)))
-+#endif
-+
 +struct size_overflow_hash {
 +	const struct size_overflow_hash * const next;
 +	const char * const name;
@@ -77577,7 +77998,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	struct visited *next;
 +	const_tree fndecl;
 +	unsigned int num;
-+	const_gimple first_stmt;
++	const_tree rhs;
 +};
 +
 +struct next_cgraph_node {
@@ -77603,9 +78024,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	gimple intentional_mark_from_gimple;
 +};
 +
-+int plugin_is_GPL_compatible;
-+void debug_gimple_stmt(gimple gs);
-+
 +static tree report_size_overflow_decl;
 +static const_tree const_char_ptr_type_node;
 +
@@ -77618,11 +78036,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +static void check_size_overflow(struct cgraph_node *caller_node, gimple stmt, tree size_overflow_type, tree cast_rhs, tree rhs, bool before);
 +static tree get_size_overflow_type(gimple stmt, const_tree node);
 +static tree dup_assign(struct pointer_set_t *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
-+
-+static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140111beta",
-+	.help		= "no-size-overflow\tturn off size overflow checking\n",
-+};
 +
 +static tree handle_size_overflow_attribute(tree *node, tree __unused name, tree args, int __unused flags, bool *no_add_attrs)
 +{
@@ -77828,7 +78241,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +struct function_hash {
 +	size_t tree_codes_len;
 +	unsigned char tree_codes[CODES_LIMIT];
-+	tree fndecl;
++	const_tree fndecl;
 +	unsigned int hash;
 +};
 +
@@ -77920,7 +78333,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +		set_node_codes(TREE_VALUE(arg), fn_hash_data);
 +}
 +
-+static const struct size_overflow_hash *get_function_hash(tree fndecl)
++static const struct size_overflow_hash *get_function_hash(const_tree fndecl)
 +{
 +	const struct size_overflow_hash *entry;
 +	struct function_hash fn_hash_data;
@@ -77936,7 +78349,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	set_function_codes(&fn_hash_data);
 +	gcc_assert(fn_hash_data.tree_codes_len != 0);
 +
-+	func_name = ASM_NAME(fn_hash_data.fndecl);
++	func_name = DECL_NAME_POINTER(fn_hash_data.fndecl);
 +	set_hash(func_name, &fn_hash_data);
 +
 +	entry = size_overflow_hash[fn_hash_data.hash];
@@ -77949,7 +78362,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	return NULL;
 +}
 +
-+static void print_missing_msg(tree func, unsigned int argnum)
++static void print_missing_msg(const_tree func, unsigned int argnum)
 +{
 +	location_t loc;
 +	const char *curfunc;
@@ -77959,7 +78372,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	fn_hash_data.tree_codes_len = 0;
 +
 +	loc = DECL_SOURCE_LOCATION(fn_hash_data.fndecl);
-+	curfunc = ASM_NAME(fn_hash_data.fndecl);
++	curfunc = DECL_NAME_POINTER(fn_hash_data.fndecl);
 +
 +	set_function_codes(&fn_hash_data);
 +	set_hash(curfunc, &fn_hash_data);
@@ -77976,7 +78389,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +		arg = SSA_NAME_VAR(arg);
 +
 +	for (var = DECL_ARGUMENTS(func); var; var = TREE_CHAIN(var), argnum++) {
-+		if (!operand_equal_p(arg, var, 0) && strcmp(NAME(var), NAME(arg)))
++		if (!operand_equal_p(arg, var, 0) && strcmp(DECL_NAME_POINTER(var), DECL_NAME_POINTER(arg)))
 +			continue;
 +		if (!skip_types(var))
 +			return argnum;
@@ -77989,9 +78402,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +{
 +	tree new_var = create_tmp_var(type, "cicus");
 +
-+#if BUILDING_GCC_VERSION <= 4007
 +	add_referenced_var(new_var);
-+#endif
 +	return new_var;
 +}
 +
@@ -78210,7 +78621,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +
 +	if (rhs2 != NULL_TREE)
 +		gimple_assign_set_rhs2(stmt, rhs2);
-+#if BUILDING_GCC_VERSION >= 4007
++#if BUILDING_GCC_VERSION >= 4006
 +	if (rhs3 != NULL_TREE)
 +		gimple_assign_set_rhs3(stmt, rhs3);
 +#endif
@@ -78233,9 +78644,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	gcc_assert(SSA_NAME_IS_DEFAULT_DEF(arg));
 +
 +	if (bb->index == 0) {
-+		first_bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
++		first_bb = split_block_after_labels(ENTRY_BLOCK_PTR_FOR_FN(cfun))->dest;
 +		gcc_assert(dom_info_available_p(CDI_DOMINATORS));
-+		set_immediate_dominator(CDI_DOMINATORS, first_bb, ENTRY_BLOCK_PTR);
++		set_immediate_dominator(CDI_DOMINATORS, first_bb, ENTRY_BLOCK_PTR_FOR_FN(cfun));
 +		bb = first_bb;
 +	}
 +
@@ -78349,9 +78760,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +}
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+static tree create_new_phi_node(VEC(tree, gc) *args, tree ssa_name_var, gimple oldstmt)
++static tree create_new_phi_node(VEC(tree, heap) **args, tree ssa_name_var, gimple oldstmt)
 +#else
-+static tree create_new_phi_node(vec<tree, va_gc> *args, tree ssa_name_var, gimple oldstmt)
++static tree create_new_phi_node(vec<tree, va_heap, vl_embed> *&args, tree ssa_name_var, gimple oldstmt)
 +#endif
 +{
 +	gimple new_phi;
@@ -78360,7 +78771,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	location_t loc = gimple_location(oldstmt);
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+	gcc_assert(!VEC_empty(tree, args));
++	gcc_assert(!VEC_empty(tree, *args));
 +#else
 +	gcc_assert(!args->is_empty());
 +#endif
@@ -78369,21 +78780,17 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	result = gimple_phi_result(new_phi);
 +	ssa_name_var = SSA_NAME_VAR(result);
 +
-+
-+#if BUILDING_GCC_VERSION == 4005
-+	for (i = 0; i < VEC_length(tree, args); i++) {
-+		arg = VEC_index(tree, args, i);
-+#elif BUILDING_GCC_VERSION <= 4007
-+	FOR_EACH_VEC_ELT(tree, args, i, arg) {
++#if BUILDING_GCC_VERSION <= 4007
++	FOR_EACH_VEC_ELT(tree, *args, i, arg) {
 +#else
-+	FOR_EACH_VEC_ELT(*args, i, arg) {
++	FOR_EACH_VEC_SAFE_ELT(args, i, arg) {
 +#endif
 +		arg = create_new_phi_arg(ssa_name_var, arg, oldstmt, i);
 +		add_phi_arg(new_phi, arg, gimple_phi_arg_edge(oldstmt, i), loc);
 +	}
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+	VEC_free(tree, gc, args);
++	VEC_free(tree, heap, *args);
 +#else
 +	vec_free(args);
 +#endif
@@ -78395,19 +78802,14 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +{
 +	tree ssa_name_var = NULL_TREE;
 +#if BUILDING_GCC_VERSION <= 4007
-+	VEC(tree, gc) *args;
++	VEC(tree, heap) *args = NULL;
 +#else
-+	vec<tree, va_gc> *args;
++	vec<tree, va_heap, vl_embed> *args = NULL;
 +#endif
 +	gimple oldstmt = get_def_stmt(orig_result);
 +	unsigned int i, len = gimple_phi_num_args(oldstmt);
 +
 +	pointer_set_insert(visited, oldstmt);
-+#if BUILDING_GCC_VERSION <= 4007
-+	args = VEC_alloc(tree, gc, len);
-+#else
-+	vec_alloc(args, len);
-+#endif
 +	for (i = 0; i < len; i++) {
 +		tree arg, new_arg;
 +
@@ -78424,13 +78826,17 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +		}
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+		VEC_safe_push(tree, gc, args, new_arg);
++		VEC_safe_push(tree, heap, args, new_arg);
 +#else
 +		vec_safe_push(args, new_arg);
 +#endif
 +	}
 +
++#if BUILDING_GCC_VERSION <= 4007
++	return create_new_phi_node(&args, ssa_name_var, oldstmt);
++#else
 +	return create_new_phi_node(args, ssa_name_var, oldstmt);
++#endif
 +}
 +
 +static tree change_assign_rhs(gimple stmt, const_tree orig_rhs, tree new_rhs)
@@ -78698,20 +79104,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	return build1(ADDR_EXPR, ptr_type_node, string);
 +}
 +
-+#if BUILDING_GCC_VERSION <= 4006
-+struct cgraph_node *cgraph_get_create_node(tree decl);
-+
-+struct cgraph_node *cgraph_get_create_node(tree decl)
-+{
-+	struct cgraph_node *node;
-+
-+	node = cgraph_get_node(decl);
-+	if (node)
-+		return node;
-+	return cgraph_node(decl);
-+}
-+#endif
-+
 +static void insert_cond_result(struct cgraph_node *caller_node, basic_block bb_true, const_gimple stmt, const_tree arg, bool min)
 +{
 +	gimple func_stmt;
@@ -78740,12 +79132,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	loc_file = build_string(strlen(xloc.file) + 1, xloc.file);
 +	loc_file = create_string_param(loc_file);
 +
-+	current_func = build_string(NAME_LEN(current_function_decl) + 1, NAME(current_function_decl));
++	current_func = build_string(DECL_NAME_LENGTH(current_function_decl) + 1, DECL_NAME_POINTER(current_function_decl));
 +	current_func = create_string_param(current_func);
 +
 +	gcc_assert(DECL_NAME(SSA_NAME_VAR(arg)) != NULL);
 +	call_count++;
-+	len = asprintf(&ssa_name_buf, "%s_%u %s, count: %u\n", NAME(SSA_NAME_VAR(arg)), SSA_NAME_VERSION(arg), min ? "min" : "max", call_count);
++	len = asprintf(&ssa_name_buf, "%s_%u %s, count: %u\n", DECL_NAME_POINTER(SSA_NAME_VAR(arg)), SSA_NAME_VERSION(arg), min ? "min" : "max", call_count);
 +	gcc_assert(len > 0);
 +	ssa_name = build_string(len + 1, ssa_name_buf);
 +	free(ssa_name_buf);
@@ -78758,11 +79150,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	callee_node = cgraph_get_create_node(report_size_overflow_decl);
 +	frequency = compute_call_stmt_bb_frequency(current_function_decl, bb_true);
 +
-+#if BUILDING_GCC_VERSION <= 4006
 +	edge = cgraph_create_edge(caller_node, callee_node, func_stmt, bb_true->count, frequency, bb_true->loop_depth);
-+#else
-+	edge = cgraph_create_edge(caller_node, callee_node, func_stmt, bb_true->count, frequency);
-+#endif
 +	gcc_assert(edge != NULL);
 +}
 +
@@ -79059,7 +79447,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	return dup_assign(visited, def_stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
 +}
 +
-+#if BUILDING_GCC_VERSION >= 4007
++#if BUILDING_GCC_VERSION >= 4006
 +static tree get_new_rhs(struct pointer_set_t *visited, struct cgraph_node *caller_node, tree size_overflow_type, tree rhs)
 +{
 +	if (is_gimple_constant(rhs))
@@ -79181,7 +79569,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +			return handle_unary_ops(visited, caller_node, def_stmt);
 +		case 3:
 +			return handle_binary_ops(visited, caller_node, lhs);
-+#if BUILDING_GCC_VERSION >= 4007
++#if BUILDING_GCC_VERSION >= 4006
 +		case 4:
 +			return handle_ternary_ops(visited, caller_node, lhs);
 +#endif
@@ -79224,7 +79612,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +		case 2:
 +			set_rhs = &gimple_assign_set_rhs2;
 +			break;
-+#if BUILDING_GCC_VERSION > 4005
++#if BUILDING_GCC_VERSION >= 4006
 +		case 3:
 +			set_rhs = &gimple_assign_set_rhs3;
 +			break;
@@ -79243,7 +79631,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	update_stmt(stmt);
 +}
 +
-+static unsigned int get_correct_arg_count(unsigned int argnum, tree fndecl)
++static unsigned int get_correct_arg_count(unsigned int argnum, const_tree fndecl)
 +{
 +	const struct size_overflow_hash *hash;
 +	unsigned int new_argnum;
@@ -79270,7 +79658,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	gcc_assert(origarg != NULL_TREE);
 +
 +	for (arg = DECL_ARGUMENTS(fndecl), new_argnum = 1; arg; arg = TREE_CHAIN(arg), new_argnum++)
-+		if (operand_equal_p(origarg, arg, 0) || !strcmp(NAME(origarg), NAME(arg)))
++		if (operand_equal_p(origarg, arg, 0) || !strcmp(DECL_NAME_POINTER(origarg), DECL_NAME_POINTER(arg)))
 +			return new_argnum;
 +
 +	return CANNOT_FIND_ARG;
@@ -79283,20 +79671,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	struct next_cgraph_node *cur_node;
 +
 +	if (fndecl == RET_CHECK)
-+#if BUILDING_GCC_VERSION <= 4007
-+		new_callee_fndecl = node->decl;
-+#else
-+		new_callee_fndecl = node->symbol.decl;
-+#endif
++		new_callee_fndecl = NODE_DECL(node);
 +	else
 +		new_callee_fndecl = fndecl;
 +
 +	for (cur_node = head; cur_node; cur_node = cur_node->next) {
-+#if BUILDING_GCC_VERSION <= 4007
-+		if (!operand_equal_p(cur_node->current_function->decl, node->decl, 0))
-+#else
-+		if (!operand_equal_p(cur_node->current_function->symbol.decl, node->symbol.decl, 0))
-+#endif
++		if (!operand_equal_p(NODE_DECL(cur_node->current_function), NODE_DECL(node), 0))
 +			continue;
 +		if (!operand_equal_p(cur_node->callee_fndecl, new_callee_fndecl, 0))
 +			continue;
@@ -79322,11 +79702,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	new_node->next = NULL;
 +	new_node->num = num;
 +	if (fndecl == RET_CHECK)
-+#if BUILDING_GCC_VERSION <= 4007
-+		new_node->callee_fndecl = node->decl;
-+#else
-+		new_node->callee_fndecl = node->symbol.decl;
-+#endif
++		new_node->callee_fndecl = NODE_DECL(node);
 +	else
 +		new_node->callee_fndecl = fndecl;
 +
@@ -79363,7 +79739,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	return false;
 +}
 +
-+static bool is_in_hash_table(tree fndecl, unsigned int num)
++static bool is_in_hash_table(const_tree fndecl, unsigned int num)
 +{
 +	const struct size_overflow_hash *hash;
 +
@@ -79403,7 +79779,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +/* Check if the function has a size_overflow attribute or it is in the size_overflow hash table.
 + * If the function is missing everywhere then print the missing message into stderr.
 + */
-+static bool is_missing_function(tree orig_fndecl, unsigned int num)
++static bool is_missing_function(const_tree orig_fndecl, unsigned int num)
 +{
 +	switch (DECL_FUNCTION_CODE(orig_fndecl)) {
 +#if BUILDING_GCC_VERSION >= 4008
@@ -79419,9 +79795,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	}
 +
 +	// skip test.c
-+	if (strcmp(NAME(current_function_decl), "coolmalloc")) {
++	if (strcmp(DECL_NAME_POINTER(current_function_decl), "coolmalloc")) {
 +		if (lookup_attribute("size_overflow", DECL_ATTRIBUTES(orig_fndecl)))
-+			warning(0, "unnecessary size_overflow attribute on: %s\n", NAME(orig_fndecl));
++			warning(0, "unnecessary size_overflow attribute on: %s\n", DECL_NAME_POINTER(orig_fndecl));
 +	}
 +
 +	if (is_in_hash_table(orig_fndecl, num))
@@ -79446,7 +79822,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +static struct next_cgraph_node *check_missing_overflow_attribute_and_create_next_node(struct next_cgraph_node *cnodes, struct missing_functions *missing_fn_head)
 +{
 +	unsigned int num;
-+	tree orig_fndecl;
++	const_tree orig_fndecl;
 +	struct cgraph_node *next_node = NULL;
 +
 +	orig_fndecl = DECL_ORIGIN(missing_fn_head->fndecl);
@@ -79473,10 +79849,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	tree node;
 +	struct missing_functions *cur, *missing_fn_head = NULL;
 +
-+#if BUILDING_GCC_VERSION == 4005
-+	for (i = 0; i < VEC_length(tree, cur_node->last_nodes); i++) {
-+		node = VEC_index(tree, cur_node->last_nodes, i);
-+#elif BUILDING_GCC_VERSION <= 4007
++#if BUILDING_GCC_VERSION <= 4007
 +	FOR_EACH_VEC_ELT(tree, cur_node->last_nodes, i, node) {
 +#else
 +	FOR_EACH_VEC_ELT(*cur_node->last_nodes, i, node) {
@@ -79744,7 +80117,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +		return;
 +
 +	loc = DECL_SOURCE_LOCATION(decl);
-+	inform(loc, "The intentional_overflow attribute is missing from +%s+%u+", NAME(decl), argnum);
++	inform(loc, "The intentional_overflow attribute is missing from +%s+%u+", DECL_NAME_POINTER(decl), argnum);
 +}
 +
 +/* Get the type of the intentional_overflow attribute of a node
@@ -79798,10 +80171,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	tree last_node;
 +	enum mark mark = MARK_NO;
 +
-+#if BUILDING_GCC_VERSION == 4005
-+	for (i = 0; i < VEC_length(tree, cur_node->last_nodes); i++) {
-+		last_node = VEC_index(tree, cur_node->last_nodes, i);
-+#elif BUILDING_GCC_VERSION <= 4007
++#if BUILDING_GCC_VERSION <= 4007
 +	FOR_EACH_VEC_ELT(tree, cur_node->last_nodes, i, last_node) {
 +#else
 +	FOR_EACH_VEC_ELT(*cur_node->last_nodes, i, last_node) {
@@ -79929,10 +80299,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	if (code != PARM_DECL && code != FUNCTION_DECL && code != COMPONENT_REF)
 +		return;
 +
-+#if BUILDING_GCC_VERSION == 4005
-+	for (i = 0; i < VEC_length(tree, cur_node->last_nodes); i++) {
-+		element = VEC_index(tree, cur_node->last_nodes, i);
-+#elif BUILDING_GCC_VERSION <= 4007
++#if BUILDING_GCC_VERSION <= 4007
 +	FOR_EACH_VEC_ELT(tree, cur_node->last_nodes, i, element) {
 +#else
 +	FOR_EACH_VEC_ELT(*cur_node->last_nodes, i, element) {
@@ -80189,7 +80556,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +static struct interesting_node *handle_stmt_by_cgraph_nodes_call(struct interesting_node *head, gimple stmt, struct next_cgraph_node *next_node)
 +{
 +	unsigned int argnum;
-+	tree fndecl, arg;
++	tree arg;
++	const_tree fndecl;
 +	struct next_cgraph_node *cur_node;
 +
 +	fndecl = gimple_call_fndecl(stmt);
@@ -80337,6 +80705,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +
 +	if (gimple_asm_noutputs(stmt) == 0) {
 +		gsi = gsi_for_stmt(stmt);
++		ipa_remove_stmt_references(cgraph_get_create_node(current_function_decl), stmt);
 +		gsi_remove(&gsi, true);
 +		return;
 +	}
@@ -80401,7 +80770,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	basic_block bb;
 +	struct interesting_node *head = NULL;
 +
-+	FOR_ALL_BB(bb) {
++	FOR_ALL_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator gsi;
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
@@ -80463,7 +80832,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	new_visited = (struct visited *)xmalloc(sizeof(*new_visited));
 +	new_visited->fndecl = cur_node->fndecl;
 +	new_visited->num = cur_node->num;
-+	new_visited->first_stmt = cur_node->first_stmt;
++	new_visited->rhs = cur_node->node;
 +	new_visited->next = NULL;
 +
 +	if (!head)
@@ -80488,7 +80857,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +			continue;
 +		if (cur_node->num != cur->num)
 +			continue;
-+		if (cur_node->first_stmt == cur->first_stmt)
++		if (cur_node->node == cur->rhs)
 +			return true;
 +	}
 +	return false;
@@ -80509,7 +80878,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +{
 +	basic_block bb;
 +
-+	FOR_ALL_BB(bb) {
++	FOR_ALL_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator si;
 +
 +		for (si = gsi_start_bb(bb); !gsi_end_p(si); gsi_next(&si))
@@ -80527,11 +80896,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	struct interesting_node *head, *cur_node;
 +	struct next_cgraph_node *cur_cnodes, *cnodes_head = NULL;
 +
-+#if BUILDING_GCC_VERSION <= 4007
-+	set_current_function_decl(node->decl);
-+#else
-+	set_current_function_decl(node->symbol.decl);
-+#endif
++	set_current_function_decl(NODE_DECL(node));
 +	call_count = 0;
 +
 +	head = collect_interesting_stmts(next_node);
@@ -80569,7 +80934,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +{
 +	basic_block bb;
 +
-+	FOR_ALL_BB(bb) {
++	FOR_ALL_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator si;
 +
 +		for (si = gsi_start_bb(bb); !gsi_end_p(si); gsi_next(&si))
@@ -80579,38 +80944,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	}
 +}
 +
-+#if BUILDING_GCC_VERSION <= 4006
-+static bool cgraph_function_with_gimple_body_p(struct cgraph_node *node)
-+{
-+	return node->analyzed && !node->thunk.thunk_p && !node->alias;
-+}
-+
-+static struct cgraph_node *cgraph_first_function_with_gimple_body(void)
-+{
-+	struct cgraph_node *node;
-+
-+	for (node = cgraph_nodes; node; node = node->next) {
-+		if (cgraph_function_with_gimple_body_p(node))
-+			return node;
-+	}
-+	return NULL;
-+}
-+
-+static inline struct cgraph_node *cgraph_next_function_with_gimple_body(struct cgraph_node *node)
-+{
-+	for (node = node->next; node; node = node->next) {
-+		if (cgraph_function_with_gimple_body_p(node))
-+			return node;
-+	}
-+	return NULL;
-+}
-+
-+#define FOR_EACH_FUNCTION_WITH_GIMPLE_BODY(node) \
-+	for ((node) = cgraph_first_function_with_gimple_body (); (node); \
-+		(node) = cgraph_next_function_with_gimple_body (node))
-+
-+#endif
-+
 +// Main entry point of the ipa pass: erases the plf flag of all stmts and iterates over all the functions
 +static unsigned int search_function(void)
 +{
@@ -80618,11 +80951,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	struct visited *visited = NULL;
 +
 +	FOR_EACH_FUNCTION_WITH_GIMPLE_BODY(node) {
-+#if BUILDING_GCC_VERSION <= 4007
-+		set_current_function_decl(node->decl);
-+#else
-+		set_current_function_decl(node->symbol.decl);
-+#endif
++		set_current_function_decl(NODE_DECL(node));
 +		set_plf_false();
 +		unset_current_function_decl();
 +	}
@@ -80640,24 +80969,34 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	return 0;
 +}
 +
-+static struct ipa_opt_pass_d pass_ipa = {
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data ipa_pass_data = {
++#else
++static struct ipa_opt_pass_d ipa_pass = {
 +	.pass = {
++#endif
 +		.type			= SIMPLE_IPA_PASS,
 +		.name			= "size_overflow",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
 +		.gate			= NULL,
 +		.execute		= search_function,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
++#endif
 +		.tv_id			= TV_NONE,
 +		.properties_required	= 0,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
 +		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_remove_unused_locals | TODO_ggc_collect | TODO_verify_flow | TODO_dump_cgraph | TODO_dump_func | TODO_update_ssa_no_phi,
++#if BUILDING_GCC_VERSION < 4009
 +	},
 +	.generate_summary		= NULL,
 +	.write_summary			= NULL,
@@ -80670,7 +81009,27 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	.function_transform_todo_flags_start		= 0,
 +	.function_transform		= NULL,
 +	.variable_transform		= NULL,
++#endif
 +};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class ipa_pass : public ipa_opt_pass_d {
++public:
++	ipa_pass() : ipa_opt_pass_d(ipa_pass_data, g, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL) {}
++	unsigned int execute() { return search_function(); }
++};
++}
++#endif
++
++static struct opt_pass *make_ipa_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new ipa_pass();
++#else
++	return &ipa_pass.pass;
++#endif
++}
 +
 +// data for the size_overflow asm stmt
 +struct asm_data {
@@ -80976,9 +81335,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	unsigned int len;
 +
 +	if (argnum == 0)
-+		fn_name = NAME(current_function_decl);
++		fn_name = DECL_NAME_POINTER(current_function_decl);
 +	else
-+		fn_name = NAME(gimple_call_fndecl(stmt));
++		fn_name = DECL_NAME_POINTER(gimple_call_fndecl(stmt));
 +
 +	len = asprintf(&asm_comment, "%s %s %u", mark_str, fn_name, argnum);
 +	gcc_assert(len > 0);
@@ -81364,7 +81723,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +{
 +	basic_block bb;
 +
-+	FOR_ALL_BB(bb) {
++	FOR_ALL_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator gsi;
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
@@ -81387,26 +81746,56 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 + * this pass inserts asm stmts to mark the interesting args
 + * that the ipa pass will detect and insert the size overflow checks for.
 + */
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data insert_size_overflow_asm_pass_data = {
++#else
 +static struct gimple_opt_pass insert_size_overflow_asm_pass = {
 +	.pass = {
++#endif
 +		.type			= GIMPLE_PASS,
 +		.name			= "insert_size_overflow_asm",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
 +		.gate			= NULL,
 +		.execute		= search_interesting_functions,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
++#endif
 +		.tv_id			= TV_NONE,
 +		.properties_required	= PROP_cfg,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
 +		.todo_flags_finish	= TODO_dump_func | TODO_verify_ssa | TODO_verify_stmts | TODO_remove_unused_locals | TODO_update_ssa_no_phi | TODO_cleanup_cfg | TODO_ggc_collect | TODO_verify_flow
++#if BUILDING_GCC_VERSION < 4009
 +	}
++#endif
 +};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class insert_size_overflow_asm_pass : public gimple_opt_pass {
++public:
++	insert_size_overflow_asm_pass() : gimple_opt_pass(insert_size_overflow_asm_pass_data, g) {}
++	unsigned int execute() { return search_interesting_functions(); }
++};
++}
++#endif
++
++static struct opt_pass *make_insert_size_overflow_asm_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new insert_size_overflow_asm_pass();
++#else
++	return &insert_size_overflow_asm_pass.pass;
++#endif
++}
 +
 +// Create the noreturn report_size_overflow() function decl.
 +static void start_unit_callback(void __unused *gcc_data, void __unused *user_data)
@@ -81438,17 +81827,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	FOR_EACH_FUNCTION_WITH_GIMPLE_BODY(node) {
 +		basic_block bb;
 +
-+#if BUILDING_GCC_VERSION <= 4007
-+		push_cfun(DECL_STRUCT_FUNCTION(node->decl));
-+		current_function_decl = node->decl;
-+#else
-+		push_cfun(DECL_STRUCT_FUNCTION(node->symbol.decl));
-+		current_function_decl = node->symbol.decl;
-+#endif
++		push_cfun(DECL_STRUCT_FUNCTION(NODE_DECL(node)));
++		current_function_decl = NODE_DECL(node);
 +
-+		fprintf(stderr, "-----------------------------------------\n%s\n-----------------------------------------\n", NAME(current_function_decl));
++		fprintf(stderr, "-----------------------------------------\n%s\n-----------------------------------------\n", DECL_NAME_POINTER(current_function_decl));
 +
-+		FOR_ALL_BB(bb) {
++		FOR_ALL_BB_FN(bb, cfun) {
 +			gimple_stmt_iterator si;
 +
 +			fprintf(stderr, "<bb %u>:\n", bb->index);
@@ -81470,24 +81854,34 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	return 0;
 +}
 +
-+static struct ipa_opt_pass_d pass_dump = {
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data dump_pass_data = {
++#else
++static struct ipa_opt_pass_d dump_pass = {
 +	.pass = {
++#endif
 +		.type			= SIMPLE_IPA_PASS,
 +		.name			= "dump",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
 +		.gate			= NULL,
 +		.execute		= dump_functions,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
++#endif
 +		.tv_id			= TV_NONE,
 +		.properties_required	= 0,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
 +		.todo_flags_finish	= 0,
++#if BUILDING_GCC_VERSION < 4009
 +	},
 +	.generate_summary		= NULL,
 +	.write_summary			= NULL,
@@ -81500,7 +81894,27 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	.function_transform_todo_flags_start		= 0,
 +	.function_transform		= NULL,
 +	.variable_transform		= NULL,
++#endif
 +};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class dump_pass : public ipa_opt_pass_d {
++public:
++	dump_pass() : ipa_opt_pass_d(dump_pass_data, g, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL) {}
++	unsigned int execute() { return dump_functions(); }
++};
++}
++#endif
++
++static struct opt_pass *make_dump_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new dump_pass();
++#else
++	return &dump_pass.pass;
++#endif
++}
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
@@ -81509,34 +81923,30 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +	const int argc = plugin_info->argc;
 +	const struct plugin_argument * const argv = plugin_info->argv;
 +	bool enable = true;
++	struct register_pass_info insert_size_overflow_asm_pass_info;
++	struct register_pass_info __unused dump_before_pass_info;
++	struct register_pass_info __unused dump_after_pass_info;
++	struct register_pass_info ipa_pass_info;
 +
-+	struct register_pass_info insert_size_overflow_asm_pass_info = {
-+		.pass				= &insert_size_overflow_asm_pass.pass,
-+		.reference_pass_name		= "ssa",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op				= PASS_POS_INSERT_AFTER
-+	};
++	insert_size_overflow_asm_pass_info.pass				= make_insert_size_overflow_asm_pass();
++	insert_size_overflow_asm_pass_info.reference_pass_name		= "ssa";
++	insert_size_overflow_asm_pass_info.ref_pass_instance_number	= 1;
++	insert_size_overflow_asm_pass_info.pos_op			= PASS_POS_INSERT_AFTER;
 +
-+	struct register_pass_info __unused dump_before_pass_info = {
-+		.pass				= &pass_dump.pass,
-+		.reference_pass_name		= "increase_alignment",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op				= PASS_POS_INSERT_BEFORE
-+	};
++	dump_before_pass_info.pass			= make_dump_pass();
++	dump_before_pass_info.reference_pass_name	= "increase_alignment";
++	dump_before_pass_info.ref_pass_instance_number	= 1;
++	dump_before_pass_info.pos_op			= PASS_POS_INSERT_BEFORE;
 +
-+	struct register_pass_info ipa_pass_info = {
-+		.pass				= &pass_ipa.pass,
-+		.reference_pass_name		= "increase_alignment",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op				= PASS_POS_INSERT_BEFORE
-+	};
++	ipa_pass_info.pass			= make_ipa_pass();
++	ipa_pass_info.reference_pass_name	= "increase_alignment";
++	ipa_pass_info.ref_pass_instance_number	= 1;
++	ipa_pass_info.pos_op			= PASS_POS_INSERT_BEFORE;
 +
-+	struct register_pass_info __unused dump_after_pass_info = {
-+		.pass				= &pass_dump.pass,
-+		.reference_pass_name		= "increase_alignment",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op				= PASS_POS_INSERT_BEFORE
-+	};
++	dump_after_pass_info.pass			= make_dump_pass();
++	dump_after_pass_info.reference_pass_name	= "increase_alignment";
++	dump_after_pass_info.ref_pass_instance_number	= 1;
++	dump_after_pass_info.pos_op			= PASS_POS_INSERT_BEFORE;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -81565,10 +81975,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/size_
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stackleak_plugin.c linux-3.2.54-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.2.54/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/stackleak_plugin.c	2013-02-12 02:26:57.293415370 +0100
-@@ -0,0 +1,327 @@
++++ linux-3.2.54-pax/tools/gcc/stackleak_plugin.c	2014-01-28 04:21:56.481073843 +0100
+@@ -0,0 +1,341 @@
 +/*
-+ * Copyright 2011-2013 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -81586,31 +81996,8 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stack
 + * BUGS:
 + * - none known
 + */
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "flags.h"
-+#include "intl.h"
-+#include "toplev.h"
-+#include "plugin.h"
-+//#include "expr.h" where are you...
-+#include "diagnostic.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "function.h"
-+#include "basic-block.h"
-+#include "gimple.h"
-+#include "rtl.h"
-+#include "emit-rtl.h"
 +
-+#if BUILDING_GCC_VERSION >= 4008
-+#define TODO_dump_func 0
-+#endif
-+
-+extern void print_gimple_stmt(FILE *, gimple, int, int);
++#include "gcc-common.h"
 +
 +int plugin_is_GPL_compatible;
 +
@@ -81620,61 +82007,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stack
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201302112000",
++	.version	= "201401260140",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
-+
-+static bool gate_stackleak_track_stack(void);
-+static unsigned int execute_stackleak_tree_instrument(void);
-+static unsigned int execute_stackleak_final(void);
-+
-+static struct gimple_opt_pass stackleak_tree_instrument_pass = {
-+	.pass = {
-+		.type			= GIMPLE_PASS,
-+		.name			= "stackleak_tree_instrument",
-+#if BUILDING_GCC_VERSION >= 4008
-+		.optinfo_flags		= OPTGROUP_NONE,
-+#endif
-+		.gate			= gate_stackleak_track_stack,
-+		.execute		= execute_stackleak_tree_instrument,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= PROP_gimple_leh | PROP_cfg,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0, //TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts,
-+		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_update_ssa
-+	}
-+};
-+
-+static struct rtl_opt_pass stackleak_final_rtl_opt_pass = {
-+	.pass = {
-+		.type			= RTL_PASS,
-+		.name			= "stackleak_final",
-+#if BUILDING_GCC_VERSION >= 4008
-+		.optinfo_flags		= OPTGROUP_NONE,
-+#endif
-+		.gate			= gate_stackleak_track_stack,
-+		.execute		= execute_stackleak_final,
-+		.sub			= NULL,
-+		.next			= NULL,
-+		.static_pass_number	= 0,
-+		.tv_id			= TV_NONE,
-+		.properties_required	= 0,
-+		.properties_provided	= 0,
-+		.properties_destroyed	= 0,
-+		.todo_flags_start	= 0,
-+		.todo_flags_finish	= TODO_dump_func
-+	}
-+};
-+
-+static bool gate_stackleak_track_stack(void)
-+{
-+	return track_frame_size >= 0;
-+}
 +
 +static void stackleak_check_alloca(gimple_stmt_iterator *gsi)
 +{
@@ -81705,23 +82041,6 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stack
 +	gsi_insert_after(gsi, track_stack, GSI_CONTINUE_LINKING);
 +}
 +
-+#if BUILDING_GCC_VERSION == 4005
-+static bool gimple_call_builtin_p(gimple stmt, enum built_in_function code)
-+{
-+	tree fndecl;
-+
-+	if (!is_gimple_call(stmt))
-+		return false;
-+	fndecl = gimple_call_fndecl(stmt);
-+	if (!fndecl)
-+		return false;
-+	if (DECL_BUILT_IN_CLASS(fndecl) != BUILT_IN_NORMAL)
-+		return false;
-+//	print_node(stderr, "pax", fndecl, 4);
-+	return DECL_FUNCTION_CODE(fndecl) == code;
-+}
-+#endif
-+
 +static bool is_alloca(gimple stmt)
 +{
 +	if (gimple_call_builtin_p(stmt, BUILT_IN_ALLOCA))
@@ -81740,10 +82059,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stack
 +	basic_block bb, entry_bb;
 +	bool prologue_instrumented = false, is_leaf = true;
 +
-+	entry_bb = ENTRY_BLOCK_PTR_FOR_FUNCTION(cfun)->next_bb;
++	entry_bb = ENTRY_BLOCK_PTR_FOR_FN(cfun)->next_bb;
 +
 +	// 1. loop through BBs and GIMPLE statements
-+	FOR_EACH_BB(bb) {
++	FOR_EACH_BB_FN(bb, cfun) {
 +		gimple_stmt_iterator gsi;
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
@@ -81781,9 +82100,9 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stack
 +	if (!prologue_instrumented) {
 +		gimple_stmt_iterator gsi;
 +
-+		bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
++		bb = split_block_after_labels(ENTRY_BLOCK_PTR_FOR_FN(cfun))->dest;
 +		if (dom_info_available_p(CDI_DOMINATORS))
-+			set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR);
++			set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR_FOR_FN(cfun));
 +		gsi = gsi_start_bb(bb);
 +		stackleak_add_instrumentation(&gsi);
 +	}
@@ -81840,25 +82159,130 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stack
 +	return 0;
 +}
 +
++static bool gate_stackleak_track_stack(void)
++{
++	return track_frame_size >= 0;
++}
++
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data stackleak_tree_instrument_pass_data = {
++#else
++static struct gimple_opt_pass stackleak_tree_instrument_pass = {
++	.pass = {
++#endif
++		.type			= GIMPLE_PASS,
++		.name			= "stackleak_tree_instrument",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= true,
++		.has_execute		= true,
++#else
++		.gate			= gate_stackleak_track_stack,
++		.execute		= execute_stackleak_tree_instrument,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= PROP_gimple_leh | PROP_cfg,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0, //TODO_verify_ssa | TODO_verify_flow | TODO_verify_stmts,
++		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_update_ssa
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data stackleak_final_rtl_opt_pass_data = {
++#else
++static struct rtl_opt_pass stackleak_final_rtl_opt_pass = {
++	.pass = {
++#endif
++		.type			= RTL_PASS,
++		.name			= "stackleak_final",
++#if BUILDING_GCC_VERSION >= 4008
++		.optinfo_flags		= OPTGROUP_NONE,
++#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= true,
++		.has_execute		= true,
++#else
++		.gate			= gate_stackleak_track_stack,
++		.execute		= execute_stackleak_final,
++		.sub			= NULL,
++		.next			= NULL,
++		.static_pass_number	= 0,
++#endif
++		.tv_id			= TV_NONE,
++		.properties_required	= 0,
++		.properties_provided	= 0,
++		.properties_destroyed	= 0,
++		.todo_flags_start	= 0,
++		.todo_flags_finish	= TODO_dump_func
++#if BUILDING_GCC_VERSION < 4009
++	}
++#endif
++};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class stackleak_tree_instrument_pass : public gimple_opt_pass {
++public:
++	stackleak_tree_instrument_pass() : gimple_opt_pass(stackleak_tree_instrument_pass_data, g) {}
++	bool gate() { return gate_stackleak_track_stack(); }
++	unsigned int execute() { return execute_stackleak_tree_instrument(); }
++};
++
++class stackleak_final_rtl_opt_pass : public rtl_opt_pass {
++public:
++	stackleak_final_rtl_opt_pass() : rtl_opt_pass(stackleak_final_rtl_opt_pass_data, g) {}
++	bool gate() { return gate_stackleak_track_stack(); }
++	unsigned int execute() { return execute_stackleak_final(); }
++};
++}
++#endif
++
++static struct opt_pass *make_stackleak_tree_instrument_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new stackleak_tree_instrument_pass();
++#else
++	return &stackleak_tree_instrument_pass.pass;
++#endif
++}
++
++static struct opt_pass *make_stackleak_final_rtl_opt_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new stackleak_final_rtl_opt_pass();
++#else
++	return &stackleak_final_rtl_opt_pass.pass;
++#endif
++}
++
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
 +	const int argc = plugin_info->argc;
 +	const struct plugin_argument * const argv = plugin_info->argv;
 +	int i;
-+	struct register_pass_info stackleak_tree_instrument_pass_info = {
-+		.pass				= &stackleak_tree_instrument_pass.pass,
-+//		.reference_pass_name		= "tree_profile",
-+		.reference_pass_name		= "optimized",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_BEFORE
-+	};
-+	struct register_pass_info stackleak_final_pass_info = {
-+		.pass				= &stackleak_final_rtl_opt_pass.pass,
-+		.reference_pass_name		= "final",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op 			= PASS_POS_INSERT_BEFORE
-+	};
++	struct register_pass_info stackleak_tree_instrument_pass_info;
++	struct register_pass_info stackleak_final_pass_info;
++
++	stackleak_tree_instrument_pass_info.pass			= make_stackleak_tree_instrument_pass();
++//	stackleak_tree_instrument_pass_info.reference_pass_name		= "tree_profile";
++	stackleak_tree_instrument_pass_info.reference_pass_name		= "optimized";
++	stackleak_tree_instrument_pass_info.ref_pass_instance_number	= 1;
++	stackleak_tree_instrument_pass_info.pos_op 			= PASS_POS_INSERT_BEFORE;
++
++	stackleak_final_pass_info.pass				= make_stackleak_final_rtl_opt_pass();
++	stackleak_final_pass_info.reference_pass_name		= "final";
++	stackleak_final_pass_info.ref_pass_instance_number	= 1;
++	stackleak_final_pass_info.pos_op 			= PASS_POS_INSERT_BEFORE;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -81896,10 +82320,10 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/stack
 +}
 diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/structleak_plugin.c linux-3.2.54-pax/tools/gcc/structleak_plugin.c
 --- linux-3.2.54/tools/gcc/structleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.54-pax/tools/gcc/structleak_plugin.c	2013-05-23 23:03:18.274325309 +0200
-@@ -0,0 +1,277 @@
++++ linux-3.2.54-pax/tools/gcc/structleak_plugin.c	2014-01-28 04:21:56.481073843 +0100
+@@ -0,0 +1,273 @@
 +/*
-+ * Copyright 2013 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2013-2014 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -81924,38 +82348,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/struc
 + *       increase type coverage
 + */
 +
-+#include "gcc-plugin.h"
-+#include "config.h"
-+#include "system.h"
-+#include "coretypes.h"
-+#include "tree.h"
-+#include "tree-pass.h"
-+#include "intl.h"
-+#include "plugin-version.h"
-+#include "tm.h"
-+#include "toplev.h"
-+#include "function.h"
-+#include "tree-flow.h"
-+#include "plugin.h"
-+#include "gimple.h"
-+#include "diagnostic.h"
-+#include "cfgloop.h"
-+#include "langhooks.h"
++#include "gcc-common.h"
 +
-+#if BUILDING_GCC_VERSION >= 4008
-+#define TODO_dump_func 0
-+#endif
-+
-+#define NAME(node) IDENTIFIER_POINTER(DECL_NAME(node))
-+
-+// unused type flag in all versions 4.5-4.8
++// unused C type flag in all versions 4.5-4.9
 +#define TYPE_USERSPACE(TYPE) TYPE_LANG_FLAG_3(TYPE)
 +
 +int plugin_is_GPL_compatible;
-+void debug_gimple_stmt(gimple gs);
 +
 +static struct plugin_info structleak_plugin_info = {
-+	.version	= "201304082245",
++	.version	= "201401260140",
 +	.help		= "disable\tdo not activate plugin\n",
 +};
 +
@@ -82033,7 +82434,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/struc
 +
 +	// this is the original entry bb before the forced split
 +	// TODO: check further BBs in case more splits occured before us
-+	bb = ENTRY_BLOCK_PTR->next_bb->next_bb;
++	bb = ENTRY_BLOCK_PTR_FOR_FN(cfun)->next_bb->next_bb;
 +
 +	// first check if the variable is already initialized, warn otherwise
 +	for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
@@ -82065,7 +82466,7 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/struc
 +
 +	// build the initializer stmt
 +	init_stmt = gimple_build_assign(var, initializer);
-+	gsi = gsi_start_bb(ENTRY_BLOCK_PTR->next_bb);
++	gsi = gsi_start_bb(ENTRY_BLOCK_PTR_FOR_FN(cfun)->next_bb);
 +	gsi_insert_before(&gsi, init_stmt, GSI_NEW_STMT);
 +	update_stmt(init_stmt);
 +}
@@ -82075,25 +82476,15 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/struc
 +	basic_block bb;
 +	unsigned int ret = 0;
 +	tree var;
-+
-+#if BUILDING_GCC_VERSION == 4005
-+	tree vars;
-+#else
 +	unsigned int i;
-+#endif
 +
 +	// split the first bb where we can put the forced initializers
-+	bb = split_block_after_labels(ENTRY_BLOCK_PTR)->dest;
++	bb = split_block_after_labels(ENTRY_BLOCK_PTR_FOR_FN(cfun))->dest;
 +	if (dom_info_available_p(CDI_DOMINATORS))
-+		set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR);
++		set_immediate_dominator(CDI_DOMINATORS, bb, ENTRY_BLOCK_PTR_FOR_FN(cfun));
 +
 +	// enumarate all local variables and forcibly initialize our targets
-+#if BUILDING_GCC_VERSION == 4005
-+	for (vars = cfun->local_decls; vars; vars = TREE_CHAIN(vars)) {
-+		var = TREE_VALUE(vars);
-+#else
 +	FOR_EACH_LOCAL_DECL(cfun, i, var) {
-+#endif
 +		tree type = TREE_TYPE(var);
 +
 +		gcc_assert(DECL_P(var));
@@ -82112,26 +82503,56 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/struc
 +	return ret;
 +}
 +
++#if BUILDING_GCC_VERSION >= 4009
++static const struct pass_data structleak_pass_data = {
++#else
 +static struct gimple_opt_pass structleak_pass = {
 +	.pass = {
++#endif
 +		.type			= GIMPLE_PASS,
 +		.name			= "structleak",
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
++#if BUILDING_GCC_VERSION >= 4009
++		.has_gate		= false,
++		.has_execute		= true,
++#else
 +		.gate			= NULL,
 +		.execute		= handle_function,
 +		.sub			= NULL,
 +		.next			= NULL,
 +		.static_pass_number	= 0,
++#endif
 +		.tv_id			= TV_NONE,
 +		.properties_required	= PROP_cfg,
 +		.properties_provided	= 0,
 +		.properties_destroyed	= 0,
 +		.todo_flags_start	= 0,
 +		.todo_flags_finish	= TODO_verify_ssa | TODO_verify_stmts | TODO_dump_func | TODO_remove_unused_locals | TODO_update_ssa | TODO_ggc_collect | TODO_verify_flow
++#if BUILDING_GCC_VERSION < 4009
 +	}
++#endif
 +};
++
++#if BUILDING_GCC_VERSION >= 4009
++namespace {
++class structleak_pass : public gimple_opt_pass {
++public:
++	structleak_pass() : gimple_opt_pass(structleak_pass_data, g) {}
++	unsigned int execute() { return handle_function(); }
++};
++}
++#endif
++
++static struct opt_pass *make_structleak_pass(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return new structleak_pass();
++#else
++	return &structleak_pass.pass;
++#endif
++}
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
@@ -82140,13 +82561,12 @@ diff -NurpX linux-3.2.54-pax/Documentation/dontdiff linux-3.2.54/tools/gcc/struc
 +	const int argc = plugin_info->argc;
 +	const struct plugin_argument * const argv = plugin_info->argv;
 +	bool enable = true;
++	struct register_pass_info structleak_pass_info;
 +
-+	struct register_pass_info structleak_pass_info = {
-+		.pass				= &structleak_pass.pass,
-+		.reference_pass_name		= "ssa",
-+		.ref_pass_instance_number	= 1,
-+		.pos_op				= PASS_POS_INSERT_AFTER
-+	};
++	structleak_pass_info.pass			= make_structleak_pass();
++	structleak_pass_info.reference_pass_name	= "ssa";
++	structleak_pass_info.ref_pass_instance_number	= 1;
++	structleak_pass_info.pos_op			= PASS_POS_INSERT_AFTER;
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
