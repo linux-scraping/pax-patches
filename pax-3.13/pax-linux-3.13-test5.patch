@@ -1,5 +1,7 @@
-- fixed a constify plugin regression, reported by spender
-- updated gcc-common.h
+- new size overflow hash table from spender
+- backported http://git.kernel.org/linus/34228d473ef
+- fixed CONFIG_MEM_SOFT_DIRTY interference with _PAGE_NX on x86
+- fixed the size overflow plugin for gcc 4.9, by Emese Revfy
 
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/alpha/include/asm/atomic.h linux-3.13-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -14871,7 +14873,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/x86/include/as
  {
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/x86/include/asm/pgtable_types.h linux-3.13-pax/arch/x86/include/asm/pgtable_types.h
 --- linux-3.13/arch/x86/include/asm/pgtable_types.h	2013-11-04 01:46:23.067116230 +0100
-+++ linux-3.13-pax/arch/x86/include/asm/pgtable_types.h	2014-01-20 12:46:09.588968108 +0100
++++ linux-3.13-pax/arch/x86/include/asm/pgtable_types.h	2014-01-27 14:44:13.979693400 +0100
 @@ -16,13 +16,12 @@
  #define _PAGE_BIT_PSE		7	/* 4 MB (or 2MB) page */
  #define _PAGE_BIT_PAT		7	/* on 4KB pages */
@@ -14902,7 +14904,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/arch/x86/include/as
  #if defined(CONFIG_X86_64) || defined(CONFIG_X86_PAE)
  #define _PAGE_NX	(_AT(pteval_t, 1) << _PAGE_BIT_NX)
 -#else
-+#elif defined(CONFIG_KMEMCHECK)
++#elif defined(CONFIG_KMEMCHECK) || defined(CONFIG_MEM_SOFT_DIRTY)
  #define _PAGE_NX	(_AT(pteval_t, 0))
 +#else
 +#define _PAGE_NX	(_AT(pteval_t, 1) << _PAGE_BIT_HIDDEN)
@@ -65610,7 +65612,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mlock.c linux-3.
  			newflags |= VM_LOCKED;
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.13-pax/mm/mmap.c
 --- linux-3.13/mm/mmap.c	2014-01-20 12:36:53.648997791 +0100
-+++ linux-3.13-pax/mm/mmap.c	2014-01-20 12:46:10.968968034 +0100
++++ linux-3.13-pax/mm/mmap.c	2014-01-27 14:33:13.335728673 +0100
 @@ -52,6 +52,16 @@
  #define arch_rebalance_pgtables(addr, len)		(addr)
  #endif
@@ -65673,7 +65675,24 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (vma->vm_ops && vma->vm_ops->close)
  		vma->vm_ops->close(vma);
  	if (vma->vm_file)
-@@ -931,6 +952,12 @@ static int
+@@ -893,7 +914,15 @@ again:			remove_next = 1 + (end > next->
+ static inline int is_mergeable_vma(struct vm_area_struct *vma,
+ 			struct file *file, unsigned long vm_flags)
+ {
+-	if (vma->vm_flags ^ vm_flags)
++	/*
++	 * VM_SOFTDIRTY should not prevent from VMA merging, if we
++	 * match the flags but dirty bit -- the caller should mark
++	 * merged VMA as dirty. If dirty bit won't be excluded from
++	 * comparison, we increase pressue on the memory system forcing
++	 * the kernel to generate new VMAs when old one could be
++	 * extended instead.
++	 */
++	if ((vma->vm_flags ^ vm_flags) & ~VM_SOFTDIRTY)
+ 		return 0;
+ 	if (vma->vm_file != file)
+ 		return 0;
+@@ -931,6 +960,12 @@ static int
  can_vma_merge_before(struct vm_area_struct *vma, unsigned long vm_flags,
  	struct anon_vma *anon_vma, struct file *file, pgoff_t vm_pgoff)
  {
@@ -65686,7 +65705,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (is_mergeable_vma(vma, file, vm_flags) &&
  	    is_mergeable_anon_vma(anon_vma, vma->anon_vma, vma)) {
  		if (vma->vm_pgoff == vm_pgoff)
-@@ -950,6 +977,12 @@ static int
+@@ -950,6 +985,12 @@ static int
  can_vma_merge_after(struct vm_area_struct *vma, unsigned long vm_flags,
  	struct anon_vma *anon_vma, struct file *file, pgoff_t vm_pgoff)
  {
@@ -65699,7 +65718,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (is_mergeable_vma(vma, file, vm_flags) &&
  	    is_mergeable_anon_vma(anon_vma, vma->anon_vma, vma)) {
  		pgoff_t vm_pglen;
-@@ -992,13 +1025,20 @@ can_vma_merge_after(struct vm_area_struc
+@@ -992,13 +1033,20 @@ can_vma_merge_after(struct vm_area_struc
  struct vm_area_struct *vma_merge(struct mm_struct *mm,
  			struct vm_area_struct *prev, unsigned long addr,
  			unsigned long end, unsigned long vm_flags,
@@ -65721,7 +65740,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	/*
  	 * We later require that vma->vm_flags == vm_flags,
  	 * so this tests vma->vm_flags & VM_SPECIAL, too.
-@@ -1014,6 +1054,15 @@ struct vm_area_struct *vma_merge(struct
+@@ -1014,6 +1062,15 @@ struct vm_area_struct *vma_merge(struct
  	if (next && next->vm_end == end)		/* cases 6, 7, 8 */
  		next = next->vm_next;
  
@@ -65737,7 +65756,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	/*
  	 * Can it merge with the predecessor?
  	 */
-@@ -1033,9 +1082,24 @@ struct vm_area_struct *vma_merge(struct
+@@ -1033,9 +1090,24 @@ struct vm_area_struct *vma_merge(struct
  							/* cases 1, 6 */
  			err = vma_adjust(prev, prev->vm_start,
  				next->vm_end, prev->vm_pgoff, NULL);
@@ -65763,7 +65782,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		if (err)
  			return NULL;
  		khugepaged_enter_vma_merge(prev);
-@@ -1049,12 +1113,27 @@ struct vm_area_struct *vma_merge(struct
+@@ -1049,12 +1121,27 @@ struct vm_area_struct *vma_merge(struct
   			mpol_equal(policy, vma_policy(next)) &&
  			can_vma_merge_before(next, vm_flags,
  					anon_vma, file, pgoff+pglen)) {
@@ -65793,7 +65812,16 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		if (err)
  			return NULL;
  		khugepaged_enter_vma_merge(area);
-@@ -1163,8 +1242,10 @@ none:
+@@ -1082,7 +1169,7 @@ static int anon_vma_compatible(struct vm
+ 	return a->vm_end == b->vm_start &&
+ 		mpol_equal(vma_policy(a), vma_policy(b)) &&
+ 		a->vm_file == b->vm_file &&
+-		!((a->vm_flags ^ b->vm_flags) & ~(VM_READ|VM_WRITE|VM_EXEC)) &&
++		!((a->vm_flags ^ b->vm_flags) & ~(VM_READ|VM_WRITE|VM_EXEC|VM_SOFTDIRTY)) &&
+ 		b->vm_pgoff == a->vm_pgoff + ((b->vm_start - a->vm_start) >> PAGE_SHIFT);
+ }
+ 
+@@ -1163,8 +1250,10 @@ none:
  void vm_stat_account(struct mm_struct *mm, unsigned long flags,
  						struct file *file, long pages)
  {
@@ -65806,7 +65834,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  
  	mm->total_vm += pages;
  
-@@ -1172,7 +1253,7 @@ void vm_stat_account(struct mm_struct *m
+@@ -1172,7 +1261,7 @@ void vm_stat_account(struct mm_struct *m
  		mm->shared_vm += pages;
  		if ((flags & (VM_EXEC|VM_WRITE)) == VM_EXEC)
  			mm->exec_vm += pages;
@@ -65815,7 +65843,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		mm->stack_vm += pages;
  }
  #endif /* CONFIG_PROC_FS */
-@@ -1210,7 +1291,7 @@ unsigned long do_mmap_pgoff(struct file
+@@ -1210,7 +1299,7 @@ unsigned long do_mmap_pgoff(struct file
  	 * (the exception is when the underlying filesystem is noexec
  	 *  mounted, in which case we dont add PROT_EXEC.)
  	 */
@@ -65824,7 +65852,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		if (!(file && (file->f_path.mnt->mnt_flags & MNT_NOEXEC)))
  			prot |= PROT_EXEC;
  
-@@ -1236,7 +1317,7 @@ unsigned long do_mmap_pgoff(struct file
+@@ -1236,7 +1325,7 @@ unsigned long do_mmap_pgoff(struct file
  	/* Obtain the address to map to. we verify (or select) it and ensure
  	 * that it represents a valid section of the address space.
  	 */
@@ -65833,7 +65861,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (addr & ~PAGE_MASK)
  		return addr;
  
-@@ -1247,6 +1328,28 @@ unsigned long do_mmap_pgoff(struct file
+@@ -1247,6 +1336,28 @@ unsigned long do_mmap_pgoff(struct file
  	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
  			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
  
@@ -65862,7 +65890,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (flags & MAP_LOCKED)
  		if (!can_do_mlock())
  			return -EPERM;
-@@ -1435,7 +1538,7 @@ int vma_wants_writenotify(struct vm_area
+@@ -1435,7 +1546,7 @@ int vma_wants_writenotify(struct vm_area
  	vm_flags_t vm_flags = vma->vm_flags;
  
  	/* If it was private or non-writable, the write bit is already clear */
@@ -65871,7 +65899,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		return 0;
  
  	/* The backer wishes to know when pages are first written to? */
-@@ -1481,7 +1584,22 @@ unsigned long mmap_region(struct file *f
+@@ -1481,7 +1592,22 @@ unsigned long mmap_region(struct file *f
  	struct rb_node **rb_link, *rb_parent;
  	unsigned long charged = 0;
  
@@ -65894,7 +65922,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (!may_expand_vm(mm, len >> PAGE_SHIFT)) {
  		unsigned long nr_pages;
  
-@@ -1500,11 +1618,10 @@ unsigned long mmap_region(struct file *f
+@@ -1500,11 +1626,10 @@ unsigned long mmap_region(struct file *f
  
  	/* Clear old maps */
  	error = -ENOMEM;
@@ -65907,7 +65935,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	}
  
  	/*
-@@ -1535,6 +1652,16 @@ munmap_back:
+@@ -1535,6 +1660,16 @@ munmap_back:
  		goto unacct_error;
  	}
  
@@ -65924,7 +65952,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	vma->vm_mm = mm;
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
-@@ -1554,6 +1681,13 @@ munmap_back:
+@@ -1554,6 +1689,13 @@ munmap_back:
  		if (error)
  			goto unmap_and_free_vma;
  
@@ -65938,7 +65966,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		/* Can addr have changed??
  		 *
  		 * Answer: Yes, several device drivers can do it in their
-@@ -1587,6 +1721,12 @@ munmap_back:
+@@ -1587,6 +1729,12 @@ munmap_back:
  	}
  
  	vma_link(mm, vma, prev, rb_link, rb_parent);
@@ -65951,7 +65979,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	/* Once vma denies write, undo our temporary denial count */
  	if (vm_flags & VM_DENYWRITE)
  		allow_write_access(file);
-@@ -1595,6 +1735,7 @@ out:
+@@ -1595,6 +1743,7 @@ out:
  	perf_event_mmap(vma);
  
  	vm_stat_account(mm, vm_flags, file, len >> PAGE_SHIFT);
@@ -65959,7 +65987,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (vm_flags & VM_LOCKED) {
  		if (!((vm_flags & VM_SPECIAL) || is_vm_hugetlb_page(vma) ||
  					vma == get_gate_vma(current->mm)))
-@@ -1627,6 +1768,12 @@ unmap_and_free_vma:
+@@ -1627,6 +1776,12 @@ unmap_and_free_vma:
  	unmap_region(mm, vma, prev, vma->vm_start, vma->vm_end);
  	charged = 0;
  free_vma:
@@ -65972,7 +66000,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	kmem_cache_free(vm_area_cachep, vma);
  unacct_error:
  	if (charged)
-@@ -1634,7 +1781,45 @@ unacct_error:
+@@ -1634,7 +1789,45 @@ unacct_error:
  	return error;
  }
  
@@ -66019,7 +66047,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  {
  	/*
  	 * We implement the search by looking for an rbtree node that
-@@ -1687,6 +1872,18 @@ check_current:
+@@ -1687,6 +1880,18 @@ check_current:
  		/* Check if current node has a suitable gap */
  		if (gap_start > high_limit)
  			return -ENOMEM;
@@ -66038,7 +66066,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		if (gap_end >= low_limit && gap_end - gap_start >= length)
  			goto found;
  
-@@ -1736,7 +1933,7 @@ found:
+@@ -1736,7 +1941,7 @@ found:
  	return gap_start;
  }
  
@@ -66047,7 +66075,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  {
  	struct mm_struct *mm = current->mm;
  	struct vm_area_struct *vma;
-@@ -1790,6 +1987,18 @@ check_current:
+@@ -1790,6 +1995,18 @@ check_current:
  		gap_end = vma->vm_start;
  		if (gap_end < low_limit)
  			return -ENOMEM;
@@ -66066,7 +66094,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		if (gap_start <= high_limit && gap_end - gap_start >= length)
  			goto found;
  
-@@ -1860,11 +2069,15 @@ arch_get_unmapped_area(struct file *filp
+@@ -1860,11 +2077,15 @@ arch_get_unmapped_area(struct file *filp
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -66083,7 +66111,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  			return addr;
  	}
  
-@@ -1899,12 +2112,16 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1899,12 +2120,16 @@ arch_get_unmapped_area_topdown(struct fi
  	if (flags & MAP_FIXED)
  		return addr;
  
@@ -66101,7 +66129,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  			return addr;
  	}
  
-@@ -1925,6 +2142,12 @@ arch_get_unmapped_area_topdown(struct fi
+@@ -1925,6 +2150,12 @@ arch_get_unmapped_area_topdown(struct fi
  		VM_BUG_ON(addr != -ENOMEM);
  		info.flags = 0;
  		info.low_limit = TASK_UNMAPPED_BASE;
@@ -66114,7 +66142,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		info.high_limit = TASK_SIZE;
  		addr = vm_unmapped_area(&info);
  	}
-@@ -2026,6 +2249,28 @@ find_vma_prev(struct mm_struct *mm, unsi
+@@ -2026,6 +2257,28 @@ find_vma_prev(struct mm_struct *mm, unsi
  	return vma;
  }
  
@@ -66143,7 +66171,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  /*
   * Verify that the stack growth is acceptable and
   * update accounting. This is shared with both the
-@@ -2084,34 +2329,42 @@ static int acct_stack_growth(struct vm_a
+@@ -2084,34 +2337,42 @@ static int acct_stack_growth(struct vm_a
  int expand_upwards(struct vm_area_struct *vma, unsigned long address)
  {
  	int error;
@@ -66195,7 +66223,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		unsigned long size, grow;
  
  		size = address - vma->vm_start;
-@@ -2146,6 +2399,8 @@ int expand_upwards(struct vm_area_struct
+@@ -2146,6 +2407,8 @@ int expand_upwards(struct vm_area_struct
  			}
  		}
  	}
@@ -66204,7 +66232,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	vma_unlock_anon_vma(vma);
  	khugepaged_enter_vma_merge(vma);
  	validate_mm(vma->vm_mm);
-@@ -2160,6 +2415,8 @@ int expand_downwards(struct vm_area_stru
+@@ -2160,6 +2423,8 @@ int expand_downwards(struct vm_area_stru
  				   unsigned long address)
  {
  	int error;
@@ -66213,7 +66241,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  
  	/*
  	 * We must make sure the anon_vma is allocated
-@@ -2173,6 +2430,15 @@ int expand_downwards(struct vm_area_stru
+@@ -2173,6 +2438,15 @@ int expand_downwards(struct vm_area_stru
  	if (error)
  		return error;
  
@@ -66229,7 +66257,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	vma_lock_anon_vma(vma);
  
  	/*
-@@ -2182,9 +2448,17 @@ int expand_downwards(struct vm_area_stru
+@@ -2182,9 +2456,17 @@ int expand_downwards(struct vm_area_stru
  	 */
  
  	/* Somebody else might have raced and expanded it already */
@@ -66248,7 +66276,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		size = vma->vm_end - address;
  		grow = (vma->vm_start - address) >> PAGE_SHIFT;
  
-@@ -2209,13 +2483,27 @@ int expand_downwards(struct vm_area_stru
+@@ -2209,13 +2491,27 @@ int expand_downwards(struct vm_area_stru
  				vma->vm_pgoff -= grow;
  				anon_vma_interval_tree_post_update_vma(vma);
  				vma_gap_update(vma);
@@ -66276,7 +66304,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	khugepaged_enter_vma_merge(vma);
  	validate_mm(vma->vm_mm);
  	return error;
-@@ -2313,6 +2601,13 @@ static void remove_vma_list(struct mm_st
+@@ -2313,6 +2609,13 @@ static void remove_vma_list(struct mm_st
  	do {
  		long nrpages = vma_pages(vma);
  
@@ -66290,7 +66318,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		if (vma->vm_flags & VM_ACCOUNT)
  			nr_accounted += nrpages;
  		vm_stat_account(mm, vma->vm_flags, vma->vm_file, -nrpages);
-@@ -2357,6 +2652,16 @@ detach_vmas_to_be_unmapped(struct mm_str
+@@ -2357,6 +2660,16 @@ detach_vmas_to_be_unmapped(struct mm_str
  	insertion_point = (prev ? &prev->vm_next : &mm->mmap);
  	vma->vm_prev = NULL;
  	do {
@@ -66307,7 +66335,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		vma_rb_erase(vma, &mm->mm_rb);
  		mm->map_count--;
  		tail_vma = vma;
-@@ -2382,14 +2687,33 @@ static int __split_vma(struct mm_struct
+@@ -2382,14 +2695,33 @@ static int __split_vma(struct mm_struct
  	struct vm_area_struct *new;
  	int err = -ENOMEM;
  
@@ -66341,7 +66369,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	/* most fields are the same, copy all, and then fixup */
  	*new = *vma;
  
-@@ -2402,6 +2726,22 @@ static int __split_vma(struct mm_struct
+@@ -2402,6 +2734,22 @@ static int __split_vma(struct mm_struct
  		new->vm_pgoff += ((addr - vma->vm_start) >> PAGE_SHIFT);
  	}
  
@@ -66364,7 +66392,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	err = vma_dup_policy(vma, new);
  	if (err)
  		goto out_free_vma;
-@@ -2421,6 +2761,38 @@ static int __split_vma(struct mm_struct
+@@ -2421,6 +2769,38 @@ static int __split_vma(struct mm_struct
  	else
  		err = vma_adjust(vma, vma->vm_start, addr, vma->vm_pgoff, new);
  
@@ -66403,7 +66431,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	/* Success. */
  	if (!err)
  		return 0;
-@@ -2430,10 +2802,18 @@ static int __split_vma(struct mm_struct
+@@ -2430,10 +2810,18 @@ static int __split_vma(struct mm_struct
  		new->vm_ops->close(new);
  	if (new->vm_file)
  		fput(new->vm_file);
@@ -66423,7 +66451,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	kmem_cache_free(vm_area_cachep, new);
   out_err:
  	return err;
-@@ -2446,6 +2826,15 @@ static int __split_vma(struct mm_struct
+@@ -2446,6 +2834,15 @@ static int __split_vma(struct mm_struct
  int split_vma(struct mm_struct *mm, struct vm_area_struct *vma,
  	      unsigned long addr, int new_below)
  {
@@ -66439,7 +66467,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if (mm->map_count >= sysctl_max_map_count)
  		return -ENOMEM;
  
-@@ -2457,11 +2846,30 @@ int split_vma(struct mm_struct *mm, stru
+@@ -2457,11 +2854,30 @@ int split_vma(struct mm_struct *mm, stru
   * work.  This now handles partial unmappings.
   * Jeremy Fitzhardinge <jeremy@goop.org>
   */
@@ -66470,7 +66498,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	if ((start & ~PAGE_MASK) || start > TASK_SIZE || len > TASK_SIZE-start)
  		return -EINVAL;
  
-@@ -2536,6 +2944,8 @@ int do_munmap(struct mm_struct *mm, unsi
+@@ -2536,6 +2952,8 @@ int do_munmap(struct mm_struct *mm, unsi
  	/* Fix up all other VM information */
  	remove_vma_list(mm, vma);
  
@@ -66479,7 +66507,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	return 0;
  }
  
-@@ -2544,6 +2954,13 @@ int vm_munmap(unsigned long start, size_
+@@ -2544,6 +2962,13 @@ int vm_munmap(unsigned long start, size_
  	int ret;
  	struct mm_struct *mm = current->mm;
  
@@ -66493,7 +66521,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	down_write(&mm->mmap_sem);
  	ret = do_munmap(mm, start, len);
  	up_write(&mm->mmap_sem);
-@@ -2557,16 +2974,6 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
+@@ -2557,16 +2982,6 @@ SYSCALL_DEFINE2(munmap, unsigned long, a
  	return vm_munmap(addr, len);
  }
  
@@ -66510,7 +66538,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  /*
   *  this is really a simplified "do_mmap".  it only handles
   *  anonymous maps.  eventually we may be able to do some
-@@ -2580,6 +2987,7 @@ static unsigned long do_brk(unsigned lon
+@@ -2580,6 +2995,7 @@ static unsigned long do_brk(unsigned lon
  	struct rb_node ** rb_link, * rb_parent;
  	pgoff_t pgoff = addr >> PAGE_SHIFT;
  	int error;
@@ -66518,7 +66546,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  
  	len = PAGE_ALIGN(len);
  	if (!len)
-@@ -2587,16 +2995,30 @@ static unsigned long do_brk(unsigned lon
+@@ -2587,16 +3003,30 @@ static unsigned long do_brk(unsigned lon
  
  	flags = VM_DATA_DEFAULT_FLAGS | VM_ACCOUNT | mm->def_flags;
  
@@ -66550,7 +66578,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		locked += mm->locked_vm;
  		lock_limit = rlimit(RLIMIT_MEMLOCK);
  		lock_limit >>= PAGE_SHIFT;
-@@ -2613,21 +3035,20 @@ static unsigned long do_brk(unsigned lon
+@@ -2613,21 +3043,20 @@ static unsigned long do_brk(unsigned lon
  	/*
  	 * Clear old maps.  this also does some error checking for us
  	 */
@@ -66575,7 +66603,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		return -ENOMEM;
  
  	/* Can we just expand an old private anonymous mapping? */
-@@ -2641,7 +3062,7 @@ static unsigned long do_brk(unsigned lon
+@@ -2641,7 +3070,7 @@ static unsigned long do_brk(unsigned lon
  	 */
  	vma = kmem_cache_zalloc(vm_area_cachep, GFP_KERNEL);
  	if (!vma) {
@@ -66584,7 +66612,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		return -ENOMEM;
  	}
  
-@@ -2655,10 +3076,11 @@ static unsigned long do_brk(unsigned lon
+@@ -2655,10 +3084,11 @@ static unsigned long do_brk(unsigned lon
  	vma_link(mm, vma, prev, rb_link, rb_parent);
  out:
  	perf_event_mmap(vma);
@@ -66598,7 +66626,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	return addr;
  }
  
-@@ -2720,6 +3142,7 @@ void exit_mmap(struct mm_struct *mm)
+@@ -2720,6 +3150,7 @@ void exit_mmap(struct mm_struct *mm)
  	while (vma) {
  		if (vma->vm_flags & VM_ACCOUNT)
  			nr_accounted += vma_pages(vma);
@@ -66606,7 +66634,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  		vma = remove_vma(vma);
  	}
  	vm_unacct_memory(nr_accounted);
-@@ -2737,6 +3160,10 @@ int insert_vm_struct(struct mm_struct *m
+@@ -2737,6 +3168,10 @@ int insert_vm_struct(struct mm_struct *m
  	struct vm_area_struct *prev;
  	struct rb_node **rb_link, *rb_parent;
  
@@ -66617,7 +66645,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	/*
  	 * The vm_pgoff of a purely anonymous vma should be irrelevant
  	 * until its first write fault, when page's anon_vma and index
-@@ -2760,7 +3187,21 @@ int insert_vm_struct(struct mm_struct *m
+@@ -2760,7 +3195,21 @@ int insert_vm_struct(struct mm_struct *m
  	     security_vm_enough_memory_mm(mm, vma_pages(vma)))
  		return -ENOMEM;
  
@@ -66639,7 +66667,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	return 0;
  }
  
-@@ -2779,6 +3220,8 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2779,6 +3228,8 @@ struct vm_area_struct *copy_vma(struct v
  	struct rb_node **rb_link, *rb_parent;
  	bool faulted_in_anon_vma = true;
  
@@ -66648,7 +66676,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  	/*
  	 * If anonymous vma has not yet been faulted, update new pgoff
  	 * to match new location, to increase its chance of merging.
-@@ -2843,6 +3286,39 @@ struct vm_area_struct *copy_vma(struct v
+@@ -2843,6 +3294,39 @@ struct vm_area_struct *copy_vma(struct v
  	return NULL;
  }
  
@@ -66688,7 +66716,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/mm/mmap.c linux-3.1
  /*
   * Return true if the calling process may expand its vm space by the passed
   * number of pages
-@@ -2924,6 +3400,17 @@ int install_special_mapping(struct mm_st
+@@ -2924,6 +3408,17 @@ int install_special_mapping(struct mm_st
  	vma->vm_start = addr;
  	vma->vm_end = addr + len;
  
@@ -69186,7 +69214,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/net/ceph/messenger.
  	switch (ss->ss_family) {
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/net/compat.c linux-3.13-pax/net/compat.c
 --- linux-3.13/net/compat.c	2014-01-20 12:36:54.372997752 +0100
-+++ linux-3.13-pax/net/compat.c	2014-01-26 05:59:21.893704874 +0100
++++ linux-3.13-pax/net/compat.c	2014-01-26 23:56:45.384846975 +0100
 @@ -73,9 +73,9 @@ int get_compat_msghdr(struct msghdr *kms
  		return -EFAULT;
  	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
@@ -76501,8 +76529,8 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/constify_
 +}
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/gcc-common.h linux-3.13-pax/tools/gcc/gcc-common.h
 --- linux-3.13/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13-pax/tools/gcc/gcc-common.h	2014-01-27 02:26:42.649111510 +0100
-@@ -0,0 +1,265 @@
++++ linux-3.13-pax/tools/gcc/gcc-common.h	2014-01-28 04:46:24.124995482 +0100
+@@ -0,0 +1,267 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -76747,6 +76775,8 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/gcc-commo
 +	gcc_assert(code < MAX_TREE_CODES);
 +	return tree_code_name[code];
 +}
++
++#define ipa_remove_stmt_references(cnode, stmt)
 +#endif
 +
 +#if BUILDING_GCC_VERSION == 4008
@@ -77960,8 +77990,8 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/Makefile 
 +targets += size_overflow_hash.h
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_overflow_hash.data linux-3.13-pax/tools/gcc/size_overflow_hash.data
 --- linux-3.13/tools/gcc/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13-pax/tools/gcc/size_overflow_hash.data	2014-01-26 18:40:10.332288486 +0100
-@@ -0,0 +1,5670 @@
++++ linux-3.13-pax/tools/gcc/size_overflow_hash.data	2014-01-28 04:42:21.137008456 +0100
+@@ -0,0 +1,5697 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +ocfs2_get_refcount_tree_3 ocfs2_get_refcount_tree 0 3 NULL
 +storvsc_connect_to_vsp_22 storvsc_connect_to_vsp 2 22 NULL
@@ -78239,6 +78269,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +__iovec_copy_from_user_inatomic_3314 __iovec_copy_from_user_inatomic 0-4-3 3314 NULL
 +dbDiscardAG_3322 dbDiscardAG 3 3322 NULL
 +compat_sys_setsockopt_3326 compat_sys_setsockopt 5 3326 NULL
++ocfs2_extend_xattr_bucket_3328 ocfs2_extend_xattr_bucket 4 3328 NULL
 +read_from_oldmem_3337 read_from_oldmem 2 3337 NULL
 +sysfs_create_group_3339 sysfs_create_group 0 3339 NULL
 +tty_port_register_device_attr_3341 tty_port_register_device_attr 3 3341 NULL
@@ -78888,6 +78919,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +insert_inline_extent_backref_11063 insert_inline_extent_backref 8 11063 NULL
 +tcp_send_mss_11079 tcp_send_mss 0 11079 NULL
 +count_argc_11083 count_argc 0 11083 NULL
++ocfs2_blocks_per_xattr_bucket_11099 ocfs2_blocks_per_xattr_bucket 0 11099 NULL
 +kvm_write_guest_cached_11106 kvm_write_guest_cached 4 11106 NULL
 +tw_change_queue_depth_11116 tw_change_queue_depth 2 11116 NULL
 +page_offset_11120 page_offset 0 11120 NULL
@@ -78920,7 +78952,8 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +str_to_user_11411 str_to_user 2 11411 NULL
 +mem_fw_gen_free_mem_blks_read_11413 mem_fw_gen_free_mem_blks_read 3 11413 NULL
 +ath6kl_wmi_test_rx_11414 ath6kl_wmi_test_rx 3 11414 NULL
-+adis16480_show_firmware_revision_11417 adis16480_show_firmware_revision 3 11417 NULL
++adis16480_show_firmware_revision_11417 adis16480_show_firmware_revision 3 11417 NULL nohasharray
++import_sec_validate_get_11417 import_sec_validate_get 0 11417 &adis16480_show_firmware_revision_11417
 +trace_options_read_11419 trace_options_read 3 11419 NULL
 +i40e_dbg_command_write_11421 i40e_dbg_command_write 3 11421 NULL
 +xd_read_multiple_pages_11422 xd_read_multiple_pages 5-4 11422 NULL
@@ -79013,6 +79046,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +write_file_dump_12391 write_file_dump 3 12391 &populate_dir_12391
 +hbucket_elem_add_12416 hbucket_elem_add 3 12416 NULL
 +ieee80211_if_read_num_mcast_sta_12419 ieee80211_if_read_num_mcast_sta 3 12419 NULL
++ptlrpc_set_wait_12426 ptlrpc_set_wait 0 12426 NULL
 +cfs_array_alloc_12441 cfs_array_alloc 2 12441 NULL
 +skb_do_copy_data_nocache_12465 skb_do_copy_data_nocache 5 12465 NULL
 +x25_sendmsg_12487 x25_sendmsg 4 12487 NULL
@@ -79030,6 +79064,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +nr_recvmsg_12649 nr_recvmsg 4 12649 NULL
 +rtw_android_get_link_speed_12655 rtw_android_get_link_speed 0 12655 NULL
 +ocfs2_read_block_12659 ocfs2_read_block 0 12659 NULL
++lustre_pack_request_v2_12665 lustre_pack_request_v2 0 12665 NULL
 +sel_read_class_12669 sel_read_class 3 12669 NULL nohasharray
 +sparse_mem_maps_populate_node_12669 sparse_mem_maps_populate_node 4 12669 &sel_read_class_12669
 +iwl_dbgfs_calib_disabled_write_12707 iwl_dbgfs_calib_disabled_write 3 12707 NULL
@@ -79068,6 +79103,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +snd_rme96_playback_copy_13111 snd_rme96_playback_copy 5 13111 NULL
 +bfad_debugfs_read_13119 bfad_debugfs_read 3 13119 NULL
 +blk_update_request_13146 blk_update_request 3 13146 NULL
++ocfs2_quota_trans_credits_13150 ocfs2_quota_trans_credits 0 13150 NULL
 +caif_stream_recvmsg_13173 caif_stream_recvmsg 4 13173 NULL
 +pwr_disable_ps_read_13176 pwr_disable_ps_read 3 13176 NULL
 +ucs2_strlen_13178 ucs2_strlen 0 13178 NULL
@@ -79427,6 +79463,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +hmac_sha256_17278 hmac_sha256 2 17278 NULL
 +neigh_hash_grow_17283 neigh_hash_grow 2 17283 NULL
 +minstrel_stats_read_17290 minstrel_stats_read 3 17290 NULL
++__ptlrpc_request_bufs_pack_17298 __ptlrpc_request_bufs_pack 0 17298 NULL
 +ieee80211_if_fmt_dot11MeshForwarding_17301 ieee80211_if_fmt_dot11MeshForwarding 3 17301 NULL
 +mb_cache_create_17307 mb_cache_create 2 17307 NULL
 +gnttab_map_frames_v2_17314 gnttab_map_frames_v2 2 17314 NULL
@@ -79451,6 +79488,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +osst_execute_17607 osst_execute 7-6 17607 NULL
 +ieee80211_if_read_dot11MeshHWMPactivePathToRootTimeout_17618 ieee80211_if_read_dot11MeshHWMPactivePathToRootTimeout 3 17618 NULL
 +dma_map_page_17628 dma_map_page 0 17628 NULL
++ocfs2_rotate_subtree_left_17634 ocfs2_rotate_subtree_left 5 17634 NULL
 +twl4030_set_gpio_direction_17645 twl4030_set_gpio_direction 1 17645 NULL
 +SYSC_migrate_pages_17657 SYSC_migrate_pages 2 17657 NULL
 +packet_setsockopt_17662 packet_setsockopt 5 17662 NULL
@@ -79673,6 +79711,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +get_jack_mode_name_19976 get_jack_mode_name 4 19976 NULL
 +attach_hdlc_protocol_19986 attach_hdlc_protocol 3 19986 NULL
 +rtw_set_wps_probe_resp_19989 rtw_set_wps_probe_resp 3 19989 NULL
++lustre_pack_request_19992 lustre_pack_request 0 19992 NULL
 +diva_um_idi_read_20003 diva_um_idi_read 0 20003 NULL
 +lov_stripe_md_size_20009 lov_stripe_md_size 0-1 20009 NULL
 +SYSC_fgetxattr_20027 SYSC_fgetxattr 4 20027 NULL
@@ -79781,6 +79820,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +bl_add_page_to_bio_21094 bl_add_page_to_bio 2 21094 NULL nohasharray
 +multipath_status_21094 multipath_status 5 21094 &bl_add_page_to_bio_21094
 +rate_control_pid_events_read_21099 rate_control_pid_events_read 3 21099 NULL
++ocfs2_extend_meta_needed_21104 ocfs2_extend_meta_needed 0 21104 NULL
 +ath6kl_send_go_probe_resp_21113 ath6kl_send_go_probe_resp 3 21113 NULL
 +i2400m_rx_trace_21127 i2400m_rx_trace 3 21127 NULL
 +cx18_v4l2_read_21196 cx18_v4l2_read 3 21196 NULL
@@ -79798,6 +79838,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +get_zeroed_page_21322 get_zeroed_page 0 21322 NULL
 +ftrace_profile_read_21327 ftrace_profile_read 3 21327 NULL
 +read_file_bool_bmps_21344 read_file_bool_bmps 3 21344 NULL
++ocfs2_find_subtree_root_21351 ocfs2_find_subtree_root 0 21351 NULL
 +gfs2_ea_get_copy_21353 gfs2_ea_get_copy 0 21353 NULL
 +alloc_orinocodev_21371 alloc_orinocodev 1 21371 NULL
 +SYSC_rt_sigpending_21379 SYSC_rt_sigpending 2 21379 NULL
@@ -80543,6 +80584,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +read_4k_modal_eeprom_30212 read_4k_modal_eeprom 3 30212 NULL
 +SyS_semop_30227 SyS_semop 3 30227 NULL
 +bitmap_file_set_bit_30228 bitmap_file_set_bit 2 30228 NULL
++ocfs2_calc_bg_discontig_credits_30230 ocfs2_calc_bg_discontig_credits 0 30230 NULL
 +rawv6_recvmsg_30265 rawv6_recvmsg 4 30265 NULL
 +hfsplus_trusted_setxattr_30270 hfsplus_trusted_setxattr 4 30270 NULL
 +isr_pci_pm_read_30271 isr_pci_pm_read 3 30271 NULL
@@ -80708,6 +80750,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +aead_len_32021 aead_len 0 32021 NULL
 +posix_acl_set_32037 posix_acl_set 4 32037 NULL
 +stk_read_32038 stk_read 3 32038 NULL
++ocfs2_update_edge_lengths_32046 ocfs2_update_edge_lengths 3 32046 NULL
 +SYSC_llistxattr_32061 SYSC_llistxattr 3 32061 NULL
 +proc_scsi_devinfo_write_32064 proc_scsi_devinfo_write 3 32064 NULL
 +cow_file_range_inline_32091 cow_file_range_inline 3 32091 NULL
@@ -80905,6 +80948,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +mwifiex_regrdwr_read_34472 mwifiex_regrdwr_read 3 34472 NULL
 +skcipher_sndbuf_34476 skcipher_sndbuf 0 34476 NULL
 +i2o_parm_field_get_34477 i2o_parm_field_get 5 34477 NULL
++ocfs2_mv_xattr_buckets_34484 ocfs2_mv_xattr_buckets 6 34484 NULL
 +security_inode_permission_34488 security_inode_permission 0 34488 NULL
 +SyS_pwritev_34494 SyS_pwritev 3 34494 NULL
 +qp_alloc_res_34496 qp_alloc_res 5 34496 NULL
@@ -81016,6 +81060,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +SYSC_pwritev_35690 SYSC_pwritev 3 35690 NULL
 +rds_page_copy_user_35691 rds_page_copy_user 4 35691 NULL
 +md_super_write_35703 md_super_write 4 35703 NULL
++ocfs2_extent_recs_per_gd_35710 ocfs2_extent_recs_per_gd 0 35710 NULL
 +iwl_dbgfs_disable_ht40_read_35761 iwl_dbgfs_disable_ht40_read 3 35761 NULL
 +udf_alloc_i_data_35786 udf_alloc_i_data 2 35786 NULL
 +pvr2_hdw_cpufw_get_35824 pvr2_hdw_cpufw_get 0-4-2 35824 NULL
@@ -81168,6 +81213,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +exofs_max_io_pages_37263 exofs_max_io_pages 0-2 37263 NULL
 +ieee80211_if_read_power_mode_37305 ieee80211_if_read_power_mode 3 37305 NULL
 +ext3_direct_IO_37308 ext3_direct_IO 4 37308 NULL
++ocfs2_calc_extend_credits_37310 ocfs2_calc_extend_credits 0 37310 NULL
 +jffs2_write_dirent_37311 jffs2_write_dirent 5 37311 NULL
 +send_msg_37323 send_msg 4 37323 NULL
 +l2cap_create_connless_pdu_37327 l2cap_create_connless_pdu 3 37327 NULL nohasharray
@@ -81591,6 +81637,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +sk_chk_filter_42095 sk_chk_filter 2 42095 NULL
 +submit_inquiry_42108 submit_inquiry 3 42108 NULL
 +dw_dma_cyclic_prep_42113 dw_dma_cyclic_prep 3-4 42113 NULL
++obd_get_info_42156 obd_get_info 0 42156 NULL
 +blk_ioctl_zeroout_42160 blk_ioctl_zeroout 3 42160 NULL
 +mmc_align_data_size_42161 mmc_align_data_size 0-2 42161 NULL
 +read_file_base_eeprom_42168 read_file_base_eeprom 3 42168 NULL
@@ -81652,6 +81699,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +isku_sysfs_read_info_42781 isku_sysfs_read_info 6 42781 &cryptd_hash_setkey_42781
 +elfcorehdr_read_notes_42786 elfcorehdr_read_notes 2 42786 NULL
 +koneplus_sysfs_read_42792 koneplus_sysfs_read 6 42792 NULL
++ptlrpc_request_bufs_pack_42793 ptlrpc_request_bufs_pack 0 42793 NULL
 +ntfs_attr_extend_allocation_42796 ntfs_attr_extend_allocation 0 42796 NULL
 +fw_device_op_compat_ioctl_42804 fw_device_op_compat_ioctl 2 42804 NULL
 +drm_ioctl_42813 drm_ioctl 2 42813 NULL
@@ -81804,6 +81852,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +sysfs_create_link_44685 sysfs_create_link 0 44685 NULL
 +ts_read_44687 ts_read 3 44687 NULL
 +lov_emerg_alloc_44698 lov_emerg_alloc 1 44698 NULL
++__ocfs2_rotate_tree_left_44705 __ocfs2_rotate_tree_left 3 44705 NULL
 +xfer_to_user_44713 xfer_to_user 3 44713 NULL nohasharray
 +__generic_block_fiemap_44713 __generic_block_fiemap 4 44713 &xfer_to_user_44713
 +_zd_iowrite32v_locked_44725 _zd_iowrite32v_locked 3 44725 NULL
@@ -81942,6 +81991,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +xen_setup_msi_irqs_46245 xen_setup_msi_irqs 2 46245 NULL
 +mpi_read_raw_data_46248 mpi_read_raw_data 2 46248 NULL
 +ReadReg_46277 ReadReg 0 46277 NULL
++sptlrpc_req_get_ctx_46303 sptlrpc_req_get_ctx 0 46303 NULL
 +sg_proc_write_dressz_46316 sg_proc_write_dressz 3 46316 NULL
 +__hwahc_dev_set_key_46328 __hwahc_dev_set_key 5 46328 NULL nohasharray
 +compat_SyS_readv_46328 compat_SyS_readv 3 46328 &__hwahc_dev_set_key_46328
@@ -82169,6 +82219,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +vc_do_resize_48842 vc_do_resize 3-4 48842 NULL
 +comedi_buf_write_alloc_48846 comedi_buf_write_alloc 0-2 48846 NULL
 +suspend_dtim_interval_write_48854 suspend_dtim_interval_write 3 48854 NULL
++sptlrpc_cli_alloc_reqbuf_48855 sptlrpc_cli_alloc_reqbuf 0 48855 NULL
 +C_SYSC_pwritev64_48864 C_SYSC_pwritev64 3 48864 NULL nohasharray
 +viafb_dvp1_proc_write_48864 viafb_dvp1_proc_write 3 48864 &C_SYSC_pwritev64_48864
 +__ffs_ep0_read_events_48868 __ffs_ep0_read_events 3 48868 NULL
@@ -82922,7 +82973,8 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +vlsi_alloc_ring_57003 vlsi_alloc_ring 3-4 57003 NULL
 +btrfs_super_csum_size_57004 btrfs_super_csum_size 0 57004 NULL
 +aircable_process_packet_57027 aircable_process_packet 4 57027 NULL
-+ieee80211_if_fmt_state_57043 ieee80211_if_fmt_state 3 57043 NULL
++ieee80211_if_fmt_state_57043 ieee80211_if_fmt_state 3 57043 NULL nohasharray
++skb_network_offset_57043 skb_network_offset 0 57043 &ieee80211_if_fmt_state_57043
 +bytes_to_samples_57049 bytes_to_samples 0-2 57049 NULL
 +xfs_buf_read_map_57053 xfs_buf_read_map 3 57053 NULL
 +cx2341x_ctrl_new_std_57061 cx2341x_ctrl_new_std 4 57061 NULL
@@ -83087,6 +83139,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +lprocfs_wr_pinger_recov_58914 lprocfs_wr_pinger_recov 3 58914 NULL
 +print_devstats_dot11FCSErrorCount_58919 print_devstats_dot11FCSErrorCount 3 58919 NULL
 +pipeline_cs_rx_packet_out_read_58926 pipeline_cs_rx_packet_out_read 3 58926 NULL
++sptlrpc_import_sec_adapt_58948 sptlrpc_import_sec_adapt 0 58948 NULL
 +wait_table_hash_nr_entries_58962 wait_table_hash_nr_entries 0 58962 NULL
 +ieee80211_if_fmt_dot11MeshHWMPactivePathToRootTimeout_58965 ieee80211_if_fmt_dot11MeshHWMPactivePathToRootTimeout 3 58965 NULL
 +crypto_aead_ivsize_58970 crypto_aead_ivsize 0 58970 NULL
@@ -83106,6 +83159,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +framebuffer_alloc_59145 framebuffer_alloc 1 59145 &print_devstats_dot11RTSSuccessCount_59145
 +radeon_compat_ioctl_59150 radeon_compat_ioctl 2 59150 NULL
 +pvr2_hdw_report_clients_59152 pvr2_hdw_report_clients 3 59152 NULL
++md_getxattr_59161 md_getxattr 0 59161 NULL
 +ksize_59176 ksize 0 59176 NULL
 +setup_window_59178 setup_window 4-2-5-7 59178 NULL
 +ocfs2_move_extent_59187 ocfs2_move_extent 2-5 59187 NULL
@@ -83169,6 +83223,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +pvr2_ioread_set_sync_key_59882 pvr2_ioread_set_sync_key 3 59882 NULL
 +l2cap_sock_recvmsg_59886 l2cap_sock_recvmsg 4 59886 NULL
 +ffs_prepare_buffer_59892 ffs_prepare_buffer 2 59892 NULL
++ocfs2_extend_rotate_transaction_59894 ocfs2_extend_rotate_transaction 2-3 59894 NULL
 +aic7xxx_abort_waiting_scb_59932 aic7xxx_abort_waiting_scb 0 59932 NULL
 +kvm_mmu_notifier_invalidate_range_start_59944 kvm_mmu_notifier_invalidate_range_start 3-4 59944 NULL
 +dapm_widget_power_read_file_59950 dapm_widget_power_read_file 3 59950 NULL nohasharray
@@ -83332,7 +83387,8 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +btrfs_ioctl_clone_61886 btrfs_ioctl_clone 3-4-5 61886 NULL
 +lprocfs_write_frac_u64_helper_61897 lprocfs_write_frac_u64_helper 2 61897 NULL
 +lov_mds_md_stripecnt_61899 lov_mds_md_stripecnt 0-1 61899 NULL
-+clear_refs_write_61904 clear_refs_write 3 61904 NULL
++clear_refs_write_61904 clear_refs_write 3 61904 NULL nohasharray
++import_sec_check_expire_61904 import_sec_check_expire 0 61904 &clear_refs_write_61904
 +rx_filter_arp_filter_read_61914 rx_filter_arp_filter_read 3 61914 NULL
 +au0828_init_isoc_61917 au0828_init_isoc 3-2-4 61917 NULL
 +sctp_sendmsg_61919 sctp_sendmsg 4 61919 NULL
@@ -83377,6 +83433,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +sparse_early_usemaps_alloc_pgdat_section_62304 sparse_early_usemaps_alloc_pgdat_section 2 62304 NULL
 +subsystem_filter_read_62310 subsystem_filter_read 3 62310 NULL
 +Wb35Reg_BurstWrite_62327 Wb35Reg_BurstWrite 4 62327 NULL
++ocfs2_xattr_buckets_per_cluster_62330 ocfs2_xattr_buckets_per_cluster 0 62330 NULL
 +subseq_list_62332 subseq_list 3-0 62332 NULL
 +ll_statahead_max_seq_write_62333 ll_statahead_max_seq_write 3 62333 NULL
 +flash_write_62354 flash_write 3 62354 NULL
@@ -83634,7 +83691,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +nvme_trans_standard_inquiry_page_65526 nvme_trans_standard_inquiry_page 4 65526 NULL
 diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_overflow_plugin.c linux-3.13-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.13/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13-pax/tools/gcc/size_overflow_plugin.c	2014-01-26 21:38:18.328602733 +0100
++++ linux-3.13-pax/tools/gcc/size_overflow_plugin.c	2014-01-28 02:52:09.000000000 +0100
 @@ -0,0 +1,4040 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
@@ -83660,7 +83717,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "201401260140",
++	.version	= "20140128",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -83701,7 +83758,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +	struct visited *next;
 +	const_tree fndecl;
 +	unsigned int num;
-+	const_gimple first_stmt;
++	const_tree rhs;
 +};
 +
 +struct next_cgraph_node {
@@ -84463,9 +84520,9 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +}
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+static tree create_new_phi_node(VEC(tree, gc) *args, tree ssa_name_var, gimple oldstmt)
++static tree create_new_phi_node(VEC(tree, heap) **args, tree ssa_name_var, gimple oldstmt)
 +#else
-+static tree create_new_phi_node(vec<tree, va_gc> *args, tree ssa_name_var, gimple oldstmt)
++static tree create_new_phi_node(vec<tree, va_heap, vl_embed> *&args, tree ssa_name_var, gimple oldstmt)
 +#endif
 +{
 +	gimple new_phi;
@@ -84474,7 +84531,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +	location_t loc = gimple_location(oldstmt);
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+	gcc_assert(!VEC_empty(tree, args));
++	gcc_assert(!VEC_empty(tree, *args));
 +#else
 +	gcc_assert(!args->is_empty());
 +#endif
@@ -84484,16 +84541,16 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +	ssa_name_var = SSA_NAME_VAR(result);
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+	FOR_EACH_VEC_ELT(tree, args, i, arg) {
++	FOR_EACH_VEC_ELT(tree, *args, i, arg) {
 +#else
-+	FOR_EACH_VEC_ELT(*args, i, arg) {
++	FOR_EACH_VEC_SAFE_ELT(args, i, arg) {
 +#endif
 +		arg = create_new_phi_arg(ssa_name_var, arg, oldstmt, i);
 +		add_phi_arg(new_phi, arg, gimple_phi_arg_edge(oldstmt, i), loc);
 +	}
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+	VEC_free(tree, gc, args);
++	VEC_free(tree, heap, *args);
 +#else
 +	vec_free(args);
 +#endif
@@ -84505,19 +84562,14 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +{
 +	tree ssa_name_var = NULL_TREE;
 +#if BUILDING_GCC_VERSION <= 4007
-+	VEC(tree, gc) *args;
++	VEC(tree, heap) *args = NULL;
 +#else
-+	vec<tree, va_gc> *args;
++	vec<tree, va_heap, vl_embed> *args = NULL;
 +#endif
 +	gimple oldstmt = get_def_stmt(orig_result);
 +	unsigned int i, len = gimple_phi_num_args(oldstmt);
 +
 +	pointer_set_insert(visited, oldstmt);
-+#if BUILDING_GCC_VERSION <= 4007
-+	args = VEC_alloc(tree, gc, len);
-+#else
-+	vec_alloc(args, len);
-+#endif
 +	for (i = 0; i < len; i++) {
 +		tree arg, new_arg;
 +
@@ -84534,13 +84586,17 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +		}
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+		VEC_safe_push(tree, gc, args, new_arg);
++		VEC_safe_push(tree, heap, args, new_arg);
 +#else
 +		vec_safe_push(args, new_arg);
 +#endif
 +	}
 +
++#if BUILDING_GCC_VERSION <= 4007
++	return create_new_phi_node(&args, ssa_name_var, oldstmt);
++#else
 +	return create_new_phi_node(args, ssa_name_var, oldstmt);
++#endif
 +}
 +
 +static tree change_assign_rhs(gimple stmt, const_tree orig_rhs, tree new_rhs)
@@ -86409,6 +86465,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +
 +	if (gimple_asm_noutputs(stmt) == 0) {
 +		gsi = gsi_for_stmt(stmt);
++		ipa_remove_stmt_references(cgraph_get_create_node(current_function_decl), stmt);
 +		gsi_remove(&gsi, true);
 +		return;
 +	}
@@ -86535,7 +86592,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +	new_visited = (struct visited *)xmalloc(sizeof(*new_visited));
 +	new_visited->fndecl = cur_node->fndecl;
 +	new_visited->num = cur_node->num;
-+	new_visited->first_stmt = cur_node->first_stmt;
++	new_visited->rhs = cur_node->node;
 +	new_visited->next = NULL;
 +
 +	if (!head)
@@ -86560,7 +86617,7 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +			continue;
 +		if (cur_node->num != cur->num)
 +			continue;
-+		if (cur_node->first_stmt == cur->first_stmt)
++		if (cur_node->node == cur->rhs)
 +			return true;
 +	}
 +	return false;
@@ -87628,8 +87685,8 @@ diff -NurpX linux-3.13-pax/Documentation/dontdiff linux-3.13/tools/gcc/size_over
 +	bool enable = true;
 +	struct register_pass_info insert_size_overflow_asm_pass_info;
 +	struct register_pass_info __unused dump_before_pass_info;
-+	struct register_pass_info ipa_pass_info;
 +	struct register_pass_info __unused dump_after_pass_info;
++	struct register_pass_info ipa_pass_info;
 +
 +	insert_size_overflow_asm_pass_info.pass				= make_insert_size_overflow_asm_pass();
 +	insert_size_overflow_asm_pass_info.reference_pass_name		= "ssa";
