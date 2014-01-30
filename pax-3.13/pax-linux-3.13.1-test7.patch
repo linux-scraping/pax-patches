@@ -1,5 +1,4 @@
-- forward port to 3.13.1
-- fixed a weak UDEREF regression resulting in a kernel hang on boot, reported by Negres
+- fixed CVE-2014-0038 (direct userland provided pointer dereference via compat_sys_recvmmsg under CONFIG_X86_X32_ABI)
 
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/alpha/include/asm/atomic.h linux-3.13.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13.1/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -69229,7 +69228,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/net/ceph/messen
  	switch (ss->ss_family) {
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/net/compat.c linux-3.13.1-pax/net/compat.c
 --- linux-3.13.1/net/compat.c	2014-01-20 12:36:54.372997752 +0100
-+++ linux-3.13.1-pax/net/compat.c	2014-01-26 23:56:45.384846975 +0100
++++ linux-3.13.1-pax/net/compat.c	2014-01-30 22:32:02.801285471 +0100
 @@ -73,9 +73,9 @@ int get_compat_msghdr(struct msghdr *kms
  		return -EFAULT;
  	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
@@ -69357,16 +69356,31 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/net/compat.c li
  	struct group_filter __user *kgf;
  	int __user	*koptlen;
  	u32 interface, fmode, numsrc;
-@@ -783,7 +783,7 @@ asmlinkage long compat_sys_recvmmsg(int
- 	if (COMPAT_USE_64BIT_TIME)
- 		return __sys_recvmmsg(fd, (struct mmsghdr __user *)mmsg, vlen,
- 				      flags | MSG_CMSG_COMPAT,
--				      (struct timespec *) timeout);
-+				      (struct timespec __force_kernel *) timeout);
+@@ -780,21 +780,16 @@ asmlinkage long compat_sys_recvmmsg(int
+ 	if (flags & MSG_CMSG_COMPAT)
+ 		return -EINVAL;
  
+-	if (COMPAT_USE_64BIT_TIME)
+-		return __sys_recvmmsg(fd, (struct mmsghdr __user *)mmsg, vlen,
+-				      flags | MSG_CMSG_COMPAT,
+-				      (struct timespec *) timeout);
+-
  	if (timeout == NULL)
  		return __sys_recvmmsg(fd, (struct mmsghdr __user *)mmsg, vlen,
-@@ -808,7 +808,7 @@ asmlinkage long compat_sys_socketcall(in
+ 				      flags | MSG_CMSG_COMPAT, NULL);
+ 
+-	if (get_compat_timespec(&ktspec, timeout))
++	if (compat_get_timespec(&ktspec, timeout))
+ 		return -EFAULT;
+ 
+ 	datagrams = __sys_recvmmsg(fd, (struct mmsghdr __user *)mmsg, vlen,
+ 				   flags | MSG_CMSG_COMPAT, &ktspec);
+-	if (datagrams > 0 && put_compat_timespec(&ktspec, timeout))
++	if (datagrams > 0 && compat_put_timespec(&ktspec, timeout))
+ 		datagrams = -EFAULT;
+ 
+ 	return datagrams;
+@@ -808,7 +803,7 @@ asmlinkage long compat_sys_socketcall(in
  
  	if (call < SYS_SOCKET || call > SYS_SENDMMSG)
  		return -EINVAL;
