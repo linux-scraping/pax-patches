@@ -1,4 +1,10 @@
-- fixed CVE-2014-0038 (direct userland provided pointer dereference via compat_sys_recvmmsg under CONFIG_X86_X32_ABI)
+- fixed compile errors on arm due to constification, reported by Michael Tremer <michael.tremer@ipfire.org>
+- fixed the PLUGIN_START_UNIT callback names in the latent entropy and size overflow plugins, reported by spender
+- added a new header to gcc-common.h, reported by spender
+- some useful backports from upstream 3.14:
+  - debug info for .S: https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=7db436325db821b400328563ed693b09f8c4c46c
+  - make v4 -s handling: https://git.kernel.org/cgit/linux/kernel/git/torvalds/linux.git/commit/?id=e36aaea28972c57a32a3ba5365e61633739719b9
+
 
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/alpha/include/asm/atomic.h linux-3.13.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13.1/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -2862,6 +2868,28 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/arm/mach-o
  	.notifier_call = irq_cpu_hotplug_notify,
  };
  
+diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/arm/mach-omap2/powerdomains43xx_data.c linux-3.13.1-pax/arch/arm/mach-omap2/powerdomains43xx_data.c
+--- linux-3.13.1/arch/arm/mach-omap2/powerdomains43xx_data.c	2014-01-20 12:35:55.577000891 +0100
++++ linux-3.13.1-pax/arch/arm/mach-omap2/powerdomains43xx_data.c	2014-02-02 22:03:56.742481644 +0100
+@@ -10,6 +10,7 @@
+ 
+ #include <linux/kernel.h>
+ #include <linux/init.h>
++#include <asm/pgtable.h>
+ 
+ #include "powerdomain.h"
+ 
+@@ -129,7 +130,9 @@ static int am43xx_check_vcvp(void)
+ 
+ void __init am43xx_powerdomains_init(void)
+ {
+-	omap4_pwrdm_operations.pwrdm_has_voltdm = am43xx_check_vcvp;
++	pax_open_kernel();
++	*(void **)&omap4_pwrdm_operations.pwrdm_has_voltdm = am43xx_check_vcvp;
++	pax_close_kernel();
+ 	pwrdm_register_platform_funcs(&omap4_pwrdm_operations);
+ 	pwrdm_register_pwrdms(powerdomains_am43xx);
+ 	pwrdm_complete_init();
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/arm/mach-omap2/wd_timer.c linux-3.13.1-pax/arch/arm/mach-omap2/wd_timer.c
 --- linux-3.13.1/arch/arm/mach-omap2/wd_timer.c	2013-08-20 19:08:15.711833394 +0200
 +++ linux-3.13.1-pax/arch/arm/mach-omap2/wd_timer.c	2014-01-20 12:46:09.416968117 +0100
@@ -16067,7 +16095,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/x86/includ
  #endif /* _ASM_X86_THREAD_INFO_H */
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/x86/include/asm/tlbflush.h linux-3.13.1-pax/arch/x86/include/asm/tlbflush.h
 --- linux-3.13.1/arch/x86/include/asm/tlbflush.h	2013-11-04 01:46:23.183116224 +0100
-+++ linux-3.13.1-pax/arch/x86/include/asm/tlbflush.h	2014-01-20 12:46:09.596968108 +0100
++++ linux-3.13.1-pax/arch/x86/include/asm/tlbflush.h	2014-02-06 18:54:27.970930815 +0100
 @@ -17,18 +17,44 @@
  
  static inline void __native_flush_tlb(void)
@@ -16119,11 +16147,10 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/x86/includ
  }
  
  static inline void __native_flush_tlb_global(void)
-@@ -49,6 +75,42 @@ static inline void __native_flush_tlb_gl
+@@ -49,6 +75,41 @@ static inline void __native_flush_tlb_gl
  
  static inline void __native_flush_tlb_single(unsigned long addr)
  {
-+
 +	if (static_cpu_has(X86_FEATURE_INVPCID)) {
 +		u64 descriptor[2];
 +
@@ -27731,7 +27758,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/x86/lib/us
  	return len;
  }
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/arch/x86/Makefile linux-3.13.1-pax/arch/x86/Makefile
---- linux-3.13.1/arch/x86/Makefile	2014-01-20 12:36:05.185000378 +0100
+--- linux-3.13.1/arch/x86/Makefile	2014-01-31 05:29:46.116648285 +0100
 +++ linux-3.13.1-pax/arch/x86/Makefile	2014-01-20 12:46:09.692968102 +0100
 @@ -49,14 +49,12 @@ ifeq ($(CONFIG_X86_32),y)
          # CPU-specific tuning. Anything which can be shared with UML should go here.
@@ -35677,6 +35704,26 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/gpio/gp
  
  	return -EINVAL;
  }
+diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/gpu/drm/armada/armada_drv.c linux-3.13.1-pax/drivers/gpu/drm/armada/armada_drv.c
+--- linux-3.13.1/drivers/gpu/drm/armada/armada_drv.c	2014-01-20 12:36:10.933000072 +0100
++++ linux-3.13.1-pax/drivers/gpu/drm/armada/armada_drv.c	2014-02-03 00:38:00.246461045 +0100
+@@ -68,15 +68,7 @@ void __armada_drm_queue_unref_work(struc
+ {
+ 	struct armada_private *priv = dev->dev_private;
+ 
+-	/*
+-	 * Yes, we really must jump through these hoops just to store a
+-	 * _pointer_ to something into the kfifo.  This is utterly insane
+-	 * and idiotic, because it kfifo requires the _data_ pointed to by
+-	 * the pointer const, not the pointer itself.  Not only that, but
+-	 * you have to pass a pointer _to_ the pointer you want stored.
+-	 */
+-	const struct drm_framebuffer *silly_api_alert = fb;
+-	WARN_ON(!kfifo_put(&priv->fb_unref, &silly_api_alert));
++	WARN_ON(!kfifo_put(&priv->fb_unref, fb));
+ 	schedule_work(&priv->fb_unref_work);
+ }
+ 
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/gpu/drm/drm_crtc.c linux-3.13.1-pax/drivers/gpu/drm/drm_crtc.c
 --- linux-3.13.1/drivers/gpu/drm/drm_crtc.c	2014-01-20 12:36:10.981000069 +0100
 +++ linux-3.13.1-pax/drivers/gpu/drm/drm_crtc.c	2014-01-26 04:42:09.697568680 +0100
@@ -36888,6 +36935,18 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/gpu/drm
  
  	err = drm_debugfs_create_files(dc->debugfs_files,
  				       ARRAY_SIZE(debugfs_files),
+diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/gpu/drm/tegra/hdmi.c linux-3.13.1-pax/drivers/gpu/drm/tegra/hdmi.c
+--- linux-3.13.1/drivers/gpu/drm/tegra/hdmi.c	2014-01-20 12:36:14.456999883 +0100
++++ linux-3.13.1-pax/drivers/gpu/drm/tegra/hdmi.c	2014-02-02 23:52:58.226467066 +0100
+@@ -57,7 +57,7 @@ struct tegra_hdmi {
+ 	bool stereo;
+ 	bool dvi;
+ 
+-	struct drm_info_list *debugfs_files;
++	drm_info_list_no_const *debugfs_files;
+ 	struct drm_minor *minor;
+ 	struct dentry *debugfs;
+ };
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/gpu/drm/ttm/ttm_memory.c linux-3.13.1-pax/drivers/gpu/drm/ttm/ttm_memory.c
 --- linux-3.13.1/drivers/gpu/drm/ttm/ttm_memory.c	2013-08-20 19:08:16.119833372 +0200
 +++ linux-3.13.1-pax/drivers/gpu/drm/ttm/ttm_memory.c	2014-01-20 12:46:09.856968094 +0100
@@ -40466,6 +40525,20 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/misc/c2
  
  	c2dev->dev = device_create(c2port_class, NULL, 0, c2dev,
  				   "c2port%d", c2dev->id);
+diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/misc/eeprom/sunxi_sid.c linux-3.13.1-pax/drivers/misc/eeprom/sunxi_sid.c
+--- linux-3.13.1/drivers/misc/eeprom/sunxi_sid.c	2014-01-20 12:36:20.424999565 +0100
++++ linux-3.13.1-pax/drivers/misc/eeprom/sunxi_sid.c	2014-02-02 23:44:33.874468190 +0100
+@@ -127,7 +127,9 @@ static int sunxi_sid_probe(struct platfo
+ 
+ 	platform_set_drvdata(pdev, sid_data);
+ 
+-	sid_bin_attr.size = sid_data->keysize;
++	pax_open_kernel();
++	*(size_t *)&sid_bin_attr.size = sid_data->keysize;
++	pax_close_kernel();
+ 	if (device_create_bin_file(&pdev->dev, &sid_bin_attr))
+ 		return -ENODEV;
+ 
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/misc/kgdbts.c linux-3.13.1-pax/drivers/misc/kgdbts.c
 --- linux-3.13.1/drivers/misc/kgdbts.c	2013-08-20 19:08:16.207833368 +0200
 +++ linux-3.13.1-pax/drivers/misc/kgdbts.c	2014-01-20 12:46:10.112968080 +0100
@@ -40861,6 +40934,24 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/mmc/hos
  		mmci_write_datactrlreg(host, MCI_ST_DPSM_BUSYMODE);
  	}
  
+diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/mmc/host/sdhci-esdhc-imx.c linux-3.13.1-pax/drivers/mmc/host/sdhci-esdhc-imx.c
+--- linux-3.13.1/drivers/mmc/host/sdhci-esdhc-imx.c	2014-01-20 12:36:20.776999546 +0100
++++ linux-3.13.1-pax/drivers/mmc/host/sdhci-esdhc-imx.c	2014-02-02 23:49:17.190467559 +0100
+@@ -1011,9 +1011,12 @@ static int sdhci_esdhc_imx_probe(struct
+ 		host->quirks2 |= SDHCI_QUIRK2_PRESET_VALUE_BROKEN;
+ 	}
+ 
+-	if (imx_data->socdata->flags & ESDHC_FLAG_MAN_TUNING)
+-		sdhci_esdhc_ops.platform_execute_tuning =
++	if (imx_data->socdata->flags & ESDHC_FLAG_MAN_TUNING) {
++		pax_open_kernel();
++		*(void **)&sdhci_esdhc_ops.platform_execute_tuning =
+ 					esdhc_executing_tuning;
++		pax_close_kernel();
++	}
+ 	boarddata = &imx_data->boarddata;
+ 	if (sdhci_esdhc_imx_probe_dt(pdev, boarddata) < 0) {
+ 		if (!host->mmc->parent->platform_data) {
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/drivers/mmc/host/sdhci-s3c.c linux-3.13.1-pax/drivers/mmc/host/sdhci-s3c.c
 --- linux-3.13.1/drivers/mmc/host/sdhci-s3c.c	2013-11-04 01:46:35.227115581 +0100
 +++ linux-3.13.1-pax/drivers/mmc/host/sdhci-s3c.c	2014-01-20 12:46:10.120968080 +0100
@@ -54159,7 +54250,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/include/drm/drm
   * drm_connector_helper_funcs - helper operations for connectors
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/include/drm/drmP.h linux-3.13.1-pax/include/drm/drmP.h
 --- linux-3.13.1/include/drm/drmP.h	2014-01-20 12:36:47.508998119 +0100
-+++ linux-3.13.1-pax/include/drm/drmP.h	2014-01-20 12:46:10.740968046 +0100
++++ linux-3.13.1-pax/include/drm/drmP.h	2014-02-02 23:52:50.510467083 +0100
 @@ -66,6 +66,7 @@
  #include <linux/workqueue.h>
  #include <linux/poll.h>
@@ -54196,16 +54287,17 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/include/drm/drm
  
  /**
   * Creates a driver or general drm_ioctl_desc array entry for the given
-@@ -1013,7 +1016,7 @@ struct drm_info_list {
+@@ -1013,7 +1016,8 @@ struct drm_info_list {
  	int (*show)(struct seq_file*, void*); /** show callback */
  	u32 driver_features; /**< Required driver features for this entry */
  	void *data;
 -};
 +} __do_const;
++typedef struct drm_info_list __no_const drm_info_list_no_const;
  
  /**
   * debugfs node structure. This structure represents a debugfs file.
-@@ -1097,7 +1100,7 @@ struct drm_device {
+@@ -1097,7 +1101,7 @@ struct drm_device {
  
  	/** \name Usage Counters */
  	/*@{ */
@@ -54238,6 +54330,17 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/include/drm/ttm
  
  /**
   * struct ttm_mem_global - Global memory accounting structure.
+diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/include/drm/ttm/ttm_page_alloc.h linux-3.13.1-pax/include/drm/ttm/ttm_page_alloc.h
+--- linux-3.13.1/include/drm/ttm/ttm_page_alloc.h	2014-01-20 12:36:47.572998115 +0100
++++ linux-3.13.1-pax/include/drm/ttm/ttm_page_alloc.h	2014-02-02 22:13:55.646480309 +0100
+@@ -78,6 +78,7 @@ void ttm_dma_page_alloc_fini(void);
+  */
+ extern int ttm_dma_page_alloc_debugfs(struct seq_file *m, void *data);
+ 
++struct device;
+ extern int ttm_dma_populate(struct ttm_dma_tt *ttm_dma, struct device *dev);
+ extern void ttm_dma_unpopulate(struct ttm_dma_tt *ttm_dma, struct device *dev);
+ 
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/include/keys/asymmetric-subtype.h linux-3.13.1-pax/include/keys/asymmetric-subtype.h
 --- linux-3.13.1/include/keys/asymmetric-subtype.h	2013-08-20 19:08:16.495833352 +0200
 +++ linux-3.13.1-pax/include/keys/asymmetric-subtype.h	2014-01-20 12:46:10.740968046 +0100
@@ -64124,7 +64227,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/lib/vsprintf.c 
  
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-3.13.1-pax/Makefile
 --- linux-3.13.1/Makefile	2014-01-29 19:05:38.873629768 +0100
-+++ linux-3.13.1-pax/Makefile	2014-01-29 19:05:50.321629157 +0100
++++ linux-3.13.1-pax/Makefile	2014-01-31 03:24:30.188665034 +0100
 @@ -244,8 +244,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -64137,7 +64240,23 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  
  # Decide whether to build built-in, modular, or both.
  # Normally, just do built-in.
-@@ -417,8 +418,8 @@ export RCS_TAR_IGNORE := --exclude SCCS
+@@ -311,9 +312,15 @@ endif
+ # If the user is running make -s (silent mode), suppress echoing of
+ # commands
+ 
++ifneq ($(filter 4.%,$(MAKE_VERSION)),)	# make-4
++ifneq ($(filter %s ,$(firstword x$(MAKEFLAGS))),)
++ quiet=silent_
++endif
++else					# make-3.8x
+ ifneq ($(filter s% -s%,$(MAKEFLAGS)),)
+   quiet=silent_
+ endif
++endif
+ 
+ export quiet Q KBUILD_VERBOSE
+ 
+@@ -417,8 +424,8 @@ export RCS_TAR_IGNORE := --exclude SCCS
  # Rules shared between *config targets and build targets
  
  # Basic helpers built in scripts/
@@ -64148,7 +64267,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  	$(Q)$(MAKE) $(build)=scripts/basic
  	$(Q)rm -f .tmp_quiet_recordmcount
  
-@@ -579,6 +580,63 @@ else
+@@ -579,6 +586,63 @@ else
  KBUILD_CFLAGS	+= -O2
  endif
  
@@ -64212,7 +64331,16 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  include $(srctree)/arch/$(SRCARCH)/Makefile
  
  ifdef CONFIG_READABLE_ASM
-@@ -803,6 +861,8 @@ endif
+@@ -619,7 +683,7 @@ endif
+ 
+ ifdef CONFIG_DEBUG_INFO
+ KBUILD_CFLAGS	+= -g
+-KBUILD_AFLAGS	+= -gdwarf-2
++KBUILD_AFLAGS	+= -Wa,--gdwarf-2
+ endif
+ 
+ ifdef CONFIG_DEBUG_INFO_REDUCED
+@@ -803,6 +867,8 @@ endif
  
  # The actual objects are generated when descending, 
  # make sure no implicit rule kicks in
@@ -64221,7 +64349,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  $(sort $(vmlinux-deps)): $(vmlinux-dirs) ;
  
  # Handle descending into subdirectories listed in $(vmlinux-dirs)
-@@ -812,7 +872,7 @@ $(sort $(vmlinux-deps)): $(vmlinux-dirs)
+@@ -812,7 +878,7 @@ $(sort $(vmlinux-deps)): $(vmlinux-dirs)
  # Error messages still appears in the original language
  
  PHONY += $(vmlinux-dirs)
@@ -64230,7 +64358,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  	$(Q)$(MAKE) $(build)=$@
  
  define filechk_kernel.release
-@@ -855,10 +915,13 @@ prepare1: prepare2 $(version_h) include/
+@@ -855,10 +921,13 @@ prepare1: prepare2 $(version_h) include/
  
  archprepare: archheaders archscripts prepare1 scripts_basic
  
@@ -64244,7 +64372,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  prepare: prepare0
  
  # Generate some files
-@@ -966,6 +1029,8 @@ all: modules
+@@ -966,6 +1035,8 @@ all: modules
  #	using awk while concatenating to the final file.
  
  PHONY += modules
@@ -64253,7 +64381,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  modules: $(vmlinux-dirs) $(if $(KBUILD_BUILTIN),vmlinux) modules.builtin
  	$(Q)$(AWK) '!x[$$0]++' $(vmlinux-dirs:%=$(objtree)/%/modules.order) > $(objtree)/modules.order
  	@$(kecho) '  Building modules, stage 2.';
-@@ -981,7 +1046,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
+@@ -981,7 +1052,7 @@ modules.builtin: $(vmlinux-dirs:%=%/modu
  
  # Target to prepare building external modules
  PHONY += modules_prepare
@@ -64262,7 +64390,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  
  # Target to install modules
  PHONY += modules_install
-@@ -1047,7 +1112,7 @@ MRPROPER_FILES += .config .config.old .v
+@@ -1047,7 +1118,7 @@ MRPROPER_FILES += .config .config.old .v
  		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS \
  		  signing_key.priv signing_key.x509 x509.genkey		\
  		  extra_certificates signing_key.x509.keyid		\
@@ -64271,7 +64399,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  
  # clean - Delete most, but leave enough to build external modules
  #
-@@ -1087,6 +1152,7 @@ distclean: mrproper
+@@ -1087,6 +1158,7 @@ distclean: mrproper
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
  		-o -name '.*.rej' \
@@ -64279,7 +64407,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1248,6 +1314,8 @@ PHONY += $(module-dirs) modules
+@@ -1248,6 +1320,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -64288,7 +64416,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1387,17 +1455,21 @@ else
+@@ -1387,17 +1461,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -64314,7 +64442,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/Makefile linux-
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1407,11 +1479,15 @@ endif
+@@ -1407,11 +1485,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -69228,7 +69356,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/net/ceph/messen
  	switch (ss->ss_family) {
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/net/compat.c linux-3.13.1-pax/net/compat.c
 --- linux-3.13.1/net/compat.c	2014-01-20 12:36:54.372997752 +0100
-+++ linux-3.13.1-pax/net/compat.c	2014-01-30 22:32:02.801285471 +0100
++++ linux-3.13.1-pax/net/compat.c	2014-02-06 14:05:42.826421425 +0100
 @@ -73,9 +73,9 @@ int get_compat_msghdr(struct msghdr *kms
  		return -EFAULT;
  	if (kmsg->msg_namelen > sizeof(struct sockaddr_storage))
@@ -76558,8 +76686,8 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/const
 +}
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/gcc-common.h linux-3.13.1-pax/tools/gcc/gcc-common.h
 --- linux-3.13.1/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.1-pax/tools/gcc/gcc-common.h	2014-01-28 04:46:24.124995482 +0100
-@@ -0,0 +1,267 @@
++++ linux-3.13.1-pax/tools/gcc/gcc-common.h	2014-02-06 03:36:45.244111040 +0100
+@@ -0,0 +1,268 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -76650,6 +76778,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/gcc-c
 +#if BUILDING_GCC_VERSION >= 4009
 +#include "tree-ssa-operands.h"
 +#include "tree-phinodes.h"
++#include "tree-cfg.h"
 +#include "gimple-iterator.h"
 +#include "gimple-ssa.h"
 +#include "ssa-iterators.h"
@@ -77641,7 +77770,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/kerne
 +}
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/latent_entropy_plugin.c linux-3.13.1-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.13.1/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.1-pax/tools/gcc/latent_entropy_plugin.c	2014-01-26 18:03:35.556223956 +0100
++++ linux-3.13.1-pax/tools/gcc/latent_entropy_plugin.c	2014-02-02 23:32:46.982469766 +0100
 @@ -0,0 +1,325 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
@@ -77962,7 +78091,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/laten
 +	}
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &latent_entropy_plugin_info);
-+	register_callback ("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
++	register_callback(plugin_name, PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &latent_entropy_pass_info);
 +	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
@@ -83720,7 +83849,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/size_
 +nvme_trans_standard_inquiry_page_65526 nvme_trans_standard_inquiry_page 4 65526 NULL
 diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/size_overflow_plugin.c linux-3.13.1-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.13.1/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.1-pax/tools/gcc/size_overflow_plugin.c	2014-01-28 02:52:09.000000000 +0100
++++ linux-3.13.1-pax/tools/gcc/size_overflow_plugin.c	2014-02-02 23:32:30.142469803 +0100
 @@ -0,0 +1,4040 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
@@ -87752,7 +87881,7 @@ diff -NurpX linux-3.13.1-pax/Documentation/dontdiff linux-3.13.1/tools/gcc/size_
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &size_overflow_plugin_info);
 +	if (enable) {
-+		register_callback("start_unit", PLUGIN_START_UNIT, &start_unit_callback, NULL);
++		register_callback(plugin_name, PLUGIN_START_UNIT, &start_unit_callback, NULL);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &insert_size_overflow_asm_pass_info);
 +//		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &dump_before_pass_info);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &ipa_pass_info);
