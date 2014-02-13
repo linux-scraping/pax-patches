@@ -1,4 +1,4 @@
-- forward port to 3.13.2
+- fixed some gcc plugins to work in low-memory environments as well, reported by many, big thanks to niv <n@e-ix.net> for help
 
 diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/arch/alpha/include/asm/atomic.h linux-3.13.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13.2/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -77740,8 +77740,8 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/kerne
 +}
 diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/latent_entropy_plugin.c linux-3.13.2-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.13.2/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.2-pax/tools/gcc/latent_entropy_plugin.c	2014-02-02 23:32:46.982469766 +0100
-@@ -0,0 +1,325 @@
++++ linux-3.13.2-pax/tools/gcc/latent_entropy_plugin.c	2014-02-13 20:55:08.101055221 +0100
+@@ -0,0 +1,337 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -77770,7 +77770,7 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/laten
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201401260140",
++	.version	= "201402131900",
 +	.help		= NULL
 +};
 +
@@ -77967,7 +77967,7 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/laten
 +	return 0;
 +}
 +
-+static void start_unit_callback(void *gcc_data, void *user_data)
++static void latent_entropy_start_unit(void *gcc_data, void *user_data)
 +{
 +	tree latent_entropy_type;
 +
@@ -78054,6 +78054,16 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/laten
 +	latent_entropy_pass_info.reference_pass_name		= "optimized";
 +	latent_entropy_pass_info.ref_pass_instance_number	= 1;
 +	latent_entropy_pass_info.pos_op 			= PASS_POS_INSERT_BEFORE;
++	static const struct ggc_root_tab gt_ggc_r_gt_latent_entropy[] = {
++		{
++			.base = &latent_entropy_decl,
++			.nelt = 1,
++			.stride = sizeof(latent_entropy_decl),
++			.cb = &gt_ggc_mx_tree_node,
++			.pchw = &gt_pch_nx_tree_node
++		},
++		LAST_GGC_ROOT_TAB
++	};
 +
 +	if (!plugin_default_version_check(version, &gcc_version)) {
 +		error(G_("incompatible gcc/plugin versions"));
@@ -78061,7 +78071,9 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/laten
 +	}
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &latent_entropy_plugin_info);
-+	register_callback(plugin_name, PLUGIN_START_UNIT, &start_unit_callback, NULL);
++	register_callback(plugin_name, PLUGIN_START_UNIT, &latent_entropy_start_unit, NULL);
++	if (!in_lto_p)
++		register_callback(plugin_name, PLUGIN_REGISTER_GGC_ROOTS, NULL, (void *)&gt_ggc_r_gt_latent_entropy);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &latent_entropy_pass_info);
 +	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
@@ -78069,7 +78081,7 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/laten
 +}
 diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/Makefile linux-3.13.2-pax/tools/gcc/Makefile
 --- linux-3.13.2/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.2-pax/tools/gcc/Makefile	2014-01-26 09:09:04.114039532 +0100
++++ linux-3.13.2-pax/tools/gcc/Makefile	2014-02-13 20:56:29.733055039 +0100
 @@ -0,0 +1,45 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
@@ -78082,7 +78094,7 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/Makef
 +HOST_EXTRACFLAGS += -I$(GCCPLUGINS_DIR)/include -std=gnu99 -ggdb
 +else
 +HOSTLIBS := hostcxxlibs
-+HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -std=gnu++98 -fno-rtti -ggdb -Wno-unused-parameter
++HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -std=gnu++98 -fno-rtti -ggdb -Wno-unused-parameter -Wno-narrowing
 +endif
 +
 +$(HOSTLIBS)-$(CONFIG_PAX_CONSTIFY_PLUGIN) := constify_plugin.so
@@ -83819,8 +83831,8 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_
 +nvme_trans_standard_inquiry_page_65526 nvme_trans_standard_inquiry_page 4 65526 NULL
 diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_overflow_plugin.c linux-3.13.2-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.13.2/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.2-pax/tools/gcc/size_overflow_plugin.c	2014-02-02 23:32:30.142469803 +0100
-@@ -0,0 +1,4040 @@
++++ linux-3.13.2-pax/tools/gcc/size_overflow_plugin.c	2014-02-13 20:55:28.929055175 +0100
+@@ -0,0 +1,4051 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -83845,7 +83857,7 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140128",
++	.version	= "20140213",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -83913,7 +83925,6 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_
 +};
 +
 +static tree report_size_overflow_decl;
-+static const_tree const_char_ptr_type_node;
 +
 +static tree expand(struct pointer_set_t *visited, struct cgraph_node *caller_node, tree lhs);
 +static void set_conditions(struct pointer_set_t *visited, bool *interesting_conditions, const_tree lhs);
@@ -87686,8 +87697,9 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_
 +}
 +
 +// Create the noreturn report_size_overflow() function decl.
-+static void start_unit_callback(void __unused *gcc_data, void __unused *user_data)
++static void size_overflow_start_unit(void __unused *gcc_data, void __unused *user_data)
 +{
++	tree const_char_ptr_type_node;
 +	tree fntype;
 +
 +	const_char_ptr_type_node = build_pointer_type(build_type_variant(char_type_node, 1, 0));
@@ -87815,6 +87827,16 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_
 +	struct register_pass_info __unused dump_before_pass_info;
 +	struct register_pass_info __unused dump_after_pass_info;
 +	struct register_pass_info ipa_pass_info;
++	static const struct ggc_root_tab gt_ggc_r_gt_size_overflow[] = {
++		{
++			.base = &report_size_overflow_decl,
++			.nelt = 1,
++			.stride = sizeof(report_size_overflow_decl),
++			.cb = &gt_ggc_mx_tree_node,
++			.pchw = &gt_pch_nx_tree_node
++		},
++		LAST_GGC_ROOT_TAB
++	};
 +
 +	insert_size_overflow_asm_pass_info.pass				= make_insert_size_overflow_asm_pass();
 +	insert_size_overflow_asm_pass_info.reference_pass_name		= "ssa";
@@ -87851,7 +87873,8 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &size_overflow_plugin_info);
 +	if (enable) {
-+		register_callback(plugin_name, PLUGIN_START_UNIT, &start_unit_callback, NULL);
++		register_callback(plugin_name, PLUGIN_START_UNIT, &size_overflow_start_unit, NULL);
++		register_callback(plugin_name, PLUGIN_REGISTER_GGC_ROOTS, NULL, (void *)&gt_ggc_r_gt_size_overflow);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &insert_size_overflow_asm_pass_info);
 +//		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &dump_before_pass_info);
 +		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &ipa_pass_info);
@@ -87863,8 +87886,8 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/size_
 +}
 diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/stackleak_plugin.c linux-3.13.2-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.13.2/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.2-pax/tools/gcc/stackleak_plugin.c	2014-01-26 09:10:26.382041951 +0100
-@@ -0,0 +1,341 @@
++++ linux-3.13.2-pax/tools/gcc/stackleak_plugin.c	2014-02-13 20:55:40.021055150 +0100
+@@ -0,0 +1,373 @@
 +/*
 + * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -87892,10 +87915,11 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/stack
 +static int track_frame_size = -1;
 +static const char track_function[] = "pax_track_stack";
 +static const char check_function[] = "pax_check_alloca";
++static tree track_function_decl, check_function_decl;
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201401260140",
++	.version	= "201402131920",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
@@ -87903,29 +87927,20 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/stack
 +static void stackleak_check_alloca(gimple_stmt_iterator *gsi)
 +{
 +	gimple check_alloca;
-+	tree fntype, fndecl, alloca_size;
-+
-+	fntype = build_function_type_list(void_type_node, long_unsigned_type_node, NULL_TREE);
-+	fndecl = build_fn_decl(check_function, fntype);
-+	DECL_ASSEMBLER_NAME(fndecl); // for LTO
++	tree alloca_size;
 +
 +	// insert call to void pax_check_alloca(unsigned long size)
 +	alloca_size = gimple_call_arg(gsi_stmt(*gsi), 0);
-+	check_alloca = gimple_build_call(fndecl, 1, alloca_size);
++	check_alloca = gimple_build_call(check_function_decl, 1, alloca_size);
 +	gsi_insert_before(gsi, check_alloca, GSI_SAME_STMT);
 +}
 +
 +static void stackleak_add_instrumentation(gimple_stmt_iterator *gsi)
 +{
 +	gimple track_stack;
-+	tree fntype, fndecl;
-+
-+	fntype = build_function_type_list(void_type_node, NULL_TREE);
-+	fndecl = build_fn_decl(track_function, fntype);
-+	DECL_ASSEMBLER_NAME(fndecl); // for LTO
 +
 +	// insert call to void pax_track_stack(void)
-+	track_stack = gimple_build_call(fndecl, 0);
++	track_stack = gimple_build_call(track_function_decl, 0);
 +	gsi_insert_after(gsi, track_stack, GSI_CONTINUE_LINKING);
 +}
 +
@@ -88052,6 +88067,27 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/stack
 +	return track_frame_size >= 0;
 +}
 +
++static void stackleak_start_unit(void *gcc_data, void *user_data)
++{
++	tree fntype;
++
++	// void pax_track_stack(void)
++	fntype = build_function_type_list(void_type_node, NULL_TREE);
++	track_function_decl = build_fn_decl(track_function, fntype);
++	DECL_ASSEMBLER_NAME(track_function_decl); // for LTO
++	TREE_PUBLIC(track_function_decl) = 1;
++	DECL_EXTERNAL(track_function_decl) = 1;
++	DECL_ARTIFICIAL(track_function_decl) = 1;
++
++	// void pax_check_alloca(unsigned long)
++	fntype = build_function_type_list(void_type_node, long_unsigned_type_node, NULL_TREE);
++	check_function_decl = build_fn_decl(check_function, fntype);
++	DECL_ASSEMBLER_NAME(check_function_decl); // for LTO
++	TREE_PUBLIC(check_function_decl) = 1;
++	DECL_EXTERNAL(check_function_decl) = 1;
++	DECL_ARTIFICIAL(check_function_decl) = 1;
++}
++
 +#if BUILDING_GCC_VERSION >= 4009
 +static const struct pass_data stackleak_tree_instrument_pass_data = {
 +#else
@@ -88160,6 +88196,23 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/stack
 +	int i;
 +	struct register_pass_info stackleak_tree_instrument_pass_info;
 +	struct register_pass_info stackleak_final_pass_info;
++	static const struct ggc_root_tab gt_ggc_r_gt_stackleak[] = {
++		{
++			.base = &track_function_decl,
++			.nelt = 1,
++			.stride = sizeof(track_function_decl),
++			.cb = &gt_ggc_mx_tree_node,
++			.pchw = &gt_pch_nx_tree_node
++		},
++		{
++			.base = &check_function_decl,
++			.nelt = 1,
++			.stride = sizeof(check_function_decl),
++			.cb = &gt_ggc_mx_tree_node,
++			.pchw = &gt_pch_nx_tree_node
++		},
++		LAST_GGC_ROOT_TAB
++	};
 +
 +	stackleak_tree_instrument_pass_info.pass			= make_stackleak_tree_instrument_pass();
 +//	stackleak_tree_instrument_pass_info.reference_pass_name		= "tree_profile";
@@ -88201,6 +88254,8 @@ diff -NurpX linux-3.13.2-pax/Documentation/dontdiff linux-3.13.2/tools/gcc/stack
 +		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
 +	}
 +
++	register_callback(plugin_name, PLUGIN_START_UNIT, &stackleak_start_unit, NULL);
++	register_callback(plugin_name, PLUGIN_REGISTER_GGC_ROOTS, NULL, (void *)&gt_ggc_r_gt_stackleak);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_tree_instrument_pass_info);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &stackleak_final_pass_info);
 +
