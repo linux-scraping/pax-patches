@@ -1,7 +1,4 @@
-- fixed asm goto for all gcc versions, backport from upstream (https://git.kernel.org/linus/a9f180345f5378ac87)
-- fixed a size overflow false positive in the ELF loader (needs a non-0 based PIE to trigger), reported by spender
-- the latent entropy plugin will now insert some entropy at compile time into the random pools
-- changed the array initializer produced by latent entropy to work around a bug in spender's RANDSTRUCT :)
+- the latent entropy plugin can now initialize structure variables as well
 
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/alpha/include/asm/atomic.h linux-3.2.55-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.55/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -57960,6 +57957,18 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/lib/radix-tree.
  
  static inline void *ptr_to_indirect(void *ptr)
  {
+diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/lib/random32.c linux-3.2.55-pax/lib/random32.c
+--- linux-3.2.55/lib/random32.c	2014-01-03 15:48:45.124070557 +0100
++++ linux-3.2.55-pax/lib/random32.c	2014-02-24 23:15:57.051848426 +0100
+@@ -39,7 +39,7 @@
+ #include <linux/jiffies.h>
+ #include <linux/random.h>
+ 
+-static DEFINE_PER_CPU(struct rnd_state, net_rand_state);
++static DEFINE_PER_CPU(struct rnd_state, net_rand_state) __latent_entropy;
+ 
+ /**
+  *	prandom32 - seeded pseudo-random number generator.
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/lib/vsprintf.c linux-3.2.55-pax/lib/vsprintf.c
 --- linux-3.2.55/lib/vsprintf.c	2014-01-03 15:48:45.124070557 +0100
 +++ linux-3.2.55-pax/lib/vsprintf.c	2014-01-03 15:48:49.612070318 +0100
@@ -71624,8 +71633,8 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/kerne
 +}
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/latent_entropy_plugin.c linux-3.2.55-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.2.55/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.55-pax/tools/gcc/latent_entropy_plugin.c	2014-02-21 01:19:25.059737974 +0100
-@@ -0,0 +1,403 @@
++++ linux-3.2.55-pax/tools/gcc/latent_entropy_plugin.c	2014-02-24 06:43:35.335700993 +0100
+@@ -0,0 +1,451 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -71654,7 +71663,7 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/laten
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201402210120",
++	.version	= "201402240545",
 +	.help		= NULL
 +};
 +
@@ -71677,6 +71686,12 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/laten
 +static tree handle_latent_entropy_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
 +{
 +	tree type;
++	unsigned long long mask;
++#if BUILDING_GCC_VERSION <= 4007
++	VEC(constructor_elt, gc) *vals;
++#else
++	vec<constructor_elt, va_gc> *vals;
++#endif
 +
 +	switch (TREE_CODE(*node)) {
 +	default:
@@ -71701,22 +71716,64 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/laten
 +		switch (TREE_CODE(type)) {
 +		default:
 +			*no_add_attrs = true;
-+			error("variable %qD with %qE attribute must be an integer or a fixed length integer array type", *node, name);
++			error("variable %qD with %qE attribute must be an integer or a fixed length integer array type or a fixed sized structure with integer fields", *node, name);
 +			break;
 +
++		case RECORD_TYPE: {
++			tree field;
++			unsigned int nelt = 0;
++
++			for (field = TYPE_FIELDS(type); field; nelt++, field = TREE_CHAIN(field)) {
++				tree fieldtype;
++
++				fieldtype = TREE_TYPE(field);
++				if (TREE_CODE(fieldtype) != INTEGER_TYPE) {
++					*no_add_attrs = true;
++					error("structure variable %qD with %qE attribute has a non-integer field %qE", *node, name, field);
++					break;
++				}
++			}
++
++			if (field)
++				break;
++
++#if BUILDING_GCC_VERSION <= 4007
++			vals = VEC_alloc(constructor_elt, gc, nelt);
++#else
++			vec_alloc(vals, nelt);
++#endif
++
++			for (field = TYPE_FIELDS(type); field; field = TREE_CHAIN(field)) {
++				tree fieldtype;
++
++				fieldtype = TREE_TYPE(field);
++				mask = 1ULL << (TREE_INT_CST_LOW(TYPE_SIZE(fieldtype)) - 1);
++				mask = 2 * (mask - 1) + 1;
++
++				if (TYPE_UNSIGNED(fieldtype))
++					CONSTRUCTOR_APPEND_ELT(vals, field, build_int_cstu(fieldtype, mask & get_random_const()));
++				else
++					CONSTRUCTOR_APPEND_ELT(vals, field, build_int_cst(fieldtype, mask & get_random_const()));
++			}
++
++			DECL_INITIAL(*node) = build_constructor(type, vals);
++//debug_tree(DECL_INITIAL(*node));
++			break;
++		}
++
 +		case INTEGER_TYPE:
-+			DECL_INITIAL(*node) = build_int_cstu(type, get_random_const());
++			mask = 1ULL << (TREE_INT_CST_LOW(TYPE_SIZE(type)) - 1);
++			mask = 2 * (mask - 1) + 1;
++
++			if (TYPE_UNSIGNED(type))
++				DECL_INITIAL(*node) = build_int_cstu(type, mask & get_random_const());
++			else
++				DECL_INITIAL(*node) = build_int_cst(type, mask & get_random_const());
 +			break;
 +
 +		case ARRAY_TYPE: {
 +			tree elt_type, array_size, elt_size;
-+			unsigned long long mask;
 +			unsigned int i, nelt;
-+#if BUILDING_GCC_VERSION <= 4007
-+			VEC(constructor_elt, gc) *vals;
-+#else
-+			vec<constructor_elt, va_gc> *vals;
-+#endif
 +
 +			elt_type = TREE_TYPE(type);
 +			elt_size = TYPE_SIZE_UNIT(TREE_TYPE(type));
@@ -71724,7 +71781,7 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/laten
 +
 +			if (TREE_CODE(elt_type) != INTEGER_TYPE || !array_size || TREE_CODE(array_size) != INTEGER_CST) {
 +				*no_add_attrs = true;
-+				error("variable %qD with %qE attribute must be a fixed length integer array type", *node, name);
++				error("array variable %qD with %qE attribute must be a fixed length integer array type", *node, name);
 +				break;
 +			}
 +
