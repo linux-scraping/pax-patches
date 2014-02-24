@@ -1,5 +1,5 @@
-- forward port to 3.13.4
-- changed the array initializer produced by latent entropy to work around a bug in spender's RANDSTRUCT :)
+- fixed a mismerge in atomic64_sub_return on arm, reported by Arnaud Fontaine
+- the latent entropy plugin can now initialize structure variables as well
 
 diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/alpha/include/asm/atomic.h linux-3.13.4-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13.4/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -273,7 +273,7 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/arm/include/asm/atomic.h linux-3.13.4-pax/arch/arm/include/asm/atomic.h
 --- linux-3.13.4/arch/arm/include/asm/atomic.h	2014-01-20 12:35:53.945000979 +0100
-+++ linux-3.13.4-pax/arch/arm/include/asm/atomic.h	2014-01-20 12:46:09.344968121 +0100
++++ linux-3.13.4-pax/arch/arm/include/asm/atomic.h	2014-02-21 16:51:17.337292741 +0100
 @@ -18,17 +18,35 @@
  #include <asm/barrier.h>
  #include <asm/cmpxchg.h>
@@ -774,7 +774,7 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/arm/includ
  "	sbc	%R0, %R0, %R4\n"
  "	strexd	%1, %0, %H0, [%3]\n"
  "	teq	%1, #0\n"
-@@ -344,20 +691,56 @@ static inline long long atomic64_sub_ret
+@@ -344,16 +691,29 @@ static inline long long atomic64_sub_ret
  	__asm__ __volatile__("@ atomic64_sub_return\n"
  "1:	ldrexd	%0, %H0, [%3]\n"
  "	subs	%Q0, %Q0, %Q4\n"
@@ -801,19 +801,26 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (i)
  	: "cc");
-+}
-+
-+static inline long long atomic64_cmpxchg(atomic64_t *ptr, long long old,
+ 
+-	smp_mb();
+-
+ 	return result;
+ }
+ 
+@@ -382,6 +742,31 @@ static inline long long atomic64_cmpxchg
+ 	return oldval;
+ }
+ 
++static inline long long atomic64_cmpxchg_unchecked(atomic64_unchecked_t *ptr, long long old,
 +					long long new)
 +{
 +	long long oldval;
 +	unsigned long res;
- 
- 	smp_mb();
- 
--	return result;
++
++	smp_mb();
++
 +	do {
-+		__asm__ __volatile__("@ atomic64_cmpxchg\n"
++		__asm__ __volatile__("@ atomic64_cmpxchg_unchecked\n"
 +		"ldrexd		%1, %H1, [%3]\n"
 +		"mov		%0, #0\n"
 +		"teq		%1, %4\n"
@@ -827,23 +834,12 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/arm/includ
 +	smp_mb();
 +
 +	return oldval;
- }
- 
--static inline long long atomic64_cmpxchg(atomic64_t *ptr, long long old,
-+static inline long long atomic64_cmpxchg_unchecked(atomic64_unchecked_t *ptr, long long old,
- 					long long new)
++}
++
+ static inline long long atomic64_xchg(atomic64_t *ptr, long long new)
  {
- 	long long oldval;
-@@ -366,7 +749,7 @@ static inline long long atomic64_cmpxchg
- 	smp_mb();
- 
- 	do {
--		__asm__ __volatile__("@ atomic64_cmpxchg\n"
-+		__asm__ __volatile__("@ atomic64_cmpxchg_unchecked\n"
- 		"ldrexd		%1, %H1, [%3]\n"
- 		"mov		%0, #0\n"
- 		"teq		%1, %4\n"
-@@ -406,20 +789,34 @@ static inline long long atomic64_xchg(at
+ 	long long result;
+@@ -406,20 +791,34 @@ static inline long long atomic64_xchg(at
  static inline long long atomic64_dec_if_positive(atomic64_t *v)
  {
  	long long result;
@@ -884,7 +880,7 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter)
  	: "cc");
-@@ -442,13 +839,25 @@ static inline int atomic64_add_unless(at
+@@ -442,13 +841,25 @@ static inline int atomic64_add_unless(at
  "	teq	%0, %5\n"
  "	teqeq	%H0, %H5\n"
  "	moveq	%1, #0\n"
@@ -913,7 +909,7 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/arch/arm/includ
  	: "=&r" (val), "+r" (ret), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (u), "r" (a)
  	: "cc");
-@@ -461,10 +870,13 @@ static inline int atomic64_add_unless(at
+@@ -461,10 +872,13 @@ static inline int atomic64_add_unless(at
  
  #define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
  #define atomic64_inc(v)			atomic64_add(1LL, (v))
@@ -56615,7 +56611,7 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/include/linux/q
  
 diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/include/linux/random.h linux-3.13.4-pax/include/linux/random.h
 --- linux-3.13.4/include/linux/random.h	2014-01-20 12:36:48.284998077 +0100
-+++ linux-3.13.4-pax/include/linux/random.h	2014-01-20 12:46:10.800968043 +0100
++++ linux-3.13.4-pax/include/linux/random.h	2014-02-24 06:37:55.031719163 +0100
 @@ -10,9 +10,19 @@
  
  
@@ -64172,6 +64168,18 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/lib/radix-tree.
  
  static inline void *ptr_to_indirect(void *ptr)
  {
+diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/lib/random32.c linux-3.13.4-pax/lib/random32.c
+--- linux-3.13.4/lib/random32.c	2014-01-20 12:36:53.476997800 +0100
++++ linux-3.13.4-pax/lib/random32.c	2014-02-24 06:15:15.287791763 +0100
+@@ -44,7 +44,7 @@
+ static void __init prandom_state_selftest(void);
+ #endif
+ 
+-static DEFINE_PER_CPU(struct rnd_state, net_rand_state);
++static DEFINE_PER_CPU(struct rnd_state, net_rand_state) __latent_entropy;
+ 
+ /**
+  *	prandom_u32_state - seeded pseudo-random number generator.
 diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/lib/strncpy_from_user.c linux-3.13.4-pax/lib/strncpy_from_user.c
 --- linux-3.13.4/lib/strncpy_from_user.c	2013-08-20 19:08:16.907833330 +0200
 +++ linux-3.13.4-pax/lib/strncpy_from_user.c	2014-01-20 12:46:10.948968035 +0100
@@ -77764,8 +77772,8 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/tools/gcc/kerne
 +}
 diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/tools/gcc/latent_entropy_plugin.c linux-3.13.4-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.13.4/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.4-pax/tools/gcc/latent_entropy_plugin.c	2014-02-21 01:19:25.059737974 +0100
-@@ -0,0 +1,403 @@
++++ linux-3.13.4-pax/tools/gcc/latent_entropy_plugin.c	2014-02-24 06:43:35.335700993 +0100
+@@ -0,0 +1,451 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -77794,7 +77802,7 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/tools/gcc/laten
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201402210120",
++	.version	= "201402240545",
 +	.help		= NULL
 +};
 +
@@ -77817,6 +77825,12 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/tools/gcc/laten
 +static tree handle_latent_entropy_attribute(tree *node, tree name, tree args, int flags, bool *no_add_attrs)
 +{
 +	tree type;
++	unsigned long long mask;
++#if BUILDING_GCC_VERSION <= 4007
++	VEC(constructor_elt, gc) *vals;
++#else
++	vec<constructor_elt, va_gc> *vals;
++#endif
 +
 +	switch (TREE_CODE(*node)) {
 +	default:
@@ -77841,22 +77855,64 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/tools/gcc/laten
 +		switch (TREE_CODE(type)) {
 +		default:
 +			*no_add_attrs = true;
-+			error("variable %qD with %qE attribute must be an integer or a fixed length integer array type", *node, name);
++			error("variable %qD with %qE attribute must be an integer or a fixed length integer array type or a fixed sized structure with integer fields", *node, name);
 +			break;
 +
++		case RECORD_TYPE: {
++			tree field;
++			unsigned int nelt = 0;
++
++			for (field = TYPE_FIELDS(type); field; nelt++, field = TREE_CHAIN(field)) {
++				tree fieldtype;
++
++				fieldtype = TREE_TYPE(field);
++				if (TREE_CODE(fieldtype) != INTEGER_TYPE) {
++					*no_add_attrs = true;
++					error("structure variable %qD with %qE attribute has a non-integer field %qE", *node, name, field);
++					break;
++				}
++			}
++
++			if (field)
++				break;
++
++#if BUILDING_GCC_VERSION <= 4007
++			vals = VEC_alloc(constructor_elt, gc, nelt);
++#else
++			vec_alloc(vals, nelt);
++#endif
++
++			for (field = TYPE_FIELDS(type); field; field = TREE_CHAIN(field)) {
++				tree fieldtype;
++
++				fieldtype = TREE_TYPE(field);
++				mask = 1ULL << (TREE_INT_CST_LOW(TYPE_SIZE(fieldtype)) - 1);
++				mask = 2 * (mask - 1) + 1;
++
++				if (TYPE_UNSIGNED(fieldtype))
++					CONSTRUCTOR_APPEND_ELT(vals, field, build_int_cstu(fieldtype, mask & get_random_const()));
++				else
++					CONSTRUCTOR_APPEND_ELT(vals, field, build_int_cst(fieldtype, mask & get_random_const()));
++			}
++
++			DECL_INITIAL(*node) = build_constructor(type, vals);
++//debug_tree(DECL_INITIAL(*node));
++			break;
++		}
++
 +		case INTEGER_TYPE:
-+			DECL_INITIAL(*node) = build_int_cstu(type, get_random_const());
++			mask = 1ULL << (TREE_INT_CST_LOW(TYPE_SIZE(type)) - 1);
++			mask = 2 * (mask - 1) + 1;
++
++			if (TYPE_UNSIGNED(type))
++				DECL_INITIAL(*node) = build_int_cstu(type, mask & get_random_const());
++			else
++				DECL_INITIAL(*node) = build_int_cst(type, mask & get_random_const());
 +			break;
 +
 +		case ARRAY_TYPE: {
 +			tree elt_type, array_size, elt_size;
-+			unsigned long long mask;
 +			unsigned int i, nelt;
-+#if BUILDING_GCC_VERSION <= 4007
-+			VEC(constructor_elt, gc) *vals;
-+#else
-+			vec<constructor_elt, va_gc> *vals;
-+#endif
 +
 +			elt_type = TREE_TYPE(type);
 +			elt_size = TYPE_SIZE_UNIT(TREE_TYPE(type));
@@ -77864,7 +77920,7 @@ diff -NurpX linux-3.13.4-pax/Documentation/dontdiff linux-3.13.4/tools/gcc/laten
 +
 +			if (TREE_CODE(elt_type) != INTEGER_TYPE || !array_size || TREE_CODE(array_size) != INTEGER_CST) {
 +				*no_add_attrs = true;
-+				error("variable %qD with %qE attribute must be a fixed length integer array type", *node, name);
++				error("array variable %qD with %qE attribute must be a fixed length integer array type", *node, name);
 +				break;
 +			}
 +
