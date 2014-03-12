@@ -1,4 +1,4 @@
-- forward port to 3.13.5
+- fixed constify regression on arm, reported by Arnaud Fontaine and Arnaud Ebalard
 
 diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/alpha/include/asm/atomic.h linux-3.13.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13.5/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -1449,18 +1449,6 @@ diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/includ
  	pte_val(pte) = (pte_val(pte) & ~mask) | (pgprot_val(newprot) & mask);
  	return pte;
  }
-diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/include/asm/proc-fns.h linux-3.13.5-pax/arch/arm/include/asm/proc-fns.h
---- linux-3.13.5/arch/arm/include/asm/proc-fns.h	2013-09-03 00:44:46.838913190 +0200
-+++ linux-3.13.5-pax/arch/arm/include/asm/proc-fns.h	2014-01-20 12:46:09.368968120 +0100
-@@ -75,7 +75,7 @@ extern struct processor {
- 	unsigned int suspend_size;
- 	void (*do_suspend)(void *);
- 	void (*do_resume)(void *);
--} processor;
-+} __do_const processor;
- 
- #ifndef MULTI_CPU
- extern void cpu_proc_init(void);
 diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/include/asm/psci.h linux-3.13.5-pax/arch/arm/include/asm/psci.h
 --- linux-3.13.5/arch/arm/include/asm/psci.h	2013-09-03 00:44:46.838913190 +0200
 +++ linux-3.13.5-pax/arch/arm/include/asm/psci.h	2014-01-20 12:46:09.368968120 +0100
@@ -2280,7 +2268,7 @@ diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/kernel
  
 diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/kernel/setup.c linux-3.13.5-pax/arch/arm/kernel/setup.c
 --- linux-3.13.5/arch/arm/kernel/setup.c	2014-01-20 12:35:54.253000962 +0100
-+++ linux-3.13.5-pax/arch/arm/kernel/setup.c	2014-01-20 12:46:09.388968119 +0100
++++ linux-3.13.5-pax/arch/arm/kernel/setup.c	2014-03-01 22:36:18.039278229 +0100
 @@ -100,21 +100,23 @@ EXPORT_SYMBOL(system_serial_high);
  unsigned int elf_hwcap __read_mostly;
  EXPORT_SYMBOL(elf_hwcap);
@@ -2290,7 +2278,7 @@ diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/kernel
  
  #ifdef MULTI_CPU
 -struct processor processor __read_mostly;
-+struct processor processor;
++struct processor processor __read_only;
  #endif
  #ifdef MULTI_TLB
 -struct cpu_tlb_fns cpu_tlb __read_mostly;
@@ -2326,15 +2314,6 @@ diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/kernel
  			 (mmfr0 & 0x000000f0) == 0x00000020)
  			cpu_arch = CPU_ARCH_ARMv6;
  		else
-@@ -573,7 +579,7 @@ static void __init setup_processor(void)
- 	__cpu_architecture = __get_cpu_architecture();
- 
- #ifdef MULTI_CPU
--	processor = *list->proc;
-+	memcpy((void *)&processor, list->proc, sizeof processor);
- #endif
- #ifdef MULTI_TLB
- 	cpu_tlb = *list->tlb;
 diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/arm/kernel/signal.c linux-3.13.5-pax/arch/arm/kernel/signal.c
 --- linux-3.13.5/arch/arm/kernel/signal.c	2014-01-20 12:35:54.253000962 +0100
 +++ linux-3.13.5-pax/arch/arm/kernel/signal.c	2014-01-20 12:46:09.392968118 +0100
@@ -17752,7 +17731,7 @@ diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/x86/kernel
  			size = 64;
 diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/x86/kernel/cpu/common.c linux-3.13.5-pax/arch/x86/kernel/cpu/common.c
 --- linux-3.13.5/arch/x86/kernel/cpu/common.c	2014-02-24 20:00:24.327070408 +0100
-+++ linux-3.13.5-pax/arch/x86/kernel/cpu/common.c	2014-02-24 20:20:01.771067785 +0100
++++ linux-3.13.5-pax/arch/x86/kernel/cpu/common.c	2014-02-24 23:43:41.671759549 +0100
 @@ -88,60 +88,6 @@ static const struct cpu_dev default_cpu
  
  static const struct cpu_dev *this_cpu = &default_cpu;
@@ -17814,15 +17793,7 @@ diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/arch/x86/kernel
  static int __init x86_xsave_setup(char *s)
  {
  	setup_clear_cpu_cap(X86_FEATURE_XSAVE);
-@@ -286,13 +232,66 @@ static __always_inline void setup_smap(s
- 
- 	if (cpu_has(c, X86_FEATURE_SMAP)) {
- #ifdef CONFIG_X86_SMAP
--		set_in_cr4(X86_CR4_SMAP);
-+ 		set_in_cr4(X86_CR4_SMAP);
- #else
- 		clear_in_cr4(X86_CR4_SMAP);
- #endif
+@@ -293,6 +239,59 @@ static __always_inline void setup_smap(s
  	}
  }
  
@@ -61628,7 +61599,16 @@ diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/kernel/padata.c
  	pd->pinst = pinst;
 diff -NurpX linux-3.13.5-pax/Documentation/dontdiff linux-3.13.5/kernel/panic.c linux-3.13.5-pax/kernel/panic.c
 --- linux-3.13.5/kernel/panic.c	2014-01-20 12:36:50.444997962 +0100
-+++ linux-3.13.5-pax/kernel/panic.c	2014-01-20 12:46:10.900968038 +0100
++++ linux-3.13.5-pax/kernel/panic.c	2014-03-02 12:03:46.275680206 +0100
+@@ -52,7 +52,7 @@ EXPORT_SYMBOL(panic_blink);
+ /*
+  * Stop ourself in panic -- architecture code may override this
+  */
+-void __weak panic_smp_self_stop(void)
++void __weak __noreturn panic_smp_self_stop(void)
+ {
+ 	while (1)
+ 		cpu_relax();
 @@ -461,7 +461,8 @@ EXPORT_SYMBOL(warn_slowpath_null);
   */
  void __stack_chk_fail(void)
