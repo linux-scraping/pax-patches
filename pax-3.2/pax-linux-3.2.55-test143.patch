@@ -1,6 +1,7 @@
-- compile fixes for various archs, by spender
-- backported 3fa10cc83fb92750af11fab81e11ad96dc75d656 that upstream 'forgot' about as usual,
-  it's a user triggerable DoS (without a CVE) that got caught by Emese's new fuzzer as well
+- fixed the gcc plugin capability detector script for gcc 4.9
+- fixed the latent entropy plugin to use the intended successor blocks instead of what happens to be next in the block list
+- changed the initial task's and the idle tasks' starting stack address to be consistent with the other stacks (top 2 slots are unused)
+- removed the pointless retaddr instrumentation from the low level kernel relocator code
 
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/alpha/include/asm/atomic.h linux-3.2.55-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.55/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -4003,7 +4004,7 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/powerpc/mm
  
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/powerpc/mm/numa.c linux-3.2.55-pax/arch/powerpc/mm/numa.c
 --- linux-3.2.55/arch/powerpc/mm/numa.c	2013-05-14 13:33:40.456285681 +0200
-+++ linux-3.2.55-pax/arch/powerpc/mm/numa.c	2014-03-23 21:07:50.740059889 +0100
++++ linux-3.2.55-pax/arch/powerpc/mm/numa.c	2014-03-23 22:02:52.751883587 +0100
 @@ -659,7 +659,7 @@ static void __init parse_drconf_memory(s
  	unsigned int n, rc, ranges, is_kexec_kdump = 0;
  	unsigned long lmb_size, base, size, sz;
@@ -17153,7 +17154,7 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel
 +	.endr
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel/head_64.S linux-3.2.55-pax/arch/x86/kernel/head_64.S
 --- linux-3.2.55/arch/x86/kernel/head_64.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.55-pax/arch/x86/kernel/head_64.S	2013-12-10 21:38:22.479327304 +0100
++++ linux-3.2.55-pax/arch/x86/kernel/head_64.S	2014-03-27 02:59:21.520154157 +0100
 @@ -19,6 +19,8 @@
  #include <asm/cache.h>
  #include <asm/processor-flags.h>
@@ -17262,7 +17263,15 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -269,7 +275,7 @@ ENTRY(secondary_startup_64)
+@@ -262,14 +268,14 @@ ENTRY(secondary_startup_64)
+ 	.quad	INIT_PER_CPU_VAR(irq_stack_union)
+ 
+ 	ENTRY(stack_start)
+-	.quad  init_thread_union+THREAD_SIZE-8
++	.quad  init_thread_union+THREAD_SIZE-16
+ 	.word  0
+ 	__FINITDATA
+ 
  bad_address:
  	jmp bad_address
  
@@ -19140,25 +19149,6 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel
  
  /*
   * PCI ids solely used for fixups_table go here
-diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel/relocate_kernel_64.S linux-3.2.55-pax/arch/x86/kernel/relocate_kernel_64.S
---- linux-3.2.55/arch/x86/kernel/relocate_kernel_64.S	2013-06-21 21:22:07.574352284 +0200
-+++ linux-3.2.55-pax/arch/x86/kernel/relocate_kernel_64.S	2012-07-04 19:24:47.592063004 +0200
-@@ -11,6 +11,7 @@
- #include <asm/kexec.h>
- #include <asm/processor-flags.h>
- #include <asm/pgtable_types.h>
-+#include <asm/alternative-asm.h>
- 
- /*
-  * Must be relocatable PIC code callable as a C function
-@@ -167,6 +168,7 @@ identity_mapped:
- 	xorq	%r14, %r14
- 	xorq	%r15, %r15
- 
-+	pax_force_retaddr 0, 1
- 	ret
- 
- 1:
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel/setup.c linux-3.2.55-pax/arch/x86/kernel/setup.c
 --- linux-3.2.55/arch/x86/kernel/setup.c	2013-02-09 01:12:40.720782284 +0100
 +++ linux-3.2.55-pax/arch/x86/kernel/setup.c	2013-02-09 01:13:27.784783668 +0100
@@ -19354,7 +19344,16 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel
  	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/x86/kernel/smpboot.c linux-3.2.55-pax/arch/x86/kernel/smpboot.c
 --- linux-3.2.55/arch/x86/kernel/smpboot.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.55-pax/arch/x86/kernel/smpboot.c	2013-08-17 01:55:05.452229905 +0200
++++ linux-3.2.55-pax/arch/x86/kernel/smpboot.c	2014-03-27 03:00:40.668149932 +0100
+@@ -692,7 +692,7 @@ static int __cpuinit do_boot_cpu(int api
+ 	 */
+ 	if (c_idle.idle) {
+ 		c_idle.idle->thread.sp = (unsigned long) (((struct pt_regs *)
+-			(THREAD_SIZE +  task_stack_page(c_idle.idle))) - 1);
++			(THREAD_SIZE - 16 + task_stack_page(c_idle.idle))) - 1);
+ 		init_idle(c_idle.idle, cpu);
+ 		goto do_rest;
+ 	}
 @@ -709,17 +709,20 @@ static int __cpuinit do_boot_cpu(int api
  	set_idle_for_cpu(cpu, c_idle.idle);
  do_rest:
@@ -68105,24 +68104,23 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/scripts/gcc-plugin.sh linux-3.2.55-pax/scripts/gcc-plugin.sh
 --- linux-3.2.55/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.55-pax/scripts/gcc-plugin.sh	2013-02-18 00:09:25.547774548 +0100
-@@ -0,0 +1,17 @@
++++ linux-3.2.55-pax/scripts/gcc-plugin.sh	2014-02-24 21:21:41.195106114 +0100
+@@ -0,0 +1,16 @@
 +#!/bin/bash
-+plugincc=`$1 -E -shared - -o /dev/null -I\`$3 -print-file-name=plugin\`/include 2>&1 <<EOF
-+#include "gcc-plugin.h"
-+#include "tree.h"
-+#include "tm.h"
-+#include "rtl.h"
-+#ifdef ENABLE_BUILD_WITH_CXX
++srctree=$(dirname "$0")
++gccplugins_dir=$("$1" -print-file-name=plugin)
++plugincc=$("$1" -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++#include "gcc-common.h"
++#if __GNUC__ > 4 || __GNUC_MINOR__ >= 8 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2
 +#else
 +#warning $1
 +#endif
-+EOF`
++EOF
++)
 +if [ $? -eq 0 ]
 +then
-+	[[ "$plugincc" =~ "$1" ]] && echo "$1"
-+	[[ "$plugincc" =~ "$2" ]] && echo "$2"
++	( [[ "$plugincc" =~ "$1" ]] && echo "$1" ) || ( [[ "$plugincc" =~ "$2" ]] && echo "$2" )
 +fi
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/scripts/headers_install.pl linux-3.2.55-pax/scripts/headers_install.pl
 --- linux-3.2.55/scripts/headers_install.pl	2012-07-04 06:44:35.000000000 +0200
@@ -72058,8 +72056,8 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/kerne
 +}
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/latent_entropy_plugin.c linux-3.2.55-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.2.55/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.55-pax/tools/gcc/latent_entropy_plugin.c	2014-02-24 06:43:35.335700993 +0100
-@@ -0,0 +1,451 @@
++++ linux-3.2.55-pax/tools/gcc/latent_entropy_plugin.c	2014-03-26 20:40:20.121368372 +0100
+@@ -0,0 +1,453 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -72088,7 +72086,7 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/laten
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201402240545",
++	.version	= "201403042150",
 +	.help		= NULL
 +};
 +
@@ -72384,7 +72382,8 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/laten
 +	gsi_insert_after(&gsi, assign, GSI_NEW_STMT);
 +	update_stmt(assign);
 +//debug_bb(bb);
-+	bb = bb->next_bb;
++	gcc_assert(single_succ_p(bb));
++	bb = single_succ(bb);
 +
 +	// 3. instrument each BB with an operation on the local entropy variable
 +	while (bb != EXIT_BLOCK_PTR_FOR_FN(cfun)) {
@@ -72394,8 +72393,9 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/tools/gcc/laten
 +	};
 +
 +	// 4. mix local entropy into the global entropy variable
-+	perturb_latent_entropy(EXIT_BLOCK_PTR_FOR_FN(cfun)->prev_bb, local_entropy);
-+//debug_bb(EXIT_BLOCK_PTR_FOR_FN(cfun)->prev_bb);
++	gcc_assert(single_pred_p(EXIT_BLOCK_PTR_FOR_FN(cfun)));
++	perturb_latent_entropy(single_pred(EXIT_BLOCK_PTR_FOR_FN(cfun)), local_entropy);
++//debug_bb(single_pred(EXIT_BLOCK_PTR_FOR_FN(cfun)));
 +	return 0;
 +}
 +
