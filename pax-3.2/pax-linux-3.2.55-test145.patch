@@ -1,4 +1,5 @@
-- fixed a regression in the previous latent entropy plugin change, reported by spender
+- fixed a regression in gcc-plugin.sh that could make cross-compilation fail, reported by Aniem
+- hardened the hyper-v hypercall page access rights (rwx -> r-x), reported and tested by Hunger
 
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/arch/alpha/include/asm/atomic.h linux-3.2.55-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.55/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -33022,7 +33023,7 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/drivers/hv/chan
  	if (ret)
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/drivers/hv/hv.c linux-3.2.55-pax/drivers/hv/hv.c
 --- linux-3.2.55/drivers/hv/hv.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.55-pax/drivers/hv/hv.c	2012-07-04 19:24:48.412063007 +0200
++++ linux-3.2.55-pax/drivers/hv/hv.c	2014-03-30 19:14:32.650505957 +0200
 @@ -132,7 +132,7 @@ static u64 do_hypercall(u64 control, voi
  	u64 output_address = (output) ? virt_to_phys(output) : 0;
  	u32 output_address_hi = output_address >> 32;
@@ -33032,6 +33033,15 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/drivers/hv/hv.c
  
  	__asm__ __volatile__ ("call *%8" : "=d"(hv_status_hi),
  			      "=a"(hv_status_lo) : "d" (control_hi),
+@@ -176,7 +176,7 @@ int hv_init(void)
+ 	/* See if the hypercall page is already set */
+ 	rdmsrl(HV_X64_MSR_HYPERCALL, hypercall_msr.as_uint64);
+ 
+-	virtaddr = __vmalloc(PAGE_SIZE, GFP_KERNEL, PAGE_KERNEL_EXEC);
++	virtaddr = __vmalloc(PAGE_SIZE, GFP_KERNEL, PAGE_KERNEL_RX);
+ 
+ 	if (!virtaddr)
+ 		goto cleanup;
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/drivers/hv/hyperv_vmbus.h linux-3.2.55-pax/drivers/hv/hyperv_vmbus.h
 --- linux-3.2.55/drivers/hv/hyperv_vmbus.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.55-pax/drivers/hv/hyperv_vmbus.h	2012-07-04 19:24:48.412063007 +0200
@@ -68101,14 +68111,14 @@ diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-3.2.55-pax/Documentation/dontdiff linux-3.2.55/scripts/gcc-plugin.sh linux-3.2.55-pax/scripts/gcc-plugin.sh
 --- linux-3.2.55/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.55-pax/scripts/gcc-plugin.sh	2014-02-24 21:21:41.195106114 +0100
++++ linux-3.2.55-pax/scripts/gcc-plugin.sh	2014-03-30 19:14:57.262504643 +0200
 @@ -0,0 +1,16 @@
 +#!/bin/bash
 +srctree=$(dirname "$0")
-+gccplugins_dir=$("$1" -print-file-name=plugin)
++gccplugins_dir=$("$3" -print-file-name=plugin)
 +plugincc=$("$1" -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
-+#if __GNUC__ > 4 || __GNUC_MINOR__ >= 8 || defined(ENABLE_BUILD_WITH_CXX)
++#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2
 +#else
 +#warning $1
