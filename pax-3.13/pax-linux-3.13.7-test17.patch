@@ -1,8 +1,6 @@
-- updated the size overflow hast table, by spender
-- fixed the gcc plugin capability detector script for gcc 4.9
-- fixed the latent entropy plugin to use the intended successor blocks instead of what happens to be next in the block list
-- changed the initial task's and the idle tasks' starting stack address to be consistent with the other stacks (top 2 slots are unused)
-- removed the pointless retaddr instrumentation from the low level kernel relocator code
+- fixed a regression in the previous latent entropy plugin change, reported by spender
+- fixed a regression in gcc-plugin.sh that could make cross-compilation fail, reported by Aniem
+- hardened the hyper-v hypercall page access rights (rwx -> r-x), reported and tested by Hunger
 
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/alpha/include/asm/atomic.h linux-3.13.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13.7/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -37819,7 +37817,7 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/drivers/hv/hv_b
  	cap_msg.caps.cap_bits.hot_add = 1;
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/drivers/hv/hv.c linux-3.13.7-pax/drivers/hv/hv.c
 --- linux-3.13.7/drivers/hv/hv.c	2014-01-20 12:36:15.408999833 +0100
-+++ linux-3.13.7-pax/drivers/hv/hv.c	2014-01-20 12:46:09.868968093 +0100
++++ linux-3.13.7-pax/drivers/hv/hv.c	2014-03-29 23:09:21.441979308 +0100
 @@ -112,7 +112,7 @@ static u64 do_hypercall(u64 control, voi
  	u64 output_address = (output) ? virt_to_phys(output) : 0;
  	u32 output_address_hi = output_address >> 32;
@@ -37829,6 +37827,15 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/drivers/hv/hv.c
  
  	__asm__ __volatile__ ("call *%8" : "=d"(hv_status_hi),
  			      "=a"(hv_status_lo) : "d" (control_hi),
+@@ -154,7 +154,7 @@ int hv_init(void)
+ 	/* See if the hypercall page is already set */
+ 	rdmsrl(HV_X64_MSR_HYPERCALL, hypercall_msr.as_uint64);
+ 
+-	virtaddr = __vmalloc(PAGE_SIZE, GFP_KERNEL, PAGE_KERNEL_EXEC);
++	virtaddr = __vmalloc(PAGE_SIZE, GFP_KERNEL, PAGE_KERNEL_RX);
+ 
+ 	if (!virtaddr)
+ 		goto cleanup;
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/drivers/hv/hyperv_vmbus.h linux-3.13.7-pax/drivers/hv/hyperv_vmbus.h
 --- linux-3.13.7/drivers/hv/hyperv_vmbus.h	2014-01-20 12:36:15.408999833 +0100
 +++ linux-3.13.7-pax/drivers/hv/hyperv_vmbus.h	2014-01-20 12:46:09.868968093 +0100
@@ -59860,7 +59867,7 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/init/Kconfig li
  	  also breaks ancient binaries (including anything libc5 based).
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/init/main.c linux-3.13.7-pax/init/main.c
 --- linux-3.13.7/init/main.c	2014-01-20 12:36:49.992997986 +0100
-+++ linux-3.13.7-pax/init/main.c	2014-01-20 12:46:10.868968040 +0100
++++ linux-3.13.7-pax/init/main.c	2014-03-28 02:28:56.039638534 +0100
 @@ -164,6 +164,65 @@ static int __init set_reset_devices(char
  
  __setup("reset_devices", set_reset_devices);
@@ -74342,14 +74349,14 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/scripts/gcc-plugin.sh linux-3.13.7-pax/scripts/gcc-plugin.sh
 --- linux-3.13.7/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.7-pax/scripts/gcc-plugin.sh	2014-02-24 21:21:41.195106114 +0100
++++ linux-3.13.7-pax/scripts/gcc-plugin.sh	2014-03-30 18:52:02.306578055 +0200
 @@ -0,0 +1,16 @@
 +#!/bin/bash
 +srctree=$(dirname "$0")
-+gccplugins_dir=$("$1" -print-file-name=plugin)
++gccplugins_dir=$("$3" -print-file-name=plugin)
 +plugincc=$("$1" -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
-+#if __GNUC__ > 4 || __GNUC_MINOR__ >= 8 || defined(ENABLE_BUILD_WITH_CXX)
++#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2
 +#else
 +#warning $1
@@ -78346,8 +78353,8 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/kerne
 +}
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/latent_entropy_plugin.c linux-3.13.7-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.13.7/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.7-pax/tools/gcc/latent_entropy_plugin.c	2014-03-26 20:40:20.121368372 +0100
-@@ -0,0 +1,453 @@
++++ linux-3.13.7-pax/tools/gcc/latent_entropy_plugin.c	2014-03-28 03:09:55.579507213 +0100
+@@ -0,0 +1,457 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -78376,7 +78383,7 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/laten
 +static tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201403042150",
++	.version	= "201403280150",
 +	.help		= NULL
 +};
 +
@@ -78548,6 +78555,10 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/laten
 +
 +static bool gate_latent_entropy(void)
 +{
++	// don't bother with noreturn functions for now
++	if (TREE_THIS_VOLATILE(current_function_decl))
++		return false;
++
 +	return lookup_attribute("latent_entropy", DECL_ATTRIBUTES(current_function_decl)) != NULL_TREE;
 +}
 +
