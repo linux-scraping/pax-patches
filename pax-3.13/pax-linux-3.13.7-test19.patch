@@ -1,5 +1,6 @@
-- fixed plugin compilation under gcc 4.5, reported by Emese Revfy
-- Emese added support for out-of-tree modules for the size overflow plugin, fixes https://bugs.gentoo.org/show_bug.cgi?id=505594
+- updated the hash database for external modules, by Emese
+- fixed regression in gcc plugin compilation when compiling with ccache, reported by ncopa
+- proper fix for 309944be296efbb3ca4737d12ef49d2ba97cbecc upstream
 
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/alpha/include/asm/atomic.h linux-3.13.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.13.7/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -10065,7 +10066,7 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/boot/c
  gdt_end:
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/boot/compressed/Makefile linux-3.13.7-pax/arch/x86/boot/compressed/Makefile
 --- linux-3.13.7/arch/x86/boot/compressed/Makefile	2014-01-20 12:36:05.185000378 +0100
-+++ linux-3.13.7-pax/arch/x86/boot/compressed/Makefile	2014-01-20 12:46:09.532968111 +0100
++++ linux-3.13.7-pax/arch/x86/boot/compressed/Makefile	2014-04-04 04:57:30.195231555 +0200
 @@ -16,6 +16,9 @@ KBUILD_CFLAGS += $(cflags-y)
  KBUILD_CFLAGS += -mno-mmx -mno-sse
  KBUILD_CFLAGS += $(call cc-option,-ffreestanding)
@@ -10078,7 +10079,16 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/boot/c
  GCOV_PROFILE := n
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/boot/compressed/misc.c linux-3.13.7-pax/arch/x86/boot/compressed/misc.c
 --- linux-3.13.7/arch/x86/boot/compressed/misc.c	2013-11-04 01:46:22.079116283 +0100
-+++ linux-3.13.7-pax/arch/x86/boot/compressed/misc.c	2014-01-20 12:46:09.532968111 +0100
++++ linux-3.13.7-pax/arch/x86/boot/compressed/misc.c	2014-04-04 05:51:12.703059498 +0200
+@@ -224,7 +224,7 @@ void __putstr(const char *s)
+ 
+ void *memset(void *s, int c, size_t n)
+ {
+-	int i;
++	size_t i;
+ 	char *ss = s;
+ 
+ 	for (i = 0; i < n; i++)
 @@ -283,7 +283,7 @@ static void handle_relocations(void *out
  	 * Calculate the delta between where vmlinux was linked to load
  	 * and where it was actually loaded.
@@ -10088,7 +10098,16 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/boot/c
  	if (!delta) {
  		debug_putstr("No relocation needed... ");
  		return;
-@@ -380,7 +380,7 @@ static void parse_elf(void *output)
+@@ -353,7 +353,7 @@ static void parse_elf(void *output)
+ 	Elf32_Ehdr ehdr;
+ 	Elf32_Phdr *phdrs, *phdr;
+ #endif
+-	void *dest;
++	void *dest, *prev;
+ 	int i;
+ 
+ 	memcpy(&ehdr, output, sizeof(ehdr));
+@@ -380,13 +380,16 @@ static void parse_elf(void *output)
  		case PT_LOAD:
  #ifdef CONFIG_RELOCATABLE
  			dest = output;
@@ -10097,7 +10116,16 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/boot/c
  #else
  			dest = (void *)(phdr->p_paddr);
  #endif
-@@ -432,7 +432,7 @@ asmlinkage void decompress_kernel(void *
+ 			memcpy(dest,
+ 			       output + phdr->p_offset,
+ 			       phdr->p_filesz);
++			if (i)
++				memset(prev, 0xff, dest - prev);
++			prev = dest + phdr->p_filesz;
+ 			break;
+ 		default: /* Ignore other PT_* */ break;
+ 		}
+@@ -432,7 +435,7 @@ asmlinkage void decompress_kernel(void *
  		error("Destination address too large");
  #endif
  #ifndef CONFIG_RELOCATABLE
@@ -24708,7 +24736,7 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/kernel
  	if ((segoffs >> 16) == BIOSSEG)
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/arch/x86/kernel/vmlinux.lds.S linux-3.13.7-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-3.13.7/arch/x86/kernel/vmlinux.lds.S	2014-01-20 12:36:07.421000259 +0100
-+++ linux-3.13.7-pax/arch/x86/kernel/vmlinux.lds.S	2014-01-20 12:46:09.668968104 +0100
++++ linux-3.13.7-pax/arch/x86/kernel/vmlinux.lds.S	2014-04-04 05:51:34.835058316 +0200
 @@ -26,6 +26,13 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -40004,6 +40032,27 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/drivers/md/pers
 +typedef struct dm_space_map __no_const dm_space_map_no_const;
  
  /*----------------------------------------------------------------*/
+ 
+diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/drivers/md/persistent-data/dm-space-map-metadata.c linux-3.13.7-pax/drivers/md/persistent-data/dm-space-map-metadata.c
+--- linux-3.13.7/drivers/md/persistent-data/dm-space-map-metadata.c	2014-03-24 13:56:04.649223536 +0100
++++ linux-3.13.7-pax/drivers/md/persistent-data/dm-space-map-metadata.c	2014-04-03 23:02:59.376367252 +0200
+@@ -679,7 +679,7 @@ static int sm_metadata_extend(struct dm_
+ 	 * Flick into a mode where all blocks get allocated in the new area.
+ 	 */
+ 	smm->begin = old_len;
+-	memcpy(sm, &bootstrap_ops, sizeof(*sm));
++	memcpy((void *)sm, &bootstrap_ops, sizeof(*sm));
+ 
+ 	/*
+ 	 * Extend.
+@@ -710,7 +710,7 @@ out:
+ 	/*
+ 	 * Switch back to normal behaviour.
+ 	 */
+-	memcpy(sm, &ops, sizeof(*sm));
++	memcpy((void *)sm, &ops, sizeof(*sm));
+ 	return r;
+ }
  
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/drivers/md/raid10.c linux-3.13.7-pax/drivers/md/raid10.c
 --- linux-3.13.7/drivers/md/raid10.c	2014-01-20 12:36:17.976999695 +0100
@@ -74348,12 +74397,12 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/scripts/gcc-plugin.sh linux-3.13.7-pax/scripts/gcc-plugin.sh
 --- linux-3.13.7/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.7-pax/scripts/gcc-plugin.sh	2014-03-30 18:52:02.306578055 +0200
++++ linux-3.13.7-pax/scripts/gcc-plugin.sh	2014-04-02 13:54:51.037937536 +0200
 @@ -0,0 +1,16 @@
 +#!/bin/bash
 +srctree=$(dirname "$0")
-+gccplugins_dir=$("$3" -print-file-name=plugin)
-+plugincc=$("$1" -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++gccplugins_dir=$($3 -print-file-name=plugin)
++plugincc=$($1 -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2
@@ -78872,18 +78921,20 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/Makef
 +targets += size_overflow_hash.h size_overflow_hash_aux.h
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/size_overflow_hash_aux.data linux-3.13.7-pax/tools/gcc/size_overflow_hash_aux.data
 --- linux-3.13.7/tools/gcc/size_overflow_hash_aux.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.7-pax/tools/gcc/size_overflow_hash_aux.data	2014-04-02 02:21:52.939844939 +0200
-@@ -0,0 +1,68 @@
++++ linux-3.13.7-pax/tools/gcc/size_overflow_hash_aux.data	2014-04-03 19:25:16.737064695 +0200
+@@ -0,0 +1,83 @@
 +spa_set_aux_vdevs_746 spa_set_aux_vdevs 3 746 NULL
 +mappedread_2627 mappedread 2 2627 NULL
 +vdev_disk_dio_alloc_2957 vdev_disk_dio_alloc 1 2957 NULL
 +nv_alloc_pushpage_spl_4286 nv_alloc_pushpage_spl 2 4286 NULL
++zpl_xattr_get_4574 zpl_xattr_get 0 4574 NULL
 +sa_replace_all_by_template_5699 sa_replace_all_by_template 3 5699 NULL
 +dmu_write_6048 dmu_write 4-3 6048 NULL
 +dmu_buf_hold_array_6095 dmu_buf_hold_array 4-3 6095 NULL
 +update_pages_6225 update_pages 2-3 6225 NULL
 +bio_nr_pages_7117 bio_nr_pages 0-2 7117 NULL
 +dmu_buf_hold_array_by_bonus_8562 dmu_buf_hold_array_by_bonus 3-2 8562 NULL
++zpios_dmu_write_8858 zpios_dmu_write 4-5 8858 NULL
 +ddi_copyout_9401 ddi_copyout 3 9401 NULL
 +avl_numnodes_12384 avl_numnodes 0 12384 NULL
 +dmu_write_uio_dnode_12473 dmu_write_uio_dnode 3 12473 NULL
@@ -78892,29 +78943,38 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/size_
 +kmem_alloc_debug_14852 kmem_alloc_debug 1 14852 NULL
 +kmalloc_node_nofail_15151 kmalloc_node_nofail 1 15151 NULL
 +dmu_write_uio_16351 dmu_write_uio 4 16351 NULL
++zfs_log_write_16524 zfs_log_write 6-5 16524 NULL
 +sa_build_layouts_16910 sa_build_layouts 3 16910 NULL
 +dsl_dir_namelen_17053 dsl_dir_namelen 0 17053 NULL
 +sa_add_layout_entry_17507 sa_add_layout_entry 3 17507 NULL
 +sa_attr_table_setup_18029 sa_attr_table_setup 3 18029 NULL
 +uiocopy_18680 uiocopy 2 18680 NULL
 +dmu_buf_hold_array_by_dnode_19125 dmu_buf_hold_array_by_dnode 2-3 19125 NULL
++zpl_acl_from_xattr_21141 zpl_acl_from_xattr 2 21141 NULL
 +dsl_pool_tx_assign_init_22518 dsl_pool_tx_assign_init 2 22518 NULL
 +sa_replace_all_by_template_locked_22533 sa_replace_all_by_template_locked 3 22533 NULL
 +tsd_hash_table_init_22559 tsd_hash_table_init 1 22559 NULL
 +spa_vdev_remove_aux_23966 spa_vdev_remove_aux 4 23966 NULL
++zpl_xattr_acl_set_access_24129 zpl_xattr_acl_set_access 4 24129 NULL
 +dmu_assign_arcbuf_24622 dmu_assign_arcbuf 2 24622 NULL
 +zap_lookup_norm_25166 zap_lookup_norm 9 25166 NULL
 +dmu_prealloc_25456 dmu_prealloc 4-3 25456 NULL
 +kmalloc_nofail_26347 kmalloc_nofail 1 26347 NULL
 +zfsctl_snapshot_zpath_27578 zfsctl_snapshot_zpath 2 27578 NULL
++zpios_dmu_read_30015 zpios_dmu_read 4-5 30015 NULL
++splat_write_30943 splat_write 3 30943 NULL
++zpl_xattr_get_sa_31183 zpl_xattr_get_sa 0 31183 NULL
 +dmu_read_uio_31467 dmu_read_uio 4 31467 NULL
 +zfs_replay_fuids_31479 zfs_replay_fuids 4 31479 NULL
 +spa_history_log_to_phys_31632 spa_history_log_to_phys 0-1 31632 NULL
++__zpl_xattr_get_32601 __zpl_xattr_get 0 32601 NULL
 +proc_copyout_string_34049 proc_copyout_string 2 34049 NULL
 +nv_alloc_sleep_spl_34544 nv_alloc_sleep_spl 2 34544 NULL
 +nv_alloc_nosleep_spl_34761 nv_alloc_nosleep_spl 2 34761 NULL
 +zap_leaf_array_match_36922 zap_leaf_array_match 4 36922 NULL
 +copyinstr_36980 copyinstr 3 36980 NULL
++zpl_xattr_acl_set_default_37864 zpl_xattr_acl_set_default 4 37864 NULL
++splat_read_38116 splat_read 3 38116 NULL
 +sa_setup_38756 sa_setup 4 38756 NULL
 +vdev_disk_physio_39898 vdev_disk_physio 3 39898 NULL
 +arc_buf_size_39982 arc_buf_size 0 39982 NULL
@@ -78922,6 +78982,8 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/size_
 +fuidstr_to_sid_40777 fuidstr_to_sid 4 40777 NULL
 +vdev_raidz_matrix_reconstruct_40852 vdev_raidz_matrix_reconstruct 2-3 40852 NULL
 +sa_find_layout_40892 sa_find_layout 4 40892 NULL
++zpl_xattr_get_dir_41918 zpl_xattr_get_dir 0 41918 NULL
++zpl_xattr_acl_set_42808 zpl_xattr_acl_set 4 42808 NULL
 +xdr_dec_array_43091 xdr_dec_array 5 43091 NULL
 +dsl_dataset_namelen_43136 dsl_dataset_namelen 0 43136 NULL
 +uiomove_44355 uiomove 2 44355 NULL
@@ -78930,7 +78992,6 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/size_
 +copyin_45945 copyin 3 45945 NULL
 +zil_itx_create_46555 zil_itx_create 2 46555 NULL
 +dmu_write_uio_dbuf_48064 dmu_write_uio_dbuf 3 48064 NULL
-+blk_rq_pos_48233 blk_rq_pos 0 48233 NULL
 +spa_history_write_49650 spa_history_write 3 49650 NULL
 +zfs_log_write_50162 zfs_log_write 6-5 50162 NULL
 +i_fm_alloc_51038 i_fm_alloc 2 51038 NULL
@@ -78939,12 +79000,15 @@ diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/size_
 +zfs_acl_node_alloc_55641 zfs_acl_node_alloc 1 55641 NULL
 +get_nvlist_56685 get_nvlist 2 56685 NULL
 +zprop_get_numprops_56820 zprop_get_numprops 0 56820 NULL
++splat_taskq_test4_common_59829 splat_taskq_test4_common 5 59829 NULL
 +zfs_replay_domain_cnt_61399 zfs_replay_domain_cnt 0 61399 NULL
++zpios_write_61823 zpios_write 3 61823 NULL
 +proc_copyin_string_62019 proc_copyin_string 4 62019 NULL
 +random_get_pseudo_bytes_64611 random_get_pseudo_bytes 2 64611 NULL
++zpios_read_64734 zpios_read 3 64734 NULL
 diff -NurpX linux-3.13.7-pax/Documentation/dontdiff linux-3.13.7/tools/gcc/size_overflow_hash.data linux-3.13.7-pax/tools/gcc/size_overflow_hash.data
 --- linux-3.13.7/tools/gcc/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.13.7-pax/tools/gcc/size_overflow_hash.data	2014-03-25 22:08:30.000000000 +0100
++++ linux-3.13.7-pax/tools/gcc/size_overflow_hash.data	2014-03-27 02:54:45.520168894 +0100
 @@ -0,0 +1,5709 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +ocfs2_get_refcount_tree_3 ocfs2_get_refcount_tree 0 3 NULL
