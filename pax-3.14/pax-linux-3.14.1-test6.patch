@@ -1,4 +1,14 @@
-- temporarily reverted the previous fix of the overflow plugin as it triggers more problems than it solves
+- spender fixed various compilation problems on arm, reported by Michael Tremer
+- spender fixed a sparc compile error
+- changed the colorize plugin to be similar to -fdiagnostics-color in gcc 4.9
+  - http://gcc.gnu.org/onlinedocs/gcc-4.9.0/gcc/Language-Independent-Options.html
+  - by default colorization is off
+  - if GCC_COLORS exists in the environment then stderr will be colored if it's a terminal
+  - -fplugin-arg-colorize_plugin-color= takes the same arguments as -fdiagnostics-color=
+    - e.g., the old behaviour is equivalent to EXTRA_CFLAGS=-fplugin-arg-colorize_plugin-color=always
+  - the value of GCC_COLORS isn't parsed yet, the existing colors (red/yellow/blue) are used instead
+- fixed all warnings on the gcc plugins reported by clang
+- fixed a REFCOUNT regression that would instrument code even when REFCOUNT was disabled
 
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/alpha/include/asm/atomic.h linux-3.14.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.1/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -1175,13 +1185,15 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/includ
  	void		*addr;		/* single DMA address		*/
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/include/asm/mach/map.h linux-3.14.1-pax/arch/arm/include/asm/mach/map.h
 --- linux-3.14.1/arch/arm/include/asm/mach/map.h	2014-03-31 12:47:46.651131887 +0200
-+++ linux-3.14.1-pax/arch/arm/include/asm/mach/map.h	2014-03-31 12:53:46.243112688 +0200
-@@ -24,16 +24,18 @@ struct map_desc {
++++ linux-3.14.1-pax/arch/arm/include/asm/mach/map.h	2014-04-20 18:45:41.421222982 +0200
+@@ -23,17 +23,19 @@ struct map_desc {
+ 
  /* types 0-3 are defined in asm/io.h */
  enum {
- 	MT_UNCACHED = 4,
+-	MT_UNCACHED = 4,
 -	MT_CACHECLEAN,
 -	MT_MINICLEAN,
++	MT_UNCACHED_RW = 4,
 +	MT_CACHECLEAN_RO,
 +	MT_MINICLEAN_RO,
  	MT_LOW_VECTORS,
@@ -1189,9 +1201,10 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/includ
 -	MT_MEMORY_RWX,
 +	__MT_MEMORY_RWX,
  	MT_MEMORY_RW,
-+	MT_MEMORY_RX,
- 	MT_ROM,
+-	MT_ROM,
 -	MT_MEMORY_RWX_NONCACHED,
++	MT_MEMORY_RX,
++	MT_ROM_RX,
 +	MT_MEMORY_RW_NONCACHED,
 +	MT_MEMORY_RX_NONCACHED,
  	MT_MEMORY_RW_DTCM,
@@ -3496,7 +3509,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/mm/mma
  }
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/mm/mmu.c linux-3.14.1-pax/arch/arm/mm/mmu.c
 --- linux-3.14.1/arch/arm/mm/mmu.c	2014-03-31 12:47:46.727131883 +0200
-+++ linux-3.14.1-pax/arch/arm/mm/mmu.c	2014-03-31 12:53:46.267112687 +0200
++++ linux-3.14.1-pax/arch/arm/mm/mmu.c	2014-04-20 18:45:41.433222981 +0200
 @@ -39,6 +39,22 @@
  #include "mm.h"
  #include "tcm.h"
@@ -3732,6 +3745,15 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/mm/mmu
  		break;
  	}
  	pr_info("Memory policy: %sData cache %s\n",
+@@ -832,7 +889,7 @@ static void __init create_mapping(struct
+ 		return;
+ 	}
+ 
+-	if ((md->type == MT_DEVICE || md->type == MT_ROM) &&
++	if ((md->type == MT_DEVICE || md->type == MT_ROM_RX) &&
+ 	    md->virtual >= PAGE_OFFSET &&
+ 	    (md->virtual < VMALLOC_START || md->virtual >= VMALLOC_END)) {
+ 		printk(KERN_WARNING "BUG: mapping for 0x%08llx"
 @@ -1247,18 +1304,15 @@ void __init arm_mm_memblock_reserve(void
   * called function.  This means you can't use any function or debugging
   * method which may touch any device, otherwise the kernel _will_ crash.
@@ -3744,12 +3766,12 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/mm/mmu
  	struct map_desc map;
  	unsigned long addr;
 -	void *vectors;
--
+ 
 -	/*
 -	 * Allocate the vector page early.
 -	 */
 -	vectors = early_alloc(PAGE_SIZE * 2);
- 
+-
 -	early_trap_init(vectors);
 +	early_trap_init(&vectors);
  
@@ -3790,7 +3812,18 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/mm/mmu
  	map.virtual = 0xffff0000;
  	map.length = PAGE_SIZE;
  #ifdef CONFIG_KUSER_HELPERS
-@@ -1369,11 +1423,48 @@ static void __init map_lowmem(void)
+@@ -1355,8 +1409,10 @@ static void __init kmap_init(void)
+ static void __init map_lowmem(void)
+ {
+ 	struct memblock_region *reg;
++#ifndef CONFIG_PAX_KERNEXEC
+ 	unsigned long kernel_x_start = round_down(__pa(_stext), SECTION_SIZE);
+ 	unsigned long kernel_x_end = round_up(__pa(__init_end), SECTION_SIZE);
++#endif
+ 
+ 	/* Map all the lowmem memory banks. */
+ 	for_each_memblock(memory, reg) {
+@@ -1369,11 +1425,48 @@ static void __init map_lowmem(void)
  		if (start >= end)
  			break;
  
@@ -3840,7 +3873,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/mm/mmu
  
  			create_mapping(&map);
  		} else {
-@@ -1390,7 +1481,7 @@ static void __init map_lowmem(void)
+@@ -1390,7 +1483,7 @@ static void __init map_lowmem(void)
  			map.pfn = __phys_to_pfn(kernel_x_start);
  			map.virtual = __phys_to_virt(kernel_x_start);
  			map.length = kernel_x_end - kernel_x_start;
@@ -3849,13 +3882,25 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/mm/mmu
  
  			create_mapping(&map);
  
-@@ -1403,6 +1494,7 @@ static void __init map_lowmem(void)
+@@ -1403,6 +1496,7 @@ static void __init map_lowmem(void)
  				create_mapping(&map);
  			}
  		}
 +#endif
  	}
  }
+ 
+diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/plat-iop/setup.c linux-3.14.1-pax/arch/arm/plat-iop/setup.c
+--- linux-3.14.1/arch/arm/plat-iop/setup.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.14.1-pax/arch/arm/plat-iop/setup.c	2014-04-20 18:45:41.433222981 +0200
+@@ -24,7 +24,7 @@ static struct map_desc iop3xx_std_desc[]
+ 		.virtual	= IOP3XX_PERIPHERAL_VIRT_BASE,
+ 		.pfn		= __phys_to_pfn(IOP3XX_PERIPHERAL_PHYS_BASE),
+ 		.length		= IOP3XX_PERIPHERAL_SIZE,
+-		.type		= MT_UNCACHED,
++		.type		= MT_UNCACHED_RW,
+ 	 },
+ };
  
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/arm/plat-omap/sram.c linux-3.14.1-pax/arch/arm/plat-omap/sram.c
 --- linux-3.14.1/arch/arm/plat-omap/sram.c	2013-08-20 19:08:15.723833393 +0200
@@ -9678,8 +9723,16 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/sparc/mm/f
  	 * was no match.  So in such a case we (carefully) read the
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/sparc/mm/hugetlbpage.c linux-3.14.1-pax/arch/sparc/mm/hugetlbpage.c
 --- linux-3.14.1/arch/sparc/mm/hugetlbpage.c	2014-03-31 12:47:57.059131332 +0200
-+++ linux-3.14.1-pax/arch/sparc/mm/hugetlbpage.c	2014-03-31 12:53:46.307112685 +0200
-@@ -35,7 +35,7 @@ static unsigned long hugetlb_get_unmappe
++++ linux-3.14.1-pax/arch/sparc/mm/hugetlbpage.c	2014-04-20 18:45:41.477222979 +0200
+@@ -27,6 +27,7 @@ static unsigned long hugetlb_get_unmappe
+ 							unsigned long pgoff,
+ 							unsigned long flags)
+ {
++	struct mm_struct *mm = current->mm;
+ 	unsigned long task_size = TASK_SIZE;
+ 	struct vm_unmapped_area_info info;
+ 
+@@ -35,7 +36,7 @@ static unsigned long hugetlb_get_unmappe
  
  	info.flags = 0;
  	info.length = len;
@@ -9688,7 +9741,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/sparc/mm/h
  	info.high_limit = min(task_size, VA_EXCLUDE_START);
  	info.align_mask = PAGE_MASK & ~HPAGE_MASK;
  	info.align_offset = 0;
-@@ -44,6 +44,12 @@ static unsigned long hugetlb_get_unmappe
+@@ -44,6 +45,12 @@ static unsigned long hugetlb_get_unmappe
  	if ((addr & ~PAGE_MASK) && task_size > VA_EXCLUDE_END) {
  		VM_BUG_ON(addr != -ENOMEM);
  		info.low_limit = VA_EXCLUDE_END;
@@ -9701,7 +9754,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/sparc/mm/h
  		info.high_limit = task_size;
  		addr = vm_unmapped_area(&info);
  	}
-@@ -82,6 +88,12 @@ hugetlb_get_unmapped_area_topdown(struct
+@@ -82,6 +89,12 @@ hugetlb_get_unmapped_area_topdown(struct
  		VM_BUG_ON(addr != -ENOMEM);
  		info.flags = 0;
  		info.low_limit = TASK_UNMAPPED_BASE;
@@ -9714,7 +9767,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/sparc/mm/h
  		info.high_limit = STACK_TOP32;
  		addr = vm_unmapped_area(&info);
  	}
-@@ -111,11 +123,14 @@ hugetlb_get_unmapped_area(struct file *f
+@@ -111,11 +124,14 @@ hugetlb_get_unmapped_area(struct file *f
  		return addr;
  	}
  
@@ -13468,7 +13521,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/includ
  		return ret;
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/include/asm/cmpxchg.h linux-3.14.1-pax/arch/x86/include/asm/cmpxchg.h
 --- linux-3.14.1/arch/x86/include/asm/cmpxchg.h	2013-08-20 19:08:15.839833387 +0200
-+++ linux-3.14.1-pax/arch/x86/include/asm/cmpxchg.h	2014-03-31 12:53:46.323112684 +0200
++++ linux-3.14.1-pax/arch/x86/include/asm/cmpxchg.h	2014-04-23 23:08:47.295423854 +0200
 @@ -14,8 +14,12 @@ extern void __cmpxchg_wrong_size(void)
  	__compiletime_error("Bad argument size for cmpxchg");
  extern void __xadd_wrong_size(void)
@@ -13482,10 +13535,11 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/includ
  
  /*
   * Constants for operation sizes. On 32-bit, the 64-bit size it set to
-@@ -67,6 +71,34 @@ extern void __add_wrong_size(void)
+@@ -67,6 +71,38 @@ extern void __add_wrong_size(void)
  		__ret;							\
  	})
  
++#ifdef CONFIG_PAX_REFCOUNT
 +#define __xchg_op_check_overflow(ptr, arg, op, lock)			\
 +	({								\
 +	        __typeof__ (*(ptr)) __ret = (arg);			\
@@ -13513,11 +13567,14 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/includ
 +		}							\
 +		__ret;							\
 +	})
++#else
++#define __xchg_op_check_overflow(ptr, arg, op, lock) __xchg_op(ptr, arg, op, lock)
++#endif
 +
  /*
   * Note: no "lock" prefix even on SMP: xchg always implies lock anyway.
   * Since this is generally used to protect other memory information, we
-@@ -167,6 +199,9 @@ extern void __add_wrong_size(void)
+@@ -167,6 +203,9 @@ extern void __add_wrong_size(void)
  #define xadd_sync(ptr, inc)	__xadd((ptr), (inc), "lock; ")
  #define xadd_local(ptr, inc)	__xadd((ptr), (inc), "")
  
@@ -24507,7 +24564,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/kernel
  static DEFINE_MUTEX(irq_vector_mutex);
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/kernel/traps.c linux-3.14.1-pax/arch/x86/kernel/traps.c
 --- linux-3.14.1/arch/x86/kernel/traps.c	2014-03-31 12:47:57.287131320 +0200
-+++ linux-3.14.1-pax/arch/x86/kernel/traps.c	2014-03-31 12:53:46.367112681 +0200
++++ linux-3.14.1-pax/arch/x86/kernel/traps.c	2014-04-23 23:08:47.315423853 +0200
 @@ -66,7 +66,7 @@
  #include <asm/proto.h>
  
@@ -24551,7 +24608,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/kernel
  			tsk->thread.trap_nr = trapnr;
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_KERNEXEC)
-+			if (trapnr == 12 && ((regs->cs & 0xFFFF) == __KERNEL_CS || (regs->cs & 0xFFFF) == __KERNEXEC_KERNEL_CS))
++			if (trapnr == X86_TRAP_SS && ((regs->cs & 0xFFFF) == __KERNEL_CS || (regs->cs & 0xFFFF) == __KERNEXEC_KERNEL_CS))
 +				str = "PAX: suspicious stack segment fault";
 +#endif
 +
@@ -24559,7 +24616,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/arch/x86/kernel
  		}
 +
 +#ifdef CONFIG_PAX_REFCOUNT
-+		if (trapnr == 4)
++		if (trapnr == X86_TRAP_OF)
 +			pax_report_refcount_overflow(regs);
 +#endif
 +
@@ -35810,6 +35867,20 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/devfreq
  err_out:
  	mutex_unlock(&devfreq_list_lock);
  
+diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/dma/sh/shdma-base.c linux-3.14.1-pax/drivers/dma/sh/shdma-base.c
+--- linux-3.14.1/drivers/dma/sh/shdma-base.c	2014-01-20 12:36:10.489000095 +0100
++++ linux-3.14.1-pax/drivers/dma/sh/shdma-base.c	2014-04-20 20:05:39.148966820 +0200
+@@ -267,8 +267,8 @@ static int shdma_alloc_chan_resources(st
+ 		schan->slave_id = -EINVAL;
+ 	}
+ 
+-	schan->desc = kcalloc(NR_DESCS_PER_CHANNEL,
+-			      sdev->desc_size, GFP_KERNEL);
++	schan->desc = kcalloc(sdev->desc_size,
++			      NR_DESCS_PER_CHANNEL, GFP_KERNEL);
+ 	if (!schan->desc) {
+ 		ret = -ENOMEM;
+ 		goto edescalloc;
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/dma/sh/shdmac.c linux-3.14.1-pax/drivers/dma/sh/shdmac.c
 --- linux-3.14.1/drivers/dma/sh/shdmac.c	2014-01-20 12:36:10.489000095 +0100
 +++ linux-3.14.1-pax/drivers/dma/sh/shdmac.c	2014-03-31 12:53:46.423112678 +0200
@@ -37337,6 +37408,18 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/gpu/drm
  
  	err = drm_debugfs_create_files(dc->debugfs_files,
  				       ARRAY_SIZE(debugfs_files),
+diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/gpu/drm/tegra/dsi.c linux-3.14.1-pax/drivers/gpu/drm/tegra/dsi.c
+--- linux-3.14.1/drivers/gpu/drm/tegra/dsi.c	2014-03-31 12:48:03.023131013 +0200
++++ linux-3.14.1-pax/drivers/gpu/drm/tegra/dsi.c	2014-04-20 19:57:25.948993153 +0200
+@@ -53,7 +53,7 @@ struct tegra_dsi {
+ 	struct clk *clk_lp;
+ 	struct clk *clk;
+ 
+-	struct drm_info_list *debugfs_files;
++	drm_info_list_no_const *debugfs_files;
+ 	struct drm_minor *minor;
+ 	struct dentry *debugfs;
+ 
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/gpu/drm/tegra/hdmi.c linux-3.14.1-pax/drivers/gpu/drm/tegra/hdmi.c
 --- linux-3.14.1/drivers/gpu/drm/tegra/hdmi.c	2014-03-31 12:48:03.027131013 +0200
 +++ linux-3.14.1-pax/drivers/gpu/drm/tegra/hdmi.c	2014-03-31 12:53:46.439112678 +0200
@@ -39164,6 +39247,18 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/irqchip
  	.name			= "GIC",
  	.irq_mask		= gic_mask_irq,
  	.irq_unmask		= gic_unmask_irq,
+diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/irqchip/irq-renesas-irqc.c linux-3.14.1-pax/drivers/irqchip/irq-renesas-irqc.c
+--- linux-3.14.1/drivers/irqchip/irq-renesas-irqc.c	2014-03-31 12:48:05.187130898 +0200
++++ linux-3.14.1-pax/drivers/irqchip/irq-renesas-irqc.c	2014-04-20 20:17:23.940929190 +0200
+@@ -151,7 +151,7 @@ static int irqc_probe(struct platform_de
+ 	struct irqc_priv *p;
+ 	struct resource *io;
+ 	struct resource *irq;
+-	struct irq_chip *irq_chip;
++	irq_chip_no_const *irq_chip;
+ 	const char *name = dev_name(&pdev->dev);
+ 	int ret;
+ 	int k;
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/isdn/capi/capi.c linux-3.14.1-pax/drivers/isdn/capi/capi.c
 --- linux-3.14.1/drivers/isdn/capi/capi.c	2013-08-20 19:08:16.159833370 +0200
 +++ linux-3.14.1-pax/drivers/isdn/capi/capi.c	2014-03-31 12:53:46.459112677 +0200
@@ -45346,6 +45441,43 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/target/
  	smp_mb__after_atomic_inc();
  	pr_debug("Allocated se_ordered_id: %u for Task Attr: 0x%02x on %s\n",
  			cmd->se_ordered_id, cmd->sam_task_attr,
+diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/thermal/of-thermal.c linux-3.14.1-pax/drivers/thermal/of-thermal.c
+--- linux-3.14.1/drivers/thermal/of-thermal.c	2014-03-31 12:48:22.331129982 +0200
++++ linux-3.14.1-pax/drivers/thermal/of-thermal.c	2014-04-20 20:32:28.708880882 +0200
+@@ -30,6 +30,7 @@
+ #include <linux/err.h>
+ #include <linux/export.h>
+ #include <linux/string.h>
++#include <linux/mm.h>
+ 
+ #include "thermal_core.h"
+ 
+@@ -341,8 +342,10 @@ thermal_zone_of_add_sensor(struct device
+ 	tz->get_trend = get_trend;
+ 	tz->sensor_data = data;
+ 
+-	tzd->ops->get_temp = of_thermal_get_temp;
+-	tzd->ops->get_trend = of_thermal_get_trend;
++	pax_open_kernel();
++	*(void **)&tzd->ops->get_temp = of_thermal_get_temp;
++	*(void **)&tzd->ops->get_trend = of_thermal_get_trend;
++	pax_close_kernel();
+ 	mutex_unlock(&tzd->lock);
+ 
+ 	return tzd;
+@@ -461,8 +464,10 @@ void thermal_zone_of_sensor_unregister(s
+ 		return;
+ 
+ 	mutex_lock(&tzd->lock);
+-	tzd->ops->get_temp = NULL;
+-	tzd->ops->get_trend = NULL;
++	pax_open_kernel();
++	*(void **)&tzd->ops->get_temp = NULL;
++	*(void **)&tzd->ops->get_trend = NULL;
++	pax_close_kernel();
+ 
+ 	tz->get_temp = NULL;
+ 	tz->get_trend = NULL;
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/drivers/tty/cyclades.c linux-3.14.1-pax/drivers/tty/cyclades.c
 --- linux-3.14.1/drivers/tty/cyclades.c	2014-03-31 12:48:22.371129980 +0200
 +++ linux-3.14.1-pax/drivers/tty/cyclades.c	2014-03-31 12:53:47.071112644 +0200
@@ -64892,7 +65024,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/lib/vsprintf.c 
  
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/Makefile linux-3.14.1-pax/Makefile
 --- linux-3.14.1/Makefile	2014-04-16 18:35:16.948587787 +0200
-+++ linux-3.14.1-pax/Makefile	2014-04-16 18:35:20.924587903 +0200
++++ linux-3.14.1-pax/Makefile	2014-04-23 23:08:47.291423854 +0200
 @@ -244,8 +244,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -64901,7 +65033,7 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/Makefile linux-
 -HOSTCXXFLAGS = -O2
 +HOSTCFLAGS   = -Wall -W -Wmissing-prototypes -Wstrict-prototypes -Wno-unused-parameter -Wno-missing-field-initializers -O2 -fomit-frame-pointer -fno-delete-null-pointer-checks
 +HOSTCFLAGS  += $(call cc-option, -Wno-empty-body)
-+HOSTCXXFLAGS = -O2 -Wall -W -fno-delete-null-pointer-checks
++HOSTCXXFLAGS = -O2 -Wall -W -Wno-array-bounds
  
  # Decide whether to build built-in, modular, or both.
  # Normally, just do built-in.
@@ -76502,8 +76634,8 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/check
 +}
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/colorize_plugin.c linux-3.14.1-pax/tools/gcc/colorize_plugin.c
 --- linux-3.14.1/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/colorize_plugin.c	2014-03-31 12:53:47.295112632 +0200
-@@ -0,0 +1,169 @@
++++ linux-3.14.1-pax/tools/gcc/colorize_plugin.c	2014-04-23 23:12:39.311411466 +0200
+@@ -0,0 +1,210 @@
 +/*
 + * Copyright 2012-2014 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -76522,20 +76654,20 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/color
 +int plugin_is_GPL_compatible;
 +
 +static struct plugin_info colorize_plugin_info = {
-+	.version	= "201401260140",
-+	.help		= NULL,
++	.version	= "201404202350",
++	.help		= "color=[never|always|auto]\tdetermine when to colorize\n",
 +};
 +
-+#define GREEN		"\033[32m\033[2m"
-+#define LIGHTGREEN	"\033[32m\033[1m"
-+#define YELLOW		"\033[33m\033[2m"
-+#define LIGHTYELLOW	"\033[33m\033[1m"
-+#define RED		"\033[31m\033[2m"
-+#define LIGHTRED	"\033[31m\033[1m"
-+#define BLUE		"\033[34m\033[2m"
-+#define LIGHTBLUE	"\033[34m\033[1m"
-+#define BRIGHT		"\033[m\033[1m"
-+#define NORMAL		"\033[m"
++#define GREEN		"\033[32m\033[K"
++#define LIGHTGREEN	"\033[1;32m\033[K"
++#define YELLOW		"\033[33m\033[K"
++#define LIGHTYELLOW	"\033[1;33m\033[K"
++#define RED		"\033[31m\033[K"
++#define LIGHTRED	"\033[1;31m\033[K"
++#define BLUE		"\033[34m\033[K"
++#define LIGHTBLUE	"\033[1;34m\033[K"
++#define BRIGHT		"\033[1;m\033[K"
++#define NORMAL		"\033[m\033[K"
 +
 +static diagnostic_starter_fn old_starter;
 +static diagnostic_finalizer_fn old_finalizer;
@@ -76637,26 +76769,42 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/color
 +	unsigned int execute() { return execute_colorize_rearm(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_colorize_rearm_pass(void)
++{
++	return new colorize_rearm_pass();
++}
++#else
 +static struct opt_pass *make_colorize_rearm_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new colorize_rearm_pass();
-+#else
 +	return &colorize_rearm_pass.pass;
-+#endif
 +}
++#endif
 +
 +static void colorize_start_unit(void *gcc_data, void *user_data)
 +{
 +	colorize_arm();
 +}
 +
++static bool should_colorize(void)
++{
++#if BUILDING_GCC_VERSION >= 4009
++	return false;
++#else
++	char const *t = getenv("TERM");
++
++	return t && strcmp(t, "dumb") && isatty(STDERR_FILENO);
++#endif
++}
++
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
 +	const char * const plugin_name = plugin_info->base_name;
++	const int argc = plugin_info->argc;
++	const struct plugin_argument * const argv = plugin_info->argv;
++	int i;
 +	struct register_pass_info colorize_rearm_pass_info;
++	bool colorize;
 +
 +	colorize_rearm_pass_info.pass				= make_colorize_rearm_pass();
 +	colorize_rearm_pass_info.reference_pass_name		= "*free_lang_data";
@@ -76669,14 +76817,39 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/color
 +	}
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &colorize_plugin_info);
-+	register_callback(plugin_name, PLUGIN_START_UNIT, &colorize_start_unit, NULL);
-+	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &colorize_rearm_pass_info);
++
++	colorize = getenv("GCC_COLORS") ? should_colorize() : false;
++
++	for (i = 0; i < argc; ++i) {
++		if (!strcmp(argv[i].key, "color")) {
++			if (!argv[i].value) {
++				error(G_("no value supplied for option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
++				continue;
++			}
++			if (!strcmp(argv[i].value, "always"))
++				colorize = true;
++			else if (!strcmp(argv[i].value, "never"))
++				colorize = false;
++			else if (!strcmp(argv[i].value, "auto"))
++				colorize = should_colorize();
++			else
++				error(G_("invalid option argument '-fplugin-arg-%s-%s=%s'"), plugin_name, argv[i].key, argv[i].value);
++			continue;
++		}
++		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
++	}
++
++	if (colorize) {
++		// TODO: parse GCC_COLORS as used by gcc 4.9+
++		register_callback(plugin_name, PLUGIN_START_UNIT, &colorize_start_unit, NULL);
++		register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &colorize_rearm_pass_info);
++	}
 +	return 0;
 +}
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/constify_plugin.c linux-3.14.1-pax/tools/gcc/constify_plugin.c
 --- linux-3.14.1/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/constify_plugin.c	2014-03-31 12:53:47.295112632 +0200
-@@ -0,0 +1,552 @@
++++ linux-3.14.1-pax/tools/gcc/constify_plugin.c	2014-04-23 23:08:47.315423853 +0200
+@@ -0,0 +1,557 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2014 by PaX Team <pageexec@freemail.hu>
@@ -77038,7 +77211,11 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/const
 +
 +static void check_global_variables(void *event_data, void *data)
 +{
++#if BUILDING_GCC_VERSION >= 4009
++	varpool_node *node;
++#else
 +	struct varpool_node *node;
++#endif
 +
 +	FOR_EACH_VARIABLE(node) {
 +		tree var = NODE_DECL(node);
@@ -77135,16 +77312,17 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/const
 +	unsigned int execute() { return check_local_variables(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_check_local_variables_pass(void)
++{
++	return new check_local_variables_pass();
++}
++#else
 +static struct opt_pass *make_check_local_variables_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new check_local_variables_pass();
-+#else
 +	return &check_local_variables_pass.pass;
-+#endif
 +}
++#endif
 +
 +static struct {
 +	const char *name;
@@ -77628,8 +77806,8 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/.giti
 +size_overflow_hash.h
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/kallocstat_plugin.c linux-3.14.1-pax/tools/gcc/kallocstat_plugin.c
 --- linux-3.14.1/tools/gcc/kallocstat_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/kallocstat_plugin.c	2014-03-31 12:53:47.295112632 +0200
-@@ -0,0 +1,182 @@
++++ linux-3.14.1-pax/tools/gcc/kallocstat_plugin.c	2014-04-23 23:08:47.319423852 +0200
+@@ -0,0 +1,183 @@
 +/*
 + * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -77781,16 +77959,17 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/kallo
 +	unsigned int execute() { return execute_kallocstat(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_kallocstat_pass(void)
++{
++	return new kallocstat_pass();
++}
++#else
 +static struct opt_pass *make_kallocstat_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new kallocstat_pass();
-+#else
 +	return &kallocstat_pass.pass;
-+#endif
 +}
++#endif
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
@@ -77814,8 +77993,8 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/kallo
 +}
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/kernexec_plugin.c linux-3.14.1-pax/tools/gcc/kernexec_plugin.c
 --- linux-3.14.1/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/kernexec_plugin.c	2014-03-31 12:53:47.295112632 +0200
-@@ -0,0 +1,519 @@
++++ linux-3.14.1-pax/tools/gcc/kernexec_plugin.c	2014-04-23 23:08:47.291423854 +0200
+@@ -0,0 +1,522 @@
 +/*
 + * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -78242,34 +78421,37 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/kerne
 +	unsigned int execute() { return execute_kernexec_retaddr(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_kernexec_reload_pass(void)
++{
++	return new kernexec_reload_pass();
++}
++
++static opt_pass *make_kernexec_fptr_pass(void)
++{
++	return new kernexec_fptr_pass();
++}
++
++static opt_pass *make_kernexec_retaddr_pass(void)
++{
++	return new kernexec_retaddr_pass();
++}
++#else
 +static struct opt_pass *make_kernexec_reload_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new kernexec_reload_pass();
-+#else
 +	return &kernexec_reload_pass.pass;
-+#endif
 +}
 +
 +static struct opt_pass *make_kernexec_fptr_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new kernexec_fptr_pass();
-+#else
 +	return &kernexec_fptr_pass.pass;
-+#endif
 +}
 +
 +static struct opt_pass *make_kernexec_retaddr_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new kernexec_retaddr_pass();
-+#else
 +	return &kernexec_retaddr_pass.pass;
-+#endif
 +}
++#endif
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
@@ -78337,8 +78519,8 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/kerne
 +}
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/latent_entropy_plugin.c linux-3.14.1-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.14.1/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/latent_entropy_plugin.c	2014-03-31 12:53:47.295112632 +0200
-@@ -0,0 +1,457 @@
++++ linux-3.14.1-pax/tools/gcc/latent_entropy_plugin.c	2014-04-23 23:08:47.319423852 +0200
+@@ -0,0 +1,462 @@
 +/*
 + * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -78632,7 +78814,11 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/laten
 +	tree local_entropy;
 +
 +	if (!latent_entropy_decl) {
++#if BUILDING_GCC_VERSION >= 4009
++		varpool_node *node;
++#else
 +		struct varpool_node *node;
++#endif
 +
 +		FOR_EACH_VARIABLE(node) {
 +			tree var = NODE_DECL(node);
@@ -78751,16 +78937,17 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/laten
 +	unsigned int execute() { return execute_latent_entropy(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_latent_entropy_pass(void)
++{
++	return new latent_entropy_pass();
++}
++#else
 +static struct opt_pass *make_latent_entropy_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new latent_entropy_pass();
-+#else
 +	return &latent_entropy_pass.pass;
-+#endif
 +}
++#endif
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
@@ -83582,8 +83769,8 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/size_
 +tree_mod_log_eb_copy_65535 tree_mod_log_eb_copy 6 65535 NULL
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/size_overflow_plugin.c linux-3.14.1-pax/tools/gcc/size_overflow_plugin.c
 --- linux-3.14.1/tools/gcc/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/size_overflow_plugin.c	2014-04-18 23:24:35.236479079 +0200
-@@ -0,0 +1,4166 @@
++++ linux-3.14.1-pax/tools/gcc/size_overflow_plugin.c	2014-04-23 23:08:47.295423854 +0200
+@@ -0,0 +1,4169 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -86785,16 +86972,17 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/size_
 +	unsigned int execute() { return search_function(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_ipa_pass(void)
++{
++	return new ipa_pass();
++}
++#else
 +static struct opt_pass *make_ipa_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new ipa_pass();
-+#else
 +	return &ipa_pass.pass;
-+#endif
 +}
++#endif
 +
 +// data for the size_overflow asm stmt
 +struct asm_data {
@@ -87551,16 +87739,17 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/size_
 +	unsigned int execute() { return search_interesting_functions(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_insert_size_overflow_asm_pass(void)
++{
++	return new insert_size_overflow_asm_pass();
++}
++#else
 +static struct opt_pass *make_insert_size_overflow_asm_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new insert_size_overflow_asm_pass();
-+#else
 +	return &insert_size_overflow_asm_pass.pass;
-+#endif
 +}
++#endif
 +
 +// Create the noreturn report_size_overflow() function decl.
 +static void size_overflow_start_unit(void __unused *gcc_data, void __unused *user_data)
@@ -87671,16 +87860,17 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/size_
 +	unsigned int execute() { return dump_functions(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_dump_pass(void)
++{
++	return new dump_pass();
++}
++#else
 +static struct opt_pass *make_dump_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new dump_pass();
-+#else
 +	return &dump_pass.pass;
-+#endif
 +}
++#endif
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
@@ -87752,8 +87942,8 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/size_
 +}
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/stackleak_plugin.c linux-3.14.1-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.14.1/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/stackleak_plugin.c	2014-03-31 12:53:47.463112623 +0200
-@@ -0,0 +1,374 @@
++++ linux-3.14.1-pax/tools/gcc/stackleak_plugin.c	2014-04-23 23:08:47.319423852 +0200
+@@ -0,0 +1,376 @@
 +/*
 + * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -88035,25 +88225,27 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/stack
 +	unsigned int execute() { return execute_stackleak_final(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_stackleak_tree_instrument_pass(void)
++{
++	return new stackleak_tree_instrument_pass();
++}
++
++static opt_pass *make_stackleak_final_rtl_opt_pass(void)
++{
++	return new stackleak_final_rtl_opt_pass();
++}
++#else
 +static struct opt_pass *make_stackleak_tree_instrument_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new stackleak_tree_instrument_pass();
-+#else
 +	return &stackleak_tree_instrument_pass.pass;
-+#endif
 +}
 +
 +static struct opt_pass *make_stackleak_final_rtl_opt_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new stackleak_final_rtl_opt_pass();
-+#else
 +	return &stackleak_final_rtl_opt_pass.pass;
-+#endif
 +}
++#endif
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
@@ -88130,8 +88322,8 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/stack
 +}
 diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/structleak_plugin.c linux-3.14.1-pax/tools/gcc/structleak_plugin.c
 --- linux-3.14.1/tools/gcc/structleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.1-pax/tools/gcc/structleak_plugin.c	2014-03-31 12:53:47.463112623 +0200
-@@ -0,0 +1,273 @@
++++ linux-3.14.1-pax/tools/gcc/structleak_plugin.c	2014-04-23 23:08:47.319423852 +0200
+@@ -0,0 +1,274 @@
 +/*
 + * Copyright 2013-2014 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -88353,16 +88545,17 @@ diff -NurpX linux-3.14.1-pax/Documentation/dontdiff linux-3.14.1/tools/gcc/struc
 +	unsigned int execute() { return handle_function(); }
 +};
 +}
-+#endif
 +
++static opt_pass *make_structleak_pass(void)
++{
++	return new structleak_pass();
++}
++#else
 +static struct opt_pass *make_structleak_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new structleak_pass();
-+#else
 +	return &structleak_pass.pass;
-+#endif
 +}
++#endif
 +
 +int plugin_init(struct plugin_name_args *plugin_info, struct plugin_gcc_version *version)
 +{
