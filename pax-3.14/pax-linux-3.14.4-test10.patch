@@ -1,6 +1,6 @@
-- Emese fixed the handling of more intentional overflows in unsigned/signed casts, reported by minipli
-- updated the mrproper target for the new location of the overflow plugin headers, by minipli
-- updated the size overflow hash database
+- fixed an off-by-one in the prefault code in access_ok on x86, reported by Roy Li <rongqing.li@windriver.com>
+  it'd cause a prefault attempt on address 0 and other unmapped addresses and fail the current syscall
+- updated gcc-common.h
 
 diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/alpha/include/asm/atomic.h linux-3.14.4-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.4/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -16983,7 +16983,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/include/asm/uaccess.h linux-3.14.4-pax/arch/x86/include/asm/uaccess.h
 --- linux-3.14.4/arch/x86/include/asm/uaccess.h	2014-03-31 12:47:57.263131321 +0200
-+++ linux-3.14.4-pax/arch/x86/include/asm/uaccess.h	2014-03-31 12:53:46.335112683 +0200
++++ linux-3.14.4-pax/arch/x86/include/asm/uaccess.h	2014-05-27 12:39:53.196977129 +0200
 @@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
@@ -17005,7 +17005,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
-@@ -85,8 +91,34 @@ static inline bool __chk_range_not_ok(un
+@@ -85,8 +91,36 @@ static inline bool __chk_range_not_ok(un
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
   */
@@ -17015,26 +17015,28 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
 +#define access_ok_noprefault(type, addr, size) (likely(!__range_not_ok(addr, size, user_addr_max())))
 +#define access_ok(type, addr, size)					\
 +({									\
-+	long __size = size;						\
++	unsigned long __size = size;					\
 +	unsigned long __addr = (unsigned long)addr;			\
-+	unsigned long __addr_ao = __addr & PAGE_MASK;			\
-+	unsigned long __end_ao = __addr + __size - 1;			\
 +	bool __ret_ao = __range_not_ok(__addr, __size, user_addr_max()) == 0;\
-+	if (__ret_ao && unlikely((__end_ao ^ __addr_ao) & PAGE_MASK)) {	\
-+		while(__addr_ao <= __end_ao) {				\
-+			char __c_ao;					\
-+			__addr_ao += PAGE_SIZE;				\
-+			if (__size > PAGE_SIZE)				\
-+				_cond_resched();			\
-+			if (__get_user(__c_ao, (char __user *)__addr))	\
-+				break;					\
-+			if (type != VERIFY_WRITE) {			\
++	if (__ret_ao && __size) {					\
++		unsigned long __addr_ao = __addr & PAGE_MASK;		\
++		unsigned long __end_ao = __addr + __size - 1;		\
++		if (unlikely((__end_ao ^ __addr_ao) & PAGE_MASK)) {	\
++			while (__addr_ao <= __end_ao) {			\
++				char __c_ao;				\
++				__addr_ao += PAGE_SIZE;			\
++				if (__size > PAGE_SIZE)			\
++					_cond_resched();		\
++				if (__get_user(__c_ao, (char __user *)__addr))	\
++					break;				\
++				if (type != VERIFY_WRITE) {		\
++					__addr = __addr_ao;		\
++					continue;			\
++				}					\
++				if (__put_user(__c_ao, (char __user *)__addr))	\
++					break;				\
 +				__addr = __addr_ao;			\
-+				continue;				\
 +			}						\
-+			if (__put_user(__c_ao, (char __user *)__addr))	\
-+				break;					\
-+			__addr = __addr_ao;				\
 +		}							\
 +	}								\
 +	__ret_ao;							\
@@ -17042,7 +17044,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  /*
   * The exception table consists of pairs of addresses relative to the
-@@ -176,10 +208,12 @@ __typeof__(__builtin_choose_expr(sizeof(
+@@ -176,10 +210,12 @@ __typeof__(__builtin_choose_expr(sizeof(
  	register __inttype(*(ptr)) __val_gu asm("%"_ASM_DX);		\
  	__chk_user_ptr(ptr);						\
  	might_fault();							\
@@ -17055,7 +17057,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  	__ret_gu;							\
  })
  
-@@ -187,13 +221,21 @@ __typeof__(__builtin_choose_expr(sizeof(
+@@ -187,13 +223,21 @@ __typeof__(__builtin_choose_expr(sizeof(
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -17080,7 +17082,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  		     "3: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
-@@ -206,8 +248,8 @@ __typeof__(__builtin_choose_expr(sizeof(
+@@ -206,8 +250,8 @@ __typeof__(__builtin_choose_expr(sizeof(
  
  #define __put_user_asm_ex_u64(x, addr)					\
  	asm volatile(ASM_STAC "\n"					\
@@ -17091,7 +17093,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  		     "3: " ASM_CLAC "\n"				\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     _ASM_EXTABLE_EX(2b, 3b)				\
-@@ -257,7 +299,8 @@ extern void __put_user_8(void);
+@@ -257,7 +301,8 @@ extern void __put_user_8(void);
  	__typeof__(*(ptr)) __pu_val;				\
  	__chk_user_ptr(ptr);					\
  	might_fault();						\
@@ -17101,7 +17103,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  	switch (sizeof(*(ptr))) {				\
  	case 1:							\
  		__put_user_x(1, __pu_val, ptr, __ret_pu);	\
-@@ -275,6 +318,7 @@ extern void __put_user_8(void);
+@@ -275,6 +320,7 @@ extern void __put_user_8(void);
  		__put_user_x(X, __pu_val, ptr, __ret_pu);	\
  		break;						\
  	}							\
@@ -17109,7 +17111,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  	__ret_pu;						\
  })
  
-@@ -355,8 +399,10 @@ do {									\
+@@ -355,8 +401,10 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -17121,7 +17123,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  		     "2: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -364,8 +410,10 @@ do {									\
+@@ -364,8 +412,10 @@ do {									\
  		     "	jmp 2b\n"					\
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
@@ -17134,7 +17136,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  #define __get_user_size_ex(x, ptr, size)				\
  do {									\
-@@ -389,7 +437,7 @@ do {									\
+@@ -389,7 +439,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -17143,7 +17145,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  		     "2:\n"						\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     : ltype(x) : "m" (__m(addr)))
-@@ -406,13 +454,24 @@ do {									\
+@@ -406,13 +456,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -17170,7 +17172,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -420,8 +479,10 @@ struct __large_struct { unsigned long bu
+@@ -420,8 +481,10 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -17182,7 +17184,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  		     "2: " ASM_CLAC "\n"				\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -429,10 +490,12 @@ struct __large_struct { unsigned long bu
+@@ -429,10 +492,12 @@ struct __large_struct { unsigned long bu
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
@@ -17197,7 +17199,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  		     "2:\n"						\
  		     _ASM_EXTABLE_EX(1b, 2b)				\
  		     : : ltype(x), "m" (__m(addr)))
-@@ -442,11 +505,13 @@ struct __large_struct { unsigned long bu
+@@ -442,11 +507,13 @@ struct __large_struct { unsigned long bu
   */
  #define uaccess_try	do {						\
  	current_thread_info()->uaccess_err = 0;				\
@@ -17211,7 +17213,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  	(err) |= (current_thread_info()->uaccess_err ? -EFAULT : 0);	\
  } while (0)
  
-@@ -471,8 +536,12 @@ struct __large_struct { unsigned long bu
+@@ -471,8 +538,12 @@ struct __large_struct { unsigned long bu
   * On error, the variable @x is set to zero.
   */
  
@@ -17224,7 +17226,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  /**
   * __put_user: - Write a simple value into user space, with less checking.
-@@ -494,8 +563,12 @@ struct __large_struct { unsigned long bu
+@@ -494,8 +565,12 @@ struct __large_struct { unsigned long bu
   * Returns zero on success, or -EFAULT on error.
   */
  
@@ -17237,7 +17239,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  #define __get_user_unaligned __get_user
  #define __put_user_unaligned __put_user
-@@ -513,7 +586,7 @@ struct __large_struct { unsigned long bu
+@@ -513,7 +588,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -17246,7 +17248,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  } while (0)
  
  #define put_user_try		uaccess_try
-@@ -542,18 +615,19 @@ extern void __cmpxchg_wrong_size(void)
+@@ -542,18 +617,19 @@ extern void __cmpxchg_wrong_size(void)
  	__typeof__(ptr) __uval = (uval);				\
  	__typeof__(*(ptr)) __old = (old);				\
  	__typeof__(*(ptr)) __new = (new);				\
@@ -17268,7 +17270,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  			: "i" (-EFAULT), "q" (__new), "1" (__old)	\
  			: "memory"					\
  		);							\
-@@ -562,14 +636,14 @@ extern void __cmpxchg_wrong_size(void)
+@@ -562,14 +638,14 @@ extern void __cmpxchg_wrong_size(void)
  	case 2:								\
  	{								\
  		asm volatile("\t" ASM_STAC "\n"				\
@@ -17285,7 +17287,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  			: "i" (-EFAULT), "r" (__new), "1" (__old)	\
  			: "memory"					\
  		);							\
-@@ -578,14 +652,14 @@ extern void __cmpxchg_wrong_size(void)
+@@ -578,14 +654,14 @@ extern void __cmpxchg_wrong_size(void)
  	case 4:								\
  	{								\
  		asm volatile("\t" ASM_STAC "\n"				\
@@ -17302,7 +17304,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  			: "i" (-EFAULT), "r" (__new), "1" (__old)	\
  			: "memory"					\
  		);							\
-@@ -597,14 +671,14 @@ extern void __cmpxchg_wrong_size(void)
+@@ -597,14 +673,14 @@ extern void __cmpxchg_wrong_size(void)
  			__cmpxchg_wrong_size();				\
  									\
  		asm volatile("\t" ASM_STAC "\n"				\
@@ -17319,7 +17321,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  			: "i" (-EFAULT), "r" (__new), "1" (__old)	\
  			: "memory"					\
  		);							\
-@@ -613,6 +687,7 @@ extern void __cmpxchg_wrong_size(void)
+@@ -613,6 +689,7 @@ extern void __cmpxchg_wrong_size(void)
  	default:							\
  		__cmpxchg_wrong_size();					\
  	}								\
@@ -17327,7 +17329,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  	*__uval = __old;						\
  	__ret;								\
  })
-@@ -636,17 +711,6 @@ extern struct movsl_mask {
+@@ -636,17 +713,6 @@ extern struct movsl_mask {
  
  #define ARCH_HAS_NOCACHE_UACCESS 1
  
@@ -17345,7 +17347,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  #ifdef CONFIG_DEBUG_STRICT_USER_COPY_CHECKS
  # define copy_user_diag __compiletime_error
  #else
-@@ -656,7 +720,7 @@ unsigned long __must_check _copy_to_user
+@@ -656,7 +722,7 @@ unsigned long __must_check _copy_to_user
  extern void copy_user_diag("copy_from_user() buffer size is too small")
  copy_from_user_overflow(void);
  extern void copy_user_diag("copy_to_user() buffer size is too small")
@@ -17354,7 +17356,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  #undef copy_user_diag
  
-@@ -669,7 +733,7 @@ __copy_from_user_overflow(void) __asm__(
+@@ -669,7 +735,7 @@ __copy_from_user_overflow(void) __asm__(
  
  extern void
  __compiletime_warning("copy_to_user() buffer size is not provably correct")
@@ -17363,7 +17365,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  #define __copy_to_user_overflow(size, count) __copy_to_user_overflow()
  
  #else
-@@ -684,10 +748,16 @@ __copy_from_user_overflow(int size, unsi
+@@ -684,10 +750,16 @@ __copy_from_user_overflow(int size, unsi
  
  #endif
  
@@ -17381,7 +17383,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  	might_fault();
  
-@@ -709,12 +779,15 @@ copy_from_user(void *to, const void __us
+@@ -709,12 +781,15 @@ copy_from_user(void *to, const void __us
  	 * case, and do only runtime checking for non-constant sizes.
  	 */
  
@@ -17403,7 +17405,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/arch/x86/includ
  
  	return n;
  }
-@@ -722,17 +795,18 @@ copy_from_user(void *to, const void __us
+@@ -722,17 +797,18 @@ copy_from_user(void *to, const void __us
  static inline unsigned long __must_check
  copy_to_user(void __user *to, const void *from, unsigned long n)
  {
@@ -77396,8 +77398,8 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/tools/gcc/const
 +}
 diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/tools/gcc/gcc-common.h linux-3.14.4-pax/tools/gcc/gcc-common.h
 --- linux-3.14.4/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.4-pax/tools/gcc/gcc-common.h	2014-04-02 03:55:41.711544406 +0200
-@@ -0,0 +1,287 @@
++++ linux-3.14.4-pax/tools/gcc/gcc-common.h	2014-05-28 02:08:44.315591869 +0200
+@@ -0,0 +1,295 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -77468,7 +77470,6 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/tools/gcc/gcc-c
 +#include "tree-pass.h"
 +//#include "df.h"
 +#include "predict.h"
-+//#include "lto-streamer.h"
 +#include "ipa-utils.h"
 +
 +#if BUILDING_GCC_VERSION >= 4009
@@ -77483,6 +77484,7 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/tools/gcc/gcc-c
 +#include "tree-ssanames.h"
 +#include "print-tree.h"
 +#include "tree-eh.h"
++#include "stmt.h"
 +#endif
 +
 +#include "gimple.h"
@@ -77496,6 +77498,10 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/tools/gcc/gcc-c
 +#include "ssa-iterators.h"
 +#endif
 +
++//#include "lto/lto.h"
++//#include "data-streamer.h"
++//#include "lto-compress.h"
++
 +//#include "expr.h" where are you...
 +extern rtx emit_move_insn(rtx x, rtx y);
 +
@@ -77507,6 +77513,8 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/tools/gcc/gcc-c
 +
 +#define DECL_NAME_POINTER(node) IDENTIFIER_POINTER(DECL_NAME(node))
 +#define DECL_NAME_LENGTH(node) IDENTIFIER_LENGTH(DECL_NAME(node))
++#define TYPE_NAME_POINTER(node) IDENTIFIER_POINTER(TYPE_NAME(node))
++#define TYPE_NAME_LENGTH(node) IDENTIFIER_LENGTH(TYPE_NAME(node))
 +
 +#if BUILDING_GCC_VERSION == 4005
 +#define FOR_EACH_LOCAL_DECL(FUN, I, D) for (tree vars = (FUN)->local_decls; vars && (D = TREE_VALUE(vars)); vars = TREE_CHAIN(vars), I)
@@ -77645,6 +77653,8 @@ diff -NurpX linux-3.14.4-pax/Documentation/dontdiff linux-3.14.4/tools/gcc/gcc-c
 +#if BUILDING_GCC_VERSION >= 4007
 +#define cgraph_create_edge(caller, callee, call_stmt, count, freq, nest) \
 +	cgraph_create_edge((caller), (callee), (call_stmt), (count), (freq))
++#define cgraph_create_edge_including_clones(caller, callee, old_call_stmt, call_stmt, count, freq, nest, reason) \
++	cgraph_create_edge_including_clones((caller), (callee), (old_call_stmt), (call_stmt), (count), (freq), (reason))
 +#endif
 +
 +#if BUILDING_GCC_VERSION <= 4008
