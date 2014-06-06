@@ -1,15 +1,8 @@
-- Emese refactored the size overflow plugin and also fixed several integer constant related false positives
-  - https://forums.grsecurity.net/viewtopic.php?f=3&t=3940
-  - https://forums.grsecurity.net/viewtopic.php?f=3&t=3942
-  - https://forums.grsecurity.net/viewtopic.php?f=3&t=3943
-  - https://forums.grsecurity.net/viewtopic.php?f=3&t=3949
-  - https://forums.grsecurity.net/viewtopic.php?f=3&t=3950
-- Emese fixed an assert in the size overflow plugin that could trigger while compiling on 32 bit archs, reported by spender
-- Emese fixed the handling of more intentional overflows in unsigned/signed casts, reported by minipli
-- updated the mrproper target for the new location of the overflow plugin headers, by minipli
-- fixed an off-by-one in the prefault code in access_ok on x86, reported by Roy Li <rongqing.li@windriver.com>
-  it'd cause a prefault attempt on address 0 and other unmapped addresses and fail the current syscall
-- updated gcc-common.h
+- backported 'x86_64: expand kernel stack to 16K', commit 6538b8ea886e472f4431db8ca1d60478f838d14b upstream
+- backported 'mm: rmap: fix use-after-free in __put_anon_vma', commit 624483f3ea82598ab0f62f1bdb9177f531ab1892 upstream
+- CPUs are switched to the percpu pgd earlier to support early vmalloc faults (needed for grsecurity's KSTACKOVERFLOW)
+- cleaned up some unnecessary hunks
+- folded RANDUSTACK into RANDMMAP as supporting them separately isn't worth it, reported by Roy Li <rongqing.li@windriver.com>
 
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/arch/alpha/include/asm/atomic.h linux-3.2.59-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.59/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -10864,7 +10857,16 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/arch/x86/includ
  #endif /* _ASM_X86_MODULE_H */
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/arch/x86/include/asm/page_64_types.h linux-3.2.59-pax/arch/x86/include/asm/page_64_types.h
 --- linux-3.2.59/arch/x86/include/asm/page_64_types.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.59-pax/arch/x86/include/asm/page_64_types.h	2012-07-04 19:24:47.508063006 +0200
++++ linux-3.2.59-pax/arch/x86/include/asm/page_64_types.h	2014-06-06 22:01:55.073045403 +0200
+@@ -1,7 +1,7 @@
+ #ifndef _ASM_X86_PAGE_64_DEFS_H
+ #define _ASM_X86_PAGE_64_DEFS_H
+ 
+-#define THREAD_ORDER	1
++#define THREAD_ORDER	2
+ #define THREAD_SIZE  (PAGE_SIZE << THREAD_ORDER)
+ #define CURRENT_MASK (~(THREAD_SIZE - 1))
+ 
 @@ -56,7 +56,7 @@ void copy_page(void *to, void *from);
  
  /* duplicated to the one in bootmem.h */
@@ -19383,8 +19385,24 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/arch/x86/kernel
  	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/arch/x86/kernel/smpboot.c linux-3.2.59-pax/arch/x86/kernel/smpboot.c
 --- linux-3.2.59/arch/x86/kernel/smpboot.c	2014-04-02 03:15:40.799672596 +0200
-+++ linux-3.2.59-pax/arch/x86/kernel/smpboot.c	2014-04-02 03:15:49.155672150 +0200
-@@ -692,7 +692,7 @@ static int __cpuinit do_boot_cpu(int api
++++ linux-3.2.59-pax/arch/x86/kernel/smpboot.c	2014-06-06 22:09:24.049044403 +0200
+@@ -252,11 +252,13 @@ notrace static void __cpuinit start_seco
+ 	preempt_disable();
+ 	smp_callin();
+ 
+-#ifdef CONFIG_X86_32
+ 	/* switch away from the initial page table */
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	load_cr3(get_cpu_pgd(smp_processor_id()));
++#else
+ 	load_cr3(swapper_pg_dir);
+-	__flush_tlb_all();
+ #endif
++	__flush_tlb_all();
+ 
+ 	/* otherwise gcc will move up smp_processor_id before the cpu_init */
+ 	barrier();
+@@ -692,7 +694,7 @@ static int __cpuinit do_boot_cpu(int api
  	 */
  	if (c_idle.idle) {
  		c_idle.idle->thread.sp = (unsigned long) (((struct pt_regs *)
@@ -19393,7 +19411,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/arch/x86/kernel
  		init_idle(c_idle.idle, cpu);
  		goto do_rest;
  	}
-@@ -709,17 +709,20 @@ static int __cpuinit do_boot_cpu(int api
+@@ -709,17 +711,20 @@ static int __cpuinit do_boot_cpu(int api
  	set_idle_for_cpu(cpu, c_idle.idle);
  do_rest:
  	per_cpu(current_task, cpu) = c_idle.idle;
@@ -19417,7 +19435,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/arch/x86/kernel
  	initial_code = (unsigned long)start_secondary;
  	stack_start  = c_idle.idle->thread.sp;
  
-@@ -861,6 +864,12 @@ int __cpuinit native_cpu_up(unsigned int
+@@ -861,6 +866,12 @@ int __cpuinit native_cpu_up(unsigned int
  
  	per_cpu(cpu_state, cpu) = CPU_UP_PREPARE;
  
@@ -36311,17 +36329,6 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/drivers/message
  	INIT_LIST_HEAD(&c->context_list);
  #endif
  
-diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/drivers/mfd/janz-cmodio.c linux-3.2.59-pax/drivers/mfd/janz-cmodio.c
---- linux-3.2.59/drivers/mfd/janz-cmodio.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.59-pax/drivers/mfd/janz-cmodio.c	2012-07-04 19:24:48.516063007 +0200
-@@ -13,6 +13,7 @@
- 
- #include <linux/kernel.h>
- #include <linux/module.h>
-+#include <linux/slab.h>
- #include <linux/init.h>
- #include <linux/pci.h>
- #include <linux/interrupt.h>
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/drivers/mfd/max8925-i2c.c linux-3.2.59-pax/drivers/mfd/max8925-i2c.c
 --- linux-3.2.59/drivers/mfd/max8925-i2c.c	2014-04-30 18:53:45.596223430 +0200
 +++ linux-3.2.59-pax/drivers/mfd/max8925-i2c.c	2014-04-30 18:53:50.444223420 +0200
@@ -58466,7 +58473,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/lib/vsprintf.c 
  
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/Makefile linux-3.2.59-pax/Makefile
 --- linux-3.2.59/Makefile	2014-05-20 01:19:02.403997850 +0200
-+++ linux-3.2.59-pax/Makefile	2014-06-02 18:53:13.878263780 +0200
++++ linux-3.2.59-pax/Makefile	2014-06-06 21:31:05.765049525 +0200
 @@ -245,8 +245,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -58638,15 +58645,16 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/Makefile linux-
  		  Module.symvers tags TAGS cscope* GPATH GTAGS GRTAGS GSYMS
  
  # clean - Delete most, but leave enough to build external modules
-@@ -1201,6 +1274,7 @@ distclean: mrproper
+@@ -1200,7 +1273,7 @@ distclean: mrproper
+ 	@find $(srctree) $(RCS_FIND_IGNORE) \
  		\( -name '*.orig' -o -name '*.rej' -o -name '*~' \
  		-o -name '*.bak' -o -name '#*#' -o -name '.*.orig' \
- 		-o -name '.*.rej' \
+-		-o -name '.*.rej' \
 +		-o -name '.*.rej' -o -name '*.so' \
  		-o -name '*%' -o -name '.*.cmd' -o -name 'core' \) \
  		-type f -print | xargs rm -f
  
-@@ -1361,6 +1435,8 @@ PHONY += $(module-dirs) modules
+@@ -1361,6 +1434,8 @@ PHONY += $(module-dirs) modules
  $(module-dirs): crmodverdir $(objtree)/Module.symvers
  	$(Q)$(MAKE) $(build)=$(patsubst _module_%,%,$@)
  
@@ -58655,7 +58663,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/Makefile linux-
  modules: $(module-dirs)
  	@$(kecho) '  Building modules, stage 2.';
  	$(Q)$(MAKE) -f $(srctree)/scripts/Makefile.modpost
-@@ -1487,17 +1563,21 @@ else
+@@ -1487,17 +1562,21 @@ else
          target-dir = $(if $(KBUILD_EXTMOD),$(dir $<),$(dir $@))
  endif
  
@@ -58681,7 +58689,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/Makefile linux-
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
  %.symtypes: %.c prepare scripts FORCE
  	$(Q)$(MAKE) $(build)=$(build-dir) $(target-dir)$(notdir $@)
-@@ -1507,11 +1587,15 @@ endif
+@@ -1507,11 +1586,15 @@ endif
  	$(cmd_crmodverdir)
  	$(Q)$(MAKE) KBUILD_MODULES=$(if $(CONFIG_MODULES),1) \
  	$(build)=$(build-dir)
@@ -61915,7 +61923,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/mm/readahead.c 
  {
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/mm/rmap.c linux-3.2.59-pax/mm/rmap.c
 --- linux-3.2.59/mm/rmap.c	2014-04-30 18:53:46.260223429 +0200
-+++ linux-3.2.59-pax/mm/rmap.c	2014-04-30 18:53:50.676223419 +0200
++++ linux-3.2.59-pax/mm/rmap.c	2014-06-06 21:31:30.973049468 +0200
 @@ -153,6 +153,10 @@ int anon_vma_prepare(struct vm_area_stru
  	struct anon_vma *anon_vma = vma->anon_vma;
  	struct anon_vma_chain *avc;
@@ -62018,6 +62026,18 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/mm/rmap.c linux
  }
  
  /*
+@@ -1669,10 +1708,9 @@ void __put_anon_vma(struct anon_vma *ano
+ {
+ 	struct anon_vma *root = anon_vma->root;
+ 
++	anon_vma_free(anon_vma);
+ 	if (root != anon_vma && atomic_dec_and_test(&root->refcount))
+ 		anon_vma_free(root);
+-
+-	anon_vma_free(anon_vma);
+ }
+ 
+ #ifdef CONFIG_MIGRATION
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/mm/shmem.c linux-3.2.59-pax/mm/shmem.c
 --- linux-3.2.59/mm/shmem.c	2013-03-29 02:18:30.207676737 +0100
 +++ linux-3.2.59-pax/mm/shmem.c	2013-03-29 02:19:02.143675032 +0100
@@ -68598,8 +68618,8 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/security/integr
  	return 0;
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/security/Kconfig linux-3.2.59-pax/security/Kconfig
 --- linux-3.2.59/security/Kconfig	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.59-pax/security/Kconfig	2014-01-16 02:54:06.798181152 +0100
-@@ -4,6 +4,688 @@
++++ linux-3.2.59-pax/security/Kconfig	2014-06-06 21:36:57.737048740 +0200
+@@ -4,6 +4,686 @@
  
  menu "Security options"
  
@@ -68647,7 +68667,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/security/Kconfi
 +	  at runtime via the entries in /proc/sys/kernel/pax.
 +
 +config PAX_EI_PAX
-+	bool 'Use legacy ELF header marking'
++	bool 'Use legacy ELF header marking' if EXPERT
 +	help
 +	  Enabling this option will allow you to control PaX features on
 +	  a per executable basis via the 'chpax' utility available at
@@ -69017,8 +69037,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/security/Kconfi
 +	  guess them in most cases.  Any failed guess will most likely crash
 +	  the attacked program which allows the kernel to detect such attempts
 +	  and react on them.  PaX itself provides no reaction mechanisms,
-+	  instead it is strongly encouraged that you make use of Nergal's
-+	  segvguard (ftp://ftp.pl.openwall.com/misc/segvguard/) or grsecurity's
++	  instead it is strongly encouraged that you make use of grsecurity's
 +	  (http://www.grsecurity.net/) built-in crash detection features or
 +	  develop one yourself.
 +
@@ -69051,28 +69070,27 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/security/Kconfi
 +	  configuration, this feature cannot be disabled on a per file basis.
 +
 +config PAX_RANDUSTACK
-+	bool "Randomize user stack base"
++	bool
++
++config PAX_RANDMMAP
++	bool "Randomize user stack and mmap() bases"
 +	depends on PAX_ASLR
++	select PAX_RANDUSTACK
 +	help
 +	  By saying Y here the kernel will randomize every task's userland
-+	  stack.  The randomization is done in two steps where the second
++	  stack and use a randomized base address for mmap() requests that
++	  do not specify one themselves.
++
++	  The stack randomization is done in two steps where the second
 +	  one may apply a big amount of shift to the top of the stack and
 +	  cause problems for programs that want to use lots of memory (more
 +	  than 2.5 GB if SEGMEXEC is not active, or 1.25 GB when it is).
-+	  For this reason the second step can be controlled by 'chpax' or
-+	  'paxctl' on a per file basis.
 +
-+config PAX_RANDMMAP
-+	bool "Randomize mmap() base"
-+	depends on PAX_ASLR
-+	help
-+	  By saying Y here the kernel will use a randomized base address for
-+	  mmap() requests that do not specify one themselves.  As a result
-+	  all dynamically loaded libraries will appear at random addresses
-+	  and therefore be harder to exploit by a technique where an attacker
-+	  attempts to execute library code for his purposes (e.g. spawn a
-+	  shell from an exploited program that is running at an elevated
-+	  privilege level).
++	  As a result of mmap randomization all dynamically loaded libraries
++	  will appear at random addresses and therefore be harder to exploit
++	  by a technique where an attacker attempts to execute library code
++	  for his purposes (e.g. spawn a shell from an exploited program that
++	  is running at an elevated privilege level).
 +
 +	  Furthermore, if a program is relinked as a dynamic ELF file, its
 +	  base address will be randomized as well, completing the full
@@ -69288,7 +69306,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/security/Kconfi
  config KEYS
  	bool "Enable access key retention support"
  	help
-@@ -169,7 +851,7 @@ config INTEL_TXT
+@@ -169,7 +849,7 @@ config INTEL_TXT
  config LSM_MMAP_MIN_ADDR
  	int "Low address space for LSM to protect from user allocation"
  	depends on SECURITY && SECURITY_SELINUX
@@ -76940,7 +76958,7 @@ diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/tools/gcc/size_
 +zpios_read_64734 zpios_read 3 64734 NULL
 diff -NurpX linux-3.2.59-pax/Documentation/dontdiff linux-3.2.59/tools/gcc/size_overflow_plugin/size_overflow_hash.data linux-3.2.59-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data
 --- linux-3.2.59/tools/gcc/size_overflow_plugin/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.59-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data	2014-04-21 23:07:17.175482817 +0200
++++ linux-3.2.59-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data	2014-06-02 22:56:56.289483057 +0200
 @@ -0,0 +1,4429 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +compat_sock_setsockopt_23 compat_sock_setsockopt 5 23 NULL
