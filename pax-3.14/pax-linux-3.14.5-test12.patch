@@ -1,9 +1,4 @@
-- backported 'x86_64: expand kernel stack to 16K', commit 6538b8ea886e472f4431db8ca1d60478f838d14b upstream
-- backported 'mm: rmap: fix use-after-free in __put_anon_vma', commit 624483f3ea82598ab0f62f1bdb9177f531ab1892 upstream
-- CPUs are switched to the percpu pgd earlier to support early vmalloc faults (needed for grsecurity's KSTACKOVERFLOW)
-- cleaned up some unnecessary hunks
-- folded RANDUSTACK into RANDMMAP as supporting them separately isn't worth it, reported by Roy Li <rongqing.li@windriver.com>
-- converted some ACCESS_ONCE usage into the correct ACCESS_ONCE_RW
+- bacported 'net: fix inet_getid() and ipv6_select_ident() bugs', commit 39c36094d78c39e038c1e499b2364e13bce36f54 upstream
 
 diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/arch/alpha/include/asm/atomic.h linux-3.14.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.5/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -58804,7 +58799,7 @@ diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/include/net/ine
   *
 diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/include/net/inetpeer.h linux-3.14.5-pax/include/net/inetpeer.h
 --- linux-3.14.5/include/net/inetpeer.h	2014-03-31 12:48:30.543129544 +0200
-+++ linux-3.14.5-pax/include/net/inetpeer.h	2014-03-31 12:53:47.191112637 +0200
++++ linux-3.14.5-pax/include/net/inetpeer.h	2014-06-09 12:56:34.965123331 +0200
 @@ -47,8 +47,8 @@ struct inet_peer {
  	 */
  	union {
@@ -58816,12 +58811,11 @@ diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/include/net/ine
  		};
  		struct rcu_head         rcu;
  		struct inet_peer	*gc_next;
-@@ -177,16 +177,13 @@ static inline void inet_peer_refcheck(co
+@@ -177,16 +177,9 @@ static inline void inet_peer_refcheck(co
  /* can be called with or without local BH being disabled */
  static inline int inet_getid(struct inet_peer *p, int more)
  {
 -	int old, new;
-+	int id;
  	more++;
  	inet_peer_refcheck(p);
 -	do {
@@ -58831,10 +58825,7 @@ diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/include/net/ine
 -			new = 1;
 -	} while (atomic_cmpxchg(&p->ip_id_count, old, new) != old);
 -	return new;
-+	id = atomic_add_return_unchecked(more, &p->ip_id_count);
-+	if (!id)
-+		id = atomic_inc_return_unchecked(&p->ip_id_count);
-+	return id;
++	return atomic_add_return_unchecked(more, &p->ip_id_count) - more;
  }
  
  #endif /* _NET_INETPEER_H */
@@ -72092,7 +72083,7 @@ diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/net/ipv6/netfil
  }
 diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/net/ipv6/output_core.c linux-3.14.5-pax/net/ipv6/output_core.c
 --- linux-3.14.5/net/ipv6/output_core.c	2013-11-04 01:46:52.327114668 +0100
-+++ linux-3.14.5-pax/net/ipv6/output_core.c	2014-03-31 12:53:47.263112634 +0200
++++ linux-3.14.5-pax/net/ipv6/output_core.c	2014-06-09 12:58:29.377123076 +0200
 @@ -9,8 +9,8 @@
  
  void ipv6_select_ident(struct frag_hdr *fhdr, struct rt6_info *rt)
@@ -72104,7 +72095,7 @@ diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/net/ipv6/output
  
  #if IS_ENABLED(CONFIG_IPV6)
  	if (rt && !(rt->dst.flags & DST_NOPEER)) {
-@@ -26,13 +26,10 @@ void ipv6_select_ident(struct frag_hdr *
+@@ -26,13 +26,8 @@ void ipv6_select_ident(struct frag_hdr *
  		}
  	}
  #endif
@@ -72116,8 +72107,6 @@ diff -NurpX linux-3.14.5-pax/Documentation/dontdiff linux-3.14.5/net/ipv6/output
 -	} while (atomic_cmpxchg(&ipv6_fragmentation_id, old, new) != old);
 -	fhdr->identification = htonl(new);
 +	id = atomic_inc_return_unchecked(&ipv6_fragmentation_id);
-+	if (!id)
-+		id = atomic_inc_return_unchecked(&ipv6_fragmentation_id);
 +	fhdr->identification = htonl(id);
  }
  EXPORT_SYMBOL(ipv6_select_ident);
