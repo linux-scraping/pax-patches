@@ -1,4 +1,5 @@
-- forward port to 3.2.60
+- fixed wrong asm constraint in __range_not_ok, reported by klimo (http://forums.grsecurity.net/viewtopic.php?f=3&t=3979)
+- added detection for more broken CC/HOSTCC combinations, reported by GBit (http://forums.grsecurity.net/viewtopic.php?f=3&t=3973)
 
 diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/arch/alpha/include/asm/atomic.h linux-3.2.60-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.60/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -12921,7 +12922,7 @@ diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/arch/x86/includ
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/arch/x86/include/asm/uaccess.h linux-3.2.60-pax/arch/x86/include/asm/uaccess.h
 --- linux-3.2.60/arch/x86/include/asm/uaccess.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.60-pax/arch/x86/include/asm/uaccess.h	2014-06-02 19:01:44.774236502 +0200
++++ linux-3.2.60-pax/arch/x86/include/asm/uaccess.h	2014-06-14 15:40:54.028938748 +0200
 @@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
@@ -12943,6 +12944,15 @@ diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/arch/x86/includ
  
  #define segment_eq(a, b)	((a).seg == (b).seg)
  
+@@ -52,7 +58,7 @@
+ 	__chk_user_ptr(addr);						\
+ 	asm("add %3,%1 ; sbb %0,%0 ; cmp %1,%4 ; sbb $0,%0"		\
+ 	    : "=&r" (flag), "=r" (roksum)				\
+-	    : "1" (addr), "g" ((long)(size)),				\
++	    : "1" (addr), "rm" ((long)(size)),				\
+ 	      "rm" (current_thread_info()->addr_limit.seg));		\
+ 	flag;								\
+ })
 @@ -76,7 +82,35 @@
   * checks that the pointer is in the user space range - after calling
   * this function, memory access functions may still return -EFAULT.
@@ -42336,7 +42346,7 @@ diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/fs/afs/inode.c 
  	if (!inode) {
 diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/fs/aio.c linux-3.2.60-pax/fs/aio.c
 --- linux-3.2.60/fs/aio.c	2013-05-14 13:33:40.636285672 +0200
-+++ linux-3.2.60-pax/fs/aio.c	2013-05-14 13:33:46.576285355 +0200
++++ linux-3.2.60-pax/fs/aio.c	2014-06-14 15:39:05.360935553 +0200
 @@ -119,7 +119,7 @@ static int aio_setup_ring(struct kioctx
  	size += sizeof(struct io_event) * nr_events;
  	nr_pages = (size + PAGE_SIZE-1) >> PAGE_SHIFT;
@@ -68142,24 +68152,51 @@ diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/scripts/gcc-plugin.sh linux-3.2.60-pax/scripts/gcc-plugin.sh
 --- linux-3.2.60/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.60-pax/scripts/gcc-plugin.sh	2014-04-05 22:27:52.408781722 +0200
-@@ -0,0 +1,16 @@
++++ linux-3.2.60-pax/scripts/gcc-plugin.sh	2014-06-16 16:03:46.864920013 +0200
+@@ -0,0 +1,43 @@
 +#!/bin/bash
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
-+plugincc=$($1 -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
-+#warning $2
++#warning $2 CXX
 +#else
-+#warning $1
++#warning $1 CC
 +#endif
++EOF
++)
++
++if [ $? -ne 0 ]
++then
++	exit 1
++fi
++
++if [[ "$plugincc" =~ "$1 CC" ]]
++then
++	echo "$1"
++	exit 0
++fi
++
++if [[ "$plugincc" =~ "$2 CXX" ]]
++then
++plugincc=$($1 -c -x c++ -std=gnu++98 - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++#include "gcc-common.h"
++class test {
++public:
++	int test;
++} test = {
++	.test = 1
++};
 +EOF
 +)
 +if [ $? -eq 0 ]
 +then
-+	( [[ "$plugincc" =~ "$1" ]] && echo "$1" ) || ( [[ "$plugincc" =~ "$2" ]] && echo "$2" )
++	echo "$2"
++	exit 0
 +fi
++fi
++exit 1
 diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/scripts/headers_install.pl linux-3.2.60-pax/scripts/headers_install.pl
 --- linux-3.2.60/scripts/headers_install.pl	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.60-pax/scripts/headers_install.pl	2013-04-05 19:58:05.772903585 +0200
@@ -68622,7 +68659,7 @@ diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/security/integr
  	return 0;
 diff -NurpX linux-3.2.60-pax/Documentation/dontdiff linux-3.2.60/security/Kconfig linux-3.2.60-pax/security/Kconfig
 --- linux-3.2.60/security/Kconfig	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.60-pax/security/Kconfig	2014-06-06 21:36:57.737048740 +0200
++++ linux-3.2.60-pax/security/Kconfig	2014-06-16 16:07:18.740926243 +0200
 @@ -4,6 +4,686 @@
  
  menu "Security options"
