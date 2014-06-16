@@ -1,4 +1,5 @@
-- forward port to 3.14.6
+- added detection for more broken CC/HOSTCC combinations, reported by GBit (http://forums.grsecurity.net/viewtopic.php?f=3&t=3973)
+- updated *FS_XATTR selection for PAX_XATTR_PAX_FLAGS, triggered by a discussion on gentoo-hardened (http://marc.info/?t=140267048800002)
 
 diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/arch/alpha/include/asm/atomic.h linux-3.14.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.6/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -58799,7 +58800,7 @@ diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/include/net/ine
   *
 diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/include/net/inetpeer.h linux-3.14.6-pax/include/net/inetpeer.h
 --- linux-3.14.6/include/net/inetpeer.h	2014-03-31 12:48:30.543129544 +0200
-+++ linux-3.14.6-pax/include/net/inetpeer.h	2014-06-09 12:56:34.965123331 +0200
++++ linux-3.14.6-pax/include/net/inetpeer.h	2014-06-10 13:49:59.557890533 +0200
 @@ -47,8 +47,8 @@ struct inet_peer {
  	 */
  	union {
@@ -58825,7 +58826,7 @@ diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/include/net/ine
 -			new = 1;
 -	} while (atomic_cmpxchg(&p->ip_id_count, old, new) != old);
 -	return new;
-+	reeturn atomic_add_return_unchecked(more, &p->ip_id_count) - more;
++	return atomic_add_return_unchecked(more, &p->ip_id_count) - more;
  }
  
  #endif /* _NET_INETPEER_H */
@@ -74576,24 +74577,51 @@ diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/scripts/gcc-plugin.sh linux-3.14.6-pax/scripts/gcc-plugin.sh
 --- linux-3.14.6/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.6-pax/scripts/gcc-plugin.sh	2014-04-05 22:15:21.112803121 +0200
-@@ -0,0 +1,16 @@
++++ linux-3.14.6-pax/scripts/gcc-plugin.sh	2014-06-12 03:46:18.966499686 +0200
+@@ -0,0 +1,43 @@
 +#!/bin/bash
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
-+plugincc=$($1 -E -shared - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
-+#warning $2
++#warning $2 CXX
 +#else
-+#warning $1
++#warning $1 CC
 +#endif
++EOF
++)
++
++if [ $? -ne 0 ]
++then
++	exit 1
++fi
++
++if [[ "$plugincc" =~ "$1 CC" ]]
++then
++	echo "$1"
++	exit 0
++fi
++
++if [[ "$plugincc" =~ "$2 CXX" ]]
++then
++plugincc=$($1 -c -x c++ -std=gnu++98 - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++#include "gcc-common.h"
++class test {
++public:
++	int test;
++} test = {
++	.test = 1
++};
 +EOF
 +)
 +if [ $? -eq 0 ]
 +then
-+	( [[ "$plugincc" =~ "$1" ]] && echo "$1" ) || ( [[ "$plugincc" =~ "$2" ]] && echo "$2" )
++	echo "$2"
++	exit 0
 +fi
++fi
++exit 1
 diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/scripts/headers_install.sh linux-3.14.6-pax/scripts/headers_install.sh
 --- linux-3.14.6/scripts/headers_install.sh	2013-09-03 00:45:11.534911871 +0200
 +++ linux-3.14.6-pax/scripts/headers_install.sh	2014-03-31 12:53:47.283112633 +0200
@@ -75031,7 +75059,7 @@ diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/security/integr
  	return 0;
 diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/security/Kconfig linux-3.14.6-pax/security/Kconfig
 --- linux-3.14.6/security/Kconfig	2014-03-31 12:48:34.783129318 +0200
-+++ linux-3.14.6-pax/security/Kconfig	2014-06-06 21:14:24.353051756 +0200
++++ linux-3.14.6-pax/security/Kconfig	2014-06-14 12:46:37.268631300 +0200
 @@ -4,6 +4,691 @@
  
  menu "Security options"
@@ -75120,13 +75148,13 @@ diff -NurpX linux-3.14.6-pax/Documentation/dontdiff linux-3.14.6/security/Kconfi
 +config PAX_XATTR_PAX_FLAGS
 +	bool 'Use filesystem extended attributes marking'
 +	select CIFS_XATTR if CIFS
++	select F2FS_FS_XATTR if F2FS_FS
 +	select EXT2_FS_XATTR if EXT2_FS
 +	select EXT3_FS_XATTR if EXT3_FS
 +	select JFFS2_FS_XATTR if JFFS2_FS
 +	select REISERFS_FS_XATTR if REISERFS_FS
 +	select SQUASHFS_XATTR if SQUASHFS
 +	select TMPFS_XATTR if TMPFS
-+	select UBIFS_FS_XATTR if UBIFS_FS
 +	help
 +	  Enabling this option will allow you to control PaX features on
 +	  a per executable basis via the 'setfattr' utility.  The control
