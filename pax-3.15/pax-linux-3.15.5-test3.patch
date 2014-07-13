@@ -1,5 +1,4 @@
-- forward port to 3.15.5
-- updated the size overflow hashtable from grsec
+- Emese fixed a size overflow false positive, reported by joe (http://forums.grsecurity.net/viewtopic.php?f=3&t=3997)
 
 diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/arch/alpha/include/asm/atomic.h linux-3.15.5-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.15.5/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -80973,8 +80972,8 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +
 diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c linux-3.15.5-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c
 --- linux-3.15.5/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.5-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	2014-06-09 12:46:24.517124692 +0200
-@@ -0,0 +1,1133 @@
++++ linux-3.15.5-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	2014-07-13 20:09:36.609118293 +0200
+@@ -0,0 +1,1141 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -81189,7 +81188,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +}
 +
 +enum conditions {
-+	FROM_CONST, NOT_UNARY, CAST
++	FROM_CONST, NOT_UNARY, CAST, RET, PHI
 +};
 +
 +// Search for constants, cast assignments and binary/ternary assignments
@@ -81209,11 +81208,15 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +		return;
 +
 +	switch (gimple_code(def_stmt)) {
-+	case GIMPLE_NOP:
 +	case GIMPLE_CALL:
++		if (lhs == gimple_return_retval(def_stmt))
++			interesting_conditions[RET] = true;
++		return;
++	case GIMPLE_NOP:
 +	case GIMPLE_ASM:
 +		return;
 +	case GIMPLE_PHI:
++		interesting_conditions[PHI] = true;
 +		return walk_phi_set_conditions(visited, interesting_conditions, lhs);
 +	case GIMPLE_ASSIGN:
 +		if (gimple_num_ops(def_stmt) == 2) {
@@ -81431,11 +81434,11 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +/* If there is a mark_turn_off intentional attribute on the caller or the callee then there is no duplication and missing size_overflow attribute check anywhere.
 + * There is only missing size_overflow attribute checking if the intentional_overflow attribute is the mark_no type.
 + * Stmt duplication is unnecessary if there are no binary/ternary assignements or if the unary assignment isn't a cast.
-+ * It skips the possible error codes too. If the def_stmts trace back to a constant and there are no binary/ternary assigments then we assume that it is some kind of error code.
++ * It skips the possible error codes too.
 + */
 +static enum precond check_preconditions(struct interesting_node *cur_node)
 +{
-+	bool interesting_conditions[3] = {false, false, false};
++	bool interesting_conditions[5] = {false, false, false, false, false};
 +
 +	set_last_nodes(cur_node);
 +
@@ -81445,7 +81448,11 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +
 +	search_interesting_conditions(cur_node, interesting_conditions);
 +
-+	// error code
++	// error code: a phi, unary assign (not cast) and returns only
++	if (!interesting_conditions[NOT_UNARY] && interesting_conditions[PHI] && interesting_conditions[RET] && !interesting_conditions[CAST])
++		return NO_ATTRIBUTE_SEARCH;
++
++	// error code: def_stmts trace back to a constant and there are no binary/ternary assigments
 +	if (interesting_conditions[CAST] && interesting_conditions[FROM_CONST] && !interesting_conditions[NOT_UNARY])
 +		return NO_ATTRIBUTE_SEARCH;
 +
@@ -83567,8 +83574,8 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +zpios_read_64734 zpios_read 3 64734 NULL
 diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_overflow_plugin/size_overflow_hash.data linux-3.15.5-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data
 --- linux-3.15.5/tools/gcc/size_overflow_plugin/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.5-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data	2014-07-09 21:18:44.148189291 +0200
-@@ -0,0 +1,5801 @@
++++ linux-3.15.5-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data	2014-07-11 12:41:07.000000000 +0200
+@@ -0,0 +1,5808 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +storvsc_connect_to_vsp_22 storvsc_connect_to_vsp 2 22 NULL
 +compat_sock_setsockopt_23 compat_sock_setsockopt 5 23 NULL
@@ -84515,6 +84522,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +page_offset_11120 page_offset 0 11120 NULL
 +cea_db_payload_len_11124 cea_db_payload_len 0 11124 NULL nohasharray
 +tracing_buffers_read_11124 tracing_buffers_read 3 11124 &cea_db_payload_len_11124
++alloc_alien_cache_11127 alloc_alien_cache 2 11127 NULL
 +snd_gf1_pcm_playback_silence_11172 snd_gf1_pcm_playback_silence 3-4 11172 NULL
 +il_dbgfs_rx_queue_read_11221 il_dbgfs_rx_queue_read 3 11221 NULL
 +comedi_alloc_spriv_11234 comedi_alloc_spriv 2 11234 NULL
@@ -84857,6 +84865,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +__kfifo_in_14797 __kfifo_in 3-0 14797 NULL
 +hpet_readl_14801 hpet_readl 0 14801 NULL nohasharray
 +snd_als300_gcr_read_14801 snd_als300_gcr_read 0 14801 &hpet_readl_14801
++do_tune_cpucache_14828 do_tune_cpucache 2 14828 NULL
 +mrp_attr_create_14853 mrp_attr_create 3 14853 NULL
 +lcd_write_14857 lcd_write 3 14857 NULL
 +get_user_cpu_mask_14861 get_user_cpu_mask 2 14861 NULL
@@ -85167,6 +85176,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +__ceph_getxattr_18386 __ceph_getxattr 0 18386 NULL
 +ci_role_write_18388 ci_role_write 3 18388 NULL
 +adis16136_show_serial_18402 adis16136_show_serial 3 18402 NULL
++rtl8169_rx_fill_18416 rtl8169_rx_fill 0 18416 NULL
 +memblock_virt_alloc_node_nopanic_18431 memblock_virt_alloc_node_nopanic 1 18431 NULL
 +iscsi_create_flashnode_sess_18433 iscsi_create_flashnode_sess 4 18433 NULL
 +snd_hda_get_connections_18437 snd_hda_get_connections 0 18437 NULL
@@ -85185,7 +85195,8 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +sas_change_queue_depth_18555 sas_change_queue_depth 2 18555 NULL
 +smk_write_rules_list_18565 smk_write_rules_list 3 18565 NULL
 +debug_output_18575 debug_output 3 18575 NULL
-+filemap_fdatawait_range_18600 filemap_fdatawait_range 0 18600 NULL
++filemap_fdatawait_range_18600 filemap_fdatawait_range 0 18600 NULL nohasharray
++slabinfo_write_18600 slabinfo_write 3 18600 &filemap_fdatawait_range_18600
 +iowarrior_write_18604 iowarrior_write 3 18604 NULL
 +from_buffer_18625 from_buffer 3 18625 NULL
 +snd_pcm_oss_write3_18657 snd_pcm_oss_write3 0-3 18657 NULL
@@ -87746,6 +87757,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +mcp23s17_read_regs_47491 mcp23s17_read_regs 4 47491 NULL
 +core_sys_select_47494 core_sys_select 1 47494 NULL
 +as3722_block_write_47503 as3722_block_write 2-3 47503 NULL
++alloc_arraycache_47505 alloc_arraycache 2 47505 NULL
 +unlink_simple_47506 unlink_simple 3 47506 NULL
 +pstore_decompress_47510 pstore_decompress 0 47510 NULL
 +__proc_lnet_portal_rotor_47529 __proc_lnet_portal_rotor 5 47529 NULL
@@ -88540,6 +88552,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +btrfs_clone_55977 btrfs_clone 5-3 55977 NULL
 +wa_xfer_create_subset_sg_55992 wa_xfer_create_subset_sg 3-2 55992 NULL
 +nvme_alloc_iod_56027 nvme_alloc_iod 1-2 56027 NULL
++rtl8169_init_ring_56028 rtl8169_init_ring 0 56028 NULL
 +usb_ocp_write_56047 usb_ocp_write 4 56047 NULL
 +dccp_sendmsg_56058 dccp_sendmsg 4 56058 NULL
 +pscsi_get_bio_56103 pscsi_get_bio 1 56103 NULL
@@ -89048,6 +89061,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +snd_pcm_playback_avail_61671 snd_pcm_playback_avail 0 61671 NULL
 +qib_format_hwmsg_61679 qib_format_hwmsg 2 61679 NULL
 +lock_loop_61681 lock_loop 1 61681 NULL
++__do_tune_cpucache_61684 __do_tune_cpucache 2 61684 NULL
 +filter_read_61692 filter_read 3 61692 NULL
 +iov_length_61716 iov_length 0 61716 NULL
 +fragmentation_threshold_read_61718 fragmentation_threshold_read 3 61718 NULL
@@ -89372,7 +89386,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +tree_mod_log_eb_copy_65535 tree_mod_log_eb_copy 6 65535 NULL
 diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_overflow_plugin/size_overflow_plugin.c linux-3.15.5-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c
 --- linux-3.15.5/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.5-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	2014-06-09 12:46:24.521124692 +0200
++++ linux-3.15.5-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	2014-07-13 20:09:36.609118293 +0200
 @@ -0,0 +1,259 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
@@ -89406,7 +89420,7 @@ diff -NurpX linux-3.15.5-pax/Documentation/dontdiff linux-3.15.5/tools/gcc/size_
 +tree size_overflow_type_TI;
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140517",
++	.version	= "20140713",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
