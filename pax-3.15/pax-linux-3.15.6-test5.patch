@@ -1,4 +1,6 @@
-- forward port to 3.15.6
+- fixed an incorrect get_user cast, reported by Corey Minyard
+  - there're a few more instances in the kernel still
+- Emese fixed a compile error in the size overflow plugin that manifested under gcc 4.9
 
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/arch/alpha/include/asm/atomic.h linux-3.15.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.15.6/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -13693,7 +13695,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/arch/x86/includ
  	        __typeof__ (*(ptr)) __ret = (inc);			\
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/arch/x86/include/asm/compat.h linux-3.15.6-pax/arch/x86/include/asm/compat.h
 --- linux-3.15.6/arch/x86/include/asm/compat.h	2013-08-20 19:08:15.839833387 +0200
-+++ linux-3.15.6-pax/arch/x86/include/asm/compat.h	2014-06-09 12:46:22.973124695 +0200
++++ linux-3.15.6-pax/arch/x86/include/asm/compat.h	2014-07-25 03:13:52.745060009 +0200
 @@ -41,7 +41,7 @@ typedef s64 __attribute__((aligned(4)))
  typedef u32		compat_uint_t;
  typedef u32		compat_ulong_t;
@@ -17054,7 +17056,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/arch/x86/includ
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/arch/x86/include/asm/uaccess.h linux-3.15.6-pax/arch/x86/include/asm/uaccess.h
 --- linux-3.15.6/arch/x86/include/asm/uaccess.h	2014-03-31 12:47:57.263131321 +0200
-+++ linux-3.15.6-pax/arch/x86/include/asm/uaccess.h	2014-06-09 12:46:22.997124695 +0200
++++ linux-3.15.6-pax/arch/x86/include/asm/uaccess.h	2014-07-25 18:40:04.001136053 +0200
 @@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
@@ -49905,7 +49907,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/fs/compat.c lin
  		ret = -ENOMEM;
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/fs/compat_ioctl.c linux-3.15.6-pax/fs/compat_ioctl.c
 --- linux-3.15.6/fs/compat_ioctl.c	2014-06-09 12:45:46.177124777 +0200
-+++ linux-3.15.6-pax/fs/compat_ioctl.c	2014-06-09 12:46:23.625124694 +0200
++++ linux-3.15.6-pax/fs/compat_ioctl.c	2014-07-25 14:52:06.897166533 +0200
 @@ -621,7 +621,7 @@ static int serial_struct_ioctl(unsigned
  			return -EFAULT;
                  if (__get_user(udata, &ss32->iomem_base))
@@ -49921,7 +49923,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/fs/compat_ioctl
  			return -EFAULT;
 -		if (get_user(datap, &umsgs[i].buf) ||
 -		    put_user(compat_ptr(datap), &tmsgs[i].buf))
-+		if (get_user(datap, (u8 __user * __user *)&umsgs[i].buf) ||
++		if (get_user(datap, (compat_caddr_t __user *)&umsgs[i].buf) ||
 +		    put_user(compat_ptr(datap), (u8 __user * __user *)&tmsgs[i].buf))
  			return -EFAULT;
  	}
@@ -79275,8 +79277,8 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +size_overflow_hash.h
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c
 --- linux-3.15.6/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c	2014-06-09 12:46:24.517124692 +0200
-@@ -0,0 +1,790 @@
++++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c	2014-07-25 00:09:53.225084610 +0200
+@@ -0,0 +1,748 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -79756,45 +79758,6 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +	return true;
 +}
 +
-+static bool is_from_cast(const_tree node)
-+{
-+	gimple def_stmt = get_def_stmt(node);
-+
-+	if (!def_stmt)
-+		return false;
-+
-+	if (gimple_assign_cast_p(def_stmt))
-+		return true;
-+
-+	return false;
-+}
-+
-+// Skip duplication when there is a minus expr and the type of rhs1 or rhs2 is a pointer_type.
-+static bool skip_ptr_minus(gimple stmt)
-+{
-+	const_tree rhs1, rhs2, ptr1_rhs, ptr2_rhs;
-+
-+	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR)
-+		return false;
-+
-+	rhs1 = gimple_assign_rhs1(stmt);
-+	if (!is_from_cast(rhs1))
-+		return false;
-+
-+	rhs2 = gimple_assign_rhs2(stmt);
-+	if (!is_from_cast(rhs2))
-+		return false;
-+
-+	ptr1_rhs = gimple_assign_rhs1(get_def_stmt(rhs1));
-+	ptr2_rhs = gimple_assign_rhs1(get_def_stmt(rhs2));
-+
-+	if (TREE_CODE(TREE_TYPE(ptr1_rhs)) != POINTER_TYPE && TREE_CODE(TREE_TYPE(ptr2_rhs)) != POINTER_TYPE)
-+		return false;
-+
-+	create_mark_asm(stmt, MARK_YES);
-+	return true;
-+}
-+
 +static void walk_use_def_ptr(struct pointer_set_t *visited, const_tree lhs)
 +{
 +	gimple def_stmt;
@@ -79828,9 +79791,6 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +			walk_use_def_ptr(visited, gimple_assign_rhs1(def_stmt));
 +			return;
 +		case 3:
-+			if (skip_ptr_minus(def_stmt))
-+				return;
-+
 +			walk_use_def_ptr(visited, gimple_assign_rhs1(def_stmt));
 +			walk_use_def_ptr(visited, gimple_assign_rhs2(def_stmt));
 +			return;
@@ -80069,8 +80029,8 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +}
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c
 --- linux-3.15.6/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c	2014-06-09 12:46:24.517124692 +0200
-@@ -0,0 +1,902 @@
++++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c	2014-07-25 00:09:53.225084610 +0200
+@@ -0,0 +1,943 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -80794,6 +80754,44 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +	inform(loc, "Integer size_overflow check applied here.");
 +}
 +
++static bool is_from_cast(const_tree node)
++{
++	gimple def_stmt = get_def_stmt(node);
++
++	if (!def_stmt)
++		return false;
++
++	if (gimple_assign_cast_p(def_stmt))
++		return true;
++
++	return false;
++}
++
++// Skip duplication when there is a minus expr and the type of rhs1 or rhs2 is a pointer_type.
++static bool is_a_ptr_minus(gimple stmt)
++{
++	const_tree rhs1, rhs2, ptr1_rhs, ptr2_rhs;
++
++	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR)
++		return false;
++
++	rhs1 = gimple_assign_rhs1(stmt);
++	if (!is_from_cast(rhs1))
++		return false;
++
++	rhs2 = gimple_assign_rhs2(stmt);
++	if (!is_from_cast(rhs2))
++		return false;
++
++	ptr1_rhs = gimple_assign_rhs1(get_def_stmt(rhs1));
++	ptr2_rhs = gimple_assign_rhs1(get_def_stmt(rhs2));
++
++	if (TREE_CODE(TREE_TYPE(ptr1_rhs)) != POINTER_TYPE && TREE_CODE(TREE_TYPE(ptr2_rhs)) != POINTER_TYPE)
++		return false;
++
++	return true;
++}
++
 +static tree handle_binary_ops(struct visited *visited, struct cgraph_node *caller_node, tree lhs)
 +{
 +	enum intentional_overflow_type res;
@@ -80801,6 +80799,9 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +	gimple def_stmt = get_def_stmt(lhs);
 +	tree new_rhs1 = NULL_TREE;
 +	tree new_rhs2 = NULL_TREE;
++
++	if (is_a_ptr_minus(def_stmt))
++		return create_assign(visited, def_stmt, lhs, AFTER_STMT);
 +
 +	rhs1 = gimple_assign_rhs1(def_stmt);
 +	rhs2 = gimple_assign_rhs2(def_stmt);
@@ -80975,7 +80976,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c
 --- linux-3.15.6/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	2014-07-13 20:09:36.609118293 +0200
++++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	2014-07-25 00:09:53.225084610 +0200
 @@ -0,0 +1,1141 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
@@ -81212,7 +81213,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +
 +	switch (gimple_code(def_stmt)) {
 +	case GIMPLE_CALL:
-+		if (lhs == gimple_return_retval(def_stmt))
++		if (lhs == gimple_call_lhs(def_stmt))
 +			interesting_conditions[RET] = true;
 +		return;
 +	case GIMPLE_NOP:
@@ -82120,8 +82121,8 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_overflow_plugin/intentional_overflow.c linux-3.15.6-pax/tools/gcc/size_overflow_plugin/intentional_overflow.c
 --- linux-3.15.6/tools/gcc/size_overflow_plugin/intentional_overflow.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/intentional_overflow.c	2014-06-09 12:46:24.517124692 +0200
-@@ -0,0 +1,733 @@
++++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/intentional_overflow.c	2014-07-25 00:09:53.225084610 +0200
+@@ -0,0 +1,736 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
@@ -82724,6 +82725,9 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +		const_rhs = rhs2;
 +		def_stmt = get_def_stmt(rhs1);
 +	} else
++		return false;
++
++	if (!is_gimple_assign(def_stmt))
 +		return false;
 +
 +	if (gimple_assign_rhs_code(def_stmt) != PLUS_EXPR && gimple_assign_rhs_code(def_stmt) != MINUS_EXPR)
@@ -89389,7 +89393,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +tree_mod_log_eb_copy_65535 tree_mod_log_eb_copy 6 65535 NULL
 diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_overflow_plugin/size_overflow_plugin.c linux-3.15.6-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c
 --- linux-3.15.6/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	2014-07-13 20:09:36.609118293 +0200
++++ linux-3.15.6-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	2014-07-25 00:09:53.229084610 +0200
 @@ -0,0 +1,259 @@
 +/*
 + * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
@@ -89423,7 +89427,7 @@ diff -NurpX linux-3.15.6-pax/Documentation/dontdiff linux-3.15.6/tools/gcc/size_
 +tree size_overflow_type_TI;
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140713",
++	.version	= "20140725",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
