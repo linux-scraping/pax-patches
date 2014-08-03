@@ -1,5 +1,5 @@
-- forward port to 3.14.15
-- fixed a merge error in copy_from_user on x86
+- fixed an incompatiblity between STACKLEAK and Xen, reported by joe (http://forums.grsecurity.net/viewtopic.php?f=3&t=3997#p14241)
+- fixed the ESPFIX SS limit on i386 so that it actually works instead of triggering a double fault, reported by Oscon
 
 diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/arch/alpha/include/asm/atomic.h linux-3.14.15-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.15/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -16464,7 +16464,7 @@ diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/arch/x86/incl
  	     : "memory", "cc" __EXTRA_CLOBBER)
 diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/arch/x86/include/asm/thread_info.h linux-3.14.15-pax/arch/x86/include/asm/thread_info.h
 --- linux-3.14.15/arch/x86/include/asm/thread_info.h	2014-03-31 12:47:57.259131321 +0200
-+++ linux-3.14.15-pax/arch/x86/include/asm/thread_info.h	2014-03-31 12:53:46.335112683 +0200
++++ linux-3.14.15-pax/arch/x86/include/asm/thread_info.h	2014-08-01 18:03:37.232102561 +0200
 @@ -10,6 +10,7 @@
  #include <linux/compiler.h>
  #include <asm/page.h>
@@ -21528,7 +21528,7 @@ diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/arch/x86/kern
  
 diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/arch/x86/kernel/head_32.S linux-3.14.15-pax/arch/x86/kernel/head_32.S
 --- linux-3.14.15/arch/x86/kernel/head_32.S	2014-03-31 12:47:57.283131320 +0200
-+++ linux-3.14.15-pax/arch/x86/kernel/head_32.S	2014-03-31 12:53:46.355112682 +0200
++++ linux-3.14.15-pax/arch/x86/kernel/head_32.S	2014-08-04 01:16:09.954946633 +0200
 @@ -26,6 +26,12 @@
  /* Physical address */
  #define pa(X) ((X) - __PAGE_OFFSET)
@@ -21938,7 +21938,7 @@ diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/arch/x86/kern
 +	.quad 0x00009b000000ffff	/* 0xc0 APM CS 16 code (16 bit) */
 +	.quad 0x004093000000ffff	/* 0xc8 APM DS    data */
 +
-+	.quad 0x00c0930000000000	/* 0xd0 - ESPFIX SS */
++	.quad 0x00c093000000ffff	/* 0xd0 - ESPFIX SS */
 +	.quad 0x0040930000000000	/* 0xd8 - PERCPU */
 +	.quad 0x0040910000000017	/* 0xe0 - STACK_CANARY */
 +	.quad 0x0000000000000000	/* 0xe8 - PCIBIOS_CS */
@@ -90117,8 +90117,8 @@ diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/tools/gcc/siz
 +
 diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/tools/gcc/stackleak_plugin.c linux-3.14.15-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.14.15/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.15-pax/tools/gcc/stackleak_plugin.c	2014-04-23 23:08:47.319423852 +0200
-@@ -0,0 +1,376 @@
++++ linux-3.14.15-pax/tools/gcc/stackleak_plugin.c	2014-08-01 21:03:01.219527848 +0200
+@@ -0,0 +1,395 @@
 +/*
 + * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -90150,7 +90150,7 @@ diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/tools/gcc/sta
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201402131920",
++	.version	= "201408011900",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
@@ -90296,6 +90296,25 @@ diff -NurpX linux-3.14.15-pax/Documentation/dontdiff linux-3.14.15/tools/gcc/sta
 +
 +static bool gate_stackleak_track_stack(void)
 +{
++	tree section;
++
++	if (ix86_cmodel != CM_KERNEL)
++		return false;
++
++	section = lookup_attribute("section", DECL_ATTRIBUTES(current_function_decl));
++	if (section && TREE_VALUE(section)) {
++		section = TREE_VALUE(TREE_VALUE(section));
++
++		if (!strncmp(TREE_STRING_POINTER(section), ".init.text", 10))
++			return false;
++		if (!strncmp(TREE_STRING_POINTER(section), ".devinit.text", 13))
++			return false;
++		if (!strncmp(TREE_STRING_POINTER(section), ".cpuinit.text", 13))
++			return false;
++		if (!strncmp(TREE_STRING_POINTER(section), ".meminit.text", 13))
++			return false;
++	}
++
 +	return track_frame_size >= 0;
 +}
 +
