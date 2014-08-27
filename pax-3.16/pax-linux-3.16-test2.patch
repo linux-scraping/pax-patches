@@ -1,4 +1,4 @@
-- forward port to 3.16
+- spender fixed a few compile issues
 
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/arch/alpha/include/asm/atomic.h linux-3.16-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.16/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -21255,7 +21255,7 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/arch/x86/kernel/ent
 +ENDPROC(ignore_sysret)
  
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/arch/x86/kernel/espfix_64.c linux-3.16-pax/arch/x86/kernel/espfix_64.c
---- linux-3.16/arch/x86/kernel/espfix_64.c	2014-08-04 01:36:56.690880067 +0200
+--- linux-3.16/arch/x86/kernel/espfix_64.c	2014-08-08 03:06:06.077607906 +0200
 +++ linux-3.16-pax/arch/x86/kernel/espfix_64.c	2014-08-04 01:39:36.202871551 +0200
 @@ -197,7 +197,7 @@ void init_espfix_ap(void)
  		set_pte(&pte_p[n*PTE_STRIDE], pte);
@@ -22753,7 +22753,16 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/arch/x86/kernel/Mak
  obj-y			+= syscall_$(BITS).o vsyscall_gtod.o
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/arch/x86/kernel/mcount_64.S linux-3.16-pax/arch/x86/kernel/mcount_64.S
 --- linux-3.16/arch/x86/kernel/mcount_64.S	2014-08-04 01:36:56.698880067 +0200
-+++ linux-3.16-pax/arch/x86/kernel/mcount_64.S	2014-08-04 01:39:36.210871550 +0200
++++ linux-3.16-pax/arch/x86/kernel/mcount_64.S	2014-08-25 10:51:08.317457916 +0200
+@@ -7,7 +7,7 @@
+ #include <linux/linkage.h>
+ #include <asm/ptrace.h>
+ #include <asm/ftrace.h>
+-
++#include <asm/alternative-asm.h>
+ 
+ 	.code64
+ 	.section .entry.text, "ax"
 @@ -24,8 +24,9 @@
  #ifdef CONFIG_DYNAMIC_FTRACE
  
@@ -34647,6 +34656,36 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/block/loop.
  	set_fs(old_fs);
  	file_end_write(file);
  	if (likely(bw == len))
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/block/nvme-core.c linux-3.16-pax/drivers/block/nvme-core.c
+--- linux-3.16/drivers/block/nvme-core.c	2014-08-04 01:36:57.474880026 +0200
++++ linux-3.16-pax/drivers/block/nvme-core.c	2014-08-25 11:34:50.269600321 +0200
+@@ -73,7 +73,6 @@ static LIST_HEAD(dev_list);
+ static struct task_struct *nvme_thread;
+ static struct workqueue_struct *nvme_workq;
+ static wait_queue_head_t nvme_kthread_wait;
+-static struct notifier_block nvme_nb;
+ 
+ static void nvme_reset_failed_dev(struct work_struct *ws);
+ 
+@@ -2925,6 +2924,10 @@ static struct pci_driver nvme_driver = {
+ 	.err_handler	= &nvme_err_handler,
+ };
+ 
++static struct notifier_block nvme_nb = {
++	.notifier_call = &nvme_cpu_notify,
++};
++
+ static int __init nvme_init(void)
+ {
+ 	int result;
+@@ -2941,7 +2944,6 @@ static int __init nvme_init(void)
+ 	else if (result > 0)
+ 		nvme_major = result;
+ 
+-	nvme_nb.notifier_call = &nvme_cpu_notify;
+ 	result = register_hotcpu_notifier(&nvme_nb);
+ 	if (result)
+ 		goto unregister_blkdev;
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/block/pktcdvd.c linux-3.16-pax/drivers/block/pktcdvd.c
 --- linux-3.16/drivers/block/pktcdvd.c	2014-08-04 01:36:57.506880024 +0200
 +++ linux-3.16-pax/drivers/block/pktcdvd.c	2014-08-04 01:39:37.054871505 +0200
@@ -36157,6 +36196,36 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/gpio/gpio-i
  
  static struct {
  	spinlock_t lock;
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/gpio/gpiolib.c linux-3.16-pax/drivers/gpio/gpiolib.c
+--- linux-3.16/drivers/gpio/gpiolib.c	2014-08-04 01:37:01.406879816 +0200
++++ linux-3.16-pax/drivers/gpio/gpiolib.c	2014-08-25 12:13:28.501726230 +0200
+@@ -1482,8 +1482,10 @@ static void gpiochip_irqchip_remove(stru
+ 	}
+ 
+ 	if (gpiochip->irqchip) {
+-		gpiochip->irqchip->irq_request_resources = NULL;
+-		gpiochip->irqchip->irq_release_resources = NULL;
++		pax_open_kernel();
++		*(void **)&gpiochip->irqchip->irq_request_resources = NULL;
++		*(void **)&gpiochip->irqchip->irq_release_resources = NULL;
++		pax_close_kernel();
+ 		gpiochip->irqchip = NULL;
+ 	}
+ }
+@@ -1549,8 +1551,11 @@ int gpiochip_irqchip_add(struct gpio_chi
+ 		gpiochip->irqchip = NULL;
+ 		return -EINVAL;
+ 	}
+-	irqchip->irq_request_resources = gpiochip_irq_reqres;
+-	irqchip->irq_release_resources = gpiochip_irq_relres;
++
++	pax_open_kernel();
++	*(void **)&irqchip->irq_request_resources = gpiochip_irq_reqres;
++	*(void **)&irqchip->irq_release_resources = gpiochip_irq_relres;
++	pax_close_kernel();
+ 
+ 	/*
+ 	 * Prepare the mapping since the irqchip shall be orthogonal to
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/gpio/gpio-rcar.c linux-3.16-pax/drivers/gpio/gpio-rcar.c
 --- linux-3.16/drivers/gpio/gpio-rcar.c	2014-08-04 01:37:01.338879819 +0200
 +++ linux-3.16-pax/drivers/gpio/gpio-rcar.c	2014-08-04 01:39:37.086871503 +0200
@@ -37760,6 +37829,24 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/hwmon/iio_h
  	int ret, i;
  	int in_i = 1, temp_i = 1, curr_i = 1;
  	enum iio_chan_type type;
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/hwmon/nct6683.c linux-3.16-pax/drivers/hwmon/nct6683.c
+--- linux-3.16/drivers/hwmon/nct6683.c	2014-08-04 01:37:05.870879577 +0200
++++ linux-3.16-pax/drivers/hwmon/nct6683.c	2014-08-25 12:28:43.005775899 +0200
+@@ -397,11 +397,11 @@ static struct attribute_group *
+ nct6683_create_attr_group(struct device *dev, struct sensor_template_group *tg,
+ 			  int repeat)
+ {
+-	struct sensor_device_attribute_2 *a2;
+-	struct sensor_device_attribute *a;
++	sensor_device_attribute_2_no_const *a2;
++	sensor_device_attribute_no_const *a;
+ 	struct sensor_device_template **t;
+ 	struct sensor_device_attr_u *su;
+-	struct attribute_group *group;
++	attribute_group_no_const *group;
+ 	struct attribute **attrs;
+ 	int i, j, count;
+ 
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/hwmon/nct6775.c linux-3.16-pax/drivers/hwmon/nct6775.c
 --- linux-3.16/drivers/hwmon/nct6775.c	2014-08-04 01:37:05.870879577 +0200
 +++ linux-3.16-pax/drivers/hwmon/nct6775.c	2014-08-04 01:39:37.142871500 +0200
@@ -41368,6 +41455,580 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/etherne
  
  	/* Scatter/gather IO is not supported,
  	 * so it is turned off
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-common.h linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-common.h
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-common.h	2014-08-04 01:37:11.378879283 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-common.h	2014-08-28 00:51:22.808248635 +0200
+@@ -986,14 +986,14 @@ do {									\
+  * operations, everything works on mask values.
+  */
+ #define XMDIO_READ(_pdata, _mmd, _reg)					\
+-	((_pdata)->hw_if.read_mmd_regs((_pdata), 0,			\
++	((_pdata)->hw_if->read_mmd_regs((_pdata), 0,			\
+ 		MII_ADDR_C45 | (_mmd << 16) | ((_reg) & 0xffff)))
+ 
+ #define XMDIO_READ_BITS(_pdata, _mmd, _reg, _mask)			\
+ 	(XMDIO_READ((_pdata), _mmd, _reg) & _mask)
+ 
+ #define XMDIO_WRITE(_pdata, _mmd, _reg, _val)				\
+-	((_pdata)->hw_if.write_mmd_regs((_pdata), 0,			\
++	((_pdata)->hw_if->write_mmd_regs((_pdata), 0,			\
+ 		MII_ADDR_C45 | (_mmd << 16) | ((_reg) & 0xffff), (_val)))
+ 
+ #define XMDIO_WRITE_BITS(_pdata, _mmd, _reg, _mask, _val)		\
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-debugfs.c linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-debugfs.c
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-debugfs.c	2014-08-04 01:37:11.378879283 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-debugfs.c	2014-08-28 00:46:19.644232170 +0200
+@@ -273,7 +273,7 @@ static ssize_t xpcs_reg_value_read(struc
+ 	struct xgbe_prv_data *pdata = filp->private_data;
+ 	unsigned int value;
+ 
+-	value = pdata->hw_if.read_mmd_regs(pdata, pdata->debugfs_xpcs_mmd,
++	value = pdata->hw_if->read_mmd_regs(pdata, pdata->debugfs_xpcs_mmd,
+ 					   pdata->debugfs_xpcs_reg);
+ 
+ 	return xgbe_common_read(buffer, count, ppos, value);
+@@ -291,7 +291,7 @@ static ssize_t xpcs_reg_value_write(stru
+ 	if (len < 0)
+ 		return len;
+ 
+-	pdata->hw_if.write_mmd_regs(pdata, pdata->debugfs_xpcs_mmd,
++	pdata->hw_if->write_mmd_regs(pdata, pdata->debugfs_xpcs_mmd,
+ 				    pdata->debugfs_xpcs_reg, value);
+ 
+ 	return len;
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-desc.c linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-desc.c
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-desc.c	2014-08-04 01:37:11.382879283 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-desc.c	2014-08-28 00:49:39.392243018 +0200
+@@ -236,7 +236,7 @@ err_ring:
+ 
+ static void xgbe_wrapper_tx_descriptor_init(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct xgbe_channel *channel;
+ 	struct xgbe_ring *ring;
+ 	struct xgbe_ring_data *rdata;
+@@ -277,7 +277,7 @@ static void xgbe_wrapper_tx_descriptor_i
+ 
+ static void xgbe_wrapper_rx_descriptor_init(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct xgbe_channel *channel;
+ 	struct xgbe_ring *ring;
+ 	struct xgbe_ring_desc *rdesc;
+@@ -496,7 +496,7 @@ err_out:
+ static void xgbe_realloc_skb(struct xgbe_channel *channel)
+ {
+ 	struct xgbe_prv_data *pdata = channel->pdata;
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct xgbe_ring *ring = channel->rx_ring;
+ 	struct xgbe_ring_data *rdata;
+ 	struct sk_buff *skb = NULL;
+@@ -540,17 +540,12 @@ static void xgbe_realloc_skb(struct xgbe
+ 	DBGPR("<--xgbe_realloc_skb\n");
+ }
+ 
+-void xgbe_init_function_ptrs_desc(struct xgbe_desc_if *desc_if)
+-{
+-	DBGPR("-->xgbe_init_function_ptrs_desc\n");
+-
+-	desc_if->alloc_ring_resources = xgbe_alloc_ring_resources;
+-	desc_if->free_ring_resources = xgbe_free_ring_resources;
+-	desc_if->map_tx_skb = xgbe_map_tx_skb;
+-	desc_if->realloc_skb = xgbe_realloc_skb;
+-	desc_if->unmap_skb = xgbe_unmap_skb;
+-	desc_if->wrapper_tx_desc_init = xgbe_wrapper_tx_descriptor_init;
+-	desc_if->wrapper_rx_desc_init = xgbe_wrapper_rx_descriptor_init;
+-
+-	DBGPR("<--xgbe_init_function_ptrs_desc\n");
+-}
++const struct xgbe_desc_if default_xgbe_desc_if = {
++	.alloc_ring_resources = xgbe_alloc_ring_resources,
++	.free_ring_resources = xgbe_free_ring_resources,
++	.map_tx_skb = xgbe_map_tx_skb,
++	.realloc_skb = xgbe_realloc_skb,
++	.unmap_skb = xgbe_unmap_skb,
++	.wrapper_tx_desc_init = xgbe_wrapper_tx_descriptor_init,
++	.wrapper_rx_desc_init = xgbe_wrapper_rx_descriptor_init,
++};
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-dev.c linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-dev.c
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-dev.c	2014-08-04 01:37:11.382879283 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-dev.c	2014-08-28 00:51:40.168249578 +0200
+@@ -2030,7 +2030,7 @@ static void xgbe_powerdown_rx(struct xgb
+ 
+ static int xgbe_init(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 	int ret;
+ 
+ 	DBGPR("-->xgbe_init\n");
+@@ -2096,87 +2096,82 @@ static int xgbe_init(struct xgbe_prv_dat
+ 	return 0;
+ }
+ 
+-void xgbe_init_function_ptrs_dev(struct xgbe_hw_if *hw_if)
+-{
+-	DBGPR("-->xgbe_init_function_ptrs\n");
+-
+-	hw_if->tx_complete = xgbe_tx_complete;
++const struct xgbe_hw_if default_xgbe_hw_if = {
++	.tx_complete = xgbe_tx_complete,
+ 
+-	hw_if->set_promiscuous_mode = xgbe_set_promiscuous_mode;
+-	hw_if->set_all_multicast_mode = xgbe_set_all_multicast_mode;
+-	hw_if->set_addn_mac_addrs = xgbe_set_addn_mac_addrs;
+-	hw_if->set_mac_address = xgbe_set_mac_address;
+-
+-	hw_if->enable_rx_csum = xgbe_enable_rx_csum;
+-	hw_if->disable_rx_csum = xgbe_disable_rx_csum;
+-
+-	hw_if->enable_rx_vlan_stripping = xgbe_enable_rx_vlan_stripping;
+-	hw_if->disable_rx_vlan_stripping = xgbe_disable_rx_vlan_stripping;
+-
+-	hw_if->read_mmd_regs = xgbe_read_mmd_regs;
+-	hw_if->write_mmd_regs = xgbe_write_mmd_regs;
+-
+-	hw_if->set_gmii_speed = xgbe_set_gmii_speed;
+-	hw_if->set_gmii_2500_speed = xgbe_set_gmii_2500_speed;
+-	hw_if->set_xgmii_speed = xgbe_set_xgmii_speed;
+-
+-	hw_if->enable_tx = xgbe_enable_tx;
+-	hw_if->disable_tx = xgbe_disable_tx;
+-	hw_if->enable_rx = xgbe_enable_rx;
+-	hw_if->disable_rx = xgbe_disable_rx;
+-
+-	hw_if->powerup_tx = xgbe_powerup_tx;
+-	hw_if->powerdown_tx = xgbe_powerdown_tx;
+-	hw_if->powerup_rx = xgbe_powerup_rx;
+-	hw_if->powerdown_rx = xgbe_powerdown_rx;
+-
+-	hw_if->pre_xmit = xgbe_pre_xmit;
+-	hw_if->dev_read = xgbe_dev_read;
+-	hw_if->enable_int = xgbe_enable_int;
+-	hw_if->disable_int = xgbe_disable_int;
+-	hw_if->init = xgbe_init;
+-	hw_if->exit = xgbe_exit;
++	.set_promiscuous_mode = xgbe_set_promiscuous_mode,
++	.set_all_multicast_mode = xgbe_set_all_multicast_mode,
++	.set_addn_mac_addrs = xgbe_set_addn_mac_addrs,
++	.set_mac_address = xgbe_set_mac_address,
++
++	.enable_rx_csum = xgbe_enable_rx_csum,
++	.disable_rx_csum = xgbe_disable_rx_csum,
++
++	.enable_rx_vlan_stripping = xgbe_enable_rx_vlan_stripping,
++	.disable_rx_vlan_stripping = xgbe_disable_rx_vlan_stripping,
++
++	.read_mmd_regs = xgbe_read_mmd_regs,
++	.write_mmd_regs = xgbe_write_mmd_regs,
++
++	.set_gmii_speed = xgbe_set_gmii_speed,
++	.set_gmii_2500_speed = xgbe_set_gmii_2500_speed,
++	.set_xgmii_speed = xgbe_set_xgmii_speed,
++
++	.enable_tx = xgbe_enable_tx,
++	.disable_tx = xgbe_disable_tx,
++	.enable_rx = xgbe_enable_rx,
++	.disable_rx = xgbe_disable_rx,
++
++	.powerup_tx = xgbe_powerup_tx,
++	.powerdown_tx = xgbe_powerdown_tx,
++	.powerup_rx = xgbe_powerup_rx,
++	.powerdown_rx = xgbe_powerdown_rx,
++
++	.pre_xmit = xgbe_pre_xmit,
++	.dev_read = xgbe_dev_read,
++	.enable_int = xgbe_enable_int,
++	.disable_int = xgbe_disable_int,
++	.init = xgbe_init,
++	.exit = xgbe_exit,
+ 
+ 	/* Descriptor related Sequences have to be initialized here */
+-	hw_if->tx_desc_init = xgbe_tx_desc_init;
+-	hw_if->rx_desc_init = xgbe_rx_desc_init;
+-	hw_if->tx_desc_reset = xgbe_tx_desc_reset;
+-	hw_if->rx_desc_reset = xgbe_rx_desc_reset;
+-	hw_if->is_last_desc = xgbe_is_last_desc;
+-	hw_if->is_context_desc = xgbe_is_context_desc;
++	.tx_desc_init = xgbe_tx_desc_init,
++	.rx_desc_init = xgbe_rx_desc_init,
++	.tx_desc_reset = xgbe_tx_desc_reset,
++	.rx_desc_reset = xgbe_rx_desc_reset,
++	.is_last_desc = xgbe_is_last_desc,
++	.is_context_desc = xgbe_is_context_desc,
+ 
+ 	/* For FLOW ctrl */
+-	hw_if->config_tx_flow_control = xgbe_config_tx_flow_control;
+-	hw_if->config_rx_flow_control = xgbe_config_rx_flow_control;
++	.config_tx_flow_control = xgbe_config_tx_flow_control,
++	.config_rx_flow_control = xgbe_config_rx_flow_control,
+ 
+ 	/* For RX coalescing */
+-	hw_if->config_rx_coalesce = xgbe_config_rx_coalesce;
+-	hw_if->config_tx_coalesce = xgbe_config_tx_coalesce;
+-	hw_if->usec_to_riwt = xgbe_usec_to_riwt;
+-	hw_if->riwt_to_usec = xgbe_riwt_to_usec;
++	.config_rx_coalesce = xgbe_config_rx_coalesce,
++	.config_tx_coalesce = xgbe_config_tx_coalesce,
++	.usec_to_riwt = xgbe_usec_to_riwt,
++	.riwt_to_usec = xgbe_riwt_to_usec,
+ 
+ 	/* For RX and TX threshold config */
+-	hw_if->config_rx_threshold = xgbe_config_rx_threshold;
+-	hw_if->config_tx_threshold = xgbe_config_tx_threshold;
++	.config_rx_threshold = xgbe_config_rx_threshold,
++	.config_tx_threshold = xgbe_config_tx_threshold,
+ 
+ 	/* For RX and TX Store and Forward Mode config */
+-	hw_if->config_rsf_mode = xgbe_config_rsf_mode;
+-	hw_if->config_tsf_mode = xgbe_config_tsf_mode;
++	.config_rsf_mode = xgbe_config_rsf_mode,
++	.config_tsf_mode = xgbe_config_tsf_mode,
+ 
+ 	/* For TX DMA Operating on Second Frame config */
+-	hw_if->config_osp_mode = xgbe_config_osp_mode;
++	.config_osp_mode = xgbe_config_osp_mode,
+ 
+ 	/* For RX and TX PBL config */
+-	hw_if->config_rx_pbl_val = xgbe_config_rx_pbl_val;
+-	hw_if->get_rx_pbl_val = xgbe_get_rx_pbl_val;
+-	hw_if->config_tx_pbl_val = xgbe_config_tx_pbl_val;
+-	hw_if->get_tx_pbl_val = xgbe_get_tx_pbl_val;
+-	hw_if->config_pblx8 = xgbe_config_pblx8;
++	.config_rx_pbl_val = xgbe_config_rx_pbl_val,
++	.get_rx_pbl_val = xgbe_get_rx_pbl_val,
++	.config_tx_pbl_val = xgbe_config_tx_pbl_val,
++	.get_tx_pbl_val = xgbe_get_tx_pbl_val,
++	.config_pblx8 = xgbe_config_pblx8,
+ 
+ 	/* For MMC statistics support */
+-	hw_if->tx_mmc_int = xgbe_tx_mmc_int;
+-	hw_if->rx_mmc_int = xgbe_rx_mmc_int;
+-	hw_if->read_mmc_stats = xgbe_read_mmc_stats;
+-
+-	DBGPR("<--xgbe_init_function_ptrs\n");
+-}
++	.tx_mmc_int = xgbe_tx_mmc_int,
++	.rx_mmc_int = xgbe_rx_mmc_int,
++	.read_mmc_stats = xgbe_read_mmc_stats,
++};
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-drv.c linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-drv.c
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-drv.c	2014-08-04 01:37:11.386879283 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-drv.c	2014-08-28 00:47:33.992236208 +0200
+@@ -153,7 +153,7 @@ static int xgbe_calc_rx_buf_size(struct
+ 
+ static void xgbe_enable_rx_tx_ints(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct xgbe_channel *channel;
+ 	unsigned int i;
+ 
+@@ -170,7 +170,7 @@ static void xgbe_enable_rx_tx_ints(struc
+ 
+ static void xgbe_disable_rx_tx_ints(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct xgbe_channel *channel;
+ 	unsigned int i;
+ 
+@@ -188,7 +188,7 @@ static void xgbe_disable_rx_tx_ints(stru
+ static irqreturn_t xgbe_isr(int irq, void *data)
+ {
+ 	struct xgbe_prv_data *pdata = data;
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct xgbe_channel *channel;
+ 	unsigned int dma_isr, dma_ch_isr;
+ 	unsigned int mac_isr;
+@@ -403,7 +403,7 @@ static void xgbe_napi_disable(struct xgb
+ 
+ void xgbe_init_tx_coalesce(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 
+ 	DBGPR("-->xgbe_init_tx_coalesce\n");
+ 
+@@ -417,7 +417,7 @@ void xgbe_init_tx_coalesce(struct xgbe_p
+ 
+ void xgbe_init_rx_coalesce(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 
+ 	DBGPR("-->xgbe_init_rx_coalesce\n");
+ 
+@@ -431,7 +431,7 @@ void xgbe_init_rx_coalesce(struct xgbe_p
+ 
+ static void xgbe_free_tx_skbuff(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 	struct xgbe_channel *channel;
+ 	struct xgbe_ring *ring;
+ 	struct xgbe_ring_data *rdata;
+@@ -456,7 +456,7 @@ static void xgbe_free_tx_skbuff(struct x
+ 
+ static void xgbe_free_rx_skbuff(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 	struct xgbe_channel *channel;
+ 	struct xgbe_ring *ring;
+ 	struct xgbe_ring_data *rdata;
+@@ -482,7 +482,7 @@ static void xgbe_free_rx_skbuff(struct x
+ int xgbe_powerdown(struct net_device *netdev, unsigned int caller)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	unsigned long flags;
+ 
+ 	DBGPR("-->xgbe_powerdown\n");
+@@ -520,7 +520,7 @@ int xgbe_powerdown(struct net_device *ne
+ int xgbe_powerup(struct net_device *netdev, unsigned int caller)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	unsigned long flags;
+ 
+ 	DBGPR("-->xgbe_powerup\n");
+@@ -557,7 +557,7 @@ int xgbe_powerup(struct net_device *netd
+ 
+ static int xgbe_start(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct net_device *netdev = pdata->netdev;
+ 
+ 	DBGPR("-->xgbe_start\n");
+@@ -583,7 +583,7 @@ static int xgbe_start(struct xgbe_prv_da
+ 
+ static void xgbe_stop(struct xgbe_prv_data *pdata)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct net_device *netdev = pdata->netdev;
+ 
+ 	DBGPR("-->xgbe_stop\n");
+@@ -603,7 +603,7 @@ static void xgbe_stop(struct xgbe_prv_da
+ 
+ static void xgbe_restart_dev(struct xgbe_prv_data *pdata, unsigned int reset)
+ {
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 
+ 	DBGPR("-->xgbe_restart_dev\n");
+ 
+@@ -741,8 +741,8 @@ static void xgbe_packet_info(struct xgbe
+ static int xgbe_open(struct net_device *netdev)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 	int ret;
+ 
+ 	DBGPR("-->xgbe_open\n");
+@@ -804,8 +804,8 @@ err_clk:
+ static int xgbe_close(struct net_device *netdev)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 
+ 	DBGPR("-->xgbe_close\n");
+ 
+@@ -835,8 +835,8 @@ static int xgbe_close(struct net_device
+ static int xgbe_xmit(struct sk_buff *skb, struct net_device *netdev)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 	struct xgbe_channel *channel;
+ 	struct xgbe_ring *ring;
+ 	struct xgbe_packet_data *packet;
+@@ -903,7 +903,7 @@ tx_netdev_return:
+ static void xgbe_set_rx_mode(struct net_device *netdev)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	unsigned int pr_mode, am_mode;
+ 
+ 	DBGPR("-->xgbe_set_rx_mode\n");
+@@ -930,7 +930,7 @@ static void xgbe_set_rx_mode(struct net_
+ static int xgbe_set_mac_address(struct net_device *netdev, void *addr)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct sockaddr *saddr = addr;
+ 
+ 	DBGPR("-->xgbe_set_mac_address\n");
+@@ -976,7 +976,7 @@ static struct rtnl_link_stats64 *xgbe_ge
+ 
+ 	DBGPR("-->%s\n", __func__);
+ 
+-	pdata->hw_if.read_mmc_stats(pdata);
++	pdata->hw_if->read_mmc_stats(pdata);
+ 
+ 	s->rx_packets = pstats->rxframecount_gb;
+ 	s->rx_bytes = pstats->rxoctetcount_gb;
+@@ -1020,7 +1020,7 @@ static int xgbe_set_features(struct net_
+ 			     netdev_features_t features)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	unsigned int rxcsum_enabled, rxvlan_enabled;
+ 
+ 	rxcsum_enabled = !!(pdata->netdev_features & NETIF_F_RXCSUM);
+@@ -1072,8 +1072,8 @@ struct net_device_ops *xgbe_get_netdev_o
+ static int xgbe_tx_poll(struct xgbe_channel *channel)
+ {
+ 	struct xgbe_prv_data *pdata = channel->pdata;
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 	struct xgbe_ring *ring = channel->tx_ring;
+ 	struct xgbe_ring_data *rdata;
+ 	struct xgbe_ring_desc *rdesc;
+@@ -1124,8 +1124,8 @@ static int xgbe_tx_poll(struct xgbe_chan
+ static int xgbe_rx_poll(struct xgbe_channel *channel, int budget)
+ {
+ 	struct xgbe_prv_data *pdata = channel->pdata;
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
+-	struct xgbe_desc_if *desc_if = &pdata->desc_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
++	struct xgbe_desc_if *desc_if = pdata->desc_if;
+ 	struct xgbe_ring *ring = channel->rx_ring;
+ 	struct xgbe_ring_data *rdata;
+ 	struct xgbe_packet_data *packet;
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-ethtool.c linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-ethtool.c
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-ethtool.c	2014-08-04 01:37:11.386879283 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-ethtool.c	2014-08-28 00:46:52.820233971 +0200
+@@ -202,7 +202,7 @@ static void xgbe_get_ethtool_stats(struc
+ 
+ 	DBGPR("-->%s\n", __func__);
+ 
+-	pdata->hw_if.read_mmc_stats(pdata);
++	pdata->hw_if->read_mmc_stats(pdata);
+ 	for (i = 0; i < XGBE_STATS_COUNT; i++) {
+ 		stat = (u8 *)pdata + xgbe_gstring_stats[i].stat_offset;
+ 		*data++ = *(u64 *)stat;
+@@ -387,7 +387,7 @@ static int xgbe_get_coalesce(struct net_
+ 			     struct ethtool_coalesce *ec)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	unsigned int riwt;
+ 
+ 	DBGPR("-->xgbe_get_coalesce\n");
+@@ -410,7 +410,7 @@ static int xgbe_set_coalesce(struct net_
+ 			     struct ethtool_coalesce *ec)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	unsigned int rx_frames, rx_riwt, rx_usecs;
+ 	unsigned int tx_frames, tx_usecs;
+ 
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe.h linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe.h
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe.h	2014-08-04 01:37:11.390879282 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe.h	2014-08-28 01:01:44.580282405 +0200
+@@ -527,8 +527,8 @@ struct xgbe_prv_data {
+ 
+ 	int irq_number;
+ 
+-	struct xgbe_hw_if hw_if;
+-	struct xgbe_desc_if desc_if;
++	const struct xgbe_hw_if *hw_if;
++	const struct xgbe_desc_if *desc_if;
+ 
+ 	/* Rings for Tx/Rx on a DMA channel */
+ 	struct xgbe_channel *channel;
+@@ -611,6 +611,9 @@ struct xgbe_prv_data {
+ #endif
+ };
+ 
++extern const struct xgbe_hw_if default_xgbe_hw_if;
++extern const struct xgbe_desc_if default_xgbe_desc_if;
++
+ /* Function prototypes*/
+ 
+ void xgbe_init_function_ptrs_dev(struct xgbe_hw_if *);
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-main.c linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-main.c
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-main.c	2014-08-04 01:37:11.386879283 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-main.c	2014-08-28 00:50:58.740247328 +0200
+@@ -210,12 +210,6 @@ static void xgbe_default_config(struct x
+ 	DBGPR("<--xgbe_default_config\n");
+ }
+ 
+-static void xgbe_init_all_fptrs(struct xgbe_prv_data *pdata)
+-{
+-	xgbe_init_function_ptrs_dev(&pdata->hw_if);
+-	xgbe_init_function_ptrs_desc(&pdata->desc_if);
+-}
+-
+ static int xgbe_probe(struct platform_device *pdev)
+ {
+ 	struct xgbe_prv_data *pdata;
+@@ -306,9 +300,8 @@ static int xgbe_probe(struct platform_de
+ 	netdev->base_addr = (unsigned long)pdata->xgmac_regs;
+ 
+ 	/* Set all the function pointers */
+-	xgbe_init_all_fptrs(pdata);
+-	hw_if = &pdata->hw_if;
+-	desc_if = &pdata->desc_if;
++	hw_if = pdata->hw_if = &default_xgbe_hw_if;
++	desc_if = pdata->desc_if = &default_xgbe_desc_if;
+ 
+ 	/* Issue software reset to device */
+ 	hw_if->exit(pdata);
+diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-mdio.c linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-mdio.c
+--- linux-3.16/drivers/net/ethernet/amd/xgbe/xgbe-mdio.c	2014-08-04 01:37:11.390879282 +0200
++++ linux-3.16-pax/drivers/net/ethernet/amd/xgbe/xgbe-mdio.c	2014-08-28 00:40:08.164211993 +0200
+@@ -128,7 +128,7 @@
+ static int xgbe_mdio_read(struct mii_bus *mii, int prtad, int mmd_reg)
+ {
+ 	struct xgbe_prv_data *pdata = mii->priv;
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	int mmd_data;
+ 
+ 	DBGPR_MDIO("-->xgbe_mdio_read: prtad=%#x mmd_reg=%#x\n",
+@@ -145,7 +145,7 @@ static int xgbe_mdio_write(struct mii_bu
+ 			   u16 mmd_val)
+ {
+ 	struct xgbe_prv_data *pdata = mii->priv;
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	int mmd_data = mmd_val;
+ 
+ 	DBGPR_MDIO("-->xgbe_mdio_write: prtad=%#x mmd_reg=%#x mmd_data=%#x\n",
+@@ -161,7 +161,7 @@ static int xgbe_mdio_write(struct mii_bu
+ static void xgbe_adjust_link(struct net_device *netdev)
+ {
+ 	struct xgbe_prv_data *pdata = netdev_priv(netdev);
+-	struct xgbe_hw_if *hw_if = &pdata->hw_if;
++	struct xgbe_hw_if *hw_if = pdata->hw_if;
+ 	struct phy_device *phydev = pdata->phydev;
+ 	unsigned long flags;
+ 	int new_state = 0;
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.h linux-3.16-pax/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.h
 --- linux-3.16/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.h	2014-08-04 01:37:11.518879276 +0200
 +++ linux-3.16-pax/drivers/net/ethernet/broadcom/bnx2x/bnx2x_cmn.h	2014-08-04 01:39:37.246871495 +0200
@@ -43760,7 +44421,7 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/scsi/hosts.
  	/* These three are default values which can be overridden */
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/scsi/hpsa.c linux-3.16-pax/drivers/scsi/hpsa.c
 --- linux-3.16/drivers/scsi/hpsa.c	2014-08-04 01:37:20.426878800 +0200
-+++ linux-3.16-pax/drivers/scsi/hpsa.c	2014-08-04 01:39:37.334871490 +0200
++++ linux-3.16-pax/drivers/scsi/hpsa.c	2014-08-25 12:58:52.981874204 +0200
 @@ -701,10 +701,10 @@ static inline u32 next_command(struct ct
  	unsigned long flags;
  
@@ -43888,6 +44549,15 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/drivers/scsi/hpsa.c
  
  	/* This is a bit complicated.  There are 8 registers on
  	 * the controller which we write to to tell it 8 different
+@@ -7329,7 +7329,7 @@ static void hpsa_enter_performant_mode(s
+ 	 * perform the superfluous readl() after each command submission.
+ 	 */
+ 	if (trans_support & (CFGTBL_Trans_io_accel1 | CFGTBL_Trans_io_accel2))
+-		access = SA5_performant_access_no_read;
++		access = &SA5_performant_access_no_read;
+ 
+ 	/* Controller spec: zero out this buffer. */
+ 	for (i = 0; i < h->nreply_queues; i++)
 @@ -7359,12 +7359,12 @@ static void hpsa_enter_performant_mode(s
  	 * enable outbound interrupt coalescing in accelerator mode;
  	 */
@@ -52461,7 +53131,7 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nfsd/nfs4xdr.c l
  	[OP_COMMIT]		= (nfsd4_dec)nfsd4_decode_commit,
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nfsd/nfscache.c linux-3.16-pax/fs/nfsd/nfscache.c
 --- linux-3.16/fs/nfsd/nfscache.c	2014-08-04 01:37:34.902878027 +0200
-+++ linux-3.16-pax/fs/nfsd/nfscache.c	2014-08-04 01:39:37.466871483 +0200
++++ linux-3.16-pax/fs/nfsd/nfscache.c	2014-08-25 13:27:32.349967587 +0200
 @@ -518,14 +518,17 @@ nfsd_cache_update(struct svc_rqst *rqstp
  {
  	struct svc_cacherep *rp = rqstp->rq_cacherep;
@@ -52483,6 +53153,15 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nfsd/nfscache.c 
  
  	/* Don't cache excessive amounts of data and XDR failures */
  	if (!statp || len > (256 >> 2)) {
+@@ -536,7 +539,7 @@ nfsd_cache_update(struct svc_rqst *rqstp
+ 	switch (cachetype) {
+ 	case RC_REPLSTAT:
+ 		if (len != 1)
+-			printk("nfsd: RC_REPLSTAT/reply len %d!\n",len);
++			printk("nfsd: RC_REPLSTAT/reply len %ld!\n",len);
+ 		rp->c_replstat = *statp;
+ 		break;
+ 	case RC_REPLBUFF:
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nfsd/vfs.c linux-3.16-pax/fs/nfsd/vfs.c
 --- linux-3.16/fs/nfsd/vfs.c	2014-08-04 01:37:34.942878025 +0200
 +++ linux-3.16-pax/fs/nfsd/vfs.c	2014-08-04 01:39:37.466871483 +0200
@@ -52515,7 +53194,7 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nfsd/vfs.c linux
  	if (host_err < 0)
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nls/nls_base.c linux-3.16-pax/fs/nls/nls_base.c
 --- linux-3.16/fs/nls/nls_base.c	2014-03-31 12:48:26.627129753 +0200
-+++ linux-3.16-pax/fs/nls/nls_base.c	2014-08-04 01:39:37.470871483 +0200
++++ linux-3.16-pax/fs/nls/nls_base.c	2014-08-25 13:28:13.757969836 +0200
 @@ -234,21 +234,25 @@ EXPORT_SYMBOL(utf16s_to_utf8s);
  
  int __register_nls(struct nls_table *nls, struct module *owner)
@@ -52565,6 +53244,24 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nls/nls_base.c l
  			spin_unlock(&nls_lock);
  			return 0;
  		}
+@@ -272,7 +278,7 @@ int unregister_nls(struct nls_table * nl
+ 	return -EINVAL;
+ }
+ 
+-static struct nls_table *find_nls(char *charset)
++static struct nls_table *find_nls(const char *charset)
+ {
+ 	struct nls_table *nls;
+ 	spin_lock(&nls_lock);
+@@ -288,7 +294,7 @@ static struct nls_table *find_nls(char *
+ 	return nls;
+ }
+ 
+-struct nls_table *load_nls(char *charset)
++struct nls_table *load_nls(const char *charset)
+ {
+ 	return try_then_request_module(find_nls(charset), "nls_%s", charset);
+ }
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/fs/nls/nls_euc-jp.c linux-3.16-pax/fs/nls/nls_euc-jp.c
 --- linux-3.16/fs/nls/nls_euc-jp.c	2014-03-31 12:48:26.659129751 +0200
 +++ linux-3.16-pax/fs/nls/nls_euc-jp.c	2014-08-04 01:39:37.470871483 +0200
@@ -56611,7 +57308,7 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/include/linux/net.h
  struct kvec;
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/include/linux/nls.h linux-3.16-pax/include/linux/nls.h
 --- linux-3.16/include/linux/nls.h	2014-03-31 12:48:29.975129574 +0200
-+++ linux-3.16-pax/include/linux/nls.h	2014-08-04 01:39:37.518871480 +0200
++++ linux-3.16-pax/include/linux/nls.h	2014-08-25 13:28:57.473972211 +0200
 @@ -31,7 +31,7 @@ struct nls_table {
  	const unsigned char *charset2upper;
  	struct module *owner;
@@ -56621,6 +57318,15 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/include/linux/nls.h
  
  /* this value hold the maximum octet of charset */
  #define NLS_MAX_CHARSET_SIZE 6 /* for UTF-8 */
+@@ -46,7 +46,7 @@ enum utf16_endian {
+ /* nls_base.c */
+ extern int __register_nls(struct nls_table *, struct module *);
+ extern int unregister_nls(struct nls_table *);
+-extern struct nls_table *load_nls(char *);
++extern struct nls_table *load_nls(const char *);
+ extern void unload_nls(struct nls_table *);
+ extern struct nls_table *load_nls_default(void);
+ #define register_nls(nls) __register_nls((nls), THIS_MODULE)
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/include/linux/notifier.h linux-3.16-pax/include/linux/notifier.h
 --- linux-3.16/include/linux/notifier.h	2013-08-20 19:08:16.731833340 +0200
 +++ linux-3.16-pax/include/linux/notifier.h	2014-08-04 01:39:37.518871480 +0200
@@ -70504,13 +71210,13 @@ diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/net/decnet/sysctl_n
  	*lenp = len;
 diff -NurpX linux-3.16-pax/Documentation/dontdiff linux-3.16/net/ieee802154/reassembly.c linux-3.16-pax/net/ieee802154/reassembly.c
 --- linux-3.16/net/ieee802154/reassembly.c	2014-08-04 01:37:42.074877644 +0200
-+++ linux-3.16-pax/net/ieee802154/reassembly.c	2014-08-04 01:39:39.182871392 +0200
++++ linux-3.16-pax/net/ieee802154/reassembly.c	2014-08-25 11:49:16.341647359 +0200
 @@ -438,14 +438,13 @@ static struct ctl_table lowpan_frags_ctl
  
  static int __net_init lowpan_frags_ns_sysctl_register(struct net *net)
  {
 -	struct ctl_table *table;
-+	ctl_table_header *table = NULL;
++	ctl_table_no_const *table = NULL;
  	struct ctl_table_header *hdr;
  	struct netns_ieee802154_lowpan *ieee802154_lowpan =
  		net_ieee802154_lowpan(net);
