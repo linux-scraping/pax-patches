@@ -1,4 +1,4 @@
-- forward port to 3.15.10
+- changed ip_ident_bucket.id to an unchecked refcount type since it can legitimately wrap around
 
 diff -NurpX linux-3.15.10-pax/Documentation/dontdiff linux-3.15.10/arch/alpha/include/asm/atomic.h linux-3.15.10-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.15.10/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -71577,7 +71577,30 @@ diff -NurpX linux-3.15.10-pax/Documentation/dontdiff linux-3.15.10/net/ipv4/raw.
  static int raw_seq_show(struct seq_file *seq, void *v)
 diff -NurpX linux-3.15.10-pax/Documentation/dontdiff linux-3.15.10/net/ipv4/route.c linux-3.15.10-pax/net/ipv4/route.c
 --- linux-3.15.10/net/ipv4/route.c	2014-08-28 09:01:21.125279488 +0200
-+++ linux-3.15.10-pax/net/ipv4/route.c	2014-08-28 09:01:26.117279759 +0200
++++ linux-3.15.10-pax/net/ipv4/route.c	2014-08-28 10:29:59.889568364 +0200
+@@ -459,11 +459,11 @@ static struct neighbour *ipv4_neigh_look
+ 
+ #define IP_IDENTS_SZ 2048u
+ struct ip_ident_bucket {
+-	atomic_t	id;
++	atomic_unchecked_t	id;
+ 	u32		stamp32;
+ };
+ 
+-static struct ip_ident_bucket *ip_idents __read_mostly;
++static struct ip_ident_bucket ip_idents[IP_IDENTS_SZ] __read_mostly;
+ 
+ /* In order to protect privacy, we add a perturbation to identifiers
+  * if one generator is seldom used. This makes hard for an attacker
+@@ -479,7 +479,7 @@ u32 ip_idents_reserve(u32 hash, int segs
+ 	if (old != now && cmpxchg(&bucket->stamp32, old, now) == old)
+ 		delta = prandom_u32_max(now - old);
+ 
+-	return atomic_add_return(segs + delta, &bucket->id) - segs;
++	return atomic_add_return_unchecked(segs + delta, &bucket->id) - segs;
+ }
+ EXPORT_SYMBOL(ip_idents_reserve);
+ 
 @@ -2618,34 +2618,34 @@ static struct ctl_table ipv4_route_flush
  		.maxlen		= sizeof(int),
  		.mode		= 0200,
@@ -71632,6 +71655,19 @@ diff -NurpX linux-3.15.10-pax/Documentation/dontdiff linux-3.15.10/net/ipv4/rout
  	get_random_bytes(&net->ipv4.dev_addr_genid,
  			 sizeof(net->ipv4.dev_addr_genid));
  	return 0;
+@@ -2712,11 +2712,7 @@ int __init ip_rt_init(void)
+ {
+ 	int rc = 0;
+ 
+-	ip_idents = kmalloc(IP_IDENTS_SZ * sizeof(*ip_idents), GFP_KERNEL);
+-	if (!ip_idents)
+-		panic("IP: failed to allocate ip_idents\n");
+-
+-	prandom_bytes(ip_idents, IP_IDENTS_SZ * sizeof(*ip_idents));
++	prandom_bytes(ip_idents, sizeof(ip_idents));
+ 
+ #ifdef CONFIG_IP_ROUTE_CLASSID
+ 	ip_rt_acct = __alloc_percpu(256 * sizeof(struct ip_rt_acct), __alignof__(struct ip_rt_acct));
 diff -NurpX linux-3.15.10-pax/Documentation/dontdiff linux-3.15.10/net/ipv4/sysctl_net_ipv4.c linux-3.15.10-pax/net/ipv4/sysctl_net_ipv4.c
 --- linux-3.15.10/net/ipv4/sysctl_net_ipv4.c	2014-06-09 12:45:50.129124768 +0200
 +++ linux-3.15.10-pax/net/ipv4/sysctl_net_ipv4.c	2014-06-09 12:46:24.465124692 +0200
