@@ -1,5 +1,6 @@
-- fixed some compile issues
-- fixed two USERCOPY false positives, reported by spender and Stephane Neveu
+- fixed a compile error on arm, by Arnaud Fontaine <arnaud@drno.eu>
+- reverted a GFP_USERCOPY mark, it only matters for grsec, not PaX
+- set the accessed bit in the efi gdt descriptors as well
 
 diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/alpha/include/asm/atomic.h linux-3.16.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.16.1/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -2788,6 +2789,27 @@ diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/arm/mach-k
  	clk = clk_register(dev, &gate_fn->gate.hw);
  
  	if (IS_ERR(clk))
+diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/arm/mach-mvebu/coherency.c linux-3.16.1-pax/arch/arm/mach-mvebu/coherency.c
+--- linux-3.16.1/arch/arm/mach-mvebu/coherency.c	2014-08-04 01:36:39.874880965 +0200
++++ linux-3.16.1-pax/arch/arm/mach-mvebu/coherency.c	2014-09-06 10:16:26.158894458 +0200
+@@ -316,7 +316,7 @@ static void __init armada_370_coherency_
+ 
+ /*
+  * This ioremap hook is used on Armada 375/38x to ensure that PCIe
+- * memory areas are mapped as MT_UNCACHED instead of MT_DEVICE. This
++ * memory areas are mapped as MT_UNCACHED_RW instead of MT_DEVICE. This
+  * is needed as a workaround for a deadlock issue between the PCIe
+  * interface and the cache controller.
+  */
+@@ -329,7 +329,7 @@ armada_pcie_wa_ioremap_caller(phys_addr_
+ 	mvebu_mbus_get_pcie_mem_aperture(&pcie_mem);
+ 
+ 	if (pcie_mem.start <= phys_addr && (phys_addr + size) <= pcie_mem.end)
+-		mtype = MT_UNCACHED;
++		mtype = MT_UNCACHED_RW;
+ 
+ 	return __arm_ioremap_caller(phys_addr, size, mtype, caller);
+ }
 diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/arm/mach-omap2/board-n8x0.c linux-3.16.1-pax/arch/arm/mach-omap2/board-n8x0.c
 --- linux-3.16.1/arch/arm/mach-omap2/board-n8x0.c	2014-03-31 12:47:46.679131886 +0200
 +++ linux-3.16.1-pax/arch/arm/mach-omap2/board-n8x0.c	2014-08-04 01:39:36.082871557 +0200
@@ -31442,7 +31464,7 @@ diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/x86/platfo
  efi_rt_function_ptr:
 diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/x86/platform/efi/efi_stub_64.S linux-3.16.1-pax/arch/x86/platform/efi/efi_stub_64.S
 --- linux-3.16.1/arch/x86/platform/efi/efi_stub_64.S	2014-08-04 01:36:56.722880066 +0200
-+++ linux-3.16.1-pax/arch/x86/platform/efi/efi_stub_64.S	2014-08-04 01:39:36.262871547 +0200
++++ linux-3.16.1-pax/arch/x86/platform/efi/efi_stub_64.S	2014-09-04 18:48:04.266547852 +0200
 @@ -11,6 +11,7 @@
  #include <asm/msr.h>
  #include <asm/processor-flags.h>
@@ -31459,6 +31481,17 @@ diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/x86/platfo
  	ret
  ENDPROC(efi_call)
  
+@@ -245,8 +247,8 @@ efi_gdt64:
+ 	.long	0			/* Filled out by user */
+ 	.word	0
+ 	.quad	0x0000000000000000	/* NULL descriptor */
+-	.quad	0x00af9a000000ffff	/* __KERNEL_CS */
+-	.quad	0x00cf92000000ffff	/* __KERNEL_DS */
++	.quad	0x00af9b000000ffff	/* __KERNEL_CS */
++	.quad	0x00cf93000000ffff	/* __KERNEL_DS */
+ 	.quad	0x0080890000000000	/* TS descriptor */
+ 	.quad   0x0000000000000000	/* TS continued */
+ efi_gdt64_end:
 diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/arch/x86/platform/intel-mid/intel-mid.c linux-3.16.1-pax/arch/x86/platform/intel-mid/intel-mid.c
 --- linux-3.16.1/arch/x86/platform/intel-mid/intel-mid.c	2014-03-31 12:47:57.307131319 +0200
 +++ linux-3.16.1-pax/arch/x86/platform/intel-mid/intel-mid.c	2014-08-04 01:39:36.262871547 +0200
@@ -54236,16 +54269,7 @@ diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/fs/reiserfs/rei
  #define fs_changed(gen,s)		\
 diff -NurpX linux-3.16.1-pax/Documentation/dontdiff linux-3.16.1/fs/seq_file.c linux-3.16.1-pax/fs/seq_file.c
 --- linux-3.16.1/fs/seq_file.c	2014-08-04 01:37:35.418878000 +0200
-+++ linux-3.16.1-pax/fs/seq_file.c	2014-08-29 20:24:48.412099803 +0200
-@@ -36,7 +36,7 @@ static void *seq_buf_alloc(unsigned long
- {
- 	void *buf;
- 
--	buf = kmalloc(size, GFP_KERNEL | __GFP_NOWARN);
-+	buf = kmalloc(size, GFP_KERNEL | __GFP_NOWARN | GFP_USERCOPY);
- 	if (!buf && size > PAGE_SIZE)
- 		buf = vmalloc(size);
- 	return buf;
++++ linux-3.16.1-pax/fs/seq_file.c	2014-09-03 00:37:27.076555162 +0200
 @@ -165,7 +165,7 @@ Eoverflow:
  ssize_t seq_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
  {
