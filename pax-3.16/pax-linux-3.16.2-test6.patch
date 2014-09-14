@@ -1,7 +1,7 @@
-- regenerated the size overflow hash table for 3.16.2, by Emese
-- fixed an assert in the latent entropy plugin under gcc 4.5, reported by Emese
-- worked around an incompatibility between the KERNEXEC plugins and early EFI service calls, by Mathias Krause <mathias.krause@secunet.com>
-- fixed a typo in INVPCID_ALL_MONGLOBAL
+- fixed powerpc compilation, reported by Rodrigo Branco
+- hopefully fixed a build race on ia64, reported by Dennis Schridde (https://bugs.gentoo.org/show_bug.cgi?id=503878)
+- fixed regression on arm (missing smp_mb in atomic64_sub_return) introduced while forward porting to 3.13, https://bugs.gentoo.org/show_bug.cgi?id=502058 was not fixed completely before
+- added REFCOUNT protection to lockref, it may have a non-trivial performance impact on certain dentry operations due to the lack of a lockless refcount API in the kernel
 
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/alpha/include/asm/atomic.h linux-3.16.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.16.2/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -273,7 +273,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/arm/include/asm/atomic.h linux-3.16.2-pax/arch/arm/include/asm/atomic.h
 --- linux-3.16.2/arch/arm/include/asm/atomic.h	2014-08-04 01:36:38.714881027 +0200
-+++ linux-3.16.2-pax/arch/arm/include/asm/atomic.h	2014-08-04 01:39:36.054871559 +0200
++++ linux-3.16.2-pax/arch/arm/include/asm/atomic.h	2014-09-14 15:23:03.887078942 +0200
 @@ -18,17 +18,35 @@
  #include <asm/barrier.h>
  #include <asm/cmpxchg.h>
@@ -802,7 +802,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/arm/includ
  "	sbc	%R0, %R0, %R4\n"
  "	strexd	%1, %0, %H0, [%3]\n"
  "	teq	%1, #0\n"
-@@ -371,16 +731,29 @@ static inline long long atomic64_sub_ret
+@@ -371,10 +731,25 @@ static inline long long atomic64_sub_ret
  	__asm__ __volatile__("@ atomic64_sub_return\n"
  "1:	ldrexd	%0, %H0, [%3]\n"
  "	subs	%Q0, %Q0, %Q4\n"
@@ -829,13 +829,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (i)
  	: "cc");
- 
--	smp_mb();
--
- 	return result;
- }
- 
-@@ -410,6 +783,31 @@ static inline long long atomic64_cmpxchg
+@@ -410,6 +785,31 @@ static inline long long atomic64_cmpxchg
  	return oldval;
  }
  
@@ -867,7 +861,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/arm/includ
  static inline long long atomic64_xchg(atomic64_t *ptr, long long new)
  {
  	long long result;
-@@ -435,21 +833,35 @@ static inline long long atomic64_xchg(at
+@@ -435,21 +835,35 @@ static inline long long atomic64_xchg(at
  static inline long long atomic64_dec_if_positive(atomic64_t *v)
  {
  	long long result;
@@ -909,7 +903,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter)
  	: "cc");
-@@ -473,13 +885,25 @@ static inline int atomic64_add_unless(at
+@@ -473,13 +887,25 @@ static inline int atomic64_add_unless(at
  "	teq	%0, %5\n"
  "	teqeq	%H0, %H5\n"
  "	moveq	%1, #0\n"
@@ -938,7 +932,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/arm/includ
  	: "=&r" (val), "+r" (ret), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (u), "r" (a)
  	: "cc");
-@@ -492,10 +916,13 @@ static inline int atomic64_add_unless(at
+@@ -492,10 +918,13 @@ static inline int atomic64_add_unless(at
  
  #define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
  #define atomic64_inc(v)			atomic64_add(1LL, (v))
@@ -7398,7 +7392,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/powerpc/mm
  	}
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/powerpc/mm/mmap.c linux-3.16.2-pax/arch/powerpc/mm/mmap.c
 --- linux-3.16.2/arch/powerpc/mm/mmap.c	2013-09-03 00:44:51.066912964 +0200
-+++ linux-3.16.2-pax/arch/powerpc/mm/mmap.c	2014-08-04 01:39:36.130871555 +0200
++++ linux-3.16.2-pax/arch/powerpc/mm/mmap.c	2014-09-13 01:53:59.659703656 +0200
 @@ -53,10 +53,14 @@ static inline int mmap_is_legacy(void)
  	return sysctl_legacy_va_layout;
  }
@@ -7445,7 +7439,8 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/powerpc/mm
 +
  		mm->get_unmapped_area = arch_get_unmapped_area;
  	} else {
- 		mm->mmap_base = mmap_base();
+-		mm->mmap_base = mmap_base();
++		mm->mmap_base = mmap_base(mm);
 +
 +#ifdef CONFIG_PAX_RANDMMAP
 +		if (mm->pax_flags & MF_PAX_RANDMMAP)
@@ -50437,7 +50432,128 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/fs/coredump.c l
  	coredump_finish(mm, core_dumped);
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/fs/dcache.c linux-3.16.2-pax/fs/dcache.c
 --- linux-3.16.2/fs/dcache.c	2014-08-04 01:37:32.778878141 +0200
-+++ linux-3.16.2-pax/fs/dcache.c	2014-08-04 01:39:37.438871485 +0200
++++ linux-3.16.2-pax/fs/dcache.c	2014-09-13 22:10:35.539925106 +0200
+@@ -479,7 +479,7 @@ static void __dentry_kill(struct dentry
+ 	 * dentry_iput drops the locks, at which point nobody (except
+ 	 * transient RCU lookups) can reach this dentry.
+ 	 */
+-	BUG_ON((int)dentry->d_lockref.count > 0);
++	BUG_ON((int)__lockref_read(&dentry->d_lockref) > 0);
+ 	this_cpu_dec(nr_dentry);
+ 	if (dentry->d_op && dentry->d_op->d_release)
+ 		dentry->d_op->d_release(dentry);
+@@ -532,7 +532,7 @@ static inline struct dentry *lock_parent
+ 	struct dentry *parent = dentry->d_parent;
+ 	if (IS_ROOT(dentry))
+ 		return NULL;
+-	if (unlikely((int)dentry->d_lockref.count < 0))
++	if (unlikely((int)__lockref_read(&dentry->d_lockref) < 0))
+ 		return NULL;
+ 	if (likely(spin_trylock(&parent->d_lock)))
+ 		return parent;
+@@ -609,7 +609,7 @@ repeat:
+ 		dentry->d_flags |= DCACHE_REFERENCED;
+ 	dentry_lru_add(dentry);
+ 
+-	dentry->d_lockref.count--;
++	__lockref_dec(&dentry->d_lockref);
+ 	spin_unlock(&dentry->d_lock);
+ 	return;
+ 
+@@ -664,7 +664,7 @@ int d_invalidate(struct dentry * dentry)
+ 	 * We also need to leave mountpoints alone,
+ 	 * directory or not.
+ 	 */
+-	if (dentry->d_lockref.count > 1 && dentry->d_inode) {
++	if (__lockref_read(&dentry->d_lockref) > 1 && dentry->d_inode) {
+ 		if (S_ISDIR(dentry->d_inode->i_mode) || d_mountpoint(dentry)) {
+ 			spin_unlock(&dentry->d_lock);
+ 			return -EBUSY;
+@@ -680,7 +680,7 @@ EXPORT_SYMBOL(d_invalidate);
+ /* This must be called with d_lock held */
+ static inline void __dget_dlock(struct dentry *dentry)
+ {
+-	dentry->d_lockref.count++;
++	__lockref_inc(&dentry->d_lockref);
+ }
+ 
+ static inline void __dget(struct dentry *dentry)
+@@ -721,8 +721,8 @@ repeat:
+ 		goto repeat;
+ 	}
+ 	rcu_read_unlock();
+-	BUG_ON(!ret->d_lockref.count);
+-	ret->d_lockref.count++;
++	BUG_ON(!__lockref_read(&ret->d_lockref));
++	__lockref_inc(&ret->d_lockref);
+ 	spin_unlock(&ret->d_lock);
+ 	return ret;
+ }
+@@ -805,7 +805,7 @@ restart:
+ 	spin_lock(&inode->i_lock);
+ 	hlist_for_each_entry(dentry, &inode->i_dentry, d_alias) {
+ 		spin_lock(&dentry->d_lock);
+-		if (!dentry->d_lockref.count) {
++		if (!__lockref_read(&dentry->d_lockref)) {
+ 			/*
+ 			 * inform the fs via d_prune that this dentry
+ 			 * is about to be unhashed and destroyed.
+@@ -848,7 +848,7 @@ static void shrink_dentry_list(struct li
+ 		 * We found an inuse dentry which was not removed from
+ 		 * the LRU because of laziness during lookup. Do not free it.
+ 		 */
+-		if ((int)dentry->d_lockref.count > 0) {
++		if ((int)__lockref_read(&dentry->d_lockref) > 0) {
+ 			spin_unlock(&dentry->d_lock);
+ 			if (parent)
+ 				spin_unlock(&parent->d_lock);
+@@ -886,8 +886,8 @@ static void shrink_dentry_list(struct li
+ 		dentry = parent;
+ 		while (dentry && !lockref_put_or_lock(&dentry->d_lockref)) {
+ 			parent = lock_parent(dentry);
+-			if (dentry->d_lockref.count != 1) {
+-				dentry->d_lockref.count--;
++			if (__lockref_read(&dentry->d_lockref) != 1) {
++				__lockref_inc(&dentry->d_lockref);
+ 				spin_unlock(&dentry->d_lock);
+ 				if (parent)
+ 					spin_unlock(&parent->d_lock);
+@@ -927,7 +927,7 @@ dentry_lru_isolate(struct list_head *ite
+ 	 * counts, just remove them from the LRU. Otherwise give them
+ 	 * another pass through the LRU.
+ 	 */
+-	if (dentry->d_lockref.count) {
++	if (__lockref_read(&dentry->d_lockref) > 0) {
+ 		d_lru_isolate(dentry);
+ 		spin_unlock(&dentry->d_lock);
+ 		return LRU_REMOVED;
+@@ -1262,7 +1262,7 @@ static enum d_walk_ret select_collect(vo
+ 	} else {
+ 		if (dentry->d_flags & DCACHE_LRU_LIST)
+ 			d_lru_del(dentry);
+-		if (!dentry->d_lockref.count) {
++		if (!__lockref_read(&dentry->d_lockref)) {
+ 			d_shrink_add(dentry, &data->dispose);
+ 			data->found++;
+ 		}
+@@ -1310,7 +1310,7 @@ static enum d_walk_ret umount_check(void
+ 		return D_WALK_CONTINUE;
+ 
+ 	/* root with refcount 1 is fine */
+-	if (dentry == _data && dentry->d_lockref.count == 1)
++	if (dentry == _data && __lockref_read(&dentry->d_lockref) == 1)
+ 		return D_WALK_CONTINUE;
+ 
+ 	printk(KERN_ERR "BUG: Dentry %p{i=%lx,n=%pd} "
+@@ -1319,7 +1319,7 @@ static enum d_walk_ret umount_check(void
+ 		       dentry->d_inode ?
+ 		       dentry->d_inode->i_ino : 0UL,
+ 		       dentry,
+-		       dentry->d_lockref.count,
++		       __lockref_read(&dentry->d_lockref),
+ 		       dentry->d_sb->s_type->name,
+ 		       dentry->d_sb->s_id);
+ 	WARN_ON(1);
 @@ -1445,7 +1445,7 @@ struct dentry *__d_alloc(struct super_bl
  	 */
  	dentry->d_iname[DNAME_INLINE_LEN-1] = 0;
@@ -50447,6 +50563,42 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/fs/dcache.c lin
  		if (!dname) {
  			kmem_cache_free(dentry_cache, dentry); 
  			return NULL;
+@@ -1463,7 +1463,7 @@ struct dentry *__d_alloc(struct super_bl
+ 	smp_wmb();
+ 	dentry->d_name.name = dname;
+ 
+-	dentry->d_lockref.count = 1;
++	__lockref_set(&dentry->d_lockref, 1);
+ 	dentry->d_flags = 0;
+ 	spin_lock_init(&dentry->d_lock);
+ 	seqcount_init(&dentry->d_seq);
+@@ -2226,7 +2226,7 @@ struct dentry *__d_lookup(const struct d
+ 				goto next;
+ 		}
+ 
+-		dentry->d_lockref.count++;
++		__lockref_inc(&dentry->d_lockref);
+ 		found = dentry;
+ 		spin_unlock(&dentry->d_lock);
+ 		break;
+@@ -2325,7 +2325,7 @@ again:
+ 	spin_lock(&dentry->d_lock);
+ 	inode = dentry->d_inode;
+ 	isdir = S_ISDIR(inode->i_mode);
+-	if (dentry->d_lockref.count == 1) {
++	if (__lockref_read(&dentry->d_lockref) == 1) {
+ 		if (!spin_trylock(&inode->i_lock)) {
+ 			spin_unlock(&dentry->d_lock);
+ 			cpu_relax();
+@@ -3297,7 +3297,7 @@ static enum d_walk_ret d_genocide_kill(v
+ 
+ 		if (!(dentry->d_flags & DCACHE_GENOCIDE)) {
+ 			dentry->d_flags |= DCACHE_GENOCIDE;
+-			dentry->d_lockref.count--;
++			__lockref_dec(&dentry->d_lockref);
+ 		}
+ 	}
+ 	return D_WALK_CONTINUE;
 @@ -3413,7 +3413,8 @@ void __init vfs_caches_init(unsigned lon
  	mempages -= reserve;
  
@@ -56699,6 +56851,46 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/include/linux/l
  /**
   * list_move - delete from one list and add as another's head
   * @list: the entry to move
+diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/include/linux/lockref.h linux-3.16.2-pax/include/linux/lockref.h
+--- linux-3.16.2/include/linux/lockref.h	2014-01-20 12:36:47.912998097 +0100
++++ linux-3.16.2-pax/include/linux/lockref.h	2014-09-13 22:03:49.923639329 +0200
+@@ -47,4 +47,36 @@ static inline int __lockref_is_dead(cons
+ 	return ((int)l->count < 0);
+ }
+ 
++static inline unsigned int __lockref_read(struct lockref *lockref)
++{
++	return lockref->count;
++}
++
++static inline void __lockref_set(struct lockref *lockref, unsigned int count)
++{
++	lockref->count = count;
++}
++
++static inline void __lockref_inc(struct lockref *lockref)
++{
++
++#ifdef CONFIG_PAX_REFCOUNT
++	atomic_inc((atomic_t *)&lockref->count);
++#else
++	lockref->count++;
++#endif
++
++}
++
++static inline void __lockref_dec(struct lockref *lockref)
++{
++
++#ifdef CONFIG_PAX_REFCOUNT
++	atomic_dec((atomic_t *)&lockref->count);
++#else
++	lockref->count--;
++#endif
++
++}
++
+ #endif /* __LINUX_LOCKREF_H */
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/include/linux/math64.h linux-3.16.2-pax/include/linux/math64.h
 --- linux-3.16.2/include/linux/math64.h	2014-01-20 12:36:47.924998096 +0100
 +++ linux-3.16.2-pax/include/linux/math64.h	2014-08-04 01:39:37.514871481 +0200
@@ -65316,6 +65508,97 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/lib/list_debug.
 +	pax_close_kernel();
 +}
 +EXPORT_SYMBOL(pax_list_del_rcu);
+diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/lib/lockref.c linux-3.16.2-pax/lib/lockref.c
+--- linux-3.16.2/lib/lockref.c	2014-01-20 12:36:53.440997802 +0100
++++ linux-3.16.2-pax/lib/lockref.c	2014-09-13 21:38:15.955034077 +0200
+@@ -49,13 +49,13 @@
+ void lockref_get(struct lockref *lockref)
+ {
+ 	CMPXCHG_LOOP(
+-		new.count++;
++		__lockref_inc(&new);
+ 	,
+ 		return;
+ 	);
+ 
+ 	spin_lock(&lockref->lock);
+-	lockref->count++;
++	__lockref_inc(lockref);
+ 	spin_unlock(&lockref->lock);
+ }
+ EXPORT_SYMBOL(lockref_get);
+@@ -70,7 +70,7 @@ int lockref_get_not_zero(struct lockref
+ 	int retval;
+ 
+ 	CMPXCHG_LOOP(
+-		new.count++;
++		__lockref_inc(&new);
+ 		if (!old.count)
+ 			return 0;
+ 	,
+@@ -80,7 +80,7 @@ int lockref_get_not_zero(struct lockref
+ 	spin_lock(&lockref->lock);
+ 	retval = 0;
+ 	if (lockref->count) {
+-		lockref->count++;
++		__lockref_inc(lockref);
+ 		retval = 1;
+ 	}
+ 	spin_unlock(&lockref->lock);
+@@ -97,7 +97,7 @@ EXPORT_SYMBOL(lockref_get_not_zero);
+ int lockref_get_or_lock(struct lockref *lockref)
+ {
+ 	CMPXCHG_LOOP(
+-		new.count++;
++		lockref_inc(&new);
+ 		if (!old.count)
+ 			break;
+ 	,
+@@ -107,7 +107,7 @@ int lockref_get_or_lock(struct lockref *
+ 	spin_lock(&lockref->lock);
+ 	if (!lockref->count)
+ 		return 0;
+-	lockref->count++;
++	__lockref_inc(lockref);
+ 	spin_unlock(&lockref->lock);
+ 	return 1;
+ }
+@@ -121,7 +121,7 @@ EXPORT_SYMBOL(lockref_get_or_lock);
+ int lockref_put_or_lock(struct lockref *lockref)
+ {
+ 	CMPXCHG_LOOP(
+-		new.count--;
++		__lockref_dec(&new);
+ 		if (old.count <= 1)
+ 			break;
+ 	,
+@@ -131,7 +131,7 @@ int lockref_put_or_lock(struct lockref *
+ 	spin_lock(&lockref->lock);
+ 	if (lockref->count <= 1)
+ 		return 0;
+-	lockref->count--;
++	__lockref_dec(lockref);
+ 	spin_unlock(&lockref->lock);
+ 	return 1;
+ }
+@@ -158,7 +158,7 @@ int lockref_get_not_dead(struct lockref
+ 	int retval;
+ 
+ 	CMPXCHG_LOOP(
+-		new.count++;
++		__lockref_inc(&new);
+ 		if ((int)old.count < 0)
+ 			return 0;
+ 	,
+@@ -168,7 +168,7 @@ int lockref_get_not_dead(struct lockref
+ 	spin_lock(&lockref->lock);
+ 	retval = 0;
+ 	if ((int) lockref->count >= 0) {
+-		lockref->count++;
++		__lockref_inc(lockref);
+ 		retval = 1;
+ 	}
+ 	spin_unlock(&lockref->lock);
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/lib/Makefile linux-3.16.2-pax/lib/Makefile
 --- linux-3.16.2/lib/Makefile	2014-08-04 01:37:41.502877675 +0200
 +++ linux-3.16.2-pax/lib/Makefile	2014-08-04 01:39:37.750871468 +0200
@@ -65468,7 +65751,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/lib/vsprintf.c 
  
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/Makefile linux-3.16.2-pax/Makefile
 --- linux-3.16.2/Makefile	2014-09-06 14:24:09.126756504 +0200
-+++ linux-3.16.2-pax/Makefile	2014-09-06 14:24:23.298762279 +0200
++++ linux-3.16.2-pax/Makefile	2014-09-10 22:55:01.189410705 +0200
 @@ -303,8 +303,9 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH"
  
  HOSTCC       = gcc
@@ -65556,6 +65839,15 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/Makefile linux-
  ifdef CONFIG_READABLE_ASM
  # Disable optimizations that make assembler listings hard to read.
  # reorder blocks reorders the control in the function
+@@ -692,7 +750,7 @@ KBUILD_CFLAGS   += $(call cc-option, -fn
+ 
+ ifdef CONFIG_DEBUG_INFO
+ KBUILD_CFLAGS	+= -g
+-KBUILD_AFLAGS	+= -Wa,-gdwarf-2
++KBUILD_AFLAGS	+= -Wa,--gdwarf-2
+ endif
+ 
+ ifdef CONFIG_DEBUG_INFO_REDUCED
 @@ -888,6 +946,8 @@ endif
  
  # The actual objects are generated when descending,
