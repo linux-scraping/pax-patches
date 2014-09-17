@@ -1,4 +1,4 @@
-- fixed compile error in the new lockref API
+- the kernel physical memory map can be made non-executable when EFI uses the new memmap code, by Mathias Krause <mathias.krause@secunet.com>
 
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/alpha/include/asm/atomic.h linux-3.16.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.16.2/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -21847,7 +21847,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel/head_64.S linux-3.16.2-pax/arch/x86/kernel/head_64.S
 --- linux-3.16.2/arch/x86/kernel/head_64.S	2014-03-31 12:47:57.283131320 +0200
-+++ linux-3.16.2-pax/arch/x86/kernel/head_64.S	2014-08-04 01:39:36.206871550 +0200
++++ linux-3.16.2-pax/arch/x86/kernel/head_64.S	2014-09-17 12:55:17.330668181 +0200
 @@ -20,6 +20,8 @@
  #include <asm/processor-flags.h>
  #include <asm/percpu.h>
@@ -21897,7 +21897,11 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  
  	/*
  	 * Set up the identity mapping for the switchover.  These
-@@ -177,8 +198,8 @@ ENTRY(secondary_startup_64)
+@@ -174,11 +195,12 @@ ENTRY(secondary_startup_64)
+ 	 * after the boot processor executes this code.
+ 	 */
+ 
++	orq	$-1, %rbp
  	movq	$(init_level4_pgt - __START_KERNEL_map), %rax
  1:
  
@@ -21908,7 +21912,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  	movq	%rcx, %cr4
  
  	/* Setup early boot stage 4 level pagetables. */
-@@ -199,10 +220,19 @@ ENTRY(secondary_startup_64)
+@@ -199,10 +221,19 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -21916,10 +21920,10 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
 +	btl	$(X86_FEATURE_NX & 31),%edi	/* No Execute supported? */
  	jnc     1f
  	btsl	$_EFER_NX, %eax
++	cmpq	$-1, %rbp
++	je	1f
  	btsq	$_PAGE_BIT_NX,early_pmd_flags(%rip)
-+#ifndef CONFIG_EFI
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_PAGE_OFFSET(%rip)
-+#endif
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_START(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_END(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMEMMAP_START(%rip)
@@ -21929,7 +21933,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -282,6 +312,7 @@ ENTRY(secondary_startup_64)
+@@ -282,6 +313,7 @@ ENTRY(secondary_startup_64)
  	 *	REX.W + FF /5 JMP m16:64 Jump far, absolute indirect,
  	 *		address given in m16:64.
  	 */
@@ -21937,7 +21941,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -313,7 +344,7 @@ ENDPROC(start_cpu0)
+@@ -313,7 +345,7 @@ ENDPROC(start_cpu0)
  	.quad	INIT_PER_CPU_VAR(irq_stack_union)
  
  	GLOBAL(stack_start)
@@ -21946,7 +21950,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  	.word  0
  	__FINITDATA
  
-@@ -391,7 +422,7 @@ ENTRY(early_idt_handler)
+@@ -391,7 +423,7 @@ ENTRY(early_idt_handler)
  	call dump_stack
  #ifdef CONFIG_KALLSYMS	
  	leaq early_idt_ripmsg(%rip),%rdi
@@ -21955,7 +21959,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  	call __print_symbol
  #endif
  #endif /* EARLY_PRINTK */
-@@ -420,6 +451,7 @@ ENDPROC(early_idt_handler)
+@@ -420,6 +452,7 @@ ENDPROC(early_idt_handler)
  early_recursion_flag:
  	.long 0
  
@@ -21963,7 +21967,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  #ifdef CONFIG_EARLY_PRINTK
  early_idt_msg:
  	.asciz "PANIC: early exception %02lx rip %lx:%lx error %lx cr2 %lx\n"
-@@ -447,29 +479,52 @@ NEXT_PAGE(early_level4_pgt)
+@@ -447,29 +480,52 @@ NEXT_PAGE(early_level4_pgt)
  NEXT_PAGE(early_dynamic_pgts)
  	.fill	512*EARLY_DYNAMIC_PAGE_TABLES,8,0
  
@@ -22025,7 +22029,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -477,6 +532,9 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -477,6 +533,9 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -22035,7 +22039,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/kernel
  NEXT_PAGE(level2_kernel_pgt)
  	/*
  	 * 512 MB kernel mapping. We spend a full page on this pagetable
-@@ -494,28 +552,64 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -494,28 +553,64 @@ NEXT_PAGE(level2_kernel_pgt)
  NEXT_PAGE(level2_fixmap_pgt)
  	.fill	506,8,0
  	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
@@ -31331,7 +31335,7 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/platfo
  	local_irq_restore(efi_rt_eflags);
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/platform/efi/efi_64.c linux-3.16.2-pax/arch/x86/platform/efi/efi_64.c
 --- linux-3.16.2/arch/x86/platform/efi/efi_64.c	2014-06-09 12:45:14.317124848 +0200
-+++ linux-3.16.2-pax/arch/x86/platform/efi/efi_64.c	2014-08-04 01:39:36.262871547 +0200
++++ linux-3.16.2-pax/arch/x86/platform/efi/efi_64.c	2014-09-17 12:02:23.884872779 +0200
 @@ -99,6 +99,11 @@ void __init efi_call_phys_prelog(void)
  		vaddress = (unsigned long)__va(pgd * PGDIR_SIZE);
  		set_pgd(pgd_offset_k(pgd * PGDIR_SIZE), *pgd_offset_k(vaddress));
@@ -31356,6 +31360,31 @@ diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/platfo
  	__flush_tlb_all();
  	local_irq_restore(efi_flags);
  	early_code_mapping_set_exec(0);
+@@ -146,8 +156,23 @@ int efi_setup_page_tables(unsigned long
+ 	unsigned npages;
+ 	pgd_t *pgd;
+ 
+-	if (efi_enabled(EFI_OLD_MEMMAP))
++	if (efi_enabled(EFI_OLD_MEMMAP)) {
++		/* PaX: We need to disable the NX bit in the PGD, otherwise we won't be
++		 * able to execute the EFI services.
++		 */
++		if (__supported_pte_mask & _PAGE_NX) {
++			unsigned long addr = (unsigned long) __va(0);
++			pgd_t pe = __pgd(pgd_val(*pgd_offset_k(addr)) &  ~_PAGE_NX);
++
++			pr_info("PAX: Disabling NX protection for low memory map. Try booting without \"efi=old_map\"");
++#ifdef CONFIG_PAX_PER_CPU_PGD
++			set_pgd(pgd_offset_cpu(0, kernel, addr), pe);
++#endif
++			set_pgd(pgd_offset_k(addr), pe);
++		}
++
+ 		return 0;
++	}
+ 
+ 	efi_scratch.efi_pgt = (pgd_t *)(unsigned long)real_mode_header->trampoline_pgd;
+ 	pgd = __va(efi_scratch.efi_pgt);
 diff -NurpX linux-3.16.2-pax/Documentation/dontdiff linux-3.16.2/arch/x86/platform/efi/efi_stub_32.S linux-3.16.2-pax/arch/x86/platform/efi/efi_stub_32.S
 --- linux-3.16.2/arch/x86/platform/efi/efi_stub_32.S	2013-08-20 19:08:15.987833379 +0200
 +++ linux-3.16.2-pax/arch/x86/platform/efi/efi_stub_32.S	2014-08-04 01:39:36.262871547 +0200
