@@ -1,4 +1,6 @@
-- forward port to 3.14.19
+- the kernel physical memory map can be made non-executable when EFI uses the new memmap code, by Mathias Krause <mathias.krause@secunet.com>
+- fixed some REFCOUNT false positives in drbd, reported by schiffi (https://forums.grsecurity.net/viewtopic.php?f=3&t=3786)
+- removed bash dependence from scripts/gcc-plugin.sh
 
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/alpha/include/asm/atomic.h linux-3.14.19-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.19/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -22078,7 +22080,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kernel/head_64.S linux-3.14.19-pax/arch/x86/kernel/head_64.S
 --- linux-3.14.19/arch/x86/kernel/head_64.S	2014-03-31 12:47:57.283131320 +0200
-+++ linux-3.14.19-pax/arch/x86/kernel/head_64.S	2014-05-15 20:32:58.930730877 +0200
++++ linux-3.14.19-pax/arch/x86/kernel/head_64.S	2014-09-21 21:25:20.816380542 +0200
 @@ -20,6 +20,8 @@
  #include <asm/processor-flags.h>
  #include <asm/percpu.h>
@@ -22128,7 +22130,11 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  
  	/*
  	 * Set up the identity mapping for the switchover.  These
-@@ -177,8 +198,8 @@ ENTRY(secondary_startup_64)
+@@ -174,11 +195,12 @@ ENTRY(secondary_startup_64)
+ 	 * after the boot processor executes this code.
+ 	 */
+ 
++	orq	$-1, %rbp
  	movq	$(init_level4_pgt - __START_KERNEL_map), %rax
  1:
  
@@ -22139,7 +22145,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  	movq	%rcx, %cr4
  
  	/* Setup early boot stage 4 level pagetables. */
-@@ -199,10 +220,19 @@ ENTRY(secondary_startup_64)
+@@ -199,10 +221,19 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -22147,10 +22153,10 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
 +	btl	$(X86_FEATURE_NX & 31),%edi	/* No Execute supported? */
  	jnc     1f
  	btsl	$_EFER_NX, %eax
++	cmpq	$-1, %rbp
++	je	1f
  	btsq	$_PAGE_BIT_NX,early_pmd_flags(%rip)
-+#ifndef CONFIG_EFI
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_PAGE_OFFSET(%rip)
-+#endif
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_START(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_END(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMEMMAP_START(%rip)
@@ -22160,7 +22166,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -282,6 +312,7 @@ ENTRY(secondary_startup_64)
+@@ -282,6 +313,7 @@ ENTRY(secondary_startup_64)
  	 *	REX.W + FF /5 JMP m16:64 Jump far, absolute indirect,
  	 *		address given in m16:64.
  	 */
@@ -22168,7 +22174,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -313,7 +344,7 @@ ENDPROC(start_cpu0)
+@@ -313,7 +345,7 @@ ENDPROC(start_cpu0)
  	.quad	INIT_PER_CPU_VAR(irq_stack_union)
  
  	GLOBAL(stack_start)
@@ -22177,7 +22183,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  	.word  0
  	__FINITDATA
  
-@@ -391,7 +422,7 @@ ENTRY(early_idt_handler)
+@@ -391,7 +423,7 @@ ENTRY(early_idt_handler)
  	call dump_stack
  #ifdef CONFIG_KALLSYMS	
  	leaq early_idt_ripmsg(%rip),%rdi
@@ -22186,7 +22192,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  	call __print_symbol
  #endif
  #endif /* EARLY_PRINTK */
-@@ -420,6 +451,7 @@ ENDPROC(early_idt_handler)
+@@ -420,6 +452,7 @@ ENDPROC(early_idt_handler)
  early_recursion_flag:
  	.long 0
  
@@ -22194,7 +22200,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  #ifdef CONFIG_EARLY_PRINTK
  early_idt_msg:
  	.asciz "PANIC: early exception %02lx rip %lx:%lx error %lx cr2 %lx\n"
-@@ -447,29 +479,52 @@ NEXT_PAGE(early_level4_pgt)
+@@ -447,29 +480,52 @@ NEXT_PAGE(early_level4_pgt)
  NEXT_PAGE(early_dynamic_pgts)
  	.fill	512*EARLY_DYNAMIC_PAGE_TABLES,8,0
  
@@ -22256,7 +22262,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -477,6 +532,9 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -477,6 +533,9 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -22266,7 +22272,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/kern
  NEXT_PAGE(level2_kernel_pgt)
  	/*
  	 * 512 MB kernel mapping. We spend a full page on this pagetable
-@@ -494,28 +552,64 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -494,28 +553,64 @@ NEXT_PAGE(level2_kernel_pgt)
  NEXT_PAGE(level2_fixmap_pgt)
  	.fill	506,8,0
  	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
@@ -31481,7 +31487,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/plat
  	local_irq_restore(efi_rt_eflags);
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/platform/efi/efi_64.c linux-3.14.19-pax/arch/x86/platform/efi/efi_64.c
 --- linux-3.14.19/arch/x86/platform/efi/efi_64.c	2014-04-16 18:35:17.032587789 +0200
-+++ linux-3.14.19-pax/arch/x86/platform/efi/efi_64.c	2014-04-16 18:35:20.932587904 +0200
++++ linux-3.14.19-pax/arch/x86/platform/efi/efi_64.c	2014-09-21 21:25:20.816380542 +0200
 @@ -97,6 +97,11 @@ void __init efi_call_phys_prelog(void)
  		vaddress = (unsigned long)__va(pgd * PGDIR_SIZE);
  		set_pgd(pgd_offset_k(pgd * PGDIR_SIZE), *pgd_offset_k(vaddress));
@@ -31506,6 +31512,31 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/plat
  	__flush_tlb_all();
  	local_irq_restore(efi_flags);
  	early_code_mapping_set_exec(0);
+@@ -141,8 +151,23 @@ int efi_setup_page_tables(unsigned long
+ {
+ 	pgd_t *pgd;
+ 
+-	if (efi_enabled(EFI_OLD_MEMMAP))
++	if (efi_enabled(EFI_OLD_MEMMAP)) {
++		/* PaX: We need to disable the NX bit in the PGD, otherwise we won't be
++		 * able to execute the EFI services.
++		 */
++		if (__supported_pte_mask & _PAGE_NX) {
++			unsigned long addr = (unsigned long) __va(0);
++			pgd_t pe = __pgd(pgd_val(*pgd_offset_k(addr)) &  ~_PAGE_NX);
++
++			pr_info("PAX: Disabling NX protection for low memory map. Try booting without \"efi=old_map\"\n");
++#ifdef CONFIG_PAX_PER_CPU_PGD
++			set_pgd(pgd_offset_cpu(0, kernel, addr), pe);
++#endif
++			set_pgd(pgd_offset_k(addr), pe);
++		}
++
+ 		return 0;
++	}
+ 
+ 	efi_scratch.efi_pgt = (pgd_t *)(unsigned long)real_mode_header->trampoline_pgd;
+ 	pgd = __va(efi_scratch.efi_pgt);
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/platform/efi/efi_stub_32.S linux-3.14.19-pax/arch/x86/platform/efi/efi_stub_32.S
 --- linux-3.14.19/arch/x86/platform/efi/efi_stub_32.S	2013-08-20 19:08:15.987833379 +0200
 +++ linux-3.14.19-pax/arch/x86/platform/efi/efi_stub_32.S	2014-03-31 12:53:46.387112680 +0200
@@ -34734,9 +34765,21 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  
  	cmdlist_t *reqQ;
  	cmdlist_t *cmpQ;
+diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block/drbd/drbd_bitmap.c linux-3.14.19-pax/drivers/block/drbd/drbd_bitmap.c
+--- linux-3.14.19/drivers/block/drbd/drbd_bitmap.c	2014-03-31 12:47:57.859131289 +0200
++++ linux-3.14.19-pax/drivers/block/drbd/drbd_bitmap.c	2014-09-28 18:53:15.911711627 +0200
+@@ -1042,7 +1042,7 @@ static void bm_page_io_async(struct bm_a
+ 		submit_bio(rw, bio);
+ 		/* this should not count as user activity and cause the
+ 		 * resync to throttle -- see drbd_rs_should_slow_down(). */
+-		atomic_add(len >> 9, &mdev->rs_sect_ev);
++		atomic_add_unchecked(len >> 9, &mdev->rs_sect_ev);
+ 	}
+ }
+ 
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block/drbd/drbd_int.h linux-3.14.19-pax/drivers/block/drbd/drbd_int.h
 --- linux-3.14.19/drivers/block/drbd/drbd_int.h	2014-01-20 12:36:09.033000173 +0100
-+++ linux-3.14.19-pax/drivers/block/drbd/drbd_int.h	2014-03-31 12:53:46.411112679 +0200
++++ linux-3.14.19-pax/drivers/block/drbd/drbd_int.h	2014-09-28 18:51:25.355692027 +0200
 @@ -582,7 +582,7 @@ struct drbd_epoch {
  	struct drbd_tconn *tconn;
  	struct list_head list;
@@ -34755,6 +34798,17 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  	unsigned int peer_seq;
  	spinlock_t peer_seq_lock;
  	unsigned int minor;
+@@ -1032,8 +1032,8 @@ struct drbd_conf {
+ 	struct mutex own_state_mutex;
+ 	struct mutex *state_mutex; /* either own_state_mutex or mdev->tconn->cstate_mutex */
+ 	char congestion_reason;  /* Why we where congested... */
+-	atomic_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
+-	atomic_t rs_sect_ev; /* for submitted resync data rate, both */
++	atomic_unchecked_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
++	atomic_unchecked_t rs_sect_ev; /* for submitted resync data rate, both */
+ 	int rs_last_sect_ev; /* counter to compare with */
+ 	int rs_last_events;  /* counter of read or write "events" (unit sectors)
+ 			      * on the lower level device when we last looked. */
 @@ -1573,7 +1573,7 @@ static inline int drbd_setsockopt(struct
  	char __user *uoptval;
  	int err;
@@ -34766,7 +34820,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  	if (level == SOL_SOCKET)
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block/drbd/drbd_main.c linux-3.14.19-pax/drivers/block/drbd/drbd_main.c
 --- linux-3.14.19/drivers/block/drbd/drbd_main.c	2014-03-31 12:47:57.859131289 +0200
-+++ linux-3.14.19-pax/drivers/block/drbd/drbd_main.c	2014-03-31 12:53:46.411112679 +0200
++++ linux-3.14.19-pax/drivers/block/drbd/drbd_main.c	2014-09-28 18:51:38.671694147 +0200
 @@ -1317,7 +1317,7 @@ static int _drbd_send_ack(struct drbd_co
  	p->sector = sector;
  	p->block_id = block_id;
@@ -34785,6 +34839,17 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  	dp_flags = bio_flags_to_wire(mdev, req->master_bio->bi_rw);
  	if (mdev->state.conn >= C_SYNC_SOURCE &&
  	    mdev->state.conn <= C_PAUSED_SYNC_T)
+@@ -1886,8 +1886,8 @@ void drbd_init_set_defaults(struct drbd_
+ 	atomic_set(&mdev->unacked_cnt, 0);
+ 	atomic_set(&mdev->local_cnt, 0);
+ 	atomic_set(&mdev->pp_in_use_by_net, 0);
+-	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_ev, 0);
++	atomic_set_unchecked(&mdev->rs_sect_in, 0);
++	atomic_set_unchecked(&mdev->rs_sect_ev, 0);
+ 	atomic_set(&mdev->ap_in_flight, 0);
+ 	atomic_set(&mdev->md_io_in_use, 0);
+ 
 @@ -2577,8 +2577,8 @@ void conn_destroy(struct kref *kref)
  {
  	struct drbd_tconn *tconn = container_of(kref, struct drbd_tconn, kref);
@@ -34819,7 +34884,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  		goto failed;
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block/drbd/drbd_receiver.c linux-3.14.19-pax/drivers/block/drbd/drbd_receiver.c
 --- linux-3.14.19/drivers/block/drbd/drbd_receiver.c	2014-03-31 12:47:57.863131289 +0200
-+++ linux-3.14.19-pax/drivers/block/drbd/drbd_receiver.c	2014-03-31 12:53:46.411112679 +0200
++++ linux-3.14.19-pax/drivers/block/drbd/drbd_receiver.c	2014-09-28 18:52:19.559701083 +0200
 @@ -834,7 +834,7 @@ int drbd_connected(struct drbd_conf *mde
  {
  	int err;
@@ -34870,6 +34935,24 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  		list_add(&epoch->list, &tconn->current_epoch->list);
  		tconn->current_epoch = epoch;
  		tconn->epochs++;
+@@ -1688,7 +1688,7 @@ static int recv_resync_read(struct drbd_
+ 	list_add(&peer_req->w.list, &mdev->sync_ee);
+ 	spin_unlock_irq(&mdev->tconn->req_lock);
+ 
+-	atomic_add(data_size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(data_size >> 9, &mdev->rs_sect_ev);
+ 	if (drbd_submit_peer_request(mdev, peer_req, WRITE, DRBD_FAULT_RS_WR) == 0)
+ 		return 0;
+ 
+@@ -1782,7 +1782,7 @@ static int receive_RSDataReply(struct dr
+ 		drbd_send_ack_dp(mdev, P_NEG_ACK, p, pi->size);
+ 	}
+ 
+-	atomic_add(pi->size >> 9, &mdev->rs_sect_in);
++	atomic_add_unchecked(pi->size >> 9, &mdev->rs_sect_in);
+ 
+ 	return err;
+ }
 @@ -2164,7 +2164,7 @@ static int receive_Data(struct drbd_tcon
  
  		err = wait_for_and_update_peer_seq(mdev, peer_seq);
@@ -34888,6 +34971,33 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  	atomic_inc(&peer_req->epoch->active);
  	spin_unlock(&tconn->epoch_lock);
  
+@@ -2326,7 +2326,7 @@ int drbd_rs_should_slow_down(struct drbd
+ 
+ 	curr_events = (int)part_stat_read(&disk->part0, sectors[0]) +
+ 		      (int)part_stat_read(&disk->part0, sectors[1]) -
+-			atomic_read(&mdev->rs_sect_ev);
++			atomic_read_unchecked(&mdev->rs_sect_ev);
+ 
+ 	if (!mdev->rs_last_events || curr_events - mdev->rs_last_events > 64) {
+ 		unsigned long rs_left;
+@@ -2459,7 +2459,7 @@ static int receive_DataRequest(struct dr
+ 			mdev->bm_resync_fo = BM_SECT_TO_BIT(sector);
+ 		} else if (pi->cmd == P_OV_REPLY) {
+ 			/* track progress, we may need to throttle */
+-			atomic_add(size >> 9, &mdev->rs_sect_in);
++			atomic_add_unchecked(size >> 9, &mdev->rs_sect_in);
+ 			peer_req->w.cb = w_e_end_ov_reply;
+ 			dec_rs_pending(mdev);
+ 			/* drbd_rs_begin_io done when we sent this request,
+@@ -2520,7 +2520,7 @@ static int receive_DataRequest(struct dr
+ 		goto out_free_e;
+ 
+ submit_for_resync:
+-	atomic_add(size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &mdev->rs_sect_ev);
+ 
+ submit:
+ 	inc_unacked(mdev);
 @@ -4345,7 +4345,7 @@ struct data_cmd {
  	int expect_payload;
  	size_t pkt_size;
@@ -34906,6 +35016,15 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  	tconn->send.seen_any_write_yet = false;
  
  	conn_info(tconn, "Connection closed\n");
+@@ -4947,7 +4947,7 @@ static int got_IsInSync(struct drbd_tcon
+ 		put_ldev(mdev);
+ 	}
+ 	dec_rs_pending(mdev);
+-	atomic_add(blksize >> 9, &mdev->rs_sect_in);
++	atomic_add_unchecked(blksize >> 9, &mdev->rs_sect_in);
+ 
+ 	return 0;
+ }
 @@ -5221,7 +5221,7 @@ static int tconn_finish_peer_reqs(struct
  struct asender_cmd {
  	size_t pkt_size;
@@ -34915,6 +35034,38 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block
  
  static struct asender_cmd asender_tbl[] = {
  	[P_PING]	    = { 0, got_Ping },
+diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block/drbd/drbd_worker.c linux-3.14.19-pax/drivers/block/drbd/drbd_worker.c
+--- linux-3.14.19/drivers/block/drbd/drbd_worker.c	2014-03-31 12:47:57.863131289 +0200
++++ linux-3.14.19-pax/drivers/block/drbd/drbd_worker.c	2014-09-28 18:53:03.963709302 +0200
+@@ -400,7 +400,7 @@ static int read_for_csum(struct drbd_con
+ 	list_add(&peer_req->w.list, &mdev->read_ee);
+ 	spin_unlock_irq(&mdev->tconn->req_lock);
+ 
+-	atomic_add(size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &mdev->rs_sect_ev);
+ 	if (drbd_submit_peer_request(mdev, peer_req, READ, DRBD_FAULT_RS_RD) == 0)
+ 		return 0;
+ 
+@@ -498,7 +498,7 @@ static int drbd_rs_controller(struct drb
+ 	int max_sect;
+ 	struct fifo_buffer *plan;
+ 
+-	sect_in = atomic_xchg(&mdev->rs_sect_in, 0); /* Number of sectors that came in */
++	sect_in = atomic_xchg_unchecked(&mdev->rs_sect_in, 0); /* Number of sectors that came in */
+ 	mdev->rs_in_flight -= sect_in;
+ 
+ 	dc = rcu_dereference(mdev->ldev->disk_conf);
+@@ -1561,8 +1561,8 @@ void drbd_rs_controller_reset(struct drb
+ {
+ 	struct fifo_buffer *plan;
+ 
+-	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_ev, 0);
++	atomic_set_unchecked(&mdev->rs_sect_in, 0);
++	atomic_set_unchecked(&mdev->rs_sect_ev, 0);
+ 	mdev->rs_in_flight = 0;
+ 
+ 	/* Updating the RCU protected object in place is necessary since
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/drivers/block/loop.c linux-3.14.19-pax/drivers/block/loop.c
 --- linux-3.14.19/drivers/block/loop.c	2014-03-31 12:47:57.863131289 +0200
 +++ linux-3.14.19-pax/drivers/block/loop.c	2014-03-31 12:53:46.415112679 +0200
@@ -74953,9 +75104,9 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/scripts/basic
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/scripts/gcc-plugin.sh linux-3.14.19-pax/scripts/gcc-plugin.sh
 --- linux-3.14.19/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.19-pax/scripts/gcc-plugin.sh	2014-06-12 03:46:18.966499686 +0200
-@@ -0,0 +1,43 @@
-+#!/bin/bash
++++ linux-3.14.19-pax/scripts/gcc-plugin.sh	2014-09-28 15:43:50.288462495 +0200
+@@ -0,0 +1,51 @@
++#!/bin/sh
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
 +plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
@@ -74973,15 +75124,23 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/scripts/gcc-p
 +	exit 1
 +fi
 +
-+if [[ "$plugincc" =~ "$1 CC" ]]
-+then
-+	echo "$1"
-+	exit 0
-+fi
++case "$plugincc" in
++	*"$1 CC"*)
++		echo "$1"
++		exit 0
++		;;
 +
-+if [[ "$plugincc" =~ "$2 CXX" ]]
-+then
-+plugincc=$($1 -c -x c++ -std=gnu++98 - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++	*"$2 CXX"*)
++		# the c++ compiler needs another test, see below
++		;;
++
++	*)
++		exit 1
++		;;
++esac
++
++# we need a c++ compiler that supports the designated initializer GNU extension
++plugincc=$($2 -c -x c++ -std=gnu++98 - -fsyntax-only -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +class test {
 +public:
@@ -74991,11 +75150,11 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/scripts/gcc-p
 +};
 +EOF
 +)
++
 +if [ $? -eq 0 ]
 +then
 +	echo "$2"
 +	exit 0
-+fi
 +fi
 +exit 1
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/scripts/headers_install.sh linux-3.14.19-pax/scripts/headers_install.sh
