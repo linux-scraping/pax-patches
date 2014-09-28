@@ -1,4 +1,6 @@
-- fixed a size overflow false positive that crept into the new ip id code, reported by jorgus (https://forums.grsecurity.net/viewtopic.php?f=3&t=4045)
+- made mmap_rnd use the passed down mm on ppc
+- fixed some REFCOUNT false positives in drbd, reported by schiffi (https://forums.grsecurity.net/viewtopic.php?f=3&t=3786)
+- removed bash dependence from scripts/gcc-plugin.sh
 
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/alpha/include/asm/atomic.h linux-3.2.63-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.63/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -3962,18 +3964,41 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/powerpc/mm
  	}
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/powerpc/mm/mmap_64.c linux-3.2.63-pax/arch/powerpc/mm/mmap_64.c
 --- linux-3.2.63/arch/powerpc/mm/mmap_64.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.63-pax/arch/powerpc/mm/mmap_64.c	2013-02-09 00:37:30.860720251 +0100
-@@ -65,6 +65,10 @@ static unsigned long mmap_rnd(void)
++++ linux-3.2.63-pax/arch/powerpc/mm/mmap_64.c	2014-09-28 19:14:54.520103947 +0200
+@@ -61,10 +61,14 @@ static inline int mmap_is_legacy(void)
+  *
+  * To avoid this we can shift the randomness by 1 bit.
+  */
+-static unsigned long mmap_rnd(void)
++static unsigned long mmap_rnd(struct mm_struct *mm)
  {
  	unsigned long rnd = 0;
  
 +#ifdef CONFIG_PAX_RANDMMAP
-+	if (!(current->mm->pax_flags & MF_PAX_RANDMMAP))
++	if (!(mm->pax_flags & MF_PAX_RANDMMAP))
 +#endif
 +
  	if (current->flags & PF_RANDOMIZE) {
  		/* 8MB for 32bit, 1GB for 64bit */
  		if (is_32bit_task())
+@@ -75,7 +79,7 @@ static unsigned long mmap_rnd(void)
+ 	return (rnd << PAGE_SHIFT) * 2;
+ }
+ 
+-static inline unsigned long mmap_base(void)
++static inline unsigned long mmap_base(struct mm_struct *mm)
+ {
+ 	unsigned long gap = rlimit(RLIMIT_STACK);
+ 
+@@ -84,7 +88,7 @@ static inline unsigned long mmap_base(vo
+ 	else if (gap > MAX_GAP)
+ 		gap = MAX_GAP;
+ 
+-	return PAGE_ALIGN(TASK_SIZE - gap - mmap_rnd());
++	return PAGE_ALIGN(TASK_SIZE - gap - mmap_rnd(mm));
+ }
+ 
+ /*
 @@ -99,10 +103,22 @@ void arch_pick_mmap_layout(struct mm_str
  	 */
  	if (mmap_is_legacy()) {
@@ -3987,7 +4012,8 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/powerpc/mm
  		mm->get_unmapped_area = arch_get_unmapped_area;
  		mm->unmap_area = arch_unmap_area;
  	} else {
- 		mm->mmap_base = mmap_base();
+-		mm->mmap_base = mmap_base();
++		mm->mmap_base = mmap_base(mm);
 +
 +#ifdef CONFIG_PAX_RANDMMAP
 +		if (mm->pax_flags & MF_PAX_RANDMMAP)
@@ -29875,9 +29901,21 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/c
  
  	cmdlist_t *reqQ;
  	cmdlist_t *cmpQ;
+diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/drbd/drbd_bitmap.c linux-3.2.63-pax/drivers/block/drbd/drbd_bitmap.c
+--- linux-3.2.63/drivers/block/drbd/drbd_bitmap.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.63-pax/drivers/block/drbd/drbd_bitmap.c	2014-09-28 19:38:57.184304993 +0200
+@@ -992,7 +992,7 @@ static void bm_page_io_async(struct bm_a
+ 		submit_bio(rw, bio);
+ 		/* this should not count as user activity and cause the
+ 		 * resync to throttle -- see drbd_rs_should_slow_down(). */
+-		atomic_add(len >> 9, &mdev->rs_sect_ev);
++		atomic_add_unchecked(len >> 9, &mdev->rs_sect_ev);
+ 	}
+ }
+ 
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/drbd/drbd_int.h linux-3.2.63-pax/drivers/block/drbd/drbd_int.h
 --- linux-3.2.63/drivers/block/drbd/drbd_int.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.63-pax/drivers/block/drbd/drbd_int.h	2012-07-04 19:24:47.700063004 +0200
++++ linux-3.2.63-pax/drivers/block/drbd/drbd_int.h	2014-09-28 19:37:48.988286686 +0200
 @@ -736,7 +736,7 @@ struct drbd_request;
  struct drbd_epoch {
  	struct list_head list;
@@ -29896,6 +29934,17 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  	unsigned int peer_seq;
  	spinlock_t peer_seq_lock;
  	unsigned int minor;
+@@ -1118,8 +1118,8 @@ struct drbd_conf {
+ 	u64 ed_uuid; /* UUID of the exposed data */
+ 	struct mutex state_mutex;
+ 	char congestion_reason;  /* Why we where congested... */
+-	atomic_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
+-	atomic_t rs_sect_ev; /* for submitted resync data rate, both */
++	atomic_unchecked_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
++	atomic_unchecked_t rs_sect_ev; /* for submitted resync data rate, both */
+ 	int rs_last_sect_ev; /* counter to compare with */
+ 	int rs_last_events;  /* counter of read or write "events" (unit sectors)
+ 			      * on the lower level device when we last looked. */
 @@ -1617,30 +1617,30 @@ static inline int drbd_setsockopt(struct
  
  static inline void drbd_tcp_cork(struct socket *sock)
@@ -29937,7 +29986,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  void drbd_bump_write_ordering(struct drbd_conf *mdev, enum write_ordering_e wo);
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/drbd/drbd_main.c linux-3.2.63-pax/drivers/block/drbd/drbd_main.c
 --- linux-3.2.63/drivers/block/drbd/drbd_main.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.63-pax/drivers/block/drbd/drbd_main.c	2012-07-04 19:24:47.700063004 +0200
++++ linux-3.2.63-pax/drivers/block/drbd/drbd_main.c	2014-09-28 19:37:59.756289563 +0200
 @@ -2397,7 +2397,7 @@ static int _drbd_send_ack(struct drbd_co
  	p.sector   = sector;
  	p.block_id = block_id;
@@ -29956,7 +30005,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  
  	dp_flags = bio_flags_to_wire(mdev, req->master_bio->bi_rw);
  
-@@ -2981,7 +2981,7 @@ void drbd_init_set_defaults(struct drbd_
+@@ -2981,11 +2981,11 @@ void drbd_init_set_defaults(struct drbd_
  	atomic_set(&mdev->unacked_cnt, 0);
  	atomic_set(&mdev->local_cnt, 0);
  	atomic_set(&mdev->net_cnt, 0);
@@ -29964,7 +30013,13 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
 +	atomic_set_unchecked(&mdev->packet_seq, 0);
  	atomic_set(&mdev->pp_in_use, 0);
  	atomic_set(&mdev->pp_in_use_by_net, 0);
- 	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_ev, 0);
++	atomic_set_unchecked(&mdev->rs_sect_in, 0);
++	atomic_set_unchecked(&mdev->rs_sect_ev, 0);
+ 	atomic_set(&mdev->ap_in_flight, 0);
+ 
+ 	mutex_init(&mdev->md_io_mutex);
 @@ -3063,8 +3063,8 @@ void drbd_mdev_cleanup(struct drbd_conf
  				mdev->receiver.t_state);
  
@@ -30026,7 +30081,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  		(int)((char *)tl - (char *)reply->tag_list);
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/drbd/drbd_receiver.c linux-3.2.63-pax/drivers/block/drbd/drbd_receiver.c
 --- linux-3.2.63/drivers/block/drbd/drbd_receiver.c	2013-06-09 18:04:43.201591760 +0200
-+++ linux-3.2.63-pax/drivers/block/drbd/drbd_receiver.c	2013-06-09 18:04:48.865591458 +0200
++++ linux-3.2.63-pax/drivers/block/drbd/drbd_receiver.c	2014-09-28 19:38:26.572297698 +0200
 @@ -894,7 +894,7 @@ retry:
  	sock->sk->sk_sndtimeo = mdev->net_conf->timeout*HZ/10;
  	sock->sk->sk_rcvtimeo = MAX_SCHEDULE_TIMEOUT;
@@ -30085,6 +30140,24 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  		list_add(&epoch->list, &mdev->current_epoch->list);
  		mdev->current_epoch = epoch;
  		mdev->epochs++;
+@@ -1449,7 +1449,7 @@ static int recv_resync_read(struct drbd_
+ 	list_add(&e->w.list, &mdev->sync_ee);
+ 	spin_unlock_irq(&mdev->req_lock);
+ 
+-	atomic_add(data_size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(data_size >> 9, &mdev->rs_sect_ev);
+ 	if (drbd_submit_ee(mdev, e, WRITE, DRBD_FAULT_RS_WR) == 0)
+ 		return true;
+ 
+@@ -1519,7 +1519,7 @@ static int receive_RSDataReply(struct dr
+ 		drbd_send_ack_dp(mdev, P_NEG_ACK, p, data_size);
+ 	}
+ 
+-	atomic_add(data_size >> 9, &mdev->rs_sect_in);
++	atomic_add_unchecked(data_size >> 9, &mdev->rs_sect_in);
+ 
+ 	return ok;
+ }
 @@ -1663,7 +1663,7 @@ static int receive_Data(struct drbd_conf
  		spin_unlock(&mdev->peer_seq_lock);
  
@@ -30103,6 +30176,33 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  	atomic_inc(&e->epoch->active);
  	spin_unlock(&mdev->epoch_lock);
  
+@@ -1906,7 +1906,7 @@ int drbd_rs_should_slow_down(struct drbd
+ 
+ 	curr_events = (int)part_stat_read(&disk->part0, sectors[0]) +
+ 		      (int)part_stat_read(&disk->part0, sectors[1]) -
+-			atomic_read(&mdev->rs_sect_ev);
++			atomic_read_unchecked(&mdev->rs_sect_ev);
+ 
+ 	if (!mdev->rs_last_events || curr_events - mdev->rs_last_events > 64) {
+ 		unsigned long rs_left;
+@@ -2034,7 +2034,7 @@ static int receive_DataRequest(struct dr
+ 			mdev->bm_resync_fo = BM_SECT_TO_BIT(sector);
+ 		} else if (cmd == P_OV_REPLY) {
+ 			/* track progress, we may need to throttle */
+-			atomic_add(size >> 9, &mdev->rs_sect_in);
++			atomic_add_unchecked(size >> 9, &mdev->rs_sect_in);
+ 			e->w.cb = w_e_end_ov_reply;
+ 			dec_rs_pending(mdev);
+ 			/* drbd_rs_begin_io done when we sent this request,
+@@ -2098,7 +2098,7 @@ static int receive_DataRequest(struct dr
+ 		goto out_free_e;
+ 
+ submit_for_resync:
+-	atomic_add(size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &mdev->rs_sect_ev);
+ 
+ submit:
+ 	inc_unacked(mdev);
 @@ -3637,7 +3637,7 @@ struct data_cmd {
  	int expect_payload;
  	size_t pkt_size;
@@ -30121,6 +30221,15 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  	D_ASSERT(list_empty(&mdev->current_epoch->list));
  }
  
+@@ -4240,7 +4240,7 @@ static int got_IsInSync(struct drbd_conf
+ 		put_ldev(mdev);
+ 	}
+ 	dec_rs_pending(mdev);
+-	atomic_add(blksize >> 9, &mdev->rs_sect_in);
++	atomic_add_unchecked(blksize >> 9, &mdev->rs_sect_in);
+ 
+ 	return true;
+ }
 @@ -4492,7 +4492,7 @@ static int got_skip(struct drbd_conf *md
  struct asender_cmd {
  	size_t pkt_size;
@@ -30130,6 +30239,38 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/d
  
  static struct asender_cmd *get_asender_cmd(int cmd)
  {
+diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/drbd/drbd_worker.c linux-3.2.63-pax/drivers/block/drbd/drbd_worker.c
+--- linux-3.2.63/drivers/block/drbd/drbd_worker.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.63-pax/drivers/block/drbd/drbd_worker.c	2014-09-28 19:38:46.352300706 +0200
+@@ -368,7 +368,7 @@ static int read_for_csum(struct drbd_con
+ 	list_add(&e->w.list, &mdev->read_ee);
+ 	spin_unlock_irq(&mdev->req_lock);
+ 
+-	atomic_add(size >> 9, &mdev->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &mdev->rs_sect_ev);
+ 	if (drbd_submit_ee(mdev, e, READ, DRBD_FAULT_RS_RD) == 0)
+ 		return 0;
+ 
+@@ -448,7 +448,7 @@ static int drbd_rs_controller(struct drb
+ 	int curr_corr;
+ 	int max_sect;
+ 
+-	sect_in = atomic_xchg(&mdev->rs_sect_in, 0); /* Number of sectors that came in */
++	sect_in = atomic_xchg_unchecked(&mdev->rs_sect_in, 0); /* Number of sectors that came in */
+ 	mdev->rs_in_flight -= sect_in;
+ 
+ 	spin_lock(&mdev->peer_seq_lock); /* get an atomic view on mdev->rs_plan_s */
+@@ -1455,8 +1455,8 @@ int drbd_alter_sa(struct drbd_conf *mdev
+ 
+ void drbd_rs_controller_reset(struct drbd_conf *mdev)
+ {
+-	atomic_set(&mdev->rs_sect_in, 0);
+-	atomic_set(&mdev->rs_sect_ev, 0);
++	atomic_set_unchecked(&mdev->rs_sect_in, 0);
++	atomic_set_unchecked(&mdev->rs_sect_ev, 0);
+ 	mdev->rs_in_flight = 0;
+ 	mdev->rs_planed = 0;
+ 	spin_lock(&mdev->peer_seq_lock);
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/drivers/block/loop.c linux-3.2.63-pax/drivers/block/loop.c
 --- linux-3.2.63/drivers/block/loop.c	2014-01-03 15:48:44.700070580 +0100
 +++ linux-3.2.63-pax/drivers/block/loop.c	2014-01-03 15:48:49.516070323 +0100
@@ -68133,9 +68274,9 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianess? %#x\n",
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/scripts/gcc-plugin.sh linux-3.2.63-pax/scripts/gcc-plugin.sh
 --- linux-3.2.63/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.63-pax/scripts/gcc-plugin.sh	2014-06-16 16:03:46.864920013 +0200
-@@ -0,0 +1,43 @@
-+#!/bin/bash
++++ linux-3.2.63-pax/scripts/gcc-plugin.sh	2014-09-28 15:43:50.288462495 +0200
+@@ -0,0 +1,51 @@
++#!/bin/sh
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
 +plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
@@ -68153,15 +68294,23 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/scripts/gcc-plu
 +	exit 1
 +fi
 +
-+if [[ "$plugincc" =~ "$1 CC" ]]
-+then
-+	echo "$1"
-+	exit 0
-+fi
++case "$plugincc" in
++	*"$1 CC"*)
++		echo "$1"
++		exit 0
++		;;
 +
-+if [[ "$plugincc" =~ "$2 CXX" ]]
-+then
-+plugincc=$($1 -c -x c++ -std=gnu++98 - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++	*"$2 CXX"*)
++		# the c++ compiler needs another test, see below
++		;;
++
++	*)
++		exit 1
++		;;
++esac
++
++# we need a c++ compiler that supports the designated initializer GNU extension
++plugincc=$($2 -c -x c++ -std=gnu++98 - -fsyntax-only -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +class test {
 +public:
@@ -68171,11 +68320,11 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/scripts/gcc-plu
 +};
 +EOF
 +)
++
 +if [ $? -eq 0 ]
 +then
 +	echo "$2"
 +	exit 0
-+fi
 +fi
 +exit 1
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/scripts/headers_install.pl linux-3.2.63-pax/scripts/headers_install.pl
