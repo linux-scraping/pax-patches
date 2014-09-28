@@ -1,5 +1,6 @@
-- fixed missing \n in the previously added EFI/NX related message, reported by spender
-- updated size overflow hash table, by spender
+- fixed some REFCOUNT false positives in drbd, reported by schiffi (https://forums.grsecurity.net/viewtopic.php?f=3&t=3786)
+- removed bash dependence from scripts/gcc-plugin.sh
+- added tools/gcc back to the tags targets
 
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/arch/alpha/include/asm/atomic.h linux-3.16.3-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.16.3/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -34570,9 +34571,21 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/c
  
  	cmdlist_t *reqQ;
  	cmdlist_t *cmpQ;
+diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/drbd/drbd_bitmap.c linux-3.16.3-pax/drivers/block/drbd/drbd_bitmap.c
+--- linux-3.16.3/drivers/block/drbd/drbd_bitmap.c	2014-06-09 12:45:14.957124847 +0200
++++ linux-3.16.3-pax/drivers/block/drbd/drbd_bitmap.c	2014-09-23 19:49:45.450727960 +0200
+@@ -1042,7 +1042,7 @@ static void bm_page_io_async(struct bm_a
+ 		submit_bio(rw, bio);
+ 		/* this should not count as user activity and cause the
+ 		 * resync to throttle -- see drbd_rs_should_slow_down(). */
+-		atomic_add(len >> 9, &device->rs_sect_ev);
++		atomic_add_unchecked(len >> 9, &device->rs_sect_ev);
+ 	}
+ }
+ 
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/drbd/drbd_int.h linux-3.16.3-pax/drivers/block/drbd/drbd_int.h
 --- linux-3.16.3/drivers/block/drbd/drbd_int.h	2014-08-04 01:36:57.362880031 +0200
-+++ linux-3.16.3-pax/drivers/block/drbd/drbd_int.h	2014-08-04 01:39:37.046871506 +0200
++++ linux-3.16.3-pax/drivers/block/drbd/drbd_int.h	2014-09-23 19:49:35.242722842 +0200
 @@ -331,7 +331,7 @@ struct drbd_epoch {
  	struct drbd_connection *connection;
  	struct list_head list;
@@ -34591,6 +34604,17 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  	unsigned int peer_seq;
  	spinlock_t peer_seq_lock;
  	unsigned int minor;
+@@ -807,8 +807,8 @@ struct drbd_device {
+ 	struct mutex own_state_mutex;
+ 	struct mutex *state_mutex; /* either own_state_mutex or first_peer_device(device)->connection->cstate_mutex */
+ 	char congestion_reason;  /* Why we where congested... */
+-	atomic_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
+-	atomic_t rs_sect_ev; /* for submitted resync data rate, both */
++	atomic_unchecked_t rs_sect_in; /* for incoming resync data rate, SyncTarget */
++	atomic_unchecked_t rs_sect_ev; /* for submitted resync data rate, both */
+ 	int rs_last_sect_ev; /* counter to compare with */
+ 	int rs_last_events;  /* counter of read or write "events" (unit sectors)
+ 			      * on the lower level device when we last looked. */
 @@ -1407,7 +1407,7 @@ static inline int drbd_setsockopt(struct
  	char __user *uoptval;
  	int err;
@@ -34602,7 +34626,7 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  	if (level == SOL_SOCKET)
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/drbd/drbd_main.c linux-3.16.3-pax/drivers/block/drbd/drbd_main.c
 --- linux-3.16.3/drivers/block/drbd/drbd_main.c	2014-08-04 01:36:57.362880031 +0200
-+++ linux-3.16.3-pax/drivers/block/drbd/drbd_main.c	2014-08-04 01:39:37.046871506 +0200
++++ linux-3.16.3-pax/drivers/block/drbd/drbd_main.c	2014-09-23 19:51:15.502772485 +0200
 @@ -1322,7 +1322,7 @@ static int _drbd_send_ack(struct drbd_pe
  	p->sector = sector;
  	p->block_id = block_id;
@@ -34621,6 +34645,17 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  	dp_flags = bio_flags_to_wire(peer_device->connection, req->master_bio->bi_rw);
  	if (device->state.conn >= C_SYNC_SOURCE &&
  	    device->state.conn <= C_PAUSED_SYNC_T)
+@@ -1905,8 +1905,8 @@ void drbd_init_set_defaults(struct drbd_
+ 	atomic_set(&device->unacked_cnt, 0);
+ 	atomic_set(&device->local_cnt, 0);
+ 	atomic_set(&device->pp_in_use_by_net, 0);
+-	atomic_set(&device->rs_sect_in, 0);
+-	atomic_set(&device->rs_sect_ev, 0);
++	atomic_set_unchecked(&device->rs_sect_in, 0);
++	atomic_set_unchecked(&device->rs_sect_ev, 0);
+ 	atomic_set(&device->ap_in_flight, 0);
+ 	atomic_set(&device->md_io_in_use, 0);
+ 
 @@ -2670,8 +2670,8 @@ void drbd_destroy_connection(struct kref
  	struct drbd_connection *connection = container_of(kref, struct drbd_connection, kref);
  	struct drbd_resource *resource = connection->resource;
@@ -34655,7 +34690,7 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  		goto failed;
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/drbd/drbd_receiver.c linux-3.16.3-pax/drivers/block/drbd/drbd_receiver.c
 --- linux-3.16.3/drivers/block/drbd/drbd_receiver.c	2014-08-04 01:36:57.374880031 +0200
-+++ linux-3.16.3-pax/drivers/block/drbd/drbd_receiver.c	2014-08-04 01:39:37.050871505 +0200
++++ linux-3.16.3-pax/drivers/block/drbd/drbd_receiver.c	2014-09-23 19:51:10.134769860 +0200
 @@ -834,7 +834,7 @@ int drbd_connected(struct drbd_peer_devi
  	struct drbd_device *device = peer_device->device;
  	int err;
@@ -34706,6 +34741,24 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  		list_add(&epoch->list, &connection->current_epoch->list);
  		connection->current_epoch = epoch;
  		connection->epochs++;
+@@ -1739,7 +1739,7 @@ static int recv_resync_read(struct drbd_
+ 	list_add(&peer_req->w.list, &device->sync_ee);
+ 	spin_unlock_irq(&device->resource->req_lock);
+ 
+-	atomic_add(pi->size >> 9, &device->rs_sect_ev);
++	atomic_add_unchecked(pi->size >> 9, &device->rs_sect_ev);
+ 	if (drbd_submit_peer_request(device, peer_req, WRITE, DRBD_FAULT_RS_WR) == 0)
+ 		return 0;
+ 
+@@ -1837,7 +1837,7 @@ static int receive_RSDataReply(struct dr
+ 		drbd_send_ack_dp(peer_device, P_NEG_ACK, p, pi->size);
+ 	}
+ 
+-	atomic_add(pi->size >> 9, &device->rs_sect_in);
++	atomic_add_unchecked(pi->size >> 9, &device->rs_sect_in);
+ 
+ 	return err;
+ }
 @@ -2224,7 +2224,7 @@ static int receive_Data(struct drbd_conn
  
  		err = wait_for_and_update_peer_seq(peer_device, peer_seq);
@@ -34724,6 +34777,33 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  	atomic_inc(&peer_req->epoch->active);
  	spin_unlock(&connection->epoch_lock);
  
+@@ -2406,7 +2406,7 @@ bool drbd_rs_c_min_rate_throttle(struct
+ 
+ 	curr_events = (int)part_stat_read(&disk->part0, sectors[0]) +
+ 		      (int)part_stat_read(&disk->part0, sectors[1]) -
+-			atomic_read(&device->rs_sect_ev);
++			atomic_read_unchecked(&device->rs_sect_ev);
+ 	if (!device->rs_last_events || curr_events - device->rs_last_events > 64) {
+ 		unsigned long rs_left;
+ 		int i;
+@@ -2540,7 +2540,7 @@ static int receive_DataRequest(struct dr
+ 			device->bm_resync_fo = BM_SECT_TO_BIT(sector);
+ 		} else if (pi->cmd == P_OV_REPLY) {
+ 			/* track progress, we may need to throttle */
+-			atomic_add(size >> 9, &device->rs_sect_in);
++			atomic_add_unchecked(size >> 9, &device->rs_sect_in);
+ 			peer_req->w.cb = w_e_end_ov_reply;
+ 			dec_rs_pending(device);
+ 			/* drbd_rs_begin_io done when we sent this request,
+@@ -2601,7 +2601,7 @@ static int receive_DataRequest(struct dr
+ 		goto out_free_e;
+ 
+ submit_for_resync:
+-	atomic_add(size >> 9, &device->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &device->rs_sect_ev);
+ 
+ submit:
+ 	inc_unacked(device);
 @@ -4461,7 +4461,7 @@ struct data_cmd {
  	int expect_payload;
  	size_t pkt_size;
@@ -34742,6 +34822,15 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  	connection->send.seen_any_write_yet = false;
  
  	drbd_info(connection, "Connection closed\n");
+@@ -5076,7 +5076,7 @@ static int got_IsInSync(struct drbd_conn
+ 		put_ldev(device);
+ 	}
+ 	dec_rs_pending(device);
+-	atomic_add(blksize >> 9, &device->rs_sect_in);
++	atomic_add_unchecked(blksize >> 9, &device->rs_sect_in);
+ 
+ 	return 0;
+ }
 @@ -5364,7 +5364,7 @@ static int connection_finish_peer_reqs(s
  struct asender_cmd {
  	size_t pkt_size;
@@ -34751,6 +34840,38 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/d
  
  static struct asender_cmd asender_tbl[] = {
  	[P_PING]	    = { 0, got_Ping },
+diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/drbd/drbd_worker.c linux-3.16.3-pax/drivers/block/drbd/drbd_worker.c
+--- linux-3.16.3/drivers/block/drbd/drbd_worker.c	2014-08-04 01:36:57.426880028 +0200
++++ linux-3.16.3-pax/drivers/block/drbd/drbd_worker.c	2014-09-23 19:50:44.510757282 +0200
+@@ -413,7 +413,7 @@ static int read_for_csum(struct drbd_pee
+ 	list_add(&peer_req->w.list, &device->read_ee);
+ 	spin_unlock_irq(&device->resource->req_lock);
+ 
+-	atomic_add(size >> 9, &device->rs_sect_ev);
++	atomic_add_unchecked(size >> 9, &device->rs_sect_ev);
+ 	if (drbd_submit_peer_request(device, peer_req, READ, DRBD_FAULT_RS_RD) == 0)
+ 		return 0;
+ 
+@@ -558,7 +558,7 @@ static int drbd_rs_number_requests(struc
+ 	unsigned int sect_in;  /* Number of sectors that came in since the last turn */
+ 	int number, mxb;
+ 
+-	sect_in = atomic_xchg(&device->rs_sect_in, 0);
++	sect_in = atomic_xchg_unchecked(&device->rs_sect_in, 0);
+ 	device->rs_in_flight -= sect_in;
+ 
+ 	rcu_read_lock();
+@@ -1583,8 +1583,8 @@ void drbd_rs_controller_reset(struct drb
+ {
+ 	struct fifo_buffer *plan;
+ 
+-	atomic_set(&device->rs_sect_in, 0);
+-	atomic_set(&device->rs_sect_ev, 0);
++	atomic_set_unchecked(&device->rs_sect_in, 0);
++	atomic_set_unchecked(&device->rs_sect_ev, 0);
+ 	device->rs_in_flight = 0;
+ 
+ 	/* Updating the RCU protected object in place is necessary since
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/drivers/block/loop.c linux-3.16.3-pax/drivers/block/loop.c
 --- linux-3.16.3/drivers/block/loop.c	2014-08-04 01:36:57.454880027 +0200
 +++ linux-3.16.3-pax/drivers/block/loop.c	2014-08-04 01:39:37.054871505 +0200
@@ -75331,9 +75452,9 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/scripts/gcc-plugin.sh linux-3.16.3-pax/scripts/gcc-plugin.sh
 --- linux-3.16.3/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.16.3-pax/scripts/gcc-plugin.sh	2014-08-04 01:39:39.254871388 +0200
-@@ -0,0 +1,43 @@
-+#!/bin/bash
++++ linux-3.16.3-pax/scripts/gcc-plugin.sh	2014-09-28 15:43:50.288462495 +0200
+@@ -0,0 +1,51 @@
++#!/bin/sh
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
 +plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
@@ -75351,15 +75472,23 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/scripts/gcc-plu
 +	exit 1
 +fi
 +
-+if [[ "$plugincc" =~ "$1 CC" ]]
-+then
-+	echo "$1"
-+	exit 0
-+fi
++case "$plugincc" in
++	*"$1 CC"*)
++		echo "$1"
++		exit 0
++		;;
 +
-+if [[ "$plugincc" =~ "$2 CXX" ]]
-+then
-+plugincc=$($1 -c -x c++ -std=gnu++98 - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++	*"$2 CXX"*)
++		# the c++ compiler needs another test, see below
++		;;
++
++	*)
++		exit 1
++		;;
++esac
++
++# we need a c++ compiler that supports the designated initializer GNU extension
++plugincc=$($2 -c -x c++ -std=gnu++98 - -fsyntax-only -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +class test {
 +public:
@@ -75369,11 +75498,11 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/scripts/gcc-plu
 +};
 +EOF
 +)
++
 +if [ $? -eq 0 ]
 +then
 +	echo "$2"
 +	exit 0
-+fi
 +fi
 +exit 1
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/scripts/headers_install.sh linux-3.16.3-pax/scripts/headers_install.sh
@@ -75742,6 +75871,18 @@ diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/scripts/sortext
  	unsigned int num_sections;
  	unsigned int secindex_strings;
  
+diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/scripts/tags.sh linux-3.16.3-pax/scripts/tags.sh
+--- linux-3.16.3/scripts/tags.sh	2014-08-04 01:37:45.602877456 +0200
++++ linux-3.16.3-pax/scripts/tags.sh	2014-09-27 02:17:41.231584179 +0200
+@@ -26,7 +26,7 @@ else
+ fi
+ 
+ # ignore userspace tools
+-ignore="$ignore ( -path ${tree}tools ) -prune -o"
++ignore="$ignore ( -path \"${tree}tools/[^g]*\" ) -prune -o"
+ 
+ # Find all available archs
+ find_all_archs()
 diff -NurpX linux-3.16.3-pax/Documentation/dontdiff linux-3.16.3/security/apparmor/lsm.c linux-3.16.3-pax/security/apparmor/lsm.c
 --- linux-3.16.3/security/apparmor/lsm.c	2014-06-09 12:45:52.697124763 +0200
 +++ linux-3.16.3-pax/security/apparmor/lsm.c	2014-08-04 01:39:39.262871387 +0200
