@@ -1,6 +1,5 @@
-- the kernel physical memory map can be made non-executable when EFI uses the new memmap code, by Mathias Krause <mathias.krause@secunet.com>
-- fixed some REFCOUNT false positives in drbd, reported by schiffi (https://forums.grsecurity.net/viewtopic.php?f=3&t=3786)
-- removed bash dependence from scripts/gcc-plugin.sh
+- backported 0b5a50635fc916cf46e3de0b819a61fc3f17e7ee from upstream to fix https://forums.grsecurity.net/viewtopic.php?f=3&t=4053
+- fixed a potential miscompile with certain gcc versions in pax_open_kernel/pax_close_kernel, reported by gyurix and hunger
 
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/alpha/include/asm/atomic.h linux-3.14.19-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.19/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -15163,8 +15162,8 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  /*
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/include/asm/pgtable_64.h linux-3.14.19-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-3.14.19/arch/x86/include/asm/pgtable_64.h	2013-08-20 19:08:15.851833387 +0200
-+++ linux-3.14.19-pax/arch/x86/include/asm/pgtable_64.h	2014-03-31 12:53:46.331112683 +0200
-@@ -16,10 +16,14 @@
++++ linux-3.14.19-pax/arch/x86/include/asm/pgtable_64.h	2014-10-03 00:26:34.201509754 +0200
+@@ -16,10 +16,15 @@
  
  extern pud_t level3_kernel_pgt[512];
  extern pud_t level3_ident_pgt[512];
@@ -15177,11 +15176,12 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
 -extern pmd_t level2_ident_pgt[512];
 -extern pgd_t init_level4_pgt[];
 +extern pmd_t level2_ident_pgt[512*2];
++extern pte_t level1_fixmap_pgt[512];
 +extern pgd_t init_level4_pgt[512];
  
  #define swapper_pg_dir init_level4_pgt
  
-@@ -61,7 +65,9 @@ static inline void native_set_pte_atomic
+@@ -61,7 +66,9 @@ static inline void native_set_pte_atomic
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -15191,7 +15191,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  }
  
  static inline void native_pmd_clear(pmd_t *pmd)
-@@ -97,7 +103,9 @@ static inline pmd_t native_pmdp_get_and_
+@@ -97,7 +104,9 @@ static inline pmd_t native_pmdp_get_and_
  
  static inline void native_set_pud(pud_t *pudp, pud_t pud)
  {
@@ -15201,7 +15201,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  }
  
  static inline void native_pud_clear(pud_t *pud)
-@@ -107,6 +115,13 @@ static inline void native_pud_clear(pud_
+@@ -107,6 +116,13 @@ static inline void native_pud_clear(pud_
  
  static inline void native_set_pgd(pgd_t *pgdp, pgd_t pgd)
  {
@@ -15235,7 +15235,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/include/asm/pgtable.h linux-3.14.19-pax/arch/x86/include/asm/pgtable.h
 --- linux-3.14.19/arch/x86/include/asm/pgtable.h	2014-03-31 12:47:33.175132607 +0200
-+++ linux-3.14.19-pax/arch/x86/include/asm/pgtable.h	2014-03-31 12:53:46.331112683 +0200
++++ linux-3.14.19-pax/arch/x86/include/asm/pgtable.h	2014-10-02 15:18:27.024882239 +0200
 @@ -45,6 +45,7 @@ extern struct mm_struct *pgd_page_get_mm
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -15244,7 +15244,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  #define pgd_clear(pgd)			native_pgd_clear(pgd)
  #endif
  
-@@ -82,12 +83,51 @@ extern struct mm_struct *pgd_page_get_mm
+@@ -82,12 +83,53 @@ extern struct mm_struct *pgd_page_get_mm
  
  #define arch_end_context_switch(prev)	do {} while(0)
  
@@ -15265,6 +15265,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
 +	cr0 = read_cr0() ^ X86_CR0_WP;
 +	BUG_ON(cr0 & X86_CR0_WP);
 +	write_cr0(cr0);
++	barrier();
 +	return cr0 ^ X86_CR0_WP;
 +}
 +
@@ -15272,6 +15273,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
 +{
 +	unsigned long cr0;
 +
++	barrier();
 +	cr0 = read_cr0() ^ X86_CR0_WP;
 +	BUG_ON(!(cr0 & X86_CR0_WP));
 +	write_cr0(cr0);
@@ -15296,7 +15298,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  static inline int pte_dirty(pte_t pte)
  {
  	return pte_flags(pte) & _PAGE_DIRTY;
-@@ -148,6 +188,11 @@ static inline unsigned long pud_pfn(pud_
+@@ -148,6 +190,11 @@ static inline unsigned long pud_pfn(pud_
  	return (pud_val(pud) & PTE_PFN_MASK) >> PAGE_SHIFT;
  }
  
@@ -15308,7 +15310,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  #define pte_page(pte)	pfn_to_page(pte_pfn(pte))
  
  static inline int pmd_large(pmd_t pte)
-@@ -201,9 +246,29 @@ static inline pte_t pte_wrprotect(pte_t
+@@ -201,9 +248,29 @@ static inline pte_t pte_wrprotect(pte_t
  	return pte_clear_flags(pte, _PAGE_RW);
  }
  
@@ -15339,7 +15341,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -430,6 +495,16 @@ pte_t *populate_extra_pte(unsigned long
+@@ -430,6 +497,16 @@ pte_t *populate_extra_pte(unsigned long
  #endif
  
  #ifndef __ASSEMBLY__
@@ -15356,7 +15358,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  #include <linux/mm_types.h>
  #include <linux/mmdebug.h>
  #include <linux/log2.h>
-@@ -570,7 +645,7 @@ static inline unsigned long pud_page_vad
+@@ -570,7 +647,7 @@ static inline unsigned long pud_page_vad
   * Currently stuck as a macro due to indirect forward reference to
   * linux/mmzone.h's __section_mem_map_addr() definition:
   */
@@ -15365,7 +15367,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  
  /* Find an entry in the second-level page table.. */
  static inline pmd_t *pmd_offset(pud_t *pud, unsigned long address)
-@@ -610,7 +685,7 @@ static inline unsigned long pgd_page_vad
+@@ -610,7 +687,7 @@ static inline unsigned long pgd_page_vad
   * Currently stuck as a macro due to indirect forward reference to
   * linux/mmzone.h's __section_mem_map_addr() definition:
   */
@@ -15374,7 +15376,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  
  /* to find an entry in a page-table-directory. */
  static inline unsigned long pud_index(unsigned long address)
-@@ -625,7 +700,7 @@ static inline pud_t *pud_offset(pgd_t *p
+@@ -625,7 +702,7 @@ static inline pud_t *pud_offset(pgd_t *p
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -15383,7 +15385,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -648,7 +723,12 @@ static inline int pgd_none(pgd_t pgd)
+@@ -648,7 +725,12 @@ static inline int pgd_none(pgd_t pgd)
   * pgd_offset() returns a (pgd_t *)
   * pgd_index() is used get the offset into the pgd page's array of pgd_t's;
   */
@@ -15397,7 +15399,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -659,6 +739,23 @@ static inline int pgd_none(pgd_t pgd)
+@@ -659,6 +741,23 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -15421,7 +15423,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/incl
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -825,11 +922,24 @@ static inline void pmdp_set_wrprotect(st
+@@ -825,11 +924,24 @@ static inline void pmdp_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
@@ -32450,7 +32452,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/xen/
  #ifdef CONFIG_ACPI_NUMA
 diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/xen/mmu.c linux-3.14.19-pax/arch/x86/xen/mmu.c
 --- linux-3.14.19/arch/x86/xen/mmu.c	2014-03-31 12:47:57.311131318 +0200
-+++ linux-3.14.19-pax/arch/x86/xen/mmu.c	2014-03-31 12:54:15.359111134 +0200
++++ linux-3.14.19-pax/arch/x86/xen/mmu.c	2014-10-03 00:26:34.769512761 +0200
 @@ -379,7 +379,7 @@ static pteval_t pte_mfn_to_pfn(pteval_t
  	return val;
  }
@@ -32460,17 +32462,63 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/xen/
  {
  	if (val & _PAGE_PRESENT) {
  		unsigned long pfn = (val & PTE_PFN_MASK) >> PAGE_SHIFT;
-@@ -1904,6 +1904,9 @@ void __init xen_setup_kernel_pagetable(p
+@@ -1866,12 +1866,11 @@ static void __init check_pt_base(unsigne
+  *
+  * We can construct this by grafting the Xen provided pagetable into
+  * head_64.S's preconstructed pagetables.  We copy the Xen L2's into
+- * level2_ident_pgt, level2_kernel_pgt and level2_fixmap_pgt.  This
+- * means that only the kernel has a physical mapping to start with -
+- * but that's enough to get __va working.  We need to fill in the rest
+- * of the physical mapping once some sort of allocator has been set
+- * up.
+- * NOTE: for PVH, the page tables are native.
++ * level2_ident_pgt, and level2_kernel_pgt.  This means that only the
++ * kernel has a physical mapping to start with - but that's enough to
++ * get __va working.  We need to fill in the rest of the physical
++ * mapping once some sort of allocator has been set up.  NOTE: for
++ * PVH, the page tables are native.
+  */
+ void __init xen_setup_kernel_pagetable(pgd_t *pgd, unsigned long max_pfn)
+ {
+@@ -1902,8 +1901,14 @@ void __init xen_setup_kernel_pagetable(p
+ 		/* L3_i[0] -> level2_ident_pgt */
+ 		convert_pfn_mfn(level3_ident_pgt);
  		/* L3_k[510] -> level2_kernel_pgt
- 		 * L3_i[511] -> level2_fixmap_pgt */
+-		 * L3_i[511] -> level2_fixmap_pgt */
++		 * L3_k[511] -> level2_fixmap_pgt */
  		convert_pfn_mfn(level3_kernel_pgt);
 +		convert_pfn_mfn(level3_vmalloc_start_pgt);
 +		convert_pfn_mfn(level3_vmalloc_end_pgt);
 +		convert_pfn_mfn(level3_vmemmap_pgt);
++
++		/* L3_k[511][506] -> level1_fixmap_pgt */
++		convert_pfn_mfn(level2_fixmap_pgt);
  	}
  	/* We get [511][511] and have Xen's version of level2_kernel_pgt */
  	l3 = m2v(pgd[pgd_index(__START_KERNEL_map)].pgd);
-@@ -1933,8 +1936,12 @@ void __init xen_setup_kernel_pagetable(p
+@@ -1913,30 +1918,29 @@ void __init xen_setup_kernel_pagetable(p
+ 	addr[1] = (unsigned long)l3;
+ 	addr[2] = (unsigned long)l2;
+ 	/* Graft it onto L4[272][0]. Note that we creating an aliasing problem:
+-	 * Both L4[272][0] and L4[511][511] have entries that point to the same
++	 * Both L4[272][0] and L4[511][510] have entries that point to the same
+ 	 * L2 (PMD) tables. Meaning that if you modify it in __va space
+ 	 * it will be also modified in the __ka space! (But if you just
+ 	 * modify the PMD table to point to other PTE's or none, then you
+ 	 * are OK - which is what cleanup_highmap does) */
+ 	copy_page(level2_ident_pgt, l2);
+-	/* Graft it onto L4[511][511] */
++	/* Graft it onto L4[511][510] */
+ 	copy_page(level2_kernel_pgt, l2);
+ 
+-	/* Get [511][510] and graft that in level2_fixmap_pgt */
+-	l3 = m2v(pgd[pgd_index(__START_KERNEL_map + PMD_SIZE)].pgd);
+-	l2 = m2v(l3[pud_index(__START_KERNEL_map + PMD_SIZE)].pud);
+-	copy_page(level2_fixmap_pgt, l2);
+-	/* Note that we don't do anything with level1_fixmap_pgt which
+-	 * we don't need. */
+ 	if (!xen_feature(XENFEAT_auto_translated_physmap)) {
+ 		/* Make pagetable pieces RO */
  		set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level3_ident_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level3_kernel_pgt, PAGE_KERNEL_RO);
@@ -32482,8 +32530,11 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/xen/
 +		set_page_prot(level2_vmemmap_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
++		set_page_prot(level1_fixmap_pgt, PAGE_KERNEL_RO);
  
-@@ -2123,6 +2130,7 @@ static void __init xen_post_allocator_in
+ 		/* Pin down new L4 */
+ 		pin_pagetable_pfn(MMUEXT_PIN_L4_TABLE,
+@@ -2123,6 +2127,7 @@ static void __init xen_post_allocator_in
  	pv_mmu_ops.set_pud = xen_set_pud;
  #if PAGETABLE_LEVELS == 4
  	pv_mmu_ops.set_pgd = xen_set_pgd;
@@ -32491,7 +32542,7 @@ diff -NurpX linux-3.14.19-pax/Documentation/dontdiff linux-3.14.19/arch/x86/xen/
  #endif
  
  	/* This will work as long as patching hasn't happened yet
-@@ -2201,6 +2209,7 @@ static const struct pv_mmu_ops xen_mmu_o
+@@ -2201,6 +2206,7 @@ static const struct pv_mmu_ops xen_mmu_o
  	.pud_val = PV_CALLEE_SAVE(xen_pud_val),
  	.make_pud = PV_CALLEE_SAVE(xen_make_pud),
  	.set_pgd = xen_set_pgd_hyper,
