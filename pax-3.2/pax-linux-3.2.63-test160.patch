@@ -1,6 +1,4 @@
-- made mmap_rnd use the passed down mm on ppc
-- fixed some REFCOUNT false positives in drbd, reported by schiffi (https://forums.grsecurity.net/viewtopic.php?f=3&t=3786)
-- removed bash dependence from scripts/gcc-plugin.sh
+- fixed a potential miscompile with certain gcc versions in pax_open_kernel/pax_close_kernel, reported by gyurix and hunger
 
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/alpha/include/asm/atomic.h linux-3.2.63-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.63/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -11297,7 +11295,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/include/asm/pgtable.h linux-3.2.63-pax/arch/x86/include/asm/pgtable.h
 --- linux-3.2.63/arch/x86/include/asm/pgtable.h	2013-03-29 02:18:30.015676747 +0100
-+++ linux-3.2.63-pax/arch/x86/include/asm/pgtable.h	2013-05-23 23:03:18.262325310 +0200
++++ linux-3.2.63-pax/arch/x86/include/asm/pgtable.h	2014-10-03 00:31:02.469569666 +0200
 @@ -44,6 +44,7 @@ extern struct mm_struct *pgd_page_get_mm
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -11306,7 +11304,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  #define pgd_clear(pgd)			native_pgd_clear(pgd)
  #endif
  
-@@ -81,12 +82,51 @@ extern struct mm_struct *pgd_page_get_mm
+@@ -81,12 +82,53 @@ extern struct mm_struct *pgd_page_get_mm
  
  #define arch_end_context_switch(prev)	do {} while(0)
  
@@ -11327,6 +11325,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
 +	cr0 = read_cr0() ^ X86_CR0_WP;
 +	BUG_ON(cr0 & X86_CR0_WP);
 +	write_cr0(cr0);
++	barrier();
 +	return cr0 ^ X86_CR0_WP;
 +}
 +
@@ -11334,6 +11333,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
 +{
 +	unsigned long cr0;
 +
++	barrier();
 +	cr0 = read_cr0() ^ X86_CR0_WP;
 +	BUG_ON(!(cr0 & X86_CR0_WP));
 +	write_cr0(cr0);
@@ -11358,7 +11358,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  static inline int pte_dirty(pte_t pte)
  {
  	return pte_flags(pte) & _PAGE_DIRTY;
-@@ -147,6 +187,11 @@ static inline unsigned long pud_pfn(pud_
+@@ -147,6 +189,11 @@ static inline unsigned long pud_pfn(pud_
  	return (pud_val(pud) & PTE_PFN_MASK) >> PAGE_SHIFT;
  }
  
@@ -11370,7 +11370,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  #define pte_page(pte)	pfn_to_page(pte_pfn(pte))
  
  static inline int pmd_large(pmd_t pte)
-@@ -200,9 +245,29 @@ static inline pte_t pte_wrprotect(pte_t
+@@ -200,9 +247,29 @@ static inline pte_t pte_wrprotect(pte_t
  	return pte_clear_flags(pte, _PAGE_RW);
  }
  
@@ -11401,7 +11401,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  }
  
  static inline pte_t pte_mkdirty(pte_t pte)
-@@ -394,6 +459,15 @@ pte_t *populate_extra_pte(unsigned long
+@@ -394,6 +461,15 @@ pte_t *populate_extra_pte(unsigned long
  #endif
  
  #ifndef __ASSEMBLY__
@@ -11417,7 +11417,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  #include <linux/mm_types.h>
  
  static inline int pte_none(pte_t pte)
-@@ -515,7 +589,7 @@ static inline unsigned long pud_page_vad
+@@ -515,7 +591,7 @@ static inline unsigned long pud_page_vad
   * Currently stuck as a macro due to indirect forward reference to
   * linux/mmzone.h's __section_mem_map_addr() definition:
   */
@@ -11426,7 +11426,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  
  /* Find an entry in the second-level page table.. */
  static inline pmd_t *pmd_offset(pud_t *pud, unsigned long address)
-@@ -555,7 +629,7 @@ static inline unsigned long pgd_page_vad
+@@ -555,7 +631,7 @@ static inline unsigned long pgd_page_vad
   * Currently stuck as a macro due to indirect forward reference to
   * linux/mmzone.h's __section_mem_map_addr() definition:
   */
@@ -11435,7 +11435,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  
  /* to find an entry in a page-table-directory. */
  static inline unsigned long pud_index(unsigned long address)
-@@ -570,7 +644,7 @@ static inline pud_t *pud_offset(pgd_t *p
+@@ -570,7 +646,7 @@ static inline pud_t *pud_offset(pgd_t *p
  
  static inline int pgd_bad(pgd_t pgd)
  {
@@ -11444,7 +11444,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  }
  
  static inline int pgd_none(pgd_t pgd)
-@@ -593,7 +667,12 @@ static inline int pgd_none(pgd_t pgd)
+@@ -593,7 +669,12 @@ static inline int pgd_none(pgd_t pgd)
   * pgd_offset() returns a (pgd_t *)
   * pgd_index() is used get the offset into the pgd page's array of pgd_t's;
   */
@@ -11458,7 +11458,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  /*
   * a shortcut which implies the use of the kernel's pgd, instead
   * of a process's
-@@ -604,6 +683,22 @@ static inline int pgd_none(pgd_t pgd)
+@@ -604,6 +685,22 @@ static inline int pgd_none(pgd_t pgd)
  #define KERNEL_PGD_BOUNDARY	pgd_index(PAGE_OFFSET)
  #define KERNEL_PGD_PTRS		(PTRS_PER_PGD - KERNEL_PGD_BOUNDARY)
  
@@ -11481,7 +11481,7 @@ diff -NurpX linux-3.2.63-pax/Documentation/dontdiff linux-3.2.63/arch/x86/includ
  #ifndef __ASSEMBLY__
  
  extern int direct_gbpages;
-@@ -768,11 +863,23 @@ static inline void pmdp_set_wrprotect(st
+@@ -768,11 +865,23 @@ static inline void pmdp_set_wrprotect(st
   * dst and src can be on the same page, but the range must not overlap,
   * and must not cross a page boundary.
   */
