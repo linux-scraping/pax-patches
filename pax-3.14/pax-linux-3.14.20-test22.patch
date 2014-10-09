@@ -1,4 +1,4 @@
-- forward port to 3.14.20
+- fixed early xen dom0 crash due to not converting level1_vsyscall_pgt, reported by xen_roger and ncopa
 
 diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/alpha/include/asm/atomic.h linux-3.14.20-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.20/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -15172,8 +15172,8 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/incl
  /*
 diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/include/asm/pgtable_64.h linux-3.14.20-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-3.14.20/arch/x86/include/asm/pgtable_64.h	2014-10-06 01:00:12.451765601 +0200
-+++ linux-3.14.20-pax/arch/x86/include/asm/pgtable_64.h	2014-10-03 00:26:34.201509754 +0200
-@@ -16,11 +16,15 @@
++++ linux-3.14.20-pax/arch/x86/include/asm/pgtable_64.h	2014-10-07 18:29:05.561282602 +0200
+@@ -16,11 +16,16 @@
  
  extern pud_t level3_kernel_pgt[512];
  extern pud_t level3_ident_pgt[512];
@@ -15187,11 +15187,12 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/incl
 +extern pmd_t level2_ident_pgt[512*2];
  extern pte_t level1_fixmap_pgt[512];
 -extern pgd_t init_level4_pgt[];
++extern pte_t level1_vsyscall_pgt[512];
 +extern pgd_t init_level4_pgt[512];
  
  #define swapper_pg_dir init_level4_pgt
  
-@@ -62,7 +66,9 @@ static inline void native_set_pte_atomic
+@@ -62,7 +67,9 @@ static inline void native_set_pte_atomic
  
  static inline void native_set_pmd(pmd_t *pmdp, pmd_t pmd)
  {
@@ -15201,7 +15202,7 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/incl
  }
  
  static inline void native_pmd_clear(pmd_t *pmd)
-@@ -98,7 +104,9 @@ static inline pmd_t native_pmdp_get_and_
+@@ -98,7 +105,9 @@ static inline pmd_t native_pmdp_get_and_
  
  static inline void native_set_pud(pud_t *pudp, pud_t pud)
  {
@@ -15211,7 +15212,7 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/incl
  }
  
  static inline void native_pud_clear(pud_t *pud)
-@@ -108,6 +116,13 @@ static inline void native_pud_clear(pud_
+@@ -108,6 +117,13 @@ static inline void native_pud_clear(pud_
  
  static inline void native_set_pgd(pgd_t *pgdp, pgd_t pgd)
  {
@@ -32462,7 +32463,7 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/xen/
  #ifdef CONFIG_ACPI_NUMA
 diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/xen/mmu.c linux-3.14.20-pax/arch/x86/xen/mmu.c
 --- linux-3.14.20/arch/x86/xen/mmu.c	2014-10-06 01:00:12.451765601 +0200
-+++ linux-3.14.20-pax/arch/x86/xen/mmu.c	2014-10-03 00:26:34.769512761 +0200
++++ linux-3.14.20-pax/arch/x86/xen/mmu.c	2014-10-07 16:51:24.638441374 +0200
 @@ -379,7 +379,7 @@ static pteval_t pte_mfn_to_pfn(pteval_t
  	return val;
  }
@@ -32472,7 +32473,7 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/xen/
  {
  	if (val & _PAGE_PRESENT) {
  		unsigned long pfn = (val & PTE_PFN_MASK) >> PAGE_SHIFT;
-@@ -1903,6 +1903,9 @@ void __init xen_setup_kernel_pagetable(p
+@@ -1903,8 +1903,12 @@ void __init xen_setup_kernel_pagetable(p
  		/* L3_k[510] -> level2_kernel_pgt
  		 * L3_k[511] -> level2_fixmap_pgt */
  		convert_pfn_mfn(level3_kernel_pgt);
@@ -32481,8 +32482,11 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/xen/
 +		convert_pfn_mfn(level3_vmemmap_pgt);
  
  		/* L3_k[511][506] -> level1_fixmap_pgt */
++		/* L3_k[511][507] -> level1_vsyscall_pgt */
  		convert_pfn_mfn(level2_fixmap_pgt);
-@@ -1929,8 +1932,12 @@ void __init xen_setup_kernel_pagetable(p
+ 	}
+ 	/* We get [511][511] and have Xen's version of level2_kernel_pgt */
+@@ -1929,11 +1933,16 @@ void __init xen_setup_kernel_pagetable(p
  		set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level3_ident_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level3_kernel_pgt, PAGE_KERNEL_RO);
@@ -32495,7 +32499,11 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/xen/
  		set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level1_fixmap_pgt, PAGE_KERNEL_RO);
-@@ -2120,6 +2127,7 @@ static void __init xen_post_allocator_in
++		set_page_prot(level1_vsyscall_pgt, PAGE_KERNEL_RO);
+ 
+ 		/* Pin down new L4 */
+ 		pin_pagetable_pfn(MMUEXT_PIN_L4_TABLE,
+@@ -2120,6 +2129,7 @@ static void __init xen_post_allocator_in
  	pv_mmu_ops.set_pud = xen_set_pud;
  #if PAGETABLE_LEVELS == 4
  	pv_mmu_ops.set_pgd = xen_set_pgd;
@@ -32503,7 +32511,7 @@ diff -NurpX linux-3.14.20-pax/Documentation/dontdiff linux-3.14.20/arch/x86/xen/
  #endif
  
  	/* This will work as long as patching hasn't happened yet
-@@ -2198,6 +2206,7 @@ static const struct pv_mmu_ops xen_mmu_o
+@@ -2198,6 +2208,7 @@ static const struct pv_mmu_ops xen_mmu_o
  	.pud_val = PV_CALLEE_SAVE(xen_pud_val),
  	.make_pud = PV_CALLEE_SAVE(xen_make_pud),
  	.set_pgd = xen_set_pgd_hyper,
