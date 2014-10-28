@@ -1,4 +1,7 @@
-- fixed some compiler errors, reported by spender
+- fixed REFCOUNT/arm for THUMB2, reported by Michael Tremer
+- fixed some constification fallout on arm
+- backported ce9ec37bddb633404a0c23e1acb181a264e7f7f2 from vanilla, hopefully it'll fix the UDEREF/PCID related crashes reported since 3.15+
+- removed an unnecessary set_memory_rw in the x86 bpf jit (regression in the 3.17 port)
 
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/alpha/include/asm/atomic.h linux-3.17.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.17.1/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -270,8 +273,8 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/include/asm/atomic.h linux-3.17.1-pax/arch/arm/include/asm/atomic.h
 --- linux-3.17.1/arch/arm/include/asm/atomic.h	2014-08-04 01:36:38.714881027 +0200
-+++ linux-3.17.1-pax/arch/arm/include/asm/atomic.h	2014-10-05 21:54:23.732047161 +0200
-@@ -18,17 +18,35 @@
++++ linux-3.17.1-pax/arch/arm/include/asm/atomic.h	2014-10-27 19:25:58.725019374 +0100
+@@ -18,17 +18,41 @@
  #include <asm/barrier.h>
  #include <asm/cmpxchg.h>
  
@@ -283,6 +286,12 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  
  #ifdef __KERNEL__
  
++#ifdef CONFIG_THUMB2_KERNEL
++#define REFCOUNT_TRAP_INSN "bkpt	0xf1"
++#else
++#define REFCOUNT_TRAP_INSN "bkpt	0xf103"
++#endif
++
 +#define _ASM_EXTABLE(from, to)		\
 +"	.pushsection __ex_table,\"a\"\n"\
 +"	.align	3\n"			\
@@ -307,7 +316,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  
  #if __LINUX_ARM_ARCH__ >= 6
  
-@@ -44,6 +62,36 @@ static inline void atomic_add(int i, ato
+@@ -44,6 +68,36 @@ static inline void atomic_add(int i, ato
  
  	prefetchw(&v->counter);
  	__asm__ __volatile__("@ atomic_add\n"
@@ -316,7 +325,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -344,7 +353,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  "1:	ldrex	%0, [%3]\n"
  "	add	%0, %0, %4\n"
  "	strex	%1, %0, [%3]\n"
-@@ -63,6 +111,43 @@ static inline int atomic_add_return(int
+@@ -63,6 +117,43 @@ static inline int atomic_add_return(int
  	prefetchw(&v->counter);
  
  	__asm__ __volatile__("@ atomic_add_return\n"
@@ -354,7 +363,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
 +"	mov	%0, %1\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -388,7 +397,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  "1:	ldrex	%0, [%3]\n"
  "	add	%0, %0, %4\n"
  "	strex	%1, %0, [%3]\n"
-@@ -84,6 +169,36 @@ static inline void atomic_sub(int i, ato
+@@ -84,6 +175,36 @@ static inline void atomic_sub(int i, ato
  
  	prefetchw(&v->counter);
  	__asm__ __volatile__("@ atomic_sub\n"
@@ -397,7 +406,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -425,7 +434,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  "1:	ldrex	%0, [%3]\n"
  "	sub	%0, %0, %4\n"
  "	strex	%1, %0, [%3]\n"
-@@ -103,11 +218,25 @@ static inline int atomic_sub_return(int
+@@ -103,11 +224,25 @@ static inline int atomic_sub_return(int
  	prefetchw(&v->counter);
  
  	__asm__ __volatile__("@ atomic_sub_return\n"
@@ -437,7 +446,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
 +"	mov	%0, %1\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -453,7 +462,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "Ir" (i)
  	: "cc");
-@@ -152,12 +281,24 @@ static inline int __atomic_add_unless(at
+@@ -152,12 +287,24 @@ static inline int __atomic_add_unless(at
  	__asm__ __volatile__ ("@ atomic_add_unless\n"
  "1:	ldrex	%0, [%4]\n"
  "	teq	%0, %5\n"
@@ -464,7 +473,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -481,7 +490,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  	: "=&r" (oldval), "=&r" (newval), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (u), "r" (a)
  	: "cc");
-@@ -168,6 +309,28 @@ static inline int __atomic_add_unless(at
+@@ -168,6 +315,28 @@ static inline int __atomic_add_unless(at
  	return oldval;
  }
  
@@ -510,7 +519,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  #else /* ARM_ARCH_6 */
  
  #ifdef CONFIG_SMP
-@@ -186,7 +349,17 @@ static inline int atomic_add_return(int
+@@ -186,7 +355,17 @@ static inline int atomic_add_return(int
  
  	return val;
  }
@@ -528,7 +537,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  
  static inline int atomic_sub_return(int i, atomic_t *v)
  {
-@@ -201,6 +374,10 @@ static inline int atomic_sub_return(int
+@@ -201,6 +380,10 @@ static inline int atomic_sub_return(int
  	return val;
  }
  #define atomic_sub(i, v)	(void) atomic_sub_return(i, v)
@@ -539,7 +548,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  
  static inline int atomic_cmpxchg(atomic_t *v, int old, int new)
  {
-@@ -216,6 +393,11 @@ static inline int atomic_cmpxchg(atomic_
+@@ -216,6 +399,11 @@ static inline int atomic_cmpxchg(atomic_
  	return ret;
  }
  
@@ -551,7 +560,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  static inline int __atomic_add_unless(atomic_t *v, int a, int u)
  {
  	int c, old;
-@@ -229,13 +411,33 @@ static inline int __atomic_add_unless(at
+@@ -229,13 +417,33 @@ static inline int __atomic_add_unless(at
  #endif /* __LINUX_ARM_ARCH__ */
  
  #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
@@ -585,7 +594,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  #define atomic_dec_return(v)    (atomic_sub_return(1, v))
  #define atomic_sub_and_test(i, v) (atomic_sub_return(i, v) == 0)
  
-@@ -246,6 +448,14 @@ typedef struct {
+@@ -246,6 +454,14 @@ typedef struct {
  	long long counter;
  } atomic64_t;
  
@@ -600,7 +609,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  #define ATOMIC64_INIT(i) { (i) }
  
  #ifdef CONFIG_ARM_LPAE
-@@ -262,6 +472,19 @@ static inline long long atomic64_read(co
+@@ -262,6 +478,19 @@ static inline long long atomic64_read(co
  	return result;
  }
  
@@ -620,7 +629,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  static inline void atomic64_set(atomic64_t *v, long long i)
  {
  	__asm__ __volatile__("@ atomic64_set\n"
-@@ -270,6 +493,15 @@ static inline void atomic64_set(atomic64
+@@ -270,6 +499,15 @@ static inline void atomic64_set(atomic64
  	: "r" (&v->counter), "r" (i)
  	);
  }
@@ -636,7 +645,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  #else
  static inline long long atomic64_read(const atomic64_t *v)
  {
-@@ -284,6 +516,19 @@ static inline long long atomic64_read(co
+@@ -284,6 +522,19 @@ static inline long long atomic64_read(co
  	return result;
  }
  
@@ -656,7 +665,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  static inline void atomic64_set(atomic64_t *v, long long i)
  {
  	long long tmp;
-@@ -298,6 +543,21 @@ static inline void atomic64_set(atomic64
+@@ -298,6 +549,21 @@ static inline void atomic64_set(atomic64
  	: "r" (&v->counter), "r" (i)
  	: "cc");
  }
@@ -678,7 +687,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  #endif
  
  static inline void atomic64_add(long long i, atomic64_t *v)
-@@ -309,6 +569,37 @@ static inline void atomic64_add(long lon
+@@ -309,6 +575,37 @@ static inline void atomic64_add(long lon
  	__asm__ __volatile__("@ atomic64_add\n"
  "1:	ldrexd	%0, %H0, [%3]\n"
  "	adds	%Q0, %Q0, %Q4\n"
@@ -686,7 +695,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -716,7 +725,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  "	adc	%R0, %R0, %R4\n"
  "	strexd	%1, %0, %H0, [%3]\n"
  "	teq	%1, #0\n"
-@@ -329,6 +620,44 @@ static inline long long atomic64_add_ret
+@@ -329,6 +626,44 @@ static inline long long atomic64_add_ret
  	__asm__ __volatile__("@ atomic64_add_return\n"
  "1:	ldrexd	%0, %H0, [%3]\n"
  "	adds	%Q0, %Q0, %Q4\n"
@@ -726,7 +735,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +"	bvc	3f\n"
 +"	mov	%0, %1\n"
 +"	mov	%H0, %H1\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -761,7 +770,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  "	adc	%R0, %R0, %R4\n"
  "	strexd	%1, %0, %H0, [%3]\n"
  "	teq	%1, #0\n"
-@@ -351,6 +680,37 @@ static inline void atomic64_sub(long lon
+@@ -351,6 +686,37 @@ static inline void atomic64_sub(long lon
  	__asm__ __volatile__("@ atomic64_sub\n"
  "1:	ldrexd	%0, %H0, [%3]\n"
  "	subs	%Q0, %Q0, %Q4\n"
@@ -769,7 +778,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -799,7 +808,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  "	sbc	%R0, %R0, %R4\n"
  "	strexd	%1, %0, %H0, [%3]\n"
  "	teq	%1, #0\n"
-@@ -371,10 +731,25 @@ static inline long long atomic64_sub_ret
+@@ -371,10 +737,25 @@ static inline long long atomic64_sub_ret
  	__asm__ __volatile__("@ atomic64_sub_return\n"
  "1:	ldrexd	%0, %H0, [%3]\n"
  "	subs	%Q0, %Q0, %Q4\n"
@@ -810,7 +819,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +"	bvc	3f\n"
 +"	mov	%0, %1\n"
 +"	mov	%H0, %H1\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -826,7 +835,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (i)
  	: "cc");
-@@ -410,6 +785,31 @@ static inline long long atomic64_cmpxchg
+@@ -410,6 +791,31 @@ static inline long long atomic64_cmpxchg
  	return oldval;
  }
  
@@ -858,7 +867,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  static inline long long atomic64_xchg(atomic64_t *ptr, long long new)
  {
  	long long result;
-@@ -435,21 +835,35 @@ static inline long long atomic64_xchg(at
+@@ -435,21 +841,35 @@ static inline long long atomic64_xchg(at
  static inline long long atomic64_dec_if_positive(atomic64_t *v)
  {
  	long long result;
@@ -880,7 +889,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +"	bvc	3f\n"
 +"	mov	%Q0, %Q1\n"
 +"	mov	%R0, %R1\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -900,7 +909,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter)
  	: "cc");
-@@ -473,13 +887,25 @@ static inline int atomic64_add_unless(at
+@@ -473,13 +893,25 @@ static inline int atomic64_add_unless(at
  "	teq	%0, %5\n"
  "	teqeq	%H0, %H5\n"
  "	moveq	%1, #0\n"
@@ -912,7 +921,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +"	bvc	3f\n"
-+"2:	bkpt	0xf103\n"
++"2:	" REFCOUNT_TRAP_INSN "\n"
 +"3:\n"
 +#endif
 +
@@ -929,7 +938,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  	: "=&r" (val), "+r" (ret), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (u), "r" (a)
  	: "cc");
-@@ -492,10 +918,13 @@ static inline int atomic64_add_unless(at
+@@ -492,10 +924,13 @@ static inline int atomic64_add_unless(at
  
  #define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
  #define atomic64_inc(v)			atomic64_add(1LL, (v))
@@ -2756,6 +2765,18 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/mach-a
  
  	pr_info("AT91: sram at 0x%lx of 0x%x mapped at 0x%lx\n",
  		base, length, desc->virtual);
+diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/mach-keystone/keystone.c linux-3.17.1-pax/arch/arm/mach-keystone/keystone.c
+--- linux-3.17.1/arch/arm/mach-keystone/keystone.c	2014-08-04 01:36:39.822880968 +0200
++++ linux-3.17.1-pax/arch/arm/mach-keystone/keystone.c	2014-10-27 20:47:29.356949177 +0100
+@@ -27,7 +27,7 @@
+ 
+ #include "keystone.h"
+ 
+-static struct notifier_block platform_nb;
++static notifier_block_no_const platform_nb;
+ static unsigned long keystone_dma_pfn_offset __read_mostly;
+ 
+ static int keystone_platform_notifier(struct notifier_block *nb,
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/mach-mvebu/coherency.c linux-3.17.1-pax/arch/arm/mach-mvebu/coherency.c
 --- linux-3.17.1/arch/arm/mach-mvebu/coherency.c	2014-08-04 01:36:39.874880965 +0200
 +++ linux-3.17.1-pax/arch/arm/mach-mvebu/coherency.c	2014-10-05 21:54:23.768047180 +0200
@@ -3122,7 +3143,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/mm/con
  	}
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/mm/fault.c linux-3.17.1-pax/arch/arm/mm/fault.c
 --- linux-3.17.1/arch/arm/mm/fault.c	2013-11-04 01:46:19.263116433 +0100
-+++ linux-3.17.1-pax/arch/arm/mm/fault.c	2014-10-05 21:54:23.776047184 +0200
++++ linux-3.17.1-pax/arch/arm/mm/fault.c	2014-10-27 19:27:32.941017887 +0100
 @@ -25,6 +25,7 @@
  #include <asm/system_misc.h>
  #include <asm/system_info.h>
@@ -3221,7 +3242,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/mm/fau
  	printk(KERN_ALERT "Unhandled fault: %s (0x%03x) at 0x%08lx\n",
  		inf->name, fsr, addr);
  
-@@ -574,15 +634,95 @@ hook_ifault_code(int nr, int (*fn)(unsig
+@@ -574,15 +634,101 @@ hook_ifault_code(int nr, int (*fn)(unsig
  	ifsr_info[nr].name = name;
  }
  
@@ -3298,9 +3319,15 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/mm/fau
 +
 +#ifdef CONFIG_PAX_REFCOUNT
 +	if (fsr_fs(ifsr) == FAULT_CODE_DEBUG) {
++#ifdef CONFIG_THUMB2_KERNEL
++		unsigned short bkpt;
++
++		if (!probe_kernel_address(pc, bkpt) && cpu_to_le16(bkpt) == 0xbef1) {
++#else
 +		unsigned int bkpt;
 +
 +		if (!probe_kernel_address(pc, bkpt) && cpu_to_le32(bkpt) == 0xe12f1073) {
++#endif
 +			current->thread.error_code = ifsr;
 +			current->thread.trap_no = 0;
 +			pax_report_refcount_overflow(regs);
@@ -30631,7 +30658,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/x86/mm/ude
 +#endif
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/x86/net/bpf_jit_comp.c linux-3.17.1-pax/arch/x86/net/bpf_jit_comp.c
 --- linux-3.17.1/arch/x86/net/bpf_jit_comp.c	2014-10-05 21:52:05.115976625 +0200
-+++ linux-3.17.1-pax/arch/x86/net/bpf_jit_comp.c	2014-10-05 21:54:24.024047311 +0200
++++ linux-3.17.1-pax/arch/x86/net/bpf_jit_comp.c	2014-10-19 21:20:40.869399367 +0200
 @@ -109,36 +109,32 @@ static inline void bpf_flush_icache(void
  #define CHOOSE_LOAD_FUNC(K, func) \
  	((int)K < 0 ? ((int)K >= SKF_LL_OFF ? func##_negative_offset : func) : func##_positive_offset)
@@ -30716,7 +30743,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/x86/net/bp
  		prog->bpf_func = (void *)image;
  		prog->jited = 1;
  	}
-@@ -934,10 +931,9 @@ static void bpf_jit_free_deferred(struct
+@@ -934,10 +931,8 @@ static void bpf_jit_free_deferred(struct
  {
  	struct bpf_prog *fp = container_of(work, struct bpf_prog, work);
  	unsigned long addr = (unsigned long)fp->bpf_func & PAGE_MASK;
@@ -30724,7 +30751,6 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/x86/net/bp
  
 -	set_memory_rw(addr, header->pages);
 -	module_free(NULL, header);
-+	set_memory_rw(addr, 1);
 +	module_free_exec(NULL, (void *)addr);
  	kfree(fp);
  }
@@ -45744,6 +45770,18 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/drivers/scsi/sg
  	case BLKTRACESTART:
  		return blk_trace_startstop(sdp->device->request_queue, 1);
  	case BLKTRACESTOP:
+diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/drivers/soc/tegra/fuse/fuse-tegra.c linux-3.17.1-pax/drivers/soc/tegra/fuse/fuse-tegra.c
+--- linux-3.17.1/drivers/soc/tegra/fuse/fuse-tegra.c	2014-10-05 21:52:15.607981901 +0200
++++ linux-3.17.1-pax/drivers/soc/tegra/fuse/fuse-tegra.c	2014-10-27 21:21:07.555156803 +0100
+@@ -70,7 +70,7 @@ static ssize_t fuse_read(struct file *fd
+ 	return i;
+ }
+ 
+-static struct bin_attribute fuse_bin_attr = {
++static bin_attribute_no_const fuse_bin_attr = {
+ 	.attr = { .name = "fuse", .mode = S_IRUGO, },
+ 	.read = fuse_read,
+ };
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/drivers/spi/spi.c linux-3.17.1-pax/drivers/spi/spi.c
 --- linux-3.17.1/drivers/spi/spi.c	2014-10-05 21:52:15.635981915 +0200
 +++ linux-3.17.1-pax/drivers/spi/spi.c	2014-10-05 21:54:24.308047457 +0200
@@ -58623,7 +58661,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/include/linux/s
  static inline void disallow_signal(int sig)
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/include/linux/skbuff.h linux-3.17.1-pax/include/linux/skbuff.h
 --- linux-3.17.1/include/linux/skbuff.h	2014-10-05 21:52:23.455985854 +0200
-+++ linux-3.17.1-pax/include/linux/skbuff.h	2014-10-05 21:54:24.464047538 +0200
++++ linux-3.17.1-pax/include/linux/skbuff.h	2014-10-27 23:44:49.366205393 +0100
 @@ -728,7 +728,7 @@ bool skb_try_coalesce(struct sk_buff *to
  struct sk_buff *__alloc_skb(unsigned int size, gfp_t priority, int flags,
  			    int node);
@@ -66647,7 +66685,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/madvise.c li
  		return error;
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c linux-3.17.1-pax/mm/memory.c
 --- linux-3.17.1/mm/memory.c	2014-10-05 21:52:23.799986028 +0200
-+++ linux-3.17.1-pax/mm/memory.c	2014-10-05 21:54:24.644047630 +0200
++++ linux-3.17.1-pax/mm/memory.c	2014-10-28 22:45:11.284855067 +0100
 @@ -415,6 +415,7 @@ static inline void free_pmd_range(struct
  		free_pte_range(tlb, pmd, addr);
  	} while (pmd++, addr = next, addr != end);
@@ -66682,7 +66720,15 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  }
  
  /*
-@@ -1500,6 +1506,10 @@ static int insert_page(struct vm_area_st
+@@ -1147,6 +1153,7 @@ again:
+ 				print_bad_pte(vma, addr, ptent, page);
+ 			if (unlikely(!__tlb_remove_page(tlb, page))) {
+ 				force_flush = 1;
++				addr += PAGE_SIZE;
+ 				break;
+ 			}
+ 			continue;
+@@ -1500,6 +1507,10 @@ static int insert_page(struct vm_area_st
  	page_add_file_rmap(page);
  	set_pte_at(mm, addr, pte, mk_pte(page, prot));
  
@@ -66693,7 +66739,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	retval = 0;
  	pte_unmap_unlock(pte, ptl);
  	return retval;
-@@ -1544,9 +1554,21 @@ int vm_insert_page(struct vm_area_struct
+@@ -1544,9 +1555,21 @@ int vm_insert_page(struct vm_area_struct
  	if (!page_count(page))
  		return -EINVAL;
  	if (!(vma->vm_flags & VM_MIXEDMAP)) {
@@ -66715,7 +66761,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	}
  	return insert_page(vma, addr, page, vma->vm_page_prot);
  }
-@@ -1629,6 +1651,7 @@ int vm_insert_mixed(struct vm_area_struc
+@@ -1629,6 +1652,7 @@ int vm_insert_mixed(struct vm_area_struc
  			unsigned long pfn)
  {
  	BUG_ON(!(vma->vm_flags & VM_MIXEDMAP));
@@ -66723,7 +66769,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  
  	if (addr < vma->vm_start || addr >= vma->vm_end)
  		return -EFAULT;
-@@ -1876,7 +1899,9 @@ static int apply_to_pmd_range(struct mm_
+@@ -1876,7 +1900,9 @@ static int apply_to_pmd_range(struct mm_
  
  	BUG_ON(pud_huge(*pud));
  
@@ -66734,7 +66780,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	if (!pmd)
  		return -ENOMEM;
  	do {
-@@ -1896,7 +1921,9 @@ static int apply_to_pud_range(struct mm_
+@@ -1896,7 +1922,9 @@ static int apply_to_pud_range(struct mm_
  	unsigned long next;
  	int err;
  
@@ -66745,7 +66791,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -2018,6 +2045,186 @@ static int do_page_mkwrite(struct vm_are
+@@ -2018,6 +2046,186 @@ static int do_page_mkwrite(struct vm_are
  	return ret;
  }
  
@@ -66932,7 +66978,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2216,6 +2423,12 @@ gotten:
+@@ -2216,6 +2424,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -66945,7 +66991,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter_fast(mm, MM_FILEPAGES);
-@@ -2269,6 +2482,10 @@ gotten:
+@@ -2269,6 +2483,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -66956,7 +67002,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -2543,6 +2760,11 @@ static int do_swap_page(struct mm_struct
+@@ -2543,6 +2761,11 @@ static int do_swap_page(struct mm_struct
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -66968,7 +67014,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	unlock_page(page);
  	if (page != swapcache) {
  		/*
-@@ -2566,6 +2788,11 @@ static int do_swap_page(struct mm_struct
+@@ -2566,6 +2789,11 @@ static int do_swap_page(struct mm_struct
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -66980,7 +67026,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -2585,40 +2812,6 @@ out_release:
+@@ -2585,40 +2813,6 @@ out_release:
  }
  
  /*
@@ -67021,7 +67067,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -2628,27 +2821,23 @@ static int do_anonymous_page(struct mm_s
+@@ -2628,27 +2822,23 @@ static int do_anonymous_page(struct mm_s
  		unsigned int flags)
  {
  	struct mem_cgroup *memcg;
@@ -67054,7 +67100,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -2672,6 +2861,11 @@ static int do_anonymous_page(struct mm_s
+@@ -2672,6 +2862,11 @@ static int do_anonymous_page(struct mm_s
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -67066,7 +67112,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	inc_mm_counter_fast(mm, MM_ANONPAGES);
  	page_add_new_anon_rmap(page, vma, address);
  	mem_cgroup_commit_charge(page, memcg, false);
-@@ -2681,6 +2875,12 @@ setpte:
+@@ -2681,6 +2876,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -67079,7 +67125,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -2911,6 +3111,11 @@ static int do_read_fault(struct mm_struc
+@@ -2911,6 +3112,11 @@ static int do_read_fault(struct mm_struc
  		return ret;
  	}
  	do_set_pte(vma, address, fault_page, pte, false, false);
@@ -67091,7 +67137,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	unlock_page(fault_page);
  unlock_out:
  	pte_unmap_unlock(pte, ptl);
-@@ -2953,7 +3158,18 @@ static int do_cow_fault(struct mm_struct
+@@ -2953,7 +3159,18 @@ static int do_cow_fault(struct mm_struct
  		page_cache_release(fault_page);
  		goto uncharge_out;
  	}
@@ -67110,7 +67156,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	mem_cgroup_commit_charge(new_page, memcg, false);
  	lru_cache_add_active_or_unevictable(new_page, vma);
  	pte_unmap_unlock(pte, ptl);
-@@ -3003,6 +3219,11 @@ static int do_shared_fault(struct mm_str
+@@ -3003,6 +3220,11 @@ static int do_shared_fault(struct mm_str
  		return ret;
  	}
  	do_set_pte(vma, address, fault_page, pte, true, false);
@@ -67122,7 +67168,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	pte_unmap_unlock(pte, ptl);
  
  	if (set_page_dirty(fault_page))
-@@ -3244,6 +3465,12 @@ static int handle_pte_fault(struct mm_st
+@@ -3244,6 +3466,12 @@ static int handle_pte_fault(struct mm_st
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_fix_spurious_fault(vma, address);
  	}
@@ -67135,7 +67181,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3263,9 +3490,41 @@ static int __handle_mm_fault(struct mm_s
+@@ -3263,9 +3491,41 @@ static int __handle_mm_fault(struct mm_s
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -67177,7 +67223,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
  	if (!pud)
-@@ -3399,6 +3658,23 @@ int __pud_alloc(struct mm_struct *mm, pg
+@@ -3399,6 +3659,23 @@ int __pud_alloc(struct mm_struct *mm, pg
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -67201,7 +67247,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  #endif /* __PAGETABLE_PUD_FOLDED */
  
  #ifndef __PAGETABLE_PMD_FOLDED
-@@ -3429,6 +3705,30 @@ int __pmd_alloc(struct mm_struct *mm, pu
+@@ -3429,6 +3706,30 @@ int __pmd_alloc(struct mm_struct *mm, pu
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -67232,7 +67278,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  #endif /* __PAGETABLE_PMD_FOLDED */
  
  static int __follow_pte(struct mm_struct *mm, unsigned long address,
-@@ -3538,8 +3838,8 @@ out:
+@@ -3538,8 +3839,8 @@ out:
  	return ret;
  }
  
@@ -67243,7 +67289,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  {
  	resource_size_t phys_addr;
  	unsigned long prot = 0;
-@@ -3565,8 +3865,8 @@ EXPORT_SYMBOL_GPL(generic_access_phys);
+@@ -3565,8 +3866,8 @@ EXPORT_SYMBOL_GPL(generic_access_phys);
   * Access another process' address space as given in mm.  If non-NULL, use the
   * given task for page fault accounting.
   */
@@ -67254,7 +67300,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  {
  	struct vm_area_struct *vma;
  	void *old_buf = buf;
-@@ -3574,7 +3874,7 @@ static int __access_remote_vm(struct tas
+@@ -3574,7 +3875,7 @@ static int __access_remote_vm(struct tas
  	down_read(&mm->mmap_sem);
  	/* ignore errors, just check how much was successfully transferred */
  	while (len) {
@@ -67263,7 +67309,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  		void *maddr;
  		struct page *page = NULL;
  
-@@ -3635,8 +3935,8 @@ static int __access_remote_vm(struct tas
+@@ -3635,8 +3936,8 @@ static int __access_remote_vm(struct tas
   *
   * The caller must hold a reference on @mm.
   */
@@ -67274,7 +67320,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/mm/memory.c lin
  {
  	return __access_remote_vm(NULL, mm, addr, buf, len, write);
  }
-@@ -3646,11 +3946,11 @@ int access_remote_vm(struct mm_struct *m
+@@ -3646,11 +3947,11 @@ int access_remote_vm(struct mm_struct *m
   * Source/target buffer must be kernel space,
   * Do not walk the page table directly, use get_user_pages
   */
@@ -73936,7 +73982,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/net/netfilter/n
  	if (users > 0)
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/net/netfilter/nf_conntrack_standalone.c linux-3.17.1-pax/net/netfilter/nf_conntrack_standalone.c
 --- linux-3.17.1/net/netfilter/nf_conntrack_standalone.c	2013-09-03 00:45:10.170911944 +0200
-+++ linux-3.17.1-pax/net/netfilter/nf_conntrack_standalone.c	2014-10-05 21:54:24.908047766 +0200
++++ linux-3.17.1-pax/net/netfilter/nf_conntrack_standalone.c	2014-10-27 23:44:22.370197407 +0100
 @@ -471,7 +471,7 @@ static struct ctl_table nf_ct_netfilter_
  
  static int nf_conntrack_standalone_init_sysctl(struct net *net)
