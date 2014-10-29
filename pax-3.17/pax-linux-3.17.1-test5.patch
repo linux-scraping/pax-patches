@@ -1,7 +1,5 @@
-- fixed REFCOUNT/arm for THUMB2, reported by Michael Tremer
-- fixed some constification fallout on arm
-- backported ce9ec37bddb633404a0c23e1acb181a264e7f7f2 from vanilla, hopefully it'll fix the UDEREF/PCID related crashes reported since 3.15+
-- removed an unnecessary set_memory_rw in the x86 bpf jit (regression in the 3.17 port)
+- fixed KERNEXEC/arm compilation with LPAE enabled, reported by reported by Michael Tremer
+- added REFCOUNT support to powerpc, by Rodrigo Rubira Branco <rodrigofws@gmail.com>
 
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/alpha/include/asm/atomic.h linux-3.17.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.17.1/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -1387,7 +1385,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  #define PTE_EXT_AP1		(_AT(pteval_t, 2) << 4)
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/include/asm/pgtable-3level.h linux-3.17.1-pax/arch/arm/include/asm/pgtable-3level.h
 --- linux-3.17.1/arch/arm/include/asm/pgtable-3level.h	2014-10-05 21:52:01.911975016 +0200
-+++ linux-3.17.1-pax/arch/arm/include/asm/pgtable-3level.h	2014-10-05 21:54:23.740047165 +0200
++++ linux-3.17.1-pax/arch/arm/include/asm/pgtable-3level.h	2014-10-29 01:25:26.516952017 +0100
 @@ -81,6 +81,7 @@
  #define L_PTE_USER		(_AT(pteval_t, 1) << 6)		/* AP[1] */
  #define L_PTE_SHARED		(_AT(pteval_t, 3) << 8)		/* SH[1:0], inner shareable */
@@ -1396,7 +1394,12 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/arm/includ
  #define L_PTE_XN		(_AT(pteval_t, 1) << 54)	/* XN */
  #define L_PTE_DIRTY		(_AT(pteval_t, 1) << 55)
  #define L_PTE_SPECIAL		(_AT(pteval_t, 1) << 56)
-@@ -96,6 +97,7 @@
+@@ -92,10 +93,12 @@
+ #define L_PMD_SECT_SPLITTING	(_AT(pmdval_t, 1) << 56)
+ #define L_PMD_SECT_NONE		(_AT(pmdval_t, 1) << 57)
+ #define L_PMD_SECT_RDONLY	(_AT(pteval_t, 1) << 58)
++#define PMD_SECT_RDONLY		PMD_SECT_AP2
+ 
  /*
   * To be used in assembly code with the upper page attributes.
   */
@@ -6611,24 +6614,654 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/parisc/mm/
  	 * If for any reason at all we couldn't handle the fault, make
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/include/asm/atomic.h linux-3.17.1-pax/arch/powerpc/include/asm/atomic.h
 --- linux-3.17.1/arch/powerpc/include/asm/atomic.h	2014-08-04 01:36:53.494880238 +0200
-+++ linux-3.17.1-pax/arch/powerpc/include/asm/atomic.h	2014-10-05 21:54:23.820047206 +0200
-@@ -519,6 +519,16 @@ static __inline__ long atomic64_inc_not_
- 	return t1;
++++ linux-3.17.1-pax/arch/powerpc/include/asm/atomic.h	2014-10-29 02:35:26.255590811 +0100
+@@ -12,6 +12,11 @@
+ 
+ #define ATOMIC_INIT(i)		{ (i) }
+ 
++#define _ASM_EXTABLE(from, to)			\
++"	.section	__ex_table,\"a\"\n"	\
++	PPC_LONG"	" #from ", " #to"\n"	\
++"	.previous\n"
++
+ static __inline__ int atomic_read(const atomic_t *v)
+ {
+ 	int t;
+@@ -21,16 +26,61 @@ static __inline__ int atomic_read(const
+ 	return t;
  }
  
-+#define atomic64_read_unchecked(v)		atomic64_read(v)
-+#define atomic64_set_unchecked(v, i)		atomic64_set((v), (i))
-+#define atomic64_add_unchecked(a, v)		atomic64_add((a), (v))
-+#define atomic64_add_return_unchecked(a, v)	atomic64_add_return((a), (v))
-+#define atomic64_sub_unchecked(a, v)		atomic64_sub((a), (v))
-+#define atomic64_inc_unchecked(v)		atomic64_inc(v)
-+#define atomic64_inc_return_unchecked(v)	atomic64_inc_return(v)
-+#define atomic64_dec_unchecked(v)		atomic64_dec(v)
-+#define atomic64_cmpxchg_unchecked(v, o, n)	atomic64_cmpxchg((v), (o), (n))
++static __inline__ int atomic_read_unchecked(const atomic_unchecked_t *v)
++{
++	int t;
 +
- #endif /* __powerpc64__ */
++	__asm__ __volatile__("lwz%U1%X1 %0,%1" : "=r"(t) : "m"(v->counter));
++
++	return t;
++}
++
+ static __inline__ void atomic_set(atomic_t *v, int i)
+ {
+ 	__asm__ __volatile__("stw%U0%X0 %1,%0" : "=m"(v->counter) : "r"(i));
+ }
  
- #endif /* __KERNEL__ */
++static __inline__ void atomic_set_unchecked(atomic_unchecked_t *v, int i)
++{
++	__asm__ __volatile__("stw%U0%X0 %1,%0" : "=m"(v->counter) : "r"(i));
++}
++
+ static __inline__ void atomic_add(int a, atomic_t *v)
+ {
+ 	int t;
+ 
+ 	__asm__ __volatile__(
++"1:	lwarx	%0,0,%3		# atomic_add\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	addo.	%0,%2,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	add	%0,%2,%0\n"
++#endif
++
++"3:\n"
++	PPC405_ERR77(0,%3)
++"	stwcx.	%0,0,%3 \n\
++	bne-	1b"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"\n4:\n"
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (t), "+m" (v->counter)
++	: "r" (a), "r" (&v->counter)
++	: "cc");
++}
++
++static __inline__ void atomic_add_unchecked(int a, atomic_unchecked_t *v)
++{
++	int t;
++
++	__asm__ __volatile__(
+ "1:	lwarx	%0,0,%3		# atomic_add\n\
+ 	add	%0,%2,%0\n"
+ 	PPC405_ERR77(0,%3)
+@@ -41,12 +91,49 @@ static __inline__ void atomic_add(int a,
+ 	: "cc");
+ }
+ 
++/* Same as atomic_add but return the value */
+ static __inline__ int atomic_add_return(int a, atomic_t *v)
+ {
+ 	int t;
+ 
+ 	__asm__ __volatile__(
+ 	PPC_ATOMIC_ENTRY_BARRIER
++"1:	lwarx	%0,0,%2		# atomic_add_return\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	addo.	%0,%1,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	add	%0,%1,%0\n"
++#endif
++
++"3:\n"
++	PPC405_ERR77(0,%2)
++"	stwcx.	%0,0,%2 \n\
++	bne-	1b\n"
++"4:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	PPC_ATOMIC_EXIT_BARRIER
++	: "=&r" (t)
++	: "r" (a), "r" (&v->counter)
++	: "cc", "memory");
++
++	return t;
++}
++
++/* Same as atomic_add_unchecked but return the value */
++static __inline__ int atomic_add_return_unchecked(int a, atomic_unchecked_t *v)
++{
++	int t;
++
++	__asm__ __volatile__(
++	PPC_ATOMIC_ENTRY_BARRIER
+ "1:	lwarx	%0,0,%2		# atomic_add_return\n\
+ 	add	%0,%1,%0\n"
+ 	PPC405_ERR77(0,%2)
+@@ -67,6 +154,37 @@ static __inline__ void atomic_sub(int a,
+ 	int t;
+ 
+ 	__asm__ __volatile__(
++"1:	lwarx	%0,0,%3		# atomic_sub\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	subfo.	%0,%2,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	subf	%0,%2,%0\n"
++#endif
++
++"3:\n"
++	PPC405_ERR77(0,%3)
++"	stwcx.	%0,0,%3 \n\
++	bne-	1b\n"
++"4:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (t), "+m" (v->counter)
++	: "r" (a), "r" (&v->counter)
++	: "cc");
++}
++
++static __inline__ void atomic_sub_unchecked(int a, atomic_unchecked_t *v)
++{
++	int t;
++
++	__asm__ __volatile__(
+ "1:	lwarx	%0,0,%3		# atomic_sub\n\
+ 	subf	%0,%2,%0\n"
+ 	PPC405_ERR77(0,%3)
+@@ -77,18 +195,35 @@ static __inline__ void atomic_sub(int a,
+ 	: "cc");
+ }
+ 
++/* Same as atomic_sub but return the value */
+ static __inline__ int atomic_sub_return(int a, atomic_t *v)
+ {
+ 	int t;
+ 
+ 	__asm__ __volatile__(
+ 	PPC_ATOMIC_ENTRY_BARRIER
+-"1:	lwarx	%0,0,%2		# atomic_sub_return\n\
+-	subf	%0,%1,%0\n"
++"1:	lwarx	%0,0,%2		# atomic_sub_return\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	subfo.	%0,%1,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	subf	%0,%1,%0\n"
++#endif
++
++"3:\n"
+ 	PPC405_ERR77(0,%2)
+ "	stwcx.	%0,0,%2 \n\
+-	bne-	1b"
++	bne-	1b\n"
+ 	PPC_ATOMIC_EXIT_BARRIER
++"4:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
+ 	: "=&r" (t)
+ 	: "r" (a), "r" (&v->counter)
+ 	: "cc", "memory");
+@@ -96,40 +231,45 @@ static __inline__ int atomic_sub_return(
+ 	return t;
+ }
+ 
+-static __inline__ void atomic_inc(atomic_t *v)
++/* Same as atomic_sub_unchecked but return the value */
++static __inline__ int atomic_sub_return_unchecked(int a, atomic_unchecked_t *v)
+ {
+ 	int t;
+ 
+ 	__asm__ __volatile__(
+-"1:	lwarx	%0,0,%2		# atomic_inc\n\
+-	addic	%0,%0,1\n"
++	PPC_ATOMIC_ENTRY_BARRIER
++"1:	lwarx	%0,0,%2		# atomic_sub_return\n\
++	subf	%0,%1,%0\n"
+ 	PPC405_ERR77(0,%2)
+ "	stwcx.	%0,0,%2 \n\
+ 	bne-	1b"
+-	: "=&r" (t), "+m" (v->counter)
+-	: "r" (&v->counter)
+-	: "cc", "xer");
+-}
+-
+-static __inline__ int atomic_inc_return(atomic_t *v)
+-{
+-	int t;
+-
+-	__asm__ __volatile__(
+-	PPC_ATOMIC_ENTRY_BARRIER
+-"1:	lwarx	%0,0,%1		# atomic_inc_return\n\
+-	addic	%0,%0,1\n"
+-	PPC405_ERR77(0,%1)
+-"	stwcx.	%0,0,%1 \n\
+-	bne-	1b"
+ 	PPC_ATOMIC_EXIT_BARRIER
+ 	: "=&r" (t)
+-	: "r" (&v->counter)
+-	: "cc", "xer", "memory");
++	: "r" (a), "r" (&v->counter)
++	: "cc", "memory");
+ 
+ 	return t;
+ }
+ 
++/* 
++ * atomic_inc - increment atomic variable
++ * @v: pointer of type atomic_t
++ * 
++ * Automatically increments @v by 1
++ */
++#define atomic_inc(v) atomic_add(1, (v))
++#define atomic_inc_return(v) atomic_add_return(1, (v))
++
++static __inline__ void atomic_inc_unchecked(atomic_unchecked_t *v)
++{
++	atomic_add_unchecked(1, v);
++}
++
++static __inline__ int atomic_inc_return_unchecked(atomic_unchecked_t *v)
++{
++	return atomic_add_return_unchecked(1, v);
++}
++
+ /*
+  * atomic_inc_and_test - increment and test
+  * @v: pointer of type atomic_t
+@@ -140,43 +280,38 @@ static __inline__ int atomic_inc_return(
+  */
+ #define atomic_inc_and_test(v) (atomic_inc_return(v) == 0)
+ 
+-static __inline__ void atomic_dec(atomic_t *v)
++static __inline__ int atomic_inc_and_test_unchecked(atomic_unchecked_t *v)
+ {
+-	int t;
+-
+-	__asm__ __volatile__(
+-"1:	lwarx	%0,0,%2		# atomic_dec\n\
+-	addic	%0,%0,-1\n"
+-	PPC405_ERR77(0,%2)\
+-"	stwcx.	%0,0,%2\n\
+-	bne-	1b"
+-	: "=&r" (t), "+m" (v->counter)
+-	: "r" (&v->counter)
+-	: "cc", "xer");
++	return atomic_add_return_unchecked(1, v) == 0;
+ }
+ 
+-static __inline__ int atomic_dec_return(atomic_t *v)
+-{
+-	int t;
+-
+-	__asm__ __volatile__(
+-	PPC_ATOMIC_ENTRY_BARRIER
+-"1:	lwarx	%0,0,%1		# atomic_dec_return\n\
+-	addic	%0,%0,-1\n"
+-	PPC405_ERR77(0,%1)
+-"	stwcx.	%0,0,%1\n\
+-	bne-	1b"
+-	PPC_ATOMIC_EXIT_BARRIER
+-	: "=&r" (t)
+-	: "r" (&v->counter)
+-	: "cc", "xer", "memory");
++/* 
++ * atomic_dec - decrement atomic variable
++ * @v: pointer of type atomic_t
++ * 
++ * Atomically decrements @v by 1
++ */
++#define atomic_dec(v) atomic_sub(1, (v))
++#define atomic_dec_return(v) atomic_sub_return(1, (v))
+ 
+-	return t;
++static __inline__ void atomic_dec_unchecked(atomic_unchecked_t *v)
++{
++	atomic_sub_unchecked(1, v);
+ }
+ 
+ #define atomic_cmpxchg(v, o, n) (cmpxchg(&((v)->counter), (o), (n)))
+ #define atomic_xchg(v, new) (xchg(&((v)->counter), new))
+ 
++static inline int atomic_cmpxchg_unchecked(atomic_unchecked_t *v, int old, int new)
++{
++	return cmpxchg(&(v->counter), old, new);
++}
++
++static inline int atomic_xchg_unchecked(atomic_unchecked_t *v, int new) 
++{
++	return xchg(&(v->counter), new);
++}
++
+ /**
+  * __atomic_add_unless - add unless the number is a given value
+  * @v: pointer of type atomic_t
+@@ -271,6 +406,11 @@ static __inline__ int atomic_dec_if_posi
+ }
+ #define atomic_dec_if_positive atomic_dec_if_positive
+ 
++#define smp_mb__before_atomic_dec()     smp_mb()
++#define smp_mb__after_atomic_dec()      smp_mb()
++#define smp_mb__before_atomic_inc()     smp_mb()
++#define smp_mb__after_atomic_inc()      smp_mb()
++
+ #ifdef __powerpc64__
+ 
+ #define ATOMIC64_INIT(i)	{ (i) }
+@@ -284,11 +424,25 @@ static __inline__ long atomic64_read(con
+ 	return t;
+ }
+ 
++static __inline__ long atomic64_read_unchecked(const atomic64_unchecked_t *v)
++{
++	long t;
++
++	__asm__ __volatile__("ld%U1%X1 %0,%1" : "=r"(t) : "m"(v->counter));
++
++	return t;
++}
++
+ static __inline__ void atomic64_set(atomic64_t *v, long i)
+ {
+ 	__asm__ __volatile__("std%U0%X0 %1,%0" : "=m"(v->counter) : "r"(i));
+ }
+ 
++static __inline__ void atomic64_set_unchecked(atomic64_unchecked_t *v, long i)
++{
++	__asm__ __volatile__("std%U0%X0 %1,%0" : "=m"(v->counter) : "r"(i));
++}
++
+ static __inline__ void atomic64_add(long a, atomic64_t *v)
+ {
+ 	long t;
+@@ -303,12 +457,76 @@ static __inline__ void atomic64_add(long
+ 	: "cc");
+ }
+ 
++static __inline__ void atomic64_add_unchecked(long a, atomic64_unchecked_t *v)
++{
++	long t;
++
++	__asm__ __volatile__(
++"1:	ldarx	%0,0,%3		# atomic64_add\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	addo.	%0,%2,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	add	%0,%2,%0\n"
++#endif
++
++"3:\n"
++"	stdcx.	%0,0,%3 \n\
++	bne-	1b\n"
++"4:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (t), "+m" (v->counter)
++	: "r" (a), "r" (&v->counter)
++	: "cc");
++}
++
+ static __inline__ long atomic64_add_return(long a, atomic64_t *v)
+ {
+ 	long t;
+ 
+ 	__asm__ __volatile__(
+ 	PPC_ATOMIC_ENTRY_BARRIER
++"1:	ldarx	%0,0,%2		# atomic64_add_return\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	addo.	%0,%1,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	add	%0,%1,%0\n"
++#endif
++
++"3:\n"
++"	stdcx.	%0,0,%2 \n\
++	bne-	1b\n"
++	PPC_ATOMIC_EXIT_BARRIER
++"4:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (t)
++	: "r" (a), "r" (&v->counter)
++	: "cc", "memory");
++
++	return t;
++}
++
++static __inline__ long atomic64_add_return_unchecked(long a, atomic64_unchecked_t *v)
++{
++	long t;
++
++	__asm__ __volatile__(
++	PPC_ATOMIC_ENTRY_BARRIER
+ "1:	ldarx	%0,0,%2		# atomic64_add_return\n\
+ 	add	%0,%1,%0\n\
+ 	stdcx.	%0,0,%2 \n\
+@@ -328,6 +546,36 @@ static __inline__ void atomic64_sub(long
+ 	long t;
+ 
+ 	__asm__ __volatile__(
++"1:	ldarx	%0,0,%3		# atomic64_sub\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	subfo.	%0,%2,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	subf	%0,%2,%0\n"
++#endif
++
++"3:\n"
++"	stdcx.	%0,0,%3 \n\
++	bne-	1b"
++"4:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (t), "+m" (v->counter)
++	: "r" (a), "r" (&v->counter)
++	: "cc");
++}
++
++static __inline__ void atomic64_sub_unchecked(long a, atomic64_unchecked_t *v)
++{
++	long t;
++
++	__asm__ __volatile__(
+ "1:	ldarx	%0,0,%3		# atomic64_sub\n\
+ 	subf	%0,%2,%0\n\
+ 	stdcx.	%0,0,%3 \n\
+@@ -343,11 +591,27 @@ static __inline__ long atomic64_sub_retu
+ 
+ 	__asm__ __volatile__(
+ 	PPC_ATOMIC_ENTRY_BARRIER
+-"1:	ldarx	%0,0,%2		# atomic64_sub_return\n\
+-	subf	%0,%1,%0\n\
+-	stdcx.	%0,0,%2 \n\
+-	bne-	1b"
++"1:	ldarx	%0,0,%2		# atomic64_sub_return\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	subfo.	%0,%1,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	subf	%0,%1,%0\n"
++#endif
++
++"3:\n"
++"	stdcx.	%0,0,%2 \n\
++	bne-	1b\n"
+ 	PPC_ATOMIC_EXIT_BARRIER
++"4:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
+ 	: "=&r" (t)
+ 	: "r" (a), "r" (&v->counter)
+ 	: "cc", "memory");
+@@ -355,38 +619,43 @@ static __inline__ long atomic64_sub_retu
+ 	return t;
+ }
+ 
+-static __inline__ void atomic64_inc(atomic64_t *v)
+-{
+-	long t;
+-
+-	__asm__ __volatile__(
+-"1:	ldarx	%0,0,%2		# atomic64_inc\n\
+-	addic	%0,%0,1\n\
+-	stdcx.	%0,0,%2 \n\
+-	bne-	1b"
+-	: "=&r" (t), "+m" (v->counter)
+-	: "r" (&v->counter)
+-	: "cc", "xer");
+-}
+-
+-static __inline__ long atomic64_inc_return(atomic64_t *v)
++static __inline__ long atomic64_sub_return_unchecked(long a, atomic64_unchecked_t *v)
+ {
+ 	long t;
+ 
+ 	__asm__ __volatile__(
+ 	PPC_ATOMIC_ENTRY_BARRIER
+-"1:	ldarx	%0,0,%1		# atomic64_inc_return\n\
+-	addic	%0,%0,1\n\
+-	stdcx.	%0,0,%1 \n\
++"1:	ldarx	%0,0,%2		# atomic64_sub_return\n\
++	subf	%0,%1,%0\n\
++	stdcx.	%0,0,%2 \n\
+ 	bne-	1b"
+ 	PPC_ATOMIC_EXIT_BARRIER
+ 	: "=&r" (t)
+-	: "r" (&v->counter)
+-	: "cc", "xer", "memory");
++	: "r" (a), "r" (&v->counter)
++	: "cc", "memory");
+ 
+ 	return t;
+ }
+ 
++/* 
++ * atomic64_inc - increment atomic variable
++ * @v: pointer of type atomic64_t
++ * 
++ * Automatically increments @v by 1
++ */
++#define atomic64_inc(v) atomic64_add(1, (v))
++#define atomic64_inc_return(v) atomic64_add_return(1, (v))
++
++static __inline__ void atomic64_inc_unchecked(atomic64_unchecked_t *v)
++{
++	atomic64_add_unchecked(1, v);
++}
++
++static __inline__ int atomic64_inc_return_unchecked(atomic64_unchecked_t *v)
++{
++	return atomic64_add_return_unchecked(1, v);
++}
++
+ /*
+  * atomic64_inc_and_test - increment and test
+  * @v: pointer of type atomic64_t
+@@ -397,36 +666,18 @@ static __inline__ long atomic64_inc_retu
+  */
+ #define atomic64_inc_and_test(v) (atomic64_inc_return(v) == 0)
+ 
+-static __inline__ void atomic64_dec(atomic64_t *v)
+-{
+-	long t;
+-
+-	__asm__ __volatile__(
+-"1:	ldarx	%0,0,%2		# atomic64_dec\n\
+-	addic	%0,%0,-1\n\
+-	stdcx.	%0,0,%2\n\
+-	bne-	1b"
+-	: "=&r" (t), "+m" (v->counter)
+-	: "r" (&v->counter)
+-	: "cc", "xer");
+-}
++/* 
++ * atomic64_dec - decrement atomic variable
++ * @v: pointer of type atomic64_t
++ * 
++ * Atomically decrements @v by 1
++ */
++#define atomic64_dec(v) atomic64_sub(1, (v))
++#define atomic64_dec_return(v) atomic64_sub_return(1, (v))
+ 
+-static __inline__ long atomic64_dec_return(atomic64_t *v)
++static __inline__ void atomic64_dec_unchecked(atomic64_unchecked_t *v)
+ {
+-	long t;
+-
+-	__asm__ __volatile__(
+-	PPC_ATOMIC_ENTRY_BARRIER
+-"1:	ldarx	%0,0,%1		# atomic64_dec_return\n\
+-	addic	%0,%0,-1\n\
+-	stdcx.	%0,0,%1\n\
+-	bne-	1b"
+-	PPC_ATOMIC_EXIT_BARRIER
+-	: "=&r" (t)
+-	: "r" (&v->counter)
+-	: "cc", "xer", "memory");
+-
+-	return t;
++	atomic64_sub_unchecked(1, v);
+ }
+ 
+ #define atomic64_sub_and_test(a, v)	(atomic64_sub_return((a), (v)) == 0)
+@@ -459,6 +710,16 @@ static __inline__ long atomic64_dec_if_p
+ #define atomic64_cmpxchg(v, o, n) (cmpxchg(&((v)->counter), (o), (n)))
+ #define atomic64_xchg(v, new) (xchg(&((v)->counter), new))
+ 
++static inline long atomic64_cmpxchg_unchecked(atomic64_unchecked_t *v, long old, long new)
++{
++	return cmpxchg(&(v->counter), old, new);
++}
++
++static inline long atomic64_xchg_unchecked(atomic64_unchecked_t *v, long new) 
++{
++	return xchg(&(v->counter), new);
++}
++
+ /**
+  * atomic64_add_unless - add unless the number is a given value
+  * @v: pointer of type atomic64_t
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/include/asm/barrier.h linux-3.17.1-pax/arch/powerpc/include/asm/barrier.h
 --- linux-3.17.1/arch/powerpc/include/asm/barrier.h	2014-08-04 01:36:53.494880238 +0200
 +++ linux-3.17.1-pax/arch/powerpc/include/asm/barrier.h	2014-10-05 21:54:23.820047206 +0200
@@ -6702,8 +7335,8 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/in
  #endif	/* _ASM_POWERPC_KMAP_TYPES_H */
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/include/asm/local.h linux-3.17.1-pax/arch/powerpc/include/asm/local.h
 --- linux-3.17.1/arch/powerpc/include/asm/local.h	2012-12-11 04:30:57.000000000 +0100
-+++ linux-3.17.1-pax/arch/powerpc/include/asm/local.h	2014-10-05 21:54:23.824047208 +0200
-@@ -9,15 +9,26 @@ typedef struct
++++ linux-3.17.1-pax/arch/powerpc/include/asm/local.h	2014-10-29 02:35:26.271590821 +0100
+@@ -9,21 +9,65 @@ typedef struct
  	atomic_long_t a;
  } local_t;
  
@@ -6730,23 +7363,46 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/in
  
  static __inline__ long local_add_return(long a, local_t *l)
  {
-@@ -35,6 +46,7 @@ static __inline__ long local_add_return(
+ 	long t;
  
- 	return t;
- }
-+#define local_add_return_unchecked(i, l) atomic_long_add_return_unchecked((i), (&(l)->a))
- 
- #define local_add_negative(a, l)	(local_add_return((a), (l)) < 0)
- 
-@@ -54,6 +66,7 @@ static __inline__ long local_sub_return(
- 
- 	return t;
- }
-+#define local_sub_return_unchecked(i, l) atomic_long_sub_return_unchecked((i), (&(l)->a))
- 
- static __inline__ long local_inc_return(local_t *l)
- {
-@@ -101,6 +114,8 @@ static __inline__ long local_dec_return(
+ 	__asm__ __volatile__(
++"1:"	PPC_LLARX(%0,0,%2,0) "			# local_add_return\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr   cr0\n"
++"	addo.	%0,%1,%0\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	add	%0,%1,%0\n"
++#endif
++
++"3:\n"
++	PPC405_ERR77(0,%2)
++	PPC_STLCX	"%0,0,%2 \n\
++	bne-	1b"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"\n4:\n"
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
++	: "=&r" (t)
++	: "r" (a), "r" (&(l->a.counter))
++	: "cc", "memory");
++
++	return t;
++}
++
++static __inline__ long local_add_return_unchecked(long a, local_unchecked_t *l)
++{
++	long t;
++
++	__asm__ __volatile__(
+ "1:"	PPC_LLARX(%0,0,%2,0) "			# local_add_return\n\
+ 	add	%0,%1,%0\n"
+ 	PPC405_ERR77(0,%2)
+@@ -101,6 +145,8 @@ static __inline__ long local_dec_return(
  
  #define local_cmpxchg(l, o, n) \
  	(cmpxchg_local(&((l)->a.counter), (o), (n)))
@@ -6892,6 +7548,72 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/in
  
  extern void smp_send_debugger_break(void);
  extern void start_secondary_resume(void);
+diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/include/asm/spinlock.h linux-3.17.1-pax/arch/powerpc/include/asm/spinlock.h
+--- linux-3.17.1/arch/powerpc/include/asm/spinlock.h	2014-10-05 21:52:04.795976464 +0200
++++ linux-3.17.1-pax/arch/powerpc/include/asm/spinlock.h	2014-10-29 02:35:26.271590821 +0100
+@@ -204,13 +204,29 @@ static inline long __arch_read_trylock(a
+ 	__asm__ __volatile__(
+ "1:	" PPC_LWARX(%0,0,%1,1) "\n"
+ 	__DO_SIGN_EXTEND
+-"	addic.		%0,%0,1\n\
+-	ble-		2f\n"
++
++#ifdef	CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	addico.		%0,%0,1\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	addic.		%0,%0,1\n"
++#endif
++
++"3:\n"
++	"ble-		4f\n"
+ 	PPC405_ERR77(0,%1)
+ "	stwcx.		%0,0,%1\n\
+ 	bne-		1b\n"
+ 	PPC_ACQUIRE_BARRIER
+-"2:"	: "=&r" (tmp)
++"4:"	
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(2b,4b)
++#endif
++
++	: "=&r" (tmp)
+ 	: "r" (&rw->lock)
+ 	: "cr0", "xer", "memory");
+ 
+@@ -286,11 +302,27 @@ static inline void arch_read_unlock(arch
+ 	__asm__ __volatile__(
+ 	"# read_unlock\n\t"
+ 	PPC_RELEASE_BARRIER
+-"1:	lwarx		%0,0,%1\n\
+-	addic		%0,%0,-1\n"
++"1:	lwarx		%0,0,%1\n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr 	cr0\n"
++"	addico.		%0,%0,-1\n"
++"	bf 4*cr0+so, 3f\n"
++"2:.long " "0x00c00b00""\n"
++#else
++"	addic.		%0,%0,-1\n"
++#endif
++
++"3:\n"
+ 	PPC405_ERR77(0,%1)
+ "	stwcx.		%0,0,%1\n\
+ 	bne-		1b"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"\n4:\n"
++	_ASM_EXTABLE(2b, 4b)
++#endif
++
+ 	: "=&r"(tmp)
+ 	: "r"(&rw->lock)
+ 	: "cr0", "xer", "memory");
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/include/asm/uaccess.h linux-3.17.1-pax/arch/powerpc/include/asm/uaccess.h
 --- linux-3.17.1/arch/powerpc/include/asm/uaccess.h	2013-09-03 00:44:50.826912977 +0200
 +++ linux-3.17.1-pax/arch/powerpc/include/asm/uaccess.h	2014-10-05 21:54:23.828047210 +0200
@@ -7234,6 +7956,44 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/ke
  		regs->link = current->mm->context.vdso_base + vdso64_rt_sigtramp;
  	} else {
  		err |= setup_trampoline(__NR_rt_sigreturn, &frame->tramp[0]);
+diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/kernel/traps.c linux-3.17.1-pax/arch/powerpc/kernel/traps.c
+--- linux-3.17.1/arch/powerpc/kernel/traps.c	2014-10-05 21:52:04.811976472 +0200
++++ linux-3.17.1-pax/arch/powerpc/kernel/traps.c	2014-10-29 02:35:26.271590821 +0100
+@@ -36,6 +36,7 @@
+ #include <linux/debugfs.h>
+ #include <linux/ratelimit.h>
+ #include <linux/context_tracking.h>
++#include <linux/uaccess.h>
+ 
+ #include <asm/emulated_ops.h>
+ #include <asm/pgtable.h>
+@@ -1137,6 +1138,26 @@ void __kprobes program_check_exception(s
+ 	enum ctx_state prev_state = exception_enter();
+ 	unsigned int reason = get_reason(regs);
+ 
++#ifdef CONFIG_PAX_REFCOUNT
++	unsigned int bkpt;
++	const struct exception_table_entry *entry;
++
++	if (reason & REASON_ILLEGAL) {
++		/* Check if PaX bad instruction */
++		if (!probe_kernel_address(regs->nip, bkpt) && bkpt == 0xc00b00) {
++			current->thread.trap_nr = 0;
++			pax_report_refcount_overflow(regs);
++			/* fixup_exception() for PowerPC does not exist, simulate its job */
++			if ((entry = search_exception_tables(regs->nip)) != NULL) {
++				regs->nip = entry->fixup;
++				return;
++			}
++			/* fixup_exception() could not handle */
++			goto bail;
++		}
++	}
++#endif
++
+ 	/* We can now get here via a FP Unavailable exception if the core
+ 	 * has no FPU, in that case the reason flags will be 0 */
+ 
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/arch/powerpc/kernel/vdso.c linux-3.17.1-pax/arch/powerpc/kernel/vdso.c
 --- linux-3.17.1/arch/powerpc/kernel/vdso.c	2014-10-05 21:52:04.811976472 +0200
 +++ linux-3.17.1-pax/arch/powerpc/kernel/vdso.c	2014-10-05 21:54:23.836047214 +0200
@@ -76125,7 +76885,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/security/integr
  	return 0;
 diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/security/Kconfig linux-3.17.1-pax/security/Kconfig
 --- linux-3.17.1/security/Kconfig	2014-03-31 12:48:34.783129318 +0200
-+++ linux-3.17.1-pax/security/Kconfig	2014-10-05 21:54:25.036047832 +0200
++++ linux-3.17.1-pax/security/Kconfig	2014-10-29 02:35:26.271590821 +0100
 @@ -4,6 +4,691 @@
  
  menu "Security options"
@@ -76713,7 +77473,7 @@ diff -NurpX linux-3.17.1-pax/Documentation/dontdiff linux-3.17.1/security/Kconfi
 +
 +config PAX_REFCOUNT
 +	bool "Prevent various kernel object reference counter overflows"
-+	depends on (ARM && (CPU_V6 || CPU_V6K || CPU_V7)) || MIPS || SPARC64 || X86
++	depends on (ARM && (CPU_V6 || CPU_V6K || CPU_V7)) || MIPS || PPC || SPARC64 || X86
 +	help
 +	  By saying Y here the kernel will detect and prevent overflowing
 +	  various (but not all) kinds of object reference counters.  Such
