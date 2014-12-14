@@ -1,4 +1,5 @@
-- forward port to 3.17.6
+- fixed a few REFCOUNT accessors on arm/powerpc/sparc
+- fixed a few section mismatches for CONSTIFY
 
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/alpha/include/asm/atomic.h linux-3.17.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.17.6/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -270,7 +271,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/arm/include/asm/atomic.h linux-3.17.6-pax/arch/arm/include/asm/atomic.h
 --- linux-3.17.6/arch/arm/include/asm/atomic.h	2014-08-04 01:36:38.714881027 +0200
-+++ linux-3.17.6-pax/arch/arm/include/asm/atomic.h	2014-10-27 19:25:58.725019374 +0100
++++ linux-3.17.6-pax/arch/arm/include/asm/atomic.h	2014-12-09 11:52:21.869170912 +0100
 @@ -18,17 +18,41 @@
  #include <asm/barrier.h>
  #include <asm/cmpxchg.h>
@@ -303,7 +304,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/arm/includ
  #define atomic_read(v)	(*(volatile int *)&(v)->counter)
 +static inline int atomic_read_unchecked(const atomic_unchecked_t *v)
 +{
-+	return v->counter;
++	return *(const volatile int *)&v->counter;
 +}
  #define atomic_set(v,i)	(((v)->counter) = (i))
 +static inline void atomic_set_unchecked(atomic_unchecked_t *v, int i)
@@ -6614,7 +6615,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/parisc/mm/
  	 * If for any reason at all we couldn't handle the fault, make
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/include/asm/atomic.h linux-3.17.6-pax/arch/powerpc/include/asm/atomic.h
 --- linux-3.17.6/arch/powerpc/include/asm/atomic.h	2014-08-04 01:36:53.494880238 +0200
-+++ linux-3.17.6-pax/arch/powerpc/include/asm/atomic.h	2014-10-29 02:35:26.255590811 +0100
++++ linux-3.17.6-pax/arch/powerpc/include/asm/atomic.h	2014-12-09 17:31:15.607201735 +0100
 @@ -12,6 +12,11 @@
  
  #define ATOMIC_INIT(i)		{ (i) }
@@ -6950,7 +6951,37 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  /**
   * __atomic_add_unless - add unless the number is a given value
   * @v: pointer of type atomic_t
-@@ -271,6 +406,11 @@ static __inline__ int atomic_dec_if_posi
+@@ -194,11 +329,27 @@ static __inline__ int __atomic_add_unles
+ 	PPC_ATOMIC_ENTRY_BARRIER
+ "1:	lwarx	%0,0,%1		# __atomic_add_unless\n\
+ 	cmpw	0,%0,%3 \n\
+-	beq-	2f \n\
+-	add	%0,%2,%0 \n"
++	beq-	2f \n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	addo.	%0,%2,%0\n"
++"	bf 4*cr0+so, 4f\n"
++"3:.long " "0x00c00b00""\n"
++"4:\n"
++#else
++	"add	%0,%2,%0 \n"
++#endif
++
+ 	PPC405_ERR77(0,%2)
+ "	stwcx.	%0,0,%1 \n\
+ 	bne-	1b \n"
++"5:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(3b, 5b)
++#endif
++
+ 	PPC_ATOMIC_EXIT_BARRIER
+ "	subf	%0,%2,%0 \n\
+ 2:"
+@@ -271,6 +422,11 @@ static __inline__ int atomic_dec_if_posi
  }
  #define atomic_dec_if_positive atomic_dec_if_positive
  
@@ -6962,7 +6993,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  #ifdef __powerpc64__
  
  #define ATOMIC64_INIT(i)	{ (i) }
-@@ -284,11 +424,25 @@ static __inline__ long atomic64_read(con
+@@ -284,11 +440,25 @@ static __inline__ long atomic64_read(con
  	return t;
  }
  
@@ -6988,7 +7019,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  static __inline__ void atomic64_add(long a, atomic64_t *v)
  {
  	long t;
-@@ -303,12 +457,76 @@ static __inline__ void atomic64_add(long
+@@ -303,12 +473,76 @@ static __inline__ void atomic64_add(long
  	: "cc");
  }
  
@@ -7065,7 +7096,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  "1:	ldarx	%0,0,%2		# atomic64_add_return\n\
  	add	%0,%1,%0\n\
  	stdcx.	%0,0,%2 \n\
-@@ -328,6 +546,36 @@ static __inline__ void atomic64_sub(long
+@@ -328,6 +562,36 @@ static __inline__ void atomic64_sub(long
  	long t;
  
  	__asm__ __volatile__(
@@ -7102,7 +7133,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  "1:	ldarx	%0,0,%3		# atomic64_sub\n\
  	subf	%0,%2,%0\n\
  	stdcx.	%0,0,%3 \n\
-@@ -343,11 +591,27 @@ static __inline__ long atomic64_sub_retu
+@@ -343,11 +607,27 @@ static __inline__ long atomic64_sub_retu
  
  	__asm__ __volatile__(
  	PPC_ATOMIC_ENTRY_BARRIER
@@ -7134,7 +7165,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  	: "=&r" (t)
  	: "r" (a), "r" (&v->counter)
  	: "cc", "memory");
-@@ -355,38 +619,43 @@ static __inline__ long atomic64_sub_retu
+@@ -355,38 +635,43 @@ static __inline__ long atomic64_sub_retu
  	return t;
  }
  
@@ -7190,7 +7221,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
 +	atomic64_add_unchecked(1, v);
 +}
 +
-+static __inline__ int atomic64_inc_return_unchecked(atomic64_unchecked_t *v)
++static __inline__ long atomic64_inc_return_unchecked(atomic64_unchecked_t *v)
 +{
 +	return atomic64_add_return_unchecked(1, v);
 +}
@@ -7198,7 +7229,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  /*
   * atomic64_inc_and_test - increment and test
   * @v: pointer of type atomic64_t
-@@ -397,36 +666,18 @@ static __inline__ long atomic64_inc_retu
+@@ -397,36 +682,18 @@ static __inline__ long atomic64_inc_retu
   */
  #define atomic64_inc_and_test(v) (atomic64_inc_return(v) == 0)
  
@@ -7245,7 +7276,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  }
  
  #define atomic64_sub_and_test(a, v)	(atomic64_sub_return((a), (v)) == 0)
-@@ -459,6 +710,16 @@ static __inline__ long atomic64_dec_if_p
+@@ -459,6 +726,16 @@ static __inline__ long atomic64_dec_if_p
  #define atomic64_cmpxchg(v, o, n) (cmpxchg(&((v)->counter), (o), (n)))
  #define atomic64_xchg(v, new) (xchg(&((v)->counter), new))
  
@@ -7262,6 +7293,39 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/in
  /**
   * atomic64_add_unless - add unless the number is a given value
   * @v: pointer of type atomic64_t
+@@ -474,13 +751,29 @@ static __inline__ int atomic64_add_unles
+ 
+ 	__asm__ __volatile__ (
+ 	PPC_ATOMIC_ENTRY_BARRIER
+-"1:	ldarx	%0,0,%1		# __atomic_add_unless\n\
++"1:	ldarx	%0,0,%1		# atomic64_add_unless\n\
+ 	cmpd	0,%0,%3 \n\
+-	beq-	2f \n\
+-	add	%0,%2,%0 \n"
++	beq-	2f \n"
++
++#ifdef CONFIG_PAX_REFCOUNT
++"	mcrxr	cr0\n"
++"	addo.	%0,%2,%0\n"
++"	bf 4*cr0+so, 4f\n"
++"3:.long " "0x00c00b00""\n"
++"4:\n"
++#else
++	"add	%0,%2,%0 \n"
++#endif
++
+ "	stdcx.	%0,0,%1 \n\
+ 	bne-	1b \n"
+ 	PPC_ATOMIC_EXIT_BARRIER
++"5:"
++
++#ifdef CONFIG_PAX_REFCOUNT
++	_ASM_EXTABLE(3b, 5b)
++#endif
++
+ "	subf	%0,%2,%0 \n\
+ 2:"
+ 	: "=&r" (t)
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/powerpc/include/asm/barrier.h linux-3.17.6-pax/arch/powerpc/include/asm/barrier.h
 --- linux-3.17.6/arch/powerpc/include/asm/barrier.h	2014-08-04 01:36:53.494880238 +0200
 +++ linux-3.17.6-pax/arch/powerpc/include/asm/barrier.h	2014-10-05 21:54:23.820047206 +0200
@@ -8642,19 +8706,19 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/sh/mm/mmap
  	}
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/sparc/include/asm/atomic_64.h linux-3.17.6-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-3.17.6/arch/sparc/include/asm/atomic_64.h	2014-08-04 01:36:55.722880119 +0200
-+++ linux-3.17.6-pax/arch/sparc/include/asm/atomic_64.h	2014-10-05 21:54:23.844047219 +0200
++++ linux-3.17.6-pax/arch/sparc/include/asm/atomic_64.h	2014-12-09 11:52:13.901158159 +0100
 @@ -15,18 +15,40 @@
  #define ATOMIC64_INIT(i)	{ (i) }
  
  #define atomic_read(v)		(*(volatile int *)&(v)->counter)
 +static inline int atomic_read_unchecked(const atomic_unchecked_t *v)
 +{
-+	return v->counter;
++	return *(const volatile int *)&v->counter;
 +}
  #define atomic64_read(v)	(*(volatile long *)&(v)->counter)
 +static inline long atomic64_read_unchecked(const atomic64_unchecked_t *v)
 +{
-+	return v->counter;
++	return *(const volatile long *)&v->counter;
 +}
  
  #define atomic_set(v, i)	(((v)->counter) = i)
@@ -39983,6 +40047,18 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/infinib
  
  #include "qib_common.h"
  #include "qib_verbs.h"
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/infiniband/ulp/ipoib/ipoib_netlink.c linux-3.17.6-pax/drivers/infiniband/ulp/ipoib/ipoib_netlink.c
+--- linux-3.17.6/drivers/infiniband/ulp/ipoib/ipoib_netlink.c	2014-01-20 12:36:16.752999761 +0100
++++ linux-3.17.6-pax/drivers/infiniband/ulp/ipoib/ipoib_netlink.c	2014-12-09 23:24:57.972926827 +0100
+@@ -156,7 +156,7 @@ static size_t ipoib_get_size(const struc
+ 		nla_total_size(2);	/* IFLA_IPOIB_UMCAST */
+ }
+ 
+-static struct rtnl_link_ops ipoib_link_ops __read_mostly = {
++static struct rtnl_link_ops ipoib_link_ops = {
+ 	.kind		= "ipoib",
+ 	.maxtype	= IFLA_IPOIB_MAX,
+ 	.policy		= ipoib_policy,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/input/gameport/gameport.c linux-3.17.6-pax/drivers/input/gameport/gameport.c
 --- linux-3.17.6/drivers/input/gameport/gameport.c	2014-01-20 12:36:16.816999757 +0100
 +++ linux-3.17.6-pax/drivers/input/gameport/gameport.c	2014-10-05 21:54:24.184047394 +0200
@@ -42511,6 +42587,30 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/bon
  	.kind			= "bond",
  	.priv_size		= sizeof(struct bonding),
  	.setup			= bond_setup,
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/caif/caif_hsi.c linux-3.17.6-pax/drivers/net/caif/caif_hsi.c
+--- linux-3.17.6/drivers/net/caif/caif_hsi.c	2013-07-08 01:58:24.760266888 +0200
++++ linux-3.17.6-pax/drivers/net/caif/caif_hsi.c	2014-12-09 23:25:08.172947586 +0100
+@@ -1445,7 +1445,7 @@ err:
+ 	return -ENODEV;
+ }
+ 
+-static struct rtnl_link_ops caif_hsi_link_ops __read_mostly = {
++static struct rtnl_link_ops caif_hsi_link_ops = {
+ 	.kind		= "cfhsi",
+ 	.priv_size	= sizeof(struct cfhsi),
+ 	.setup		= cfhsi_setup,
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/can/dev.c linux-3.17.6-pax/drivers/net/can/dev.c
+--- linux-3.17.6/drivers/net/can/dev.c	2014-12-08 20:18:42.777253789 +0100
++++ linux-3.17.6-pax/drivers/net/can/dev.c	2014-12-09 23:25:14.536960524 +0100
+@@ -869,7 +869,7 @@ static int can_newlink(struct net *src_n
+ 	return -EOPNOTSUPP;
+ }
+ 
+-static struct rtnl_link_ops can_link_ops __read_mostly = {
++static struct rtnl_link_ops can_link_ops = {
+ 	.kind		= "can",
+ 	.maxtype	= IFLA_CAN_MAX,
+ 	.policy		= can_policy,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/can/Kconfig linux-3.17.6-pax/drivers/net/can/Kconfig
 --- linux-3.17.6/drivers/net/can/Kconfig	2014-08-04 01:37:11.210879292 +0200
 +++ linux-3.17.6-pax/drivers/net/can/Kconfig	2014-10-05 21:54:24.232047418 +0200
@@ -42523,6 +42623,30 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/can
  	---help---
  	  Say Y here if you want to support for Freescale FlexCAN.
  
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/can/vcan.c linux-3.17.6-pax/drivers/net/can/vcan.c
+--- linux-3.17.6/drivers/net/can/vcan.c	2014-03-31 12:48:09.363130675 +0200
++++ linux-3.17.6-pax/drivers/net/can/vcan.c	2014-12-09 23:25:21.632974927 +0100
+@@ -166,7 +166,7 @@ static void vcan_setup(struct net_device
+ 	dev->destructor		= free_netdev;
+ }
+ 
+-static struct rtnl_link_ops vcan_link_ops __read_mostly = {
++static struct rtnl_link_ops vcan_link_ops = {
+ 	.kind	= "vcan",
+ 	.setup	= vcan_setup,
+ };
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/dummy.c linux-3.17.6-pax/drivers/net/dummy.c
+--- linux-3.17.6/drivers/net/dummy.c	2014-10-05 21:52:13.279980729 +0200
++++ linux-3.17.6-pax/drivers/net/dummy.c	2014-12-09 23:25:26.972985774 +0100
+@@ -149,7 +149,7 @@ static int dummy_validate(struct nlattr
+ 	return 0;
+ }
+ 
+-static struct rtnl_link_ops dummy_link_ops __read_mostly = {
++static struct rtnl_link_ops dummy_link_ops = {
+ 	.kind		= "dummy",
+ 	.setup		= dummy_setup,
+ 	.validate	= dummy_validate,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/ethernet/8390/ax88796.c linux-3.17.6-pax/drivers/net/ethernet/8390/ax88796.c
 --- linux-3.17.6/drivers/net/ethernet/8390/ax88796.c	2014-08-04 01:37:11.314879287 +0200
 +++ linux-3.17.6-pax/drivers/net/ethernet/8390/ax88796.c	2014-10-05 21:54:24.232047418 +0200
@@ -43564,6 +43688,18 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/iee
  
  	priv = netdev_priv(dev);
  	priv->phy = phy;
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/ifb.c linux-3.17.6-pax/drivers/net/ifb.c
+--- linux-3.17.6/drivers/net/ifb.c	2014-10-05 21:52:13.791980987 +0200
++++ linux-3.17.6-pax/drivers/net/ifb.c	2014-12-09 23:25:34.125000277 +0100
+@@ -252,7 +252,7 @@ static int ifb_validate(struct nlattr *t
+ 	return 0;
+ }
+ 
+-static struct rtnl_link_ops ifb_link_ops __read_mostly = {
++static struct rtnl_link_ops ifb_link_ops = {
+ 	.kind		= "ifb",
+ 	.priv_size	= sizeof(struct ifb_private),
+ 	.setup		= ifb_setup,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/macvlan.c linux-3.17.6-pax/drivers/net/macvlan.c
 --- linux-3.17.6/drivers/net/macvlan.c	2014-11-15 01:09:58.664686620 +0100
 +++ linux-3.17.6-pax/drivers/net/macvlan.c	2014-11-15 01:10:43.488680895 +0100
@@ -43610,7 +43746,16 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/mac
  
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/macvtap.c linux-3.17.6-pax/drivers/net/macvtap.c
 --- linux-3.17.6/drivers/net/macvtap.c	2014-11-21 21:25:33.637349937 +0100
-+++ linux-3.17.6-pax/drivers/net/macvtap.c	2014-11-21 21:25:50.717363744 +0100
++++ linux-3.17.6-pax/drivers/net/macvtap.c	2014-12-09 23:25:42.645017537 +0100
+@@ -422,7 +422,7 @@ static void macvtap_setup(struct net_dev
+ 	dev->tx_queue_len = TUN_READQ_SIZE;
+ }
+ 
+-static struct rtnl_link_ops macvtap_link_ops __read_mostly = {
++static struct rtnl_link_ops macvtap_link_ops = {
+ 	.kind		= "macvtap",
+ 	.setup		= macvtap_setup,
+ 	.newlink	= macvtap_newlink,
 @@ -1023,7 +1023,7 @@ static long macvtap_ioctl(struct file *f
  		}
  
@@ -43629,6 +43774,18 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/mac
  	.notifier_call	= macvtap_device_event,
  };
  
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/nlmon.c linux-3.17.6-pax/drivers/net/nlmon.c
+--- linux-3.17.6/drivers/net/nlmon.c	2014-06-09 12:45:30.185124813 +0200
++++ linux-3.17.6-pax/drivers/net/nlmon.c	2014-12-09 23:25:50.837034114 +0100
+@@ -154,7 +154,7 @@ static int nlmon_validate(struct nlattr
+ 	return 0;
+ }
+ 
+-static struct rtnl_link_ops nlmon_link_ops __read_mostly = {
++static struct rtnl_link_ops nlmon_link_ops = {
+ 	.kind			= "nlmon",
+ 	.priv_size		= sizeof(struct nlmon),
+ 	.setup			= nlmon_setup,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/ppp/ppp_generic.c linux-3.17.6-pax/drivers/net/ppp/ppp_generic.c
 --- linux-3.17.6/drivers/net/ppp/ppp_generic.c	2014-11-21 21:25:33.649349947 +0100
 +++ linux-3.17.6-pax/drivers/net/ppp/ppp_generic.c	2014-11-21 21:25:50.721363747 +0100
@@ -43664,7 +43821,16 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/sli
  	/* We've got a compressed packet; read the change byte */
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/team/team.c linux-3.17.6-pax/drivers/net/team/team.c
 --- linux-3.17.6/drivers/net/team/team.c	2014-10-15 14:06:50.060756492 +0200
-+++ linux-3.17.6-pax/drivers/net/team/team.c	2014-10-15 14:07:05.060767946 +0200
++++ linux-3.17.6-pax/drivers/net/team/team.c	2014-12-09 23:25:56.765046091 +0100
+@@ -2072,7 +2072,7 @@ static unsigned int team_get_num_rx_queu
+ 	return TEAM_DEFAULT_NUM_RX_QUEUES;
+ }
+ 
+-static struct rtnl_link_ops team_link_ops __read_mostly = {
++static struct rtnl_link_ops team_link_ops = {
+ 	.kind			= DRV_NAME,
+ 	.priv_size		= sizeof(struct team),
+ 	.setup			= team_setup,
 @@ -2862,7 +2862,7 @@ static int team_device_event(struct noti
  	return NOTIFY_DONE;
  }
@@ -43676,7 +43842,16 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/tea
  
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/net/tun.c linux-3.17.6-pax/drivers/net/tun.c
 --- linux-3.17.6/drivers/net/tun.c	2014-11-21 21:25:33.649349947 +0100
-+++ linux-3.17.6-pax/drivers/net/tun.c	2014-11-21 21:25:50.721363747 +0100
++++ linux-3.17.6-pax/drivers/net/tun.c	2014-12-09 23:26:01.725056120 +0100
+@@ -1414,7 +1414,7 @@ static int tun_validate(struct nlattr *t
+ 	return -EINVAL;
+ }
+ 
+-static struct rtnl_link_ops tun_link_ops __read_mostly = {
++static struct rtnl_link_ops tun_link_ops = {
+ 	.kind		= DRV_NAME,
+ 	.priv_size	= sizeof(struct tun_struct),
+ 	.setup		= tun_setup,
 @@ -1861,7 +1861,7 @@ unlock:
  }
  
@@ -71468,6 +71643,18 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/8021q/vlan.
  			struct vlan_net *vn;
  
  			vn = net_generic(net, vlan_net_id);
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/8021q/vlan_netlink.c linux-3.17.6-pax/net/8021q/vlan_netlink.c
+--- linux-3.17.6/net/8021q/vlan_netlink.c	2014-06-09 12:45:46.573124776 +0200
++++ linux-3.17.6-pax/net/8021q/vlan_netlink.c	2014-12-09 23:26:12.905078684 +0100
+@@ -238,7 +238,7 @@ nla_put_failure:
+ 	return -EMSGSIZE;
+ }
+ 
+-struct rtnl_link_ops vlan_link_ops __read_mostly = {
++struct rtnl_link_ops vlan_link_ops = {
+ 	.kind		= "vlan",
+ 	.maxtype	= IFLA_VLAN_MAX,
+ 	.policy		= vlan_policy,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/9p/client.c linux-3.17.6-pax/net/9p/client.c
 --- linux-3.17.6/net/9p/client.c	2014-10-05 21:52:23.823986040 +0200
 +++ linux-3.17.6-pax/net/9p/client.c	2014-10-05 21:54:24.692047655 +0200
@@ -71678,7 +71865,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/batman-adv/
  	frag_header.total_size = htons(skb->len);
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/batman-adv/soft-interface.c linux-3.17.6-pax/net/batman-adv/soft-interface.c
 --- linux-3.17.6/net/batman-adv/soft-interface.c	2014-10-05 21:52:23.827986042 +0200
-+++ linux-3.17.6-pax/net/batman-adv/soft-interface.c	2014-10-05 21:54:24.696047657 +0200
++++ linux-3.17.6-pax/net/batman-adv/soft-interface.c	2014-12-09 23:26:19.053091080 +0100
 @@ -296,7 +296,7 @@ send:
  				primary_if->net_dev->dev_addr);
  
@@ -71706,6 +71893,15 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/batman-adv/
  
  	bat_priv->primary_if = NULL;
  	bat_priv->num_ifaces = 0;
+@@ -983,7 +983,7 @@ int batadv_softif_is_valid(const struct
+ 	return 0;
+ }
+ 
+-struct rtnl_link_ops batadv_link_ops __read_mostly = {
++struct rtnl_link_ops batadv_link_ops = {
+ 	.kind		= "batadv",
+ 	.priv_size	= sizeof(struct batadv_priv),
+ 	.setup		= batadv_softif_init_early,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/batman-adv/types.h linux-3.17.6-pax/net/batman-adv/types.h
 --- linux-3.17.6/net/batman-adv/types.h	2014-08-04 01:37:41.870877655 +0200
 +++ linux-3.17.6-pax/net/batman-adv/types.h	2014-10-05 21:54:24.696047657 +0200
@@ -71856,6 +72052,18 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/bluetooth/r
  
  	tty_port_close(&dev->port, tty, filp);
  }
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/bridge/br_netlink.c linux-3.17.6-pax/net/bridge/br_netlink.c
+--- linux-3.17.6/net/bridge/br_netlink.c	2014-10-05 21:52:23.847986052 +0200
++++ linux-3.17.6-pax/net/bridge/br_netlink.c	2014-12-09 23:26:29.577112279 +0100
+@@ -484,7 +484,7 @@ static struct rtnl_af_ops br_af_ops = {
+ 	.get_link_af_size	= br_get_link_af_size,
+ };
+ 
+-struct rtnl_link_ops br_link_ops __read_mostly = {
++struct rtnl_link_ops br_link_ops = {
+ 	.kind		= "bridge",
+ 	.priv_size	= sizeof(struct net_bridge),
+ 	.setup		= br_dev_setup,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/bridge/netfilter/ebtables.c linux-3.17.6-pax/net/bridge/netfilter/ebtables.c
 --- linux-3.17.6/net/bridge/netfilter/ebtables.c	2014-10-05 21:52:23.847986052 +0200
 +++ linux-3.17.6-pax/net/bridge/netfilter/ebtables.c	2014-10-05 21:54:24.708047663 +0200
@@ -71928,6 +72136,18 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/caif/cfctrl
  					 p->sequence_no);
  			list_del(&p->list);
  			goto out;
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/caif/chnl_net.c linux-3.17.6-pax/net/caif/chnl_net.c
+--- linux-3.17.6/net/caif/chnl_net.c	2014-03-31 12:48:31.223129508 +0200
++++ linux-3.17.6-pax/net/caif/chnl_net.c	2014-12-09 23:26:40.969135194 +0100
+@@ -516,7 +516,7 @@ static const struct nla_policy ipcaif_po
+ };
+ 
+ 
+-static struct rtnl_link_ops ipcaif_link_ops __read_mostly = {
++static struct rtnl_link_ops ipcaif_link_ops = {
+ 	.kind		= "caif",
+ 	.priv_size	= sizeof(struct chnl_net),
+ 	.setup		= ipcaif_net_setup,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/can/af_can.c linux-3.17.6-pax/net/can/af_can.c
 --- linux-3.17.6/net/can/af_can.c	2014-08-04 01:37:41.958877650 +0200
 +++ linux-3.17.6-pax/net/can/af_can.c	2014-10-05 21:54:24.712047665 +0200
@@ -72748,6 +72968,30 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/decnet/sysc
  		return -EFAULT;
  
  	*lenp = len;
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/hsr/hsr_netlink.c linux-3.17.6-pax/net/hsr/hsr_netlink.c
+--- linux-3.17.6/net/hsr/hsr_netlink.c	2014-10-05 21:52:23.867986062 +0200
++++ linux-3.17.6-pax/net/hsr/hsr_netlink.c	2014-12-09 23:26:56.845167081 +0100
+@@ -102,7 +102,7 @@ nla_put_failure:
+ 	return -EMSGSIZE;
+ }
+ 
+-static struct rtnl_link_ops hsr_link_ops __read_mostly = {
++static struct rtnl_link_ops hsr_link_ops = {
+ 	.kind		= "hsr",
+ 	.maxtype	= IFLA_HSR_MAX,
+ 	.policy		= hsr_policy,
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/ieee802154/6lowpan_rtnl.c linux-3.17.6-pax/net/ieee802154/6lowpan_rtnl.c
+--- linux-3.17.6/net/ieee802154/6lowpan_rtnl.c	2014-10-05 21:52:23.867986062 +0200
++++ linux-3.17.6-pax/net/ieee802154/6lowpan_rtnl.c	2014-12-09 23:27:03.953181339 +0100
+@@ -590,7 +590,7 @@ static void lowpan_dellink(struct net_de
+ 	dev_put(real_dev);
+ }
+ 
+-static struct rtnl_link_ops lowpan_link_ops __read_mostly = {
++static struct rtnl_link_ops lowpan_link_ops = {
+ 	.kind		= "lowpan",
+ 	.priv_size	= sizeof(struct lowpan_dev_info),
+ 	.setup		= lowpan_setup,
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/ieee802154/reassembly.c linux-3.17.6-pax/net/ieee802154/reassembly.c
 --- linux-3.17.6/net/ieee802154/reassembly.c	2014-10-05 21:52:23.871986064 +0200
 +++ linux-3.17.6-pax/net/ieee802154/reassembly.c	2014-10-05 21:54:24.748047684 +0200
@@ -75011,6 +75255,18 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/netlink/af_
 +			   atomic_read_unchecked(&s->sk_drops),
  			   sock_i_ino(s)
  			);
+ 
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/openvswitch/vport-internal_dev.c linux-3.17.6-pax/net/openvswitch/vport-internal_dev.c
+--- linux-3.17.6/net/openvswitch/vport-internal_dev.c	2014-10-05 21:52:23.947986103 +0200
++++ linux-3.17.6-pax/net/openvswitch/vport-internal_dev.c	2014-12-09 23:27:37.557248597 +0100
+@@ -122,7 +122,7 @@ static const struct net_device_ops inter
+ 	.ndo_get_stats64 = internal_dev_get_stats,
+ };
+ 
+-static struct rtnl_link_ops internal_dev_link_ops __read_mostly = {
++static struct rtnl_link_ops internal_dev_link_ops = {
+ 	.kind = "openvswitch",
+ };
  
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/net/packet/af_packet.c linux-3.17.6-pax/net/packet/af_packet.c
 --- linux-3.17.6/net/packet/af_packet.c	2014-10-05 21:52:23.947986103 +0200
