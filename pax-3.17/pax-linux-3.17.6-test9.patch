@@ -1,5 +1,5 @@
-- fixed a few REFCOUNT accessors on arm/powerpc/sparc
-- fixed a few section mismatches for CONSTIFY
+- fixed a (probably harmless) integer underflow in ttm_page_pool_free/ttm_dma_page_pool_free, caught by the size overflow plugin, reported by hunger
+- fixed a REFCOUNT false positive in ftrace
 
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/arch/alpha/include/asm/atomic.h linux-3.17.6-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.17.6/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -38472,6 +38472,157 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/gpu/drm
  	if (unlikely(ret != 0)) {
  		kobject_put(&zone->kobj);
  		return ret;
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/gpu/drm/ttm/ttm_page_alloc.c linux-3.17.6-pax/drivers/gpu/drm/ttm/ttm_page_alloc.c
+--- linux-3.17.6/drivers/gpu/drm/ttm/ttm_page_alloc.c	2014-10-05 21:52:12.379980276 +0200
++++ linux-3.17.6-pax/drivers/gpu/drm/ttm/ttm_page_alloc.c	2014-12-14 23:56:13.025589063 +0100
+@@ -54,7 +54,7 @@
+ 
+ #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
+ #define SMALL_ALLOCATION		16
+-#define FREE_ALL_PAGES			(~0U)
++#define FREE_ALL_PAGES			(~0UL)
+ /* times are in msecs */
+ #define PAGE_FREE_INTERVAL		1000
+ 
+@@ -299,14 +299,13 @@ static void ttm_pool_update_free_locked(
+  * @free_all: If set to true will free all pages in pool
+  * @gfp: GFP flags.
+  **/
+-static int ttm_page_pool_free(struct ttm_page_pool *pool, unsigned nr_free,
++static unsigned long ttm_page_pool_free(struct ttm_page_pool *pool, unsigned long nr_free,
+ 			      gfp_t gfp)
+ {
+ 	unsigned long irq_flags;
+ 	struct page *p;
+ 	struct page **pages_to_free;
+-	unsigned freed_pages = 0,
+-		 npages_to_free = nr_free;
++	unsigned long freed_pages = 0, npages_to_free = nr_free;
+ 
+ 	if (NUM_PAGES_TO_ALLOC < nr_free)
+ 		npages_to_free = NUM_PAGES_TO_ALLOC;
+@@ -366,7 +365,8 @@ restart:
+ 		__list_del(&p->lru, &pool->list);
+ 
+ 		ttm_pool_update_free_locked(pool, freed_pages);
+-		nr_free -= freed_pages;
++		if (likely(nr_free != FREE_ALL_PAGES))
++			nr_free -= freed_pages;
+ 	}
+ 
+ 	spin_unlock_irqrestore(&pool->lock, irq_flags);
+@@ -395,7 +395,7 @@ ttm_pool_shrink_scan(struct shrinker *sh
+ 	unsigned i;
+ 	unsigned pool_offset;
+ 	struct ttm_page_pool *pool;
+-	int shrink_pages = sc->nr_to_scan;
++	unsigned long shrink_pages = sc->nr_to_scan;
+ 	unsigned long freed = 0;
+ 
+ 	if (!mutex_trylock(&lock))
+@@ -403,7 +403,7 @@ ttm_pool_shrink_scan(struct shrinker *sh
+ 	pool_offset = ++start_pool % NUM_POOLS;
+ 	/* select start pool in round robin fashion */
+ 	for (i = 0; i < NUM_POOLS; ++i) {
+-		unsigned nr_free = shrink_pages;
++		unsigned long nr_free = shrink_pages;
+ 		if (shrink_pages == 0)
+ 			break;
+ 		pool = &_manager->pools[(i + pool_offset)%NUM_POOLS];
+@@ -669,7 +669,7 @@ out:
+ }
+ 
+ /* Put all pages in pages list to correct pool to wait for reuse */
+-static void ttm_put_pages(struct page **pages, unsigned npages, int flags,
++static void ttm_put_pages(struct page **pages, unsigned long npages, int flags,
+ 			  enum ttm_caching_state cstate)
+ {
+ 	unsigned long irq_flags;
+@@ -724,7 +724,7 @@ static int ttm_get_pages(struct page **p
+ 	struct list_head plist;
+ 	struct page *p = NULL;
+ 	gfp_t gfp_flags = GFP_USER;
+-	unsigned count;
++	unsigned long count;
+ 	int r;
+ 
+ 	/* set zero flag for page allocation if required */
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c linux-3.17.6-pax/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c
+--- linux-3.17.6/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c	2014-10-05 21:52:12.379980276 +0200
++++ linux-3.17.6-pax/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c	2014-12-15 00:08:48.611164982 +0100
+@@ -56,7 +56,7 @@
+ 
+ #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
+ #define SMALL_ALLOCATION		4
+-#define FREE_ALL_PAGES			(~0U)
++#define FREE_ALL_PAGES			(~0UL)
+ /* times are in msecs */
+ #define IS_UNDEFINED			(0)
+ #define IS_WC				(1<<1)
+@@ -413,15 +413,14 @@ static void ttm_dma_page_put(struct dma_
+  * @nr_free: If set to true will free all pages in pool
+  * @gfp: GFP flags.
+  **/
+-static unsigned ttm_dma_page_pool_free(struct dma_pool *pool, unsigned nr_free,
++static unsigned long ttm_dma_page_pool_free(struct dma_pool *pool, unsigned long nr_free,
+ 				       gfp_t gfp)
+ {
+ 	unsigned long irq_flags;
+ 	struct dma_page *dma_p, *tmp;
+ 	struct page **pages_to_free;
+ 	struct list_head d_pages;
+-	unsigned freed_pages = 0,
+-		 npages_to_free = nr_free;
++	unsigned long freed_pages = 0, npages_to_free = nr_free;
+ 
+ 	if (NUM_PAGES_TO_ALLOC < nr_free)
+ 		npages_to_free = NUM_PAGES_TO_ALLOC;
+@@ -494,7 +493,8 @@ restart:
+ 	/* remove range of pages from the pool */
+ 	if (freed_pages) {
+ 		ttm_pool_update_free_locked(pool, freed_pages);
+-		nr_free -= freed_pages;
++		if (likely(nr_free != FREE_ALL_PAGES))
++			nr_free -= freed_pages;
+ 	}
+ 
+ 	spin_unlock_irqrestore(&pool->lock, irq_flags);
+@@ -929,7 +929,7 @@ void ttm_dma_unpopulate(struct ttm_dma_t
+ 	struct dma_page *d_page, *next;
+ 	enum pool_type type;
+ 	bool is_cached = false;
+-	unsigned count = 0, i, npages = 0;
++	unsigned long count = 0, i, npages = 0;
+ 	unsigned long irq_flags;
+ 
+ 	type = ttm_to_type(ttm->page_flags, ttm->caching_state);
+@@ -1007,7 +1007,7 @@ ttm_dma_pool_shrink_scan(struct shrinker
+ 	static unsigned start_pool;
+ 	unsigned idx = 0;
+ 	unsigned pool_offset;
+-	unsigned shrink_pages = sc->nr_to_scan;
++	unsigned long shrink_pages = sc->nr_to_scan;
+ 	struct device_pools *p;
+ 	unsigned long freed = 0;
+ 
+@@ -1020,7 +1020,7 @@ ttm_dma_pool_shrink_scan(struct shrinker
+ 		goto out;
+ 	pool_offset = ++start_pool % _manager->npools;
+ 	list_for_each_entry(p, &_manager->pools, pools) {
+-		unsigned nr_free;
++		unsigned long nr_free;
+ 
+ 		if (!p->dev)
+ 			continue;
+@@ -1034,7 +1034,7 @@ ttm_dma_pool_shrink_scan(struct shrinker
+ 						      sc->gfp_mask);
+ 		freed += nr_free - shrink_pages;
+ 
+-		pr_debug("%s: (%s:%d) Asked to shrink %d, have %d more to go\n",
++		pr_debug("%s: (%s:%d) Asked to shrink %lu, have %lu more to go\n",
+ 			 p->pool->dev_name, p->pool->name, current->pid,
+ 			 nr_free, shrink_pages);
+ 	}
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/drivers/gpu/drm/udl/udl_fb.c linux-3.17.6-pax/drivers/gpu/drm/udl/udl_fb.c
 --- linux-3.17.6/drivers/gpu/drm/udl/udl_fb.c	2014-10-05 21:52:12.379980276 +0200
 +++ linux-3.17.6-pax/drivers/gpu/drm/udl/udl_fb.c	2014-10-05 21:54:24.148047375 +0200
@@ -59449,7 +59600,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/include/linux/s
  extern unsigned int sysctl_sched_min_granularity;
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/include/linux/sched.h linux-3.17.6-pax/include/linux/sched.h
 --- linux-3.17.6/include/linux/sched.h	2014-10-30 19:32:58.070420637 +0100
-+++ linux-3.17.6-pax/include/linux/sched.h	2014-10-30 19:33:18.946426726 +0100
++++ linux-3.17.6-pax/include/linux/sched.h	2014-12-10 13:43:03.612618454 +0100
 @@ -132,6 +132,7 @@ struct fs_struct;
  struct perf_event_context;
  struct blk_plug;
@@ -59498,6 +59649,15 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/include/linux/s
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
+@@ -1618,7 +1625,7 @@ struct task_struct {
+ 	 * Number of functions that haven't been traced
+ 	 * because of depth overrun.
+ 	 */
+-	atomic_t trace_overrun;
++	atomic_unchecked_t trace_overrun;
+ 	/* Pause for the tracing */
+ 	atomic_t tracing_graph_pause;
+ #endif
 @@ -1646,6 +1653,53 @@ struct task_struct {
  #endif
  };
@@ -65874,7 +66034,7 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/kernel/trace/bl
  	ret = -EIO;
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/kernel/trace/ftrace.c linux-3.17.6-pax/kernel/trace/ftrace.c
 --- linux-3.17.6/kernel/trace/ftrace.c	2014-10-05 21:52:23.747986002 +0200
-+++ linux-3.17.6-pax/kernel/trace/ftrace.c	2014-10-05 21:54:24.600047608 +0200
++++ linux-3.17.6-pax/kernel/trace/ftrace.c	2014-12-10 13:43:16.348636873 +0100
 @@ -2128,12 +2128,17 @@ ftrace_code_disable(struct module *mod,
  	if (unlikely(ftrace_disabled))
  		return 0;
@@ -65906,6 +66066,24 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/kernel/trace/ft
  
  	start_pg = ftrace_allocate_pages(count);
  	if (!start_pg)
+@@ -5254,7 +5261,7 @@ static int alloc_retstack_tasklist(struc
+ 
+ 		if (t->ret_stack == NULL) {
+ 			atomic_set(&t->tracing_graph_pause, 0);
+-			atomic_set(&t->trace_overrun, 0);
++			atomic_set_unchecked(&t->trace_overrun, 0);
+ 			t->curr_ret_stack = -1;
+ 			/* Make sure the tasks see the -1 first: */
+ 			smp_wmb();
+@@ -5467,7 +5474,7 @@ static void
+ graph_init_task(struct task_struct *t, struct ftrace_ret_stack *ret_stack)
+ {
+ 	atomic_set(&t->tracing_graph_pause, 0);
+-	atomic_set(&t->trace_overrun, 0);
++	atomic_set_unchecked(&t->trace_overrun, 0);
+ 	t->ftrace_timestamp = 0;
+ 	/* make curr_ret_stack visible before we add the ret_stack */
+ 	smp_wmb();
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/kernel/trace/ring_buffer.c linux-3.17.6-pax/kernel/trace/ring_buffer.c
 --- linux-3.17.6/kernel/trace/ring_buffer.c	2014-11-21 21:25:33.833350100 +0100
 +++ linux-3.17.6-pax/kernel/trace/ring_buffer.c	2014-11-21 21:25:50.741363763 +0100
@@ -66225,6 +66403,27 @@ diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/kernel/trace/tr
  static void __add_event_to_tracers(struct ftrace_event_call *call);
  
  /* Add an additional event_call dynamically */
+diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/kernel/trace/trace_functions_graph.c linux-3.17.6-pax/kernel/trace/trace_functions_graph.c
+--- linux-3.17.6/kernel/trace/trace_functions_graph.c	2014-10-05 21:52:23.755986006 +0200
++++ linux-3.17.6-pax/kernel/trace/trace_functions_graph.c	2014-12-10 13:43:29.456655624 +0100
+@@ -133,7 +133,7 @@ ftrace_push_return_trace(unsigned long r
+ 
+ 	/* The return trace stack is full */
+ 	if (current->curr_ret_stack == FTRACE_RETFUNC_DEPTH - 1) {
+-		atomic_inc(&current->trace_overrun);
++		atomic_inc_unchecked(&current->trace_overrun);
+ 		return -EBUSY;
+ 	}
+ 
+@@ -230,7 +230,7 @@ ftrace_pop_return_trace(struct ftrace_gr
+ 	*ret = current->ret_stack[index].ret;
+ 	trace->func = current->ret_stack[index].func;
+ 	trace->calltime = current->ret_stack[index].calltime;
+-	trace->overrun = atomic_read(&current->trace_overrun);
++	trace->overrun = atomic_read_unchecked(&current->trace_overrun);
+ 	trace->depth = index;
+ }
+ 
 diff -NurpX linux-3.17.6-pax/Documentation/dontdiff linux-3.17.6/kernel/trace/trace.h linux-3.17.6-pax/kernel/trace/trace.h
 --- linux-3.17.6/kernel/trace/trace.h	2014-10-05 21:52:23.751986004 +0200
 +++ linux-3.17.6-pax/kernel/trace/trace.h	2014-10-05 21:54:24.608047612 +0200
