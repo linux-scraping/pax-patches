@@ -1,5 +1,4 @@
-- forward port to 3.18
-  - due to the atomic accessor unification across several archs, some breakage is possible on arm/mips/powerpc/sparc for REFCOUNT, feedback is welcome
+- fixed a (probably harmless) integer underflow in ttm_page_pool_free/ttm_dma_page_pool_free, caught by the size overflow plugin, reported by hunger
 
 diff -NurpX linux-3.18-pax/Documentation/dontdiff linux-3.18/arch/alpha/include/asm/atomic.h linux-3.18-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -37545,6 +37544,157 @@ diff -NurpX linux-3.18-pax/Documentation/dontdiff linux-3.18/drivers/gpu/drm/ttm
  	if (unlikely(ret != 0)) {
  		kobject_put(&zone->kobj);
  		return ret;
+diff -NurpX linux-3.18-pax/Documentation/dontdiff linux-3.18/drivers/gpu/drm/ttm/ttm_page_alloc.c linux-3.18-pax/drivers/gpu/drm/ttm/ttm_page_alloc.c
+--- linux-3.18/drivers/gpu/drm/ttm/ttm_page_alloc.c	2014-10-05 21:52:12.379980276 +0200
++++ linux-3.18-pax/drivers/gpu/drm/ttm/ttm_page_alloc.c	2014-12-14 23:56:55.329678966 +0100
+@@ -54,7 +54,7 @@
+ 
+ #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
+ #define SMALL_ALLOCATION		16
+-#define FREE_ALL_PAGES			(~0U)
++#define FREE_ALL_PAGES			(~0UL)
+ /* times are in msecs */
+ #define PAGE_FREE_INTERVAL		1000
+ 
+@@ -299,14 +299,13 @@ static void ttm_pool_update_free_locked(
+  * @free_all: If set to true will free all pages in pool
+  * @gfp: GFP flags.
+  **/
+-static int ttm_page_pool_free(struct ttm_page_pool *pool, unsigned nr_free,
++static unsigned long ttm_page_pool_free(struct ttm_page_pool *pool, unsigned long nr_free,
+ 			      gfp_t gfp)
+ {
+ 	unsigned long irq_flags;
+ 	struct page *p;
+ 	struct page **pages_to_free;
+-	unsigned freed_pages = 0,
+-		 npages_to_free = nr_free;
++	unsigned long freed_pages = 0, npages_to_free = nr_free;
+ 
+ 	if (NUM_PAGES_TO_ALLOC < nr_free)
+ 		npages_to_free = NUM_PAGES_TO_ALLOC;
+@@ -366,7 +365,8 @@ restart:
+ 		__list_del(&p->lru, &pool->list);
+ 
+ 		ttm_pool_update_free_locked(pool, freed_pages);
+-		nr_free -= freed_pages;
++		if (likely(nr_free != FREE_ALL_PAGES))
++			nr_free -= freed_pages;
+ 	}
+ 
+ 	spin_unlock_irqrestore(&pool->lock, irq_flags);
+@@ -395,7 +395,7 @@ ttm_pool_shrink_scan(struct shrinker *sh
+ 	unsigned i;
+ 	unsigned pool_offset;
+ 	struct ttm_page_pool *pool;
+-	int shrink_pages = sc->nr_to_scan;
++	unsigned long shrink_pages = sc->nr_to_scan;
+ 	unsigned long freed = 0;
+ 
+ 	if (!mutex_trylock(&lock))
+@@ -403,7 +403,7 @@ ttm_pool_shrink_scan(struct shrinker *sh
+ 	pool_offset = ++start_pool % NUM_POOLS;
+ 	/* select start pool in round robin fashion */
+ 	for (i = 0; i < NUM_POOLS; ++i) {
+-		unsigned nr_free = shrink_pages;
++		unsigned long nr_free = shrink_pages;
+ 		if (shrink_pages == 0)
+ 			break;
+ 		pool = &_manager->pools[(i + pool_offset)%NUM_POOLS];
+@@ -669,7 +669,7 @@ out:
+ }
+ 
+ /* Put all pages in pages list to correct pool to wait for reuse */
+-static void ttm_put_pages(struct page **pages, unsigned npages, int flags,
++static void ttm_put_pages(struct page **pages, unsigned long npages, int flags,
+ 			  enum ttm_caching_state cstate)
+ {
+ 	unsigned long irq_flags;
+@@ -724,7 +724,7 @@ static int ttm_get_pages(struct page **p
+ 	struct list_head plist;
+ 	struct page *p = NULL;
+ 	gfp_t gfp_flags = GFP_USER;
+-	unsigned count;
++	unsigned long count;
+ 	int r;
+ 
+ 	/* set zero flag for page allocation if required */
+diff -NurpX linux-3.18-pax/Documentation/dontdiff linux-3.18/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c linux-3.18-pax/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c
+--- linux-3.18/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c	2014-10-05 21:52:12.379980276 +0200
++++ linux-3.18-pax/drivers/gpu/drm/ttm/ttm_page_alloc_dma.c	2014-12-15 00:11:24.843395691 +0100
+@@ -56,7 +56,7 @@
+ 
+ #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
+ #define SMALL_ALLOCATION		4
+-#define FREE_ALL_PAGES			(~0U)
++#define FREE_ALL_PAGES			(~0UL)
+ /* times are in msecs */
+ #define IS_UNDEFINED			(0)
+ #define IS_WC				(1<<1)
+@@ -413,15 +413,14 @@ static void ttm_dma_page_put(struct dma_
+  * @nr_free: If set to true will free all pages in pool
+  * @gfp: GFP flags.
+  **/
+-static unsigned ttm_dma_page_pool_free(struct dma_pool *pool, unsigned nr_free,
++static unsigned long ttm_dma_page_pool_free(struct dma_pool *pool, unsigned long nr_free,
+ 				       gfp_t gfp)
+ {
+ 	unsigned long irq_flags;
+ 	struct dma_page *dma_p, *tmp;
+ 	struct page **pages_to_free;
+ 	struct list_head d_pages;
+-	unsigned freed_pages = 0,
+-		 npages_to_free = nr_free;
++	unsigned long freed_pages = 0, npages_to_free = nr_free;
+ 
+ 	if (NUM_PAGES_TO_ALLOC < nr_free)
+ 		npages_to_free = NUM_PAGES_TO_ALLOC;
+@@ -494,7 +493,8 @@ restart:
+ 	/* remove range of pages from the pool */
+ 	if (freed_pages) {
+ 		ttm_pool_update_free_locked(pool, freed_pages);
+-		nr_free -= freed_pages;
++		if (likely(nr_free != FREE_ALL_PAGES))
++			nr_free -= freed_pages;
+ 	}
+ 
+ 	spin_unlock_irqrestore(&pool->lock, irq_flags);
+@@ -929,7 +929,7 @@ void ttm_dma_unpopulate(struct ttm_dma_t
+ 	struct dma_page *d_page, *next;
+ 	enum pool_type type;
+ 	bool is_cached = false;
+-	unsigned count = 0, i, npages = 0;
++	unsigned long count = 0, i, npages = 0;
+ 	unsigned long irq_flags;
+ 
+ 	type = ttm_to_type(ttm->page_flags, ttm->caching_state);
+@@ -1007,7 +1007,7 @@ ttm_dma_pool_shrink_scan(struct shrinker
+ 	static unsigned start_pool;
+ 	unsigned idx = 0;
+ 	unsigned pool_offset;
+-	unsigned shrink_pages = sc->nr_to_scan;
++	unsigned long shrink_pages = sc->nr_to_scan;
+ 	struct device_pools *p;
+ 	unsigned long freed = 0;
+ 
+@@ -1020,7 +1020,7 @@ ttm_dma_pool_shrink_scan(struct shrinker
+ 		goto out;
+ 	pool_offset = ++start_pool % _manager->npools;
+ 	list_for_each_entry(p, &_manager->pools, pools) {
+-		unsigned nr_free;
++		unsigned long nr_free;
+ 
+ 		if (!p->dev)
+ 			continue;
+@@ -1034,7 +1034,7 @@ ttm_dma_pool_shrink_scan(struct shrinker
+ 						      sc->gfp_mask);
+ 		freed += nr_free - shrink_pages;
+ 
+-		pr_debug("%s: (%s:%d) Asked to shrink %d, have %d more to go\n",
++		pr_debug("%s: (%s:%d) Asked to shrink %lu, have %lu more to go\n",
+ 			 p->pool->dev_name, p->pool->name, current->pid,
+ 			 nr_free, shrink_pages);
+ 	}
 diff -NurpX linux-3.18-pax/Documentation/dontdiff linux-3.18/drivers/gpu/drm/udl/udl_fb.c linux-3.18-pax/drivers/gpu/drm/udl/udl_fb.c
 --- linux-3.18/drivers/gpu/drm/udl/udl_fb.c	2014-12-08 21:49:39.284837035 +0100
 +++ linux-3.18-pax/drivers/gpu/drm/udl/udl_fb.c	2014-12-08 21:52:13.561196943 +0100
