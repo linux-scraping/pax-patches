@@ -1,4 +1,7 @@
-- forward port to 3.14.27
+- spender finally figured out and fixed the UDEREF/PCID/PARAVIRT problem, reported by Marcin Mirosław (https://bugs.gentoo.org/show_bug.cgi?id=522252)
+- fixed wrong refcount operation in uart_open, by Rogelio M. Serrano Jr <rogelios664@gmail.com>
+- fixed ESPFIX crash under per-cpu PGD configs (KERNEXEC/UDEREF on amd64), reported by Andy Lutomirski <luto@amacapital.net>
+- constified a few variables
 
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/alpha/include/asm/atomic.h linux-3.14.27-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.27/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -20296,8 +20299,8 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  
  /*
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kernel/entry_64.S linux-3.14.27-pax/arch/x86/kernel/entry_64.S
---- linux-3.14.27/arch/x86/kernel/entry_64.S	2014-12-07 10:31:11.188681570 +0100
-+++ linux-3.14.27-pax/arch/x86/kernel/entry_64.S	2014-12-07 10:33:14.304891691 +0100
+--- linux-3.14.27/arch/x86/kernel/entry_64.S	2014-12-28 19:16:54.451988539 +0100
++++ linux-3.14.27-pax/arch/x86/kernel/entry_64.S	2014-12-28 19:17:16.032056443 +0100
 @@ -60,6 +60,8 @@
  #include <asm/smap.h>
  #include <asm/pgtable_types.h>
@@ -21252,6 +21255,27 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
+@@ -1070,15 +1566,15 @@ native_irq_return_ldt:
+ 	SWAPGS
+ 	movq PER_CPU_VAR(espfix_waddr),%rdi
+ 	movq %rax,(0*8)(%rdi)	/* RAX */
+-	movq (2*8)(%rsp),%rax	/* RIP */
++	movq (2*8 + RIP-RIP)(%rsp),%rax	/* RIP */
+ 	movq %rax,(1*8)(%rdi)
+-	movq (3*8)(%rsp),%rax	/* CS */
++	movq (2*8 + CS-RIP)(%rsp),%rax	/* CS */
+ 	movq %rax,(2*8)(%rdi)
+-	movq (4*8)(%rsp),%rax	/* RFLAGS */
++	movq (2*8 + EFLAGS-RIP)(%rsp),%rax	/* RFLAGS */
+ 	movq %rax,(3*8)(%rdi)
+-	movq (6*8)(%rsp),%rax	/* SS */
++	movq (2*8 + SS-RIP)(%rsp),%rax	/* SS */
+ 	movq %rax,(5*8)(%rdi)
+-	movq (5*8)(%rsp),%rax	/* RSP */
++	movq (2*8 + RSP-RIP)(%rsp),%rax	/* RSP */
+ 	movq %rax,(4*8)(%rdi)
+ 	andl $0xffff0000,%eax
+ 	popq_cfi %rdi
 @@ -1132,7 +1628,7 @@ ENTRY(retint_kernel)
  	jmp exit_intr
  #endif
@@ -21571,9 +21595,40 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  /*
   * End of kprobes section
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kernel/espfix_64.c linux-3.14.27-pax/arch/x86/kernel/espfix_64.c
---- linux-3.14.27/arch/x86/kernel/espfix_64.c	2014-08-08 02:15:42.905614643 +0200
-+++ linux-3.14.27-pax/arch/x86/kernel/espfix_64.c	2014-08-08 02:51:14.665609892 +0200
-@@ -197,7 +197,7 @@ void init_espfix_ap(void)
+--- linux-3.14.27/arch/x86/kernel/espfix_64.c	2014-12-28 19:16:54.451988539 +0100
++++ linux-3.14.27-pax/arch/x86/kernel/espfix_64.c	2014-12-28 19:17:16.036056456 +0100
+@@ -70,7 +70,7 @@ static DEFINE_MUTEX(espfix_init_mutex);
+ #define ESPFIX_MAX_PAGES  DIV_ROUND_UP(CONFIG_NR_CPUS, ESPFIX_STACKS_PER_PAGE)
+ static void *espfix_pages[ESPFIX_MAX_PAGES];
+ 
+-static __page_aligned_bss pud_t espfix_pud_page[PTRS_PER_PUD]
++static __page_aligned_rodata pud_t espfix_pud_page[PTRS_PER_PUD]
+ 	__aligned(PAGE_SIZE);
+ 
+ static unsigned int page_random, slot_random;
+@@ -122,14 +122,17 @@ static void init_espfix_random(void)
+ void __init init_espfix_bsp(void)
+ {
+ 	pgd_t *pgd_p;
+-	pteval_t ptemask;
+-
+-	ptemask = __supported_pte_mask;
++	unsigned long index = pgd_index(ESPFIX_BASE_ADDR);
+ 
+ 	/* Install the espfix pud into the kernel page directory */
+-	pgd_p = &init_level4_pgt[pgd_index(ESPFIX_BASE_ADDR)];
++	pgd_p = &init_level4_pgt[index];
+ 	pgd_populate(&init_mm, pgd_p, (pud_t *)espfix_pud_page);
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	clone_pgd_range(get_cpu_pgd(0, kernel) + index, swapper_pg_dir + index, 1);
++	clone_pgd_range(get_cpu_pgd(0, user) + index, swapper_pg_dir + index, 1);
++#endif
++
+ 	/* Randomize the locations */
+ 	init_espfix_random();
+ 
+@@ -197,7 +200,7 @@ void init_espfix_ap(void)
  		set_pte(&pte_p[n*PTE_STRIDE], pte);
  
  	/* Job is done for this CPU and any CPU which shares this page */
@@ -23447,6 +23502,33 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  };
  
  EXPORT_SYMBOL_GPL(pv_time_ops);
+diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kernel/paravirt_patch_64.c linux-3.14.27-pax/arch/x86/kernel/paravirt_patch_64.c
+--- linux-3.14.27/arch/x86/kernel/paravirt_patch_64.c	2014-12-28 19:16:54.455988552 +0100
++++ linux-3.14.27-pax/arch/x86/kernel/paravirt_patch_64.c	2014-12-28 19:17:16.128056744 +0100
+@@ -9,7 +9,11 @@ DEF_NATIVE(pv_irq_ops, save_fl, "pushfq;
+ DEF_NATIVE(pv_mmu_ops, read_cr2, "movq %cr2, %rax");
+ DEF_NATIVE(pv_mmu_ops, read_cr3, "movq %cr3, %rax");
+ DEF_NATIVE(pv_mmu_ops, write_cr3, "movq %rdi, %cr3");
++
++#ifndef CONFIG_PAX_MEMORY_UDEREF
+ DEF_NATIVE(pv_mmu_ops, flush_tlb_single, "invlpg (%rdi)");
++#endif
++
+ DEF_NATIVE(pv_cpu_ops, clts, "clts");
+ DEF_NATIVE(pv_cpu_ops, wbinvd, "wbinvd");
+ 
+@@ -57,7 +61,11 @@ unsigned native_patch(u8 type, u16 clobb
+ 		PATCH_SITE(pv_mmu_ops, read_cr3);
+ 		PATCH_SITE(pv_mmu_ops, write_cr3);
+ 		PATCH_SITE(pv_cpu_ops, clts);
++
++#ifndef CONFIG_PAX_MEMORY_UDEREF
+ 		PATCH_SITE(pv_mmu_ops, flush_tlb_single);
++#endif
++
+ 		PATCH_SITE(pv_cpu_ops, wbinvd);
+ 
+ 	patch_site:
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kernel/paravirt-spinlocks.c linux-3.14.27-pax/arch/x86/kernel/paravirt-spinlocks.c
 --- linux-3.14.27/arch/x86/kernel/paravirt-spinlocks.c	2013-11-04 01:46:24.803116138 +0100
 +++ linux-3.14.27-pax/arch/x86/kernel/paravirt-spinlocks.c	2014-03-31 12:53:46.359112682 +0200
@@ -25486,6 +25568,18 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kvm/
  	return 0;
  
  out:
+diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kvm/emulate.c linux-3.14.27-pax/arch/x86/kvm/emulate.c
+--- linux-3.14.27/arch/x86/kvm/emulate.c	2014-12-28 19:16:54.459988564 +0100
++++ linux-3.14.27-pax/arch/x86/kvm/emulate.c	2014-12-28 19:17:16.152056820 +0100
+@@ -3401,7 +3401,7 @@ static int check_cr_write(struct x86_emu
+ 	int cr = ctxt->modrm_reg;
+ 	u64 efer = 0;
+ 
+-	static u64 cr_reserved_bits[] = {
++	static const u64 cr_reserved_bits[] = {
+ 		0xffffffff00000000ULL,
+ 		0, 0, 0, /* CR3 checked later */
+ 		CR4_RESERVED_BITS,
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kvm/lapic.c linux-3.14.27-pax/arch/x86/kvm/lapic.c
 --- linux-3.14.27/arch/x86/kvm/lapic.c	2014-09-06 13:29:20.981336819 +0200
 +++ linux-3.14.27-pax/arch/x86/kvm/lapic.c	2014-09-06 13:29:31.725342626 +0200
@@ -46831,7 +46925,7 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/drivers/tty/s
  	if (cfg->uart_flags & UPF_CONS_FLOW) {
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/drivers/tty/serial/serial_core.c linux-3.14.27-pax/drivers/tty/serial/serial_core.c
 --- linux-3.14.27/drivers/tty/serial/serial_core.c	2014-11-14 21:14:03.485282847 +0100
-+++ linux-3.14.27-pax/drivers/tty/serial/serial_core.c	2014-11-14 21:14:19.637280171 +0100
++++ linux-3.14.27-pax/drivers/tty/serial/serial_core.c	2014-12-23 03:00:24.353579267 +0100
 @@ -1451,7 +1451,7 @@ static void uart_hangup(struct tty_struc
  		uart_flush_buffer(tty);
  		uart_shutdown(tty, state);
@@ -46864,7 +46958,7 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/drivers/tty/s
  	return retval;
  err_dec_count:
 -	port->count--;
-+	atomic_inc(&port->count);
++	atomic_dec(&port->count);
  	mutex_unlock(&port->mutex);
  	goto end;
  }
