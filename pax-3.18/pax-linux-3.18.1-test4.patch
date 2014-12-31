@@ -1,8 +1,6 @@
-- spender finally figured out and fixed the UDEREF/PCID/PARAVIRT problem, reported by Marcin Mirosław (https://bugs.gentoo.org/show_bug.cgi?id=522252)
-- fixed wrong refcount operation in uart_open, by Rogelio M. Serrano Jr <rogelios664@gmail.com>
-- fixed ESPFIX crash under per-cpu PGD configs (KERNEXEC/UDEREF on amd64), reported by Andy Lutomirski <luto@amacapital.net>
-- spender fixed a KERNEXEC compile error in cpufreq-dt.c
-- constified a few variables
+- fixed REFCOUNT/arm compilation, by N8Fear
+- fixed LAOD_ARGS on amd64 that broke seccomp, reported by many
+- fixed BPF JIT regression under KERNEXEC
 
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/alpha/include/asm/atomic.h linux-3.18.1-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18.1/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -274,7 +272,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/include/asm/atomic.h linux-3.18.1-pax/arch/arm/include/asm/atomic.h
 --- linux-3.18.1/arch/arm/include/asm/atomic.h	2014-12-08 21:49:11.848772190 +0100
-+++ linux-3.18.1-pax/arch/arm/include/asm/atomic.h	2014-12-10 01:52:06.745154142 +0100
++++ linux-3.18.1-pax/arch/arm/include/asm/atomic.h	2014-12-30 01:05:26.559855950 +0100
 @@ -18,17 +18,41 @@
  #include <asm/barrier.h>
  #include <asm/cmpxchg.h>
@@ -317,11 +315,12 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  
  #if __LINUX_ARM_ARCH__ >= 6
  
-@@ -38,7 +62,25 @@
+@@ -38,26 +62,50 @@
   * to ensure that the update happens.
   */
  
 -#define ATOMIC_OP(op, c_op, asm_op)					\
+-static inline void atomic_##op(int i, atomic_t *v)			\
 +#ifdef CONFIG_PAX_REFCOUNT
 +#define __OVERFLOW_POST			\
 +	"	bvc	3f\n"		\
@@ -332,20 +331,24 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
 +"	mov	%0, %1\n"		\
 +	"2:	" REFCOUNT_TRAP_INSN "\n"\
 +	"3:\n"
-+#define __OVERFLOW_EXTABLE	\
-+	"4:\n"
++#define __OVERFLOW_EXTABLE		\
++	"4:\n"				\
 +	_ASM_EXTABLE(2b, 4b)
 +#else
 +#define __OVERFLOW_POST
++#define __OVERFLOW_POST_RETURN
 +#define __OVERFLOW_EXTABLE
 +#endif
 +
 +#define __ATOMIC_OP(op, suffix, c_op, asm_op, post_op, extable)		\
- static inline void atomic_##op(int i, atomic_t *v)			\
++static inline void atomic_##op##suffix(int i, atomic##suffix##_t *v)	\
  {									\
  	unsigned long tmp;						\
-@@ -48,15 +90,20 @@ static inline void atomic_##op(int i, at
- 	__asm__ __volatile__("@ atomic_" #op "\n"			\
+ 	int result;							\
+ 									\
+ 	prefetchw(&v->counter);						\
+-	__asm__ __volatile__("@ atomic_" #op "\n"			\
++	__asm__ __volatile__("@ atomic_" #op #suffix "\n"		\
  "1:	ldrex	%0, [%3]\n"						\
  "	" #asm_op "	%0, %0, %4\n"					\
 +	post_op								\
@@ -360,15 +363,21 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  }									\
  
 -#define ATOMIC_OP_RETURN(op, c_op, asm_op)				\
+-static inline int atomic_##op##_return(int i, atomic_t *v)		\
 +#define ATOMIC_OP(op, c_op, asm_op) __ATOMIC_OP(op, , c_op, asm_op, , )\
 +				    __ATOMIC_OP(op, _unchecked, c_op, asm_op##s, __OVERFLOW_POST, __OVERFLOW_EXTABLE)
 +
 +#define __ATOMIC_OP_RETURN(op, suffix, c_op, asm_op, post_op, extable)	\
- static inline int atomic_##op##_return(int i, atomic_t *v)		\
++static inline int atomic_##op##_return##suffix(int i, atomic##suffix##_t *v)\
  {									\
  	unsigned long tmp;						\
-@@ -68,9 +115,11 @@ static inline int atomic_##op##_return(i
- 	__asm__ __volatile__("@ atomic_" #op "_return\n"		\
+ 	int result;							\
+@@ -65,12 +113,14 @@ static inline int atomic_##op##_return(i
+ 	smp_mb();							\
+ 	prefetchw(&v->counter);						\
+ 									\
+-	__asm__ __volatile__("@ atomic_" #op "_return\n"		\
++	__asm__ __volatile__("@ atomic_" #op "_return" #suffix "\n"	\
  "1:	ldrex	%0, [%3]\n"						\
  "	" #asm_op "	%0, %0, %4\n"					\
 +	post_op								\
@@ -380,7 +389,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)		\
  	: "r" (&v->counter), "Ir" (i)					\
  	: "cc");							\
-@@ -80,6 +129,9 @@ static inline int atomic_##op##_return(i
+@@ -80,6 +130,9 @@ static inline int atomic_##op##_return(i
  	return result;							\
  }
  
@@ -390,7 +399,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  static inline int atomic_cmpxchg(atomic_t *ptr, int old, int new)
  {
  	int oldval;
-@@ -115,12 +167,24 @@ static inline int __atomic_add_unless(at
+@@ -115,12 +168,24 @@ static inline int __atomic_add_unless(at
  	__asm__ __volatile__ ("@ atomic_add_unless\n"
  "1:	ldrex	%0, [%4]\n"
  "	teq	%0, %5\n"
@@ -418,7 +427,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  	: "=&r" (oldval), "=&r" (newval), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (u), "r" (a)
  	: "cc");
-@@ -131,6 +195,28 @@ static inline int __atomic_add_unless(at
+@@ -131,6 +196,28 @@ static inline int __atomic_add_unless(at
  	return oldval;
  }
  
@@ -447,7 +456,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  #else /* ARM_ARCH_6 */
  
  #ifdef CONFIG_SMP
-@@ -175,6 +261,11 @@ static inline int atomic_cmpxchg(atomic_
+@@ -175,6 +262,11 @@ static inline int atomic_cmpxchg(atomic_
  	return ret;
  }
  
@@ -459,7 +468,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  static inline int __atomic_add_unless(atomic_t *v, int a, int u)
  {
  	int c, old;
-@@ -196,16 +287,38 @@ ATOMIC_OPS(sub, -=, sub)
+@@ -196,16 +288,38 @@ ATOMIC_OPS(sub, -=, sub)
  
  #undef ATOMIC_OPS
  #undef ATOMIC_OP_RETURN
@@ -498,7 +507,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  #define atomic_dec_return(v)    (atomic_sub_return(1, v))
  #define atomic_sub_and_test(i, v) (atomic_sub_return(i, v) == 0)
  
-@@ -216,6 +329,14 @@ typedef struct {
+@@ -216,6 +330,14 @@ typedef struct {
  	long long counter;
  } atomic64_t;
  
@@ -513,7 +522,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  #define ATOMIC64_INIT(i) { (i) }
  
  #ifdef CONFIG_ARM_LPAE
-@@ -232,6 +353,19 @@ static inline long long atomic64_read(co
+@@ -232,6 +354,19 @@ static inline long long atomic64_read(co
  	return result;
  }
  
@@ -533,7 +542,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  static inline void atomic64_set(atomic64_t *v, long long i)
  {
  	__asm__ __volatile__("@ atomic64_set\n"
-@@ -240,6 +374,15 @@ static inline void atomic64_set(atomic64
+@@ -240,6 +375,15 @@ static inline void atomic64_set(atomic64
  	: "r" (&v->counter), "r" (i)
  	);
  }
@@ -549,7 +558,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  #else
  static inline long long atomic64_read(const atomic64_t *v)
  {
-@@ -254,6 +397,19 @@ static inline long long atomic64_read(co
+@@ -254,6 +398,19 @@ static inline long long atomic64_read(co
  	return result;
  }
  
@@ -569,7 +578,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  static inline void atomic64_set(atomic64_t *v, long long i)
  {
  	long long tmp;
-@@ -268,29 +424,57 @@ static inline void atomic64_set(atomic64
+@@ -268,29 +425,57 @@ static inline void atomic64_set(atomic64
  	: "r" (&v->counter), "r" (i)
  	: "cc");
  }
@@ -633,7 +642,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  {									\
  	long long result;						\
  	unsigned long tmp;						\
-@@ -298,13 +482,15 @@ static inline long long atomic64_##op##_
+@@ -298,13 +483,15 @@ static inline long long atomic64_##op##_
  	smp_mb();							\
  	prefetchw(&v->counter);						\
  									\
@@ -651,7 +660,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)		\
  	: "r" (&v->counter), "r" (i)					\
  	: "cc");							\
-@@ -314,6 +500,9 @@ static inline long long atomic64_##op##_
+@@ -314,6 +501,9 @@ static inline long long atomic64_##op##_
  	return result;							\
  }
  
@@ -661,7 +670,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  #define ATOMIC64_OPS(op, op1, op2)					\
  	ATOMIC64_OP(op, op1, op2)					\
  	ATOMIC64_OP_RETURN(op, op1, op2)
-@@ -323,7 +512,12 @@ ATOMIC64_OPS(sub, subs, sbc)
+@@ -323,7 +513,12 @@ ATOMIC64_OPS(sub, subs, sbc)
  
  #undef ATOMIC64_OPS
  #undef ATOMIC64_OP_RETURN
@@ -674,7 +683,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  
  static inline long long atomic64_cmpxchg(atomic64_t *ptr, long long old,
  					long long new)
-@@ -351,6 +545,31 @@ static inline long long atomic64_cmpxchg
+@@ -351,6 +546,31 @@ static inline long long atomic64_cmpxchg
  	return oldval;
  }
  
@@ -706,7 +715,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  static inline long long atomic64_xchg(atomic64_t *ptr, long long new)
  {
  	long long result;
-@@ -376,21 +595,35 @@ static inline long long atomic64_xchg(at
+@@ -376,21 +596,35 @@ static inline long long atomic64_xchg(at
  static inline long long atomic64_dec_if_positive(atomic64_t *v)
  {
  	long long result;
@@ -748,7 +757,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  	: "=&r" (result), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter)
  	: "cc");
-@@ -414,13 +647,25 @@ static inline int atomic64_add_unless(at
+@@ -414,13 +648,25 @@ static inline int atomic64_add_unless(at
  "	teq	%0, %5\n"
  "	teqeq	%H0, %H5\n"
  "	moveq	%1, #0\n"
@@ -777,7 +786,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/arm/includ
  	: "=&r" (val), "+r" (ret), "=&r" (tmp), "+Qo" (v->counter)
  	: "r" (&v->counter), "r" (u), "r" (a)
  	: "cc");
-@@ -433,10 +678,13 @@ static inline int atomic64_add_unless(at
+@@ -433,10 +679,13 @@ static inline int atomic64_add_unless(at
  
  #define atomic64_add_negative(a, v)	(atomic64_add_return((a), (v)) < 0)
  #define atomic64_inc(v)			atomic64_add(1LL, (v))
@@ -13557,7 +13566,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/includ
  #ifdef CONFIG_SMP
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/include/asm/calling.h linux-3.18.1-pax/arch/x86/include/asm/calling.h
 --- linux-3.18.1/arch/x86/include/asm/calling.h	2014-12-08 21:49:28.768812213 +0100
-+++ linux-3.18.1-pax/arch/x86/include/asm/calling.h	2014-12-09 02:56:32.044450235 +0100
++++ linux-3.18.1-pax/arch/x86/include/asm/calling.h	2014-12-31 04:31:51.442660213 +0100
 @@ -82,107 +82,117 @@ For 32-bit we have the following convent
  #define RSP		152
  #define SS		160
@@ -13682,7 +13691,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/includ
  	.if \skiprax
  	.else
 -	movq \offset+72(%rsp), %rax
-+	movq RAX(%rsp), %rax
++	movq ORIG_RAX(%rsp), %rax
  	.endif
  	.endm
  
@@ -20210,7 +20219,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel
  
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel/entry_64.S linux-3.18.1-pax/arch/x86/kernel/entry_64.S
 --- linux-3.18.1/arch/x86/kernel/entry_64.S	2014-12-08 21:49:29.228813301 +0100
-+++ linux-3.18.1-pax/arch/x86/kernel/entry_64.S	2014-12-28 18:41:54.572678154 +0100
++++ linux-3.18.1-pax/arch/x86/kernel/entry_64.S	2014-12-31 04:26:53.110676142 +0100
 @@ -59,6 +59,8 @@
  #include <asm/smap.h>
  #include <asm/pgtable_types.h>
@@ -20878,7 +20887,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -494,11 +963,14 @@ sysret_audit:
+@@ -494,12 +963,15 @@ sysret_audit:
  
  	/* Do syscall tracing */
  tracesys:
@@ -20888,12 +20897,14 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel
  	call syscall_trace_enter_phase1
  	test %rax, %rax
  	jnz tracesys_phase2		/* if needed, run the slow path */
+-	LOAD_ARGS 0			/* else restore clobbered regs */
 +
 +	pax_erase_kstack
 +
- 	LOAD_ARGS 0			/* else restore clobbered regs */
++	LOAD_ARGS			/* else restore clobbered regs */
  	jmp system_call_fastpath	/*      and return to the fast path */
  
+ tracesys_phase2:
 @@ -510,12 +982,14 @@ tracesys_phase2:
  	movq %rax,%rdx
  	call syscall_trace_enter_phase2
@@ -21396,7 +21407,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel
  
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel/espfix_64.c linux-3.18.1-pax/arch/x86/kernel/espfix_64.c
 --- linux-3.18.1/arch/x86/kernel/espfix_64.c	2014-08-08 03:06:06.077607906 +0200
-+++ linux-3.18.1-pax/arch/x86/kernel/espfix_64.c	2014-12-28 18:41:54.572678154 +0100
++++ linux-3.18.1-pax/arch/x86/kernel/espfix_64.c	2014-12-28 19:07:48.641998655 +0100
 @@ -70,7 +70,7 @@ static DEFINE_MUTEX(espfix_init_mutex);
  #define ESPFIX_MAX_PAGES  DIV_ROUND_UP(CONFIG_NR_CPUS, ESPFIX_STACKS_PER_PAGE)
  static void *espfix_pages[ESPFIX_MAX_PAGES];
@@ -23785,7 +23796,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel
 +#endif
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/kernel/ptrace.c linux-3.18.1-pax/arch/x86/kernel/ptrace.c
 --- linux-3.18.1/arch/x86/kernel/ptrace.c	2014-12-08 21:49:29.308813490 +0100
-+++ linux-3.18.1-pax/arch/x86/kernel/ptrace.c	2014-12-08 21:52:13.453196692 +0100
++++ linux-3.18.1-pax/arch/x86/kernel/ptrace.c	2014-12-31 04:35:57.138647095 +0100
 @@ -186,10 +186,10 @@ unsigned long kernel_stack_pointer(struc
  	unsigned long sp = (unsigned long)&regs->sp;
  	u32 *prev_esp;
@@ -30722,7 +30733,7 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/mm/ude
 +#endif
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/net/bpf_jit_comp.c linux-3.18.1-pax/arch/x86/net/bpf_jit_comp.c
 --- linux-3.18.1/arch/x86/net/bpf_jit_comp.c	2014-12-08 21:49:29.516813980 +0100
-+++ linux-3.18.1-pax/arch/x86/net/bpf_jit_comp.c	2014-12-09 23:11:07.571266561 +0100
++++ linux-3.18.1-pax/arch/x86/net/bpf_jit_comp.c	2014-12-30 03:42:10.767680993 +0100
 @@ -174,7 +174,9 @@ static inline u8 add_2reg(u8 byte, u32 d
  static void jit_fill_hole(void *area, unsigned int size)
  {
@@ -30751,14 +30762,21 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/net/bp
  		prog->bpf_func = (void *)image;
  		prog->jited = true;
  	}
-@@ -982,7 +985,6 @@ void bpf_jit_free(struct bpf_prog *fp)
- 	if (!fp->jited)
- 		goto free_filter;
+@@ -979,12 +982,8 @@ void bpf_jit_free(struct bpf_prog *fp)
+ 	unsigned long addr = (unsigned long)fp->bpf_func & PAGE_MASK;
+ 	struct bpf_binary_header *header = (void *)addr;
+ 
+-	if (!fp->jited)
+-		goto free_filter;
++	if (fp->jited)
++		bpf_jit_binary_free(header);
  
 -	set_memory_rw(addr, header->pages);
- 	bpf_jit_binary_free(header);
- 
- free_filter:
+-	bpf_jit_binary_free(header);
+-
+-free_filter:
+ 	bpf_prog_unlock_free(fp);
+ }
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/arch/x86/net/bpf_jit.S linux-3.18.1-pax/arch/x86/net/bpf_jit.S
 --- linux-3.18.1/arch/x86/net/bpf_jit.S	2014-08-04 01:36:56.718880066 +0200
 +++ linux-3.18.1-pax/arch/x86/net/bpf_jit.S	2014-12-08 21:52:13.489196776 +0100
@@ -61520,8 +61538,8 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/kernel/auditsc.
  	task->loginuid = loginuid;
 diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/kernel/bpf/core.c linux-3.18.1-pax/kernel/bpf/core.c
 --- linux-3.18.1/kernel/bpf/core.c	2014-12-08 21:50:28.288952183 +0100
-+++ linux-3.18.1-pax/kernel/bpf/core.c	2014-12-09 03:00:45.856886290 +0100
-@@ -143,7 +143,7 @@ bpf_jit_binary_alloc(unsigned int progle
++++ linux-3.18.1-pax/kernel/bpf/core.c	2014-12-30 01:56:34.400001596 +0100
+@@ -143,14 +143,17 @@ bpf_jit_binary_alloc(unsigned int progle
  	 * random section of illegal instructions.
  	 */
  	size = round_up(proglen + sizeof(*hdr) + 128, PAGE_SIZE);
@@ -61530,7 +61548,17 @@ diff -NurpX linux-3.18.1-pax/Documentation/dontdiff linux-3.18.1/kernel/bpf/core
  	if (hdr == NULL)
  		return NULL;
  
-@@ -163,7 +163,7 @@ bpf_jit_binary_alloc(unsigned int progle
+ 	/* Fill space with illegal/arch-dep instructions. */
+ 	bpf_fill_ill_insns(hdr, size);
+ 
++	pax_open_kernel();
+ 	hdr->pages = size / PAGE_SIZE;
++	pax_close_kernel();
++
+ 	hole = min_t(unsigned int, size - (proglen + sizeof(*hdr)),
+ 		     PAGE_SIZE - sizeof(*hdr));
+ 	start = (prandom_u32() % hole) & ~(alignment - 1);
+@@ -163,7 +166,7 @@ bpf_jit_binary_alloc(unsigned int progle
  
  void bpf_jit_binary_free(struct bpf_binary_header *hdr)
  {
