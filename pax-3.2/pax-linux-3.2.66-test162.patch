@@ -1,4 +1,4 @@
-- forward port to 3.2.66
+- fixed kernel stack corruption in iret fault handling under RANDKSTACK/amd64, triggered by Andy Lutomirski's linux-clock-tests suite (sigreturn_32)
 
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/alpha/include/asm/atomic.h linux-3.2.66-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.66/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -20112,7 +20112,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	.quad	0x00cf9b000000ffff	# __KERNEL32_CS
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/traps.c linux-3.2.66-pax/arch/x86/kernel/traps.c
 --- linux-3.2.66/arch/x86/kernel/traps.c	2014-12-14 21:13:44.978054661 +0100
-+++ linux-3.2.66-pax/arch/x86/kernel/traps.c	2014-12-14 22:17:26.242104460 +0100
++++ linux-3.2.66-pax/arch/x86/kernel/traps.c	2015-01-04 01:27:03.749050662 +0100
 @@ -70,12 +70,6 @@ asmlinkage int system_call(void);
  
  /* Do we ignore FPU interrupts ? */
@@ -20228,7 +20228,16 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	die("general protection fault", regs, error_code);
  }
  
-@@ -389,7 +418,7 @@ struct bad_iret_stack *fixup_bad_iret(st
+@@ -383,13 +412,16 @@ struct bad_iret_stack *fixup_bad_iret(st
+ 		container_of(task_pt_regs(current),
+ 			     struct bad_iret_stack, regs);
+ 
++	if ((current->thread.sp0 ^ (unsigned long)s) < THREAD_SIZE)
++		new_stack = s;
++
+ 	/* Copy the IRET target to the new stack. */
+ 	memmove(&new_stack->regs.ip, (void *)s->regs.sp, 5*8);
+ 
  	/* Copy the remainder of the stack from the current stack. */
  	memmove(new_stack, s, offsetof(struct bad_iret_stack, regs.ip));
  
@@ -20237,7 +20246,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	return new_stack;
  }
  #endif
-@@ -460,7 +489,7 @@ dotraplinkage void __kprobes do_debug(st
+@@ -460,7 +492,7 @@ dotraplinkage void __kprobes do_debug(st
  	/* It's safe to allow irq's after DR6 has been saved */
  	preempt_conditional_sti(regs);
  
@@ -20246,7 +20255,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  		handle_vm86_trap((struct kernel_vm86_regs *) regs, error_code,
  					X86_TRAP_DB);
  		preempt_conditional_cli(regs);
-@@ -474,7 +503,7 @@ dotraplinkage void __kprobes do_debug(st
+@@ -474,7 +506,7 @@ dotraplinkage void __kprobes do_debug(st
  	 * We already checked v86 mode above, so we can check for kernel mode
  	 * by just checking the CPL of CS.
  	 */
@@ -20255,7 +20264,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  		tsk->thread.debugreg6 &= ~DR_STEP;
  		set_tsk_thread_flag(tsk, TIF_SINGLESTEP);
  		regs->flags &= ~X86_EFLAGS_TF;
-@@ -504,7 +533,7 @@ void math_error(struct pt_regs *regs, in
+@@ -504,7 +536,7 @@ void math_error(struct pt_regs *regs, in
  		return;
  	conditional_sti(regs);
  
@@ -20264,7 +20273,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	{
  		if (!fixup_exception(regs)) {
  			task->thread.error_code = error_code;
-@@ -617,8 +646,8 @@ asmlinkage void __attribute__((weak)) sm
+@@ -617,8 +649,8 @@ asmlinkage void __attribute__((weak)) sm
  void __math_state_restore(struct task_struct *tsk)
  {
  	/* We need a safe address that is cheap to find and that is already
