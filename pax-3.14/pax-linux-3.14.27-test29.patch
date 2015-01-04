@@ -1,7 +1,5 @@
-- spender finally figured out and fixed the UDEREF/PCID/PARAVIRT problem, reported by Marcin Mirosław (https://bugs.gentoo.org/show_bug.cgi?id=522252)
-- fixed wrong refcount operation in uart_open, by Rogelio M. Serrano Jr <rogelios664@gmail.com>
-- fixed ESPFIX crash under per-cpu PGD configs (KERNEXEC/UDEREF on amd64), reported by Andy Lutomirski <luto@amacapital.net>
-- constified a few variables
+- fixed kernel stack corruption in iret fault handling under RANDKSTACK/amd64, triggered by Andy Lutomirski's linux-clock-tests suite (sigreturn_32)
+- removed superfluous section attr on espfix_pud_page, reported by spender
 
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/alpha/include/asm/atomic.h linux-3.14.27-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.27/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -21596,17 +21594,18 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
   * End of kprobes section
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kernel/espfix_64.c linux-3.14.27-pax/arch/x86/kernel/espfix_64.c
 --- linux-3.14.27/arch/x86/kernel/espfix_64.c	2014-12-28 19:16:54.451988539 +0100
-+++ linux-3.14.27-pax/arch/x86/kernel/espfix_64.c	2014-12-28 19:17:16.036056456 +0100
-@@ -70,7 +70,7 @@ static DEFINE_MUTEX(espfix_init_mutex);
++++ linux-3.14.27-pax/arch/x86/kernel/espfix_64.c	2015-01-04 01:25:54.385035767 +0100
+@@ -70,8 +70,7 @@ static DEFINE_MUTEX(espfix_init_mutex);
  #define ESPFIX_MAX_PAGES  DIV_ROUND_UP(CONFIG_NR_CPUS, ESPFIX_STACKS_PER_PAGE)
  static void *espfix_pages[ESPFIX_MAX_PAGES];
  
 -static __page_aligned_bss pud_t espfix_pud_page[PTRS_PER_PUD]
-+static __page_aligned_rodata pud_t espfix_pud_page[PTRS_PER_PUD]
- 	__aligned(PAGE_SIZE);
+-	__aligned(PAGE_SIZE);
++static __page_aligned_rodata pud_t espfix_pud_page[PTRS_PER_PUD];
  
  static unsigned int page_random, slot_random;
-@@ -122,14 +122,17 @@ static void init_espfix_random(void)
+ 
+@@ -122,14 +121,17 @@ static void init_espfix_random(void)
  void __init init_espfix_bsp(void)
  {
  	pgd_t *pgd_p;
@@ -21628,7 +21627,7 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  	/* Randomize the locations */
  	init_espfix_random();
  
-@@ -197,7 +200,7 @@ void init_espfix_ap(void)
+@@ -197,7 +199,7 @@ void init_espfix_ap(void)
  		set_pte(&pte_p[n*PTE_STRIDE], pte);
  
  	/* Job is done for this CPU and any CPU which shares this page */
@@ -24883,7 +24882,7 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  static DEFINE_MUTEX(irq_vector_mutex);
 diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kernel/traps.c linux-3.14.27-pax/arch/x86/kernel/traps.c
 --- linux-3.14.27/arch/x86/kernel/traps.c	2014-12-07 10:31:11.192681577 +0100
-+++ linux-3.14.27-pax/arch/x86/kernel/traps.c	2014-12-08 00:34:45.439591582 +0100
++++ linux-3.14.27-pax/arch/x86/kernel/traps.c	2015-01-04 01:25:54.389035768 +0100
 @@ -66,7 +66,7 @@
  #include <asm/proto.h>
  
@@ -25014,7 +25013,16 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  	tsk->thread.error_code = error_code;
  	tsk->thread.trap_nr = X86_TRAP_GP;
  
-@@ -410,7 +446,7 @@ struct bad_iret_stack *fixup_bad_iret(st
+@@ -404,13 +440,16 @@ struct bad_iret_stack *fixup_bad_iret(st
+ 		container_of(task_pt_regs(current),
+ 			     struct bad_iret_stack, regs);
+ 
++	if ((current->thread.sp0 ^ (unsigned long)s) < THREAD_SIZE)
++		new_stack = s;
++
+ 	/* Copy the IRET target to the new stack. */
+ 	memmove(&new_stack->regs.ip, (void *)s->regs.sp, 5*8);
+ 
  	/* Copy the remainder of the stack from the current stack. */
  	memmove(new_stack, s, offsetof(struct bad_iret_stack, regs.ip));
  
@@ -25023,7 +25031,7 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  	return new_stack;
  }
  #endif
-@@ -490,7 +526,7 @@ dotraplinkage void __kprobes do_debug(st
+@@ -490,7 +529,7 @@ dotraplinkage void __kprobes do_debug(st
  	/* It's safe to allow irq's after DR6 has been saved */
  	preempt_conditional_sti(regs);
  
@@ -25032,7 +25040,7 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  		handle_vm86_trap((struct kernel_vm86_regs *) regs, error_code,
  					X86_TRAP_DB);
  		preempt_conditional_cli(regs);
-@@ -505,7 +541,7 @@ dotraplinkage void __kprobes do_debug(st
+@@ -505,7 +544,7 @@ dotraplinkage void __kprobes do_debug(st
  	 * We already checked v86 mode above, so we can check for kernel mode
  	 * by just checking the CPL of CS.
  	 */
@@ -25041,7 +25049,7 @@ diff -NurpX linux-3.14.27-pax/Documentation/dontdiff linux-3.14.27/arch/x86/kern
  		tsk->thread.debugreg6 &= ~DR_STEP;
  		set_tsk_thread_flag(tsk, TIF_SINGLESTEP);
  		regs->flags &= ~X86_EFLAGS_TF;
-@@ -537,7 +573,7 @@ void math_error(struct pt_regs *regs, in
+@@ -537,7 +576,7 @@ void math_error(struct pt_regs *regs, in
  		return;
  	conditional_sti(regs);
  
