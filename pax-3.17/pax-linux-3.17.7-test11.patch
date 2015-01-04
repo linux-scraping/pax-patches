@@ -1,7 +1,5 @@
-- spender finally figured out and fixed the UDEREF/PCID/PARAVIRT problem, reported by Marcin Mirosław (https://bugs.gentoo.org/show_bug.cgi?id=522252)
-- fixed wrong refcount operation in uart_open, by Rogelio M. Serrano Jr <rogelios664@gmail.com>
-- fixed ESPFIX crash under per-cpu PGD configs (KERNEXEC/UDEREF on amd64), reported by Andy Lutomirski <luto@amacapital.net>
-- constified a few variables
+- fixed kernel stack corruption in iret fault handling under RANDKSTACK/amd64, triggered by Andy Lutomirski's linux-clock-tests suite (sigreturn_32)
+- removed superfluous section attr on espfix_pud_page, reported by spender
 
 diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/alpha/include/asm/atomic.h linux-3.17.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.17.7/arch/alpha/include/asm/atomic.h	2014-08-04 01:36:37.110881113 +0200
@@ -22186,17 +22184,18 @@ diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel
  
 diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel/espfix_64.c linux-3.17.7-pax/arch/x86/kernel/espfix_64.c
 --- linux-3.17.7/arch/x86/kernel/espfix_64.c	2014-08-08 03:06:06.077607906 +0200
-+++ linux-3.17.7-pax/arch/x86/kernel/espfix_64.c	2014-12-28 19:08:15.450113712 +0100
-@@ -70,7 +70,7 @@ static DEFINE_MUTEX(espfix_init_mutex);
++++ linux-3.17.7-pax/arch/x86/kernel/espfix_64.c	2015-01-04 01:25:01.581024515 +0100
+@@ -70,8 +70,7 @@ static DEFINE_MUTEX(espfix_init_mutex);
  #define ESPFIX_MAX_PAGES  DIV_ROUND_UP(CONFIG_NR_CPUS, ESPFIX_STACKS_PER_PAGE)
  static void *espfix_pages[ESPFIX_MAX_PAGES];
  
 -static __page_aligned_bss pud_t espfix_pud_page[PTRS_PER_PUD]
-+static __page_aligned_rodata pud_t espfix_pud_page[PTRS_PER_PUD]
- 	__aligned(PAGE_SIZE);
+-	__aligned(PAGE_SIZE);
++static __page_aligned_rodata pud_t espfix_pud_page[PTRS_PER_PUD];
  
  static unsigned int page_random, slot_random;
-@@ -122,14 +122,17 @@ static void init_espfix_random(void)
+ 
+@@ -122,14 +121,17 @@ static void init_espfix_random(void)
  void __init init_espfix_bsp(void)
  {
  	pgd_t *pgd_p;
@@ -22218,7 +22217,7 @@ diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel
  	/* Randomize the locations */
  	init_espfix_random();
  
-@@ -197,7 +200,7 @@ void init_espfix_ap(void)
+@@ -197,7 +199,7 @@ void init_espfix_ap(void)
  		set_pte(&pte_p[n*PTE_STRIDE], pte);
  
  	/* Job is done for this CPU and any CPU which shares this page */
@@ -25582,7 +25581,7 @@ diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel
  static DEFINE_MUTEX(irq_vector_mutex);
 diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel/traps.c linux-3.17.7-pax/arch/x86/kernel/traps.c
 --- linux-3.17.7/arch/x86/kernel/traps.c	2014-12-08 20:18:42.429253146 +0100
-+++ linux-3.17.7-pax/arch/x86/kernel/traps.c	2014-12-08 20:37:10.135374275 +0100
++++ linux-3.17.7-pax/arch/x86/kernel/traps.c	2015-01-04 01:25:01.581024515 +0100
 @@ -67,7 +67,7 @@
  #include <asm/proto.h>
  
@@ -25713,7 +25712,16 @@ diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel
  	tsk->thread.error_code = error_code;
  	tsk->thread.trap_nr = X86_TRAP_GP;
  
-@@ -433,7 +469,7 @@ struct bad_iret_stack *fixup_bad_iret(st
+@@ -427,13 +463,16 @@ struct bad_iret_stack *fixup_bad_iret(st
+ 		container_of(task_pt_regs(current),
+ 			     struct bad_iret_stack, regs);
+ 
++	if ((current->thread.sp0 ^ (unsigned long)s) < THREAD_SIZE)
++		new_stack = s;
++
+ 	/* Copy the IRET target to the new stack. */
+ 	memmove(&new_stack->regs.ip, (void *)s->regs.sp, 5*8);
+ 
  	/* Copy the remainder of the stack from the current stack. */
  	memmove(new_stack, s, offsetof(struct bad_iret_stack, regs.ip));
  
@@ -25722,7 +25730,7 @@ diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel
  	return new_stack;
  }
  #endif
-@@ -518,7 +554,7 @@ dotraplinkage void do_debug(struct pt_re
+@@ -518,7 +557,7 @@ dotraplinkage void do_debug(struct pt_re
  	/* It's safe to allow irq's after DR6 has been saved */
  	preempt_conditional_sti(regs);
  
@@ -25731,7 +25739,7 @@ diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel
  		handle_vm86_trap((struct kernel_vm86_regs *) regs, error_code,
  					X86_TRAP_DB);
  		preempt_conditional_cli(regs);
-@@ -533,7 +569,7 @@ dotraplinkage void do_debug(struct pt_re
+@@ -533,7 +572,7 @@ dotraplinkage void do_debug(struct pt_re
  	 * We already checked v86 mode above, so we can check for kernel mode
  	 * by just checking the CPL of CS.
  	 */
@@ -25740,7 +25748,7 @@ diff -NurpX linux-3.17.7-pax/Documentation/dontdiff linux-3.17.7/arch/x86/kernel
  		tsk->thread.debugreg6 &= ~DR_STEP;
  		set_tsk_thread_flag(tsk, TIF_SINGLESTEP);
  		regs->flags &= ~X86_EFLAGS_TF;
-@@ -566,7 +602,7 @@ static void math_error(struct pt_regs *r
+@@ -566,7 +605,7 @@ static void math_error(struct pt_regs *r
  		return;
  	conditional_sti(regs);
  
