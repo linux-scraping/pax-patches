@@ -1,4 +1,12 @@
-- fixed kernel stack corruption in iret fault handling under RANDKSTACK/amd64, triggered by Andy Lutomirski's linux-clock-tests suite (sigreturn_32)
+- added a temporary workaround for a few size overflow false positives when REFCOUNT was disabled until the new plugin is ready, by Mathias Krause <mathias.krause@secunet.com>
+- preliminary fix by Steffen Klassert (http://marc.info/?l=linux-netdev&m=141768340108789) for an upstream bug in the ipv6 tunnel code caught by the size overflow plugin, reported by Alexander Wetzel (https://forums.grsecurity.net/viewtopic.php?f=1&t=4083) and Colton Reeder (https://bugs.gentoo.org/show_bug.cgi?id=529352)
+- fixed a few REFCOUNT accessors on arm/sparc
+- fixed a few section mismatches for CONSTIFY
+- fixed a (probably harmless) integer underflow in ttm_page_pool_free, caught by the size overflow plugin, reported by hunger
+- fixed a REFCOUNT false positive in ftrace
+- fixed ESPFIX crash under per-cpu PGD configs (KERNEXEC/UDEREF on amd64), reported by Andy Lutomirski <luto@amacapital.net>
+- constified a few variables
+- removed superfluous section attr on espfix_pud_page, reported by spender
 
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/alpha/include/asm/atomic.h linux-3.2.66-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.66/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -281,7 +289,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/arm/include/asm/atomic.h linux-3.2.66-pax/arch/arm/include/asm/atomic.h
 --- linux-3.2.66/arch/arm/include/asm/atomic.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.66-pax/arch/arm/include/asm/atomic.h	2012-08-12 10:44:56.717212413 +0200
++++ linux-3.2.66-pax/arch/arm/include/asm/atomic.h	2015-01-05 18:22:47.871593886 +0100
 @@ -15,6 +15,10 @@
  #include <linux/types.h>
  #include <asm/system.h>
@@ -299,7 +307,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/arm/includ
  #define atomic_read(v)	(*(volatile int *)&(v)->counter)
 +static inline int atomic_read_unchecked(const atomic_unchecked_t *v)
 +{
-+	return v->counter;
++	return *(const volatile int *)&v->counter;
 +}
  #define atomic_set(v,i)	(((v)->counter) = (i))
 +static inline void atomic_set_unchecked(atomic_unchecked_t *v, int i)
@@ -4593,19 +4601,19 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/sparc/incl
  #include <asm-generic/atomic64.h>
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/sparc/include/asm/atomic_64.h linux-3.2.66-pax/arch/sparc/include/asm/atomic_64.h
 --- linux-3.2.66/arch/sparc/include/asm/atomic_64.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.66-pax/arch/sparc/include/asm/atomic_64.h	2012-07-04 19:24:47.424062984 +0200
++++ linux-3.2.66-pax/arch/sparc/include/asm/atomic_64.h	2015-01-05 18:23:51.071624566 +0100
 @@ -14,18 +14,40 @@
  #define ATOMIC64_INIT(i)	{ (i) }
  
  #define atomic_read(v)		(*(volatile int *)&(v)->counter)
 +static inline int atomic_read_unchecked(const atomic_unchecked_t *v)
 +{
-+	return v->counter;
++	return *(const volatile int *)&v->counter;
 +}
  #define atomic64_read(v)	(*(volatile long *)&(v)->counter)
 +static inline long atomic64_read_unchecked(const atomic64_unchecked_t *v)
 +{
-+	return v->counter;
++	return *(const volatile long *)&v->counter;
 +}
  
  #define atomic_set(v, i)	(((v)->counter) = i)
@@ -9034,7 +9042,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/includ
  #define atomic64_inc_not_zero(v) atomic64_add_unless((v), 1, 0)
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/include/asm/atomic.h linux-3.2.66-pax/arch/x86/include/asm/atomic.h
 --- linux-3.2.66/arch/x86/include/asm/atomic.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.66-pax/arch/x86/include/asm/atomic.h	2014-09-15 11:29:14.070840038 +0200
++++ linux-3.2.66-pax/arch/x86/include/asm/atomic.h	2015-01-05 18:18:50.099480823 +0100
 @@ -22,7 +22,18 @@
   */
  static inline int atomic_read(const atomic_t *v)
@@ -9285,6 +9293,15 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/includ
  		     : "+m" (v->counter), "=qm" (c)
  		     : "ir" (i) : "memory");
  	return c;
+@@ -170,7 +332,7 @@ static inline int atomic_add_negative(in
+  *
+  * Atomically adds @i to @v and returns @i + @v
+  */
+-static inline int atomic_add_return(int i, atomic_t *v)
++static inline int __intentional_overflow(-1) atomic_add_return(int i, atomic_t *v)
+ {
+ #ifdef CONFIG_M386
+ 	int __i;
 @@ -179,7 +341,7 @@ static inline int atomic_add_return(int
  		goto no_xadd;
  #endif
@@ -9294,7 +9311,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/includ
  
  #ifdef CONFIG_M386
  no_xadd: /* Legacy 386 processor */
-@@ -192,6 +354,34 @@ no_xadd: /* Legacy 386 processor */
+@@ -192,21 +354,58 @@ no_xadd: /* Legacy 386 processor */
  }
  
  /**
@@ -9329,7 +9346,13 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/includ
   * atomic_sub_return - subtract integer and return
   * @v: pointer of type atomic_t
   * @i: integer value to subtract
-@@ -204,9 +394,18 @@ static inline int atomic_sub_return(int
+  *
+  * Atomically subtracts @i from @v and returns @v - @i
+  */
+-static inline int atomic_sub_return(int i, atomic_t *v)
++static inline int __intentional_overflow(-1) atomic_sub_return(int i, atomic_t *v)
+ {
+ 	return atomic_add_return(-i, v);
  }
  
  #define atomic_inc_return(v)  (atomic_add_return(1, v))
@@ -15734,7 +15757,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  /*
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/entry_64.S linux-3.2.66-pax/arch/x86/kernel/entry_64.S
 --- linux-3.2.66/arch/x86/kernel/entry_64.S	2014-12-14 21:13:44.978054661 +0100
-+++ linux-3.2.66-pax/arch/x86/kernel/entry_64.S	2014-12-14 21:42:21.101975197 +0100
++++ linux-3.2.66-pax/arch/x86/kernel/entry_64.S	2015-01-05 18:49:03.800938480 +0100
 @@ -56,6 +56,8 @@
  #include <asm/ftrace.h>
  #include <asm/percpu.h>
@@ -16435,6 +16458,27 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
+@@ -890,15 +1227,15 @@ native_irq_return_ldt:
+ 	SWAPGS
+ 	movq PER_CPU_VAR(espfix_waddr),%rdi
+ 	movq %rax,(0*8)(%rdi)	/* RAX */
+-	movq (2*8)(%rsp),%rax	/* RIP */
++	movq (2*8 + RIP-RIP)(%rsp),%rax	/* RIP */
+ 	movq %rax,(1*8)(%rdi)
+-	movq (3*8)(%rsp),%rax	/* CS */
++	movq (2*8 + CS-RIP)(%rsp),%rax	/* CS */
+ 	movq %rax,(2*8)(%rdi)
+-	movq (4*8)(%rsp),%rax	/* RFLAGS */
++	movq (2*8 + EFLAGS-RIP)(%rsp),%rax	/* RFLAGS */
+ 	movq %rax,(3*8)(%rdi)
+-	movq (6*8)(%rsp),%rax	/* SS */
++	movq (2*8 + SS-RIP)(%rsp),%rax	/* SS */
+ 	movq %rax,(5*8)(%rdi)
+-	movq (5*8)(%rsp),%rax	/* RSP */
++	movq (2*8 + RSP-RIP)(%rsp),%rax	/* RSP */
+ 	movq %rax,(4*8)(%rdi)
+ 	andl $0xffff0000,%eax
+ 	popq_cfi %rdi
 @@ -954,7 +1291,7 @@ ENTRY(retint_kernel)
  	jmp exit_intr
  #endif
@@ -16727,8 +16771,39 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
   * End of kprobes section
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/espfix_64.c linux-3.2.66-pax/arch/x86/kernel/espfix_64.c
 --- linux-3.2.66/arch/x86/kernel/espfix_64.c	2014-09-14 14:10:58.070117237 +0200
-+++ linux-3.2.66-pax/arch/x86/kernel/espfix_64.c	2014-09-14 16:45:17.473523147 +0200
-@@ -197,7 +197,7 @@ void init_espfix_ap(void)
++++ linux-3.2.66-pax/arch/x86/kernel/espfix_64.c	2015-01-05 18:58:55.057414567 +0100
+@@ -70,8 +70,7 @@ static DEFINE_MUTEX(espfix_init_mutex);
+ #define ESPFIX_MAX_PAGES  DIV_ROUND_UP(CONFIG_NR_CPUS, ESPFIX_STACKS_PER_PAGE)
+ static void *espfix_pages[ESPFIX_MAX_PAGES];
+ 
+-static __page_aligned_bss pud_t espfix_pud_page[PTRS_PER_PUD]
+-	__aligned(PAGE_SIZE);
++static __page_aligned_rodata pud_t espfix_pud_page[PTRS_PER_PUD];
+ 
+ static unsigned int page_random, slot_random;
+ 
+@@ -122,14 +121,16 @@ static void init_espfix_random(void)
+ void __init init_espfix_bsp(void)
+ {
+ 	pgd_t *pgd_p;
+-	pteval_t ptemask;
+-
+-	ptemask = __supported_pte_mask;
++	unsigned long index = pgd_index(ESPFIX_BASE_ADDR);
+ 
+ 	/* Install the espfix pud into the kernel page directory */
+-	pgd_p = &init_level4_pgt[pgd_index(ESPFIX_BASE_ADDR)];
++	pgd_p = &init_level4_pgt[index];
+ 	pgd_populate(&init_mm, pgd_p, (pud_t *)espfix_pud_page);
+ 
++#ifdef CONFIG_PAX_PER_CPU_PGD
++	clone_pgd_range(get_cpu_pgd(0) + index, swapper_pg_dir + index, 1);
++#endif
++
+ 	/* Randomize the locations */
+ 	init_espfix_random();
+ 
+@@ -197,7 +198,7 @@ void init_espfix_ap(void)
  		set_pte(&pte_p[n*PTE_STRIDE], pte);
  
  	/* Job is done for this CPU and any CPU which shares this page */
@@ -20703,7 +20778,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  		 * Encountered an error while doing the restore from the
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kvm/emulate.c linux-3.2.66-pax/arch/x86/kvm/emulate.c
 --- linux-3.2.66/arch/x86/kvm/emulate.c	2014-11-05 23:20:29.981389706 +0100
-+++ linux-3.2.66-pax/arch/x86/kvm/emulate.c	2014-11-05 23:20:50.429398784 +0100
++++ linux-3.2.66-pax/arch/x86/kvm/emulate.c	2015-01-05 18:49:03.824938502 +0100
 @@ -249,6 +249,7 @@ struct gprefix {
  
  #define ____emulate_2op(ctxt, _op, _x, _y, _suffix, _dsttype)	\
@@ -20729,6 +20804,15 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kvm/em
  		switch ((ctxt)->dst.bytes) {				     \
  		case 1:							     \
  			____emulate_2op(ctxt,_op,_bx,_by,"b",u8);	     \
+@@ -3003,7 +3001,7 @@ static int check_cr_write(struct x86_emu
+ 	int cr = ctxt->modrm_reg;
+ 	u64 efer = 0;
+ 
+-	static u64 cr_reserved_bits[] = {
++	static const u64 cr_reserved_bits[] = {
+ 		0xffffffff00000000ULL,
+ 		0, 0, 0, /* CR3 checked later */
+ 		CR4_RESERVED_BITS,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kvm/lapic.c linux-3.2.66-pax/arch/x86/kvm/lapic.c
 --- linux-3.2.66/arch/x86/kvm/lapic.c	2014-04-02 03:15:40.815672595 +0200
 +++ linux-3.2.66-pax/arch/x86/kvm/lapic.c	2014-04-02 03:15:49.155672150 +0200
@@ -33021,6 +33105,71 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/gpu/drm
  	if (unlikely(ret != 0)) {
  		kobject_put(&zone->kobj);
  		return ret;
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/gpu/drm/ttm/ttm_page_alloc.c linux-3.2.66-pax/drivers/gpu/drm/ttm/ttm_page_alloc.c
+--- linux-3.2.66/drivers/gpu/drm/ttm/ttm_page_alloc.c	2014-09-14 14:10:58.542117594 +0200
++++ linux-3.2.66-pax/drivers/gpu/drm/ttm/ttm_page_alloc.c	2015-01-05 18:41:27.888452157 +0100
+@@ -51,7 +51,7 @@
+ 
+ #define NUM_PAGES_TO_ALLOC		(PAGE_SIZE/sizeof(struct page *))
+ #define SMALL_ALLOCATION		16
+-#define FREE_ALL_PAGES			(~0U)
++#define FREE_ALL_PAGES			(~0UL)
+ /* times are in msecs */
+ #define PAGE_FREE_INTERVAL		1000
+ 
+@@ -301,13 +301,12 @@ static void ttm_pool_update_free_locked(
+  * @pool: to free the pages from
+  * @free_all: If set to true will free all pages in pool
+  **/
+-static int ttm_page_pool_free(struct ttm_page_pool *pool, unsigned nr_free)
++static unsigned long ttm_page_pool_free(struct ttm_page_pool *pool, unsigned long nr_free)
+ {
+ 	unsigned long irq_flags;
+ 	struct page *p;
+ 	struct page **pages_to_free;
+-	unsigned freed_pages = 0,
+-		 npages_to_free = nr_free;
++	unsigned long freed_pages = 0, npages_to_free = nr_free;
+ 
+ 	if (NUM_PAGES_TO_ALLOC < nr_free)
+ 		npages_to_free = NUM_PAGES_TO_ALLOC;
+@@ -369,7 +368,8 @@ restart:
+ 		__list_del(&p->lru, &pool->list);
+ 
+ 		ttm_pool_update_free_locked(pool, freed_pages);
+-		nr_free -= freed_pages;
++		if (likely(nr_free != FREE_ALL_PAGES))
++			nr_free -= freed_pages;
+ 	}
+ 
+ 	spin_unlock_irqrestore(&pool->lock, irq_flags);
+@@ -403,7 +403,7 @@ static int ttm_pool_mm_shrink(struct shr
+ 	unsigned i;
+ 	unsigned pool_offset;
+ 	struct ttm_page_pool *pool;
+-	int shrink_pages = sc->nr_to_scan;
++	unsigned long shrink_pages = sc->nr_to_scan;
+ 
+ 	if (shrink_pages == 0)
+ 		goto out;
+@@ -412,7 +412,7 @@ static int ttm_pool_mm_shrink(struct shr
+ 	pool_offset = ++start_pool % NUM_POOLS;
+ 	/* select start pool in round robin fashion */
+ 	for (i = 0; i < NUM_POOLS; ++i) {
+-		unsigned nr_free = shrink_pages;
++		unsigned long nr_free = shrink_pages;
+ 		if (shrink_pages == 0)
+ 			break;
+ 		pool = &_manager->pools[(i + pool_offset)%NUM_POOLS];
+@@ -744,7 +744,7 @@ int ttm_get_pages(struct list_head *page
+ }
+ 
+ /* Put all pages in pages list to correct pool to wait for reuse */
+-void ttm_put_pages(struct list_head *pages, unsigned page_count, int flags,
++void ttm_put_pages(struct list_head *pages, unsigned long page_count, int flags,
+ 		   enum ttm_caching_state cstate, dma_addr_t *dma_address)
+ {
+ 	unsigned long irq_flags;
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/gpu/drm/via/via_drv.h linux-3.2.66-pax/drivers/gpu/drm/via/via_drv.h
 --- linux-3.2.66/drivers/gpu/drm/via/via_drv.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.66-pax/drivers/gpu/drm/via/via_drv.h	2012-07-04 19:24:48.404063007 +0200
@@ -37054,6 +37203,42 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/bon
  	.kind		= "bond",
  	.priv_size	= sizeof(struct bonding),
  	.setup		= bond_setup,
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/can/dev.c linux-3.2.66-pax/drivers/net/can/dev.c
+--- linux-3.2.66/drivers/net/can/dev.c	2014-12-14 21:13:45.094054878 +0100
++++ linux-3.2.66-pax/drivers/net/can/dev.c	2015-01-05 18:25:07.903662127 +0100
+@@ -721,7 +721,7 @@ static int can_newlink(struct net *src_n
+ 	return -EOPNOTSUPP;
+ }
+ 
+-static struct rtnl_link_ops can_link_ops __read_mostly = {
++static struct rtnl_link_ops can_link_ops = {
+ 	.kind		= "can",
+ 	.maxtype	= IFLA_CAN_MAX,
+ 	.policy		= can_policy,
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/can/vcan.c linux-3.2.66-pax/drivers/net/can/vcan.c
+--- linux-3.2.66/drivers/net/can/vcan.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.66-pax/drivers/net/can/vcan.c	2015-01-05 18:25:29.899672937 +0100
+@@ -154,7 +154,7 @@ static void vcan_setup(struct net_device
+ 	dev->destructor		= free_netdev;
+ }
+ 
+-static struct rtnl_link_ops vcan_link_ops __read_mostly = {
++static struct rtnl_link_ops vcan_link_ops = {
+ 	.kind	= "vcan",
+ 	.setup	= vcan_setup,
+ };
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/dummy.c linux-3.2.66-pax/drivers/net/dummy.c
+--- linux-3.2.66/drivers/net/dummy.c	2013-08-03 22:17:28.974408868 +0200
++++ linux-3.2.66-pax/drivers/net/dummy.c	2015-01-05 18:25:41.719678739 +0100
+@@ -150,7 +150,7 @@ static int dummy_validate(struct nlattr
+ 	return 0;
+ }
+ 
+-static struct rtnl_link_ops dummy_link_ops __read_mostly = {
++static struct rtnl_link_ops dummy_link_ops = {
+ 	.kind		= "dummy",
+ 	.setup		= dummy_setup,
+ 	.validate	= dummy_validate,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/ethernet/8390/ax88796.c linux-3.2.66-pax/drivers/net/ethernet/8390/ax88796.c
 --- linux-3.2.66/drivers/net/ethernet/8390/ax88796.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.66-pax/drivers/net/ethernet/8390/ax88796.c	2013-01-16 21:27:01.698837016 +0100
@@ -37507,6 +37692,18 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/eth
  }
  
  /* To mask all all interrupts.*/
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/ifb.c linux-3.2.66-pax/drivers/net/ifb.c
+--- linux-3.2.66/drivers/net/ifb.c	2013-09-10 17:24:55.417739122 +0200
++++ linux-3.2.66-pax/drivers/net/ifb.c	2015-01-05 18:25:55.903685735 +0100
+@@ -251,7 +251,7 @@ static int ifb_validate(struct nlattr *t
+ 	return 0;
+ }
+ 
+-static struct rtnl_link_ops ifb_link_ops __read_mostly = {
++static struct rtnl_link_ops ifb_link_ops = {
+ 	.kind		= "ifb",
+ 	.priv_size	= sizeof(struct ifb_private),
+ 	.setup		= ifb_setup,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/loopback.c linux-3.2.66-pax/drivers/net/loopback.c
 --- linux-3.2.66/drivers/net/loopback.c	2013-02-20 12:30:42.052171943 +0100
 +++ linux-3.2.66-pax/drivers/net/loopback.c	2013-03-29 04:02:30.659343545 +0100
@@ -37555,7 +37752,16 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/mac
  
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/macvtap.c linux-3.2.66-pax/drivers/net/macvtap.c
 --- linux-3.2.66/drivers/net/macvtap.c	2015-01-01 15:15:24.272069618 +0100
-+++ linux-3.2.66-pax/drivers/net/macvtap.c	2015-01-01 15:15:29.264069750 +0100
++++ linux-3.2.66-pax/drivers/net/macvtap.c	2015-01-05 18:24:05.075631389 +0100
+@@ -351,7 +351,7 @@ static void macvtap_setup(struct net_dev
+ 	dev->tx_queue_len = TUN_READQ_SIZE;
+ }
+ 
+-static struct rtnl_link_ops macvtap_link_ops __read_mostly = {
++static struct rtnl_link_ops macvtap_link_ops = {
+ 	.kind		= "macvtap",
+ 	.setup		= macvtap_setup,
+ 	.newlink	= macvtap_newlink,
 @@ -927,7 +927,7 @@ static long macvtap_ioctl(struct file *f
  			return -ENOLINK;
  
@@ -37682,7 +37888,16 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/tok
  	if (err)
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/drivers/net/tun.c linux-3.2.66-pax/drivers/net/tun.c
 --- linux-3.2.66/drivers/net/tun.c	2015-01-01 15:15:24.280069618 +0100
-+++ linux-3.2.66-pax/drivers/net/tun.c	2015-01-01 15:15:29.280069750 +0100
++++ linux-3.2.66-pax/drivers/net/tun.c	2015-01-05 18:26:30.523702852 +0100
+@@ -931,7 +931,7 @@ static int tun_validate(struct nlattr *t
+ 	return -EINVAL;
+ }
+ 
+-static struct rtnl_link_ops tun_link_ops __read_mostly = {
++static struct rtnl_link_ops tun_link_ops = {
+ 	.kind		= DRV_NAME,
+ 	.priv_size	= sizeof(struct tun_struct),
+ 	.setup		= tun_setup,
 @@ -1241,7 +1241,7 @@ static int set_offload(struct tun_struct
  }
  
@@ -48557,7 +48772,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/asm-gen
  
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/asm-generic/atomic-long.h linux-3.2.66-pax/include/asm-generic/atomic-long.h
 --- linux-3.2.66/include/asm-generic/atomic-long.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.66-pax/include/asm-generic/atomic-long.h	2013-12-19 02:23:07.448764319 +0100
++++ linux-3.2.66-pax/include/asm-generic/atomic-long.h	2015-01-05 18:19:16.139492988 +0100
 @@ -22,6 +22,12 @@
  
  typedef atomic64_t atomic_long_t;
@@ -48816,7 +49031,15 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/asm-gen
  static inline int atomic_long_sub_and_test(long i, atomic_long_t *l)
  {
  	atomic_t *v = (atomic_t *)l;
-@@ -218,6 +356,16 @@ static inline long atomic_long_add_retur
+@@ -211,13 +349,23 @@ static inline int atomic_long_add_negati
+ 	return atomic_add_negative(i, v);
+ }
+ 
+-static inline long atomic_long_add_return(long i, atomic_long_t *l)
++static inline long __intentional_overflow(-1) atomic_long_add_return(long i, atomic_long_t *l)
+ {
+ 	atomic_t *v = (atomic_t *)l;
+ 
  	return (long)atomic_add_return(i, v);
  }
  
@@ -49275,6 +49498,18 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/drm/ttm
  
  /**
   * struct ttm_mem_global - Global memory accounting structure.
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/drm/ttm/ttm_page_alloc.h linux-3.2.66-pax/include/drm/ttm/ttm_page_alloc.h
+--- linux-3.2.66/include/drm/ttm/ttm_page_alloc.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.66-pax/include/drm/ttm/ttm_page_alloc.h	2015-01-05 19:07:59.561797364 +0100
+@@ -54,7 +54,7 @@ int ttm_get_pages(struct list_head *page
+  * @dma_address: The DMA (bus) address of pages (if TTM_PAGE_FLAG_DMA32 set).
+  */
+ void ttm_put_pages(struct list_head *pages,
+-		   unsigned page_count,
++		   unsigned long page_count,
+ 		   int flags,
+ 		   enum ttm_caching_state cstate,
+ 		   dma_addr_t *dma_address);
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/linux/a.out.h linux-3.2.66-pax/include/linux/a.out.h
 --- linux-3.2.66/include/linux/a.out.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.66-pax/include/linux/a.out.h	2012-07-04 19:24:48.748063008 +0200
@@ -50568,6 +50803,17 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/linux/l
  
  struct ata_port_info {
  	unsigned long		flags;
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/linux/linkage.h linux-3.2.66-pax/include/linux/linkage.h
+--- linux-3.2.66/include/linux/linkage.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.66-pax/include/linux/linkage.h	2015-01-05 18:58:02.377375678 +0100
+@@ -15,6 +15,7 @@
+ #endif
+ 
+ #define __page_aligned_data	__section(.data..page_aligned) __aligned(PAGE_SIZE)
++#define __page_aligned_rodata	__read_only __aligned(PAGE_SIZE)
+ #define __page_aligned_bss	__section(.bss..page_aligned) __aligned(PAGE_SIZE)
+ 
+ /*
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/linux/list.h linux-3.2.66-pax/include/linux/list.h
 --- linux-3.2.66/include/linux/list.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.66-pax/include/linux/list.h	2013-03-28 01:35:23.164427955 +0100
@@ -51671,7 +51917,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/linux/r
  static inline void anon_vma_merge(struct vm_area_struct *vma,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/linux/sched.h linux-3.2.66-pax/include/linux/sched.h
 --- linux-3.2.66/include/linux/sched.h	2014-04-30 18:53:46.112223429 +0200
-+++ linux-3.2.66-pax/include/linux/sched.h	2014-04-30 18:53:50.644223419 +0200
++++ linux-3.2.66-pax/include/linux/sched.h	2015-01-05 18:30:02.991808587 +0100
 @@ -101,6 +101,7 @@ struct bio_list;
  struct fs_struct;
  struct perf_event_context;
@@ -51734,6 +51980,15 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/include/linux/s
  /* filesystem information */
  	struct fs_struct *fs;
  /* open file information */
+@@ -1560,7 +1568,7 @@ struct task_struct {
+ 	 * Number of functions that haven't been traced
+ 	 * because of depth overrun.
+ 	 */
+-	atomic_t trace_overrun;
++	atomic_unchecked_t trace_overrun;
+ 	/* Pause for the tracing */
+ 	atomic_t tracing_graph_pause;
+ #endif
 @@ -1583,6 +1591,53 @@ struct task_struct {
  #endif
  };
@@ -57500,7 +57755,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/bl
  	bt->dropped_file = debugfs_create_file("dropped", 0444, dir, bt,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/ftrace.c linux-3.2.66-pax/kernel/trace/ftrace.c
 --- linux-3.2.66/kernel/trace/ftrace.c	2014-06-10 10:59:38.802436242 +0200
-+++ linux-3.2.66-pax/kernel/trace/ftrace.c	2014-06-10 10:59:44.186435955 +0200
++++ linux-3.2.66-pax/kernel/trace/ftrace.c	2015-01-05 18:30:26.499820373 +0100
 @@ -1610,12 +1610,17 @@ ftrace_code_disable(struct module *mod,
  	if (unlikely(ftrace_disabled))
  		return 0;
@@ -57539,6 +57794,15 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/ft
  int ftrace_graph_entry_stub(struct ftrace_graph_ent *trace)
  {
  	return 0;
+@@ -4088,7 +4091,7 @@ static int alloc_retstack_tasklist(struc
+ 
+ 		if (t->ret_stack == NULL) {
+ 			atomic_set(&t->tracing_graph_pause, 0);
+-			atomic_set(&t->trace_overrun, 0);
++			atomic_set_unchecked(&t->trace_overrun, 0);
+ 			t->curr_ret_stack = -1;
+ 			/* Make sure the tasks see the -1 first: */
+ 			smp_wmb();
 @@ -4191,6 +4194,10 @@ ftrace_suspend_notifier_call(struct noti
  	return NOTIFY_DONE;
  }
@@ -57558,6 +57822,15 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/ft
  	register_pm_notifier(&ftrace_suspend_notifier);
  
  	ftrace_graph_active++;
+@@ -4288,7 +4294,7 @@ static void
+ graph_init_task(struct task_struct *t, struct ftrace_ret_stack *ret_stack)
+ {
+ 	atomic_set(&t->tracing_graph_pause, 0);
+-	atomic_set(&t->trace_overrun, 0);
++	atomic_set_unchecked(&t->trace_overrun, 0);
+ 	t->ftrace_timestamp = 0;
+ 	/* make curr_ret_stack visible before we add the ret_stack */
+ 	smp_wmb();
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/ring_buffer.c linux-3.2.66-pax/kernel/trace/ring_buffer.c
 --- linux-3.2.66/kernel/trace/ring_buffer.c	2014-11-05 23:20:30.349389870 +0100
 +++ linux-3.2.66-pax/kernel/trace/ring_buffer.c	2014-11-05 23:20:50.549398837 +0100
@@ -57931,6 +58204,27 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/tr
 +				       &mod->trace_id, &mod->trace_enable,
 +				       &mod->trace_filter, &mod->trace_format);
  	}
+ }
+ 
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/trace_functions_graph.c linux-3.2.66-pax/kernel/trace/trace_functions_graph.c
+--- linux-3.2.66/kernel/trace/trace_functions_graph.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.66-pax/kernel/trace/trace_functions_graph.c	2015-01-05 18:29:52.739803454 +0100
+@@ -108,7 +108,7 @@ ftrace_push_return_trace(unsigned long r
+ 
+ 	/* The return trace stack is full */
+ 	if (current->curr_ret_stack == FTRACE_RETFUNC_DEPTH - 1) {
+-		atomic_inc(&current->trace_overrun);
++		atomic_inc_unchecked(&current->trace_overrun);
+ 		return -EBUSY;
+ 	}
+ 
+@@ -171,7 +171,7 @@ ftrace_pop_return_trace(struct ftrace_gr
+ 	*ret = current->ret_stack[index].ret;
+ 	trace->func = current->ret_stack[index].func;
+ 	trace->calltime = current->ret_stack[index].calltime;
+-	trace->overrun = atomic_read(&current->trace_overrun);
++	trace->overrun = atomic_read_unchecked(&current->trace_overrun);
+ 	trace->depth = index;
  }
  
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/kernel/trace/trace.h linux-3.2.66-pax/kernel/trace/trace.h
@@ -63594,6 +63888,18 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/8021q/vlan.
  			struct vlan_net *vn;
  
  			vn = net_generic(net, vlan_net_id);
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/8021q/vlan_netlink.c linux-3.2.66-pax/net/8021q/vlan_netlink.c
+--- linux-3.2.66/net/8021q/vlan_netlink.c	2013-11-29 01:58:28.818491623 +0100
++++ linux-3.2.66-pax/net/8021q/vlan_netlink.c	2015-01-05 18:26:58.859716856 +0100
+@@ -214,7 +214,7 @@ nla_put_failure:
+ 	return -EMSGSIZE;
+ }
+ 
+-struct rtnl_link_ops vlan_link_ops __read_mostly = {
++struct rtnl_link_ops vlan_link_ops = {
+ 	.kind		= "vlan",
+ 	.maxtype	= IFLA_VLAN_MAX,
+ 	.policy		= vlan_policy,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/9p/client.c linux-3.2.66-pax/net/9p/client.c
 --- linux-3.2.66/net/9p/client.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.66-pax/net/9p/client.c	2014-01-28 00:06:49.269891129 +0100
@@ -64001,6 +64307,18 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/bridge/br_m
  		return 0;
  
  	/* Okay, we found ICMPv6 header */
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/bridge/br_netlink.c linux-3.2.66-pax/net/bridge/br_netlink.c
+--- linux-3.2.66/net/bridge/br_netlink.c	2014-06-10 10:59:38.802436242 +0200
++++ linux-3.2.66-pax/net/bridge/br_netlink.c	2015-01-05 18:27:43.235738883 +0100
+@@ -225,7 +225,7 @@ static int br_dev_newlink(struct net *sr
+ 	return register_netdevice(dev);
+ }
+ 
+-struct rtnl_link_ops br_link_ops __read_mostly = {
++struct rtnl_link_ops br_link_ops = {
+ 	.kind		= "bridge",
+ 	.priv_size	= sizeof(struct net_bridge),
+ 	.setup		= br_dev_setup,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/bridge/netfilter/ebtables.c linux-3.2.66-pax/net/bridge/netfilter/ebtables.c
 --- linux-3.2.66/net/bridge/netfilter/ebtables.c	2014-06-10 10:59:38.806436242 +0200
 +++ linux-3.2.66-pax/net/bridge/netfilter/ebtables.c	2014-06-10 10:59:44.186435955 +0200
@@ -64205,6 +64523,18 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/caif/cfctrl
  					 p->sequence_no);
  			list_del(&p->list);
  			goto out;
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/caif/chnl_net.c linux-3.2.66-pax/net/caif/chnl_net.c
+--- linux-3.2.66/net/caif/chnl_net.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.66-pax/net/caif/chnl_net.c	2015-01-05 18:27:21.839728255 +0100
+@@ -508,7 +508,7 @@ static const struct nla_policy ipcaif_po
+ };
+ 
+ 
+-static struct rtnl_link_ops ipcaif_link_ops __read_mostly = {
++static struct rtnl_link_ops ipcaif_link_ops = {
+ 	.kind		= "caif",
+ 	.priv_size	= sizeof(struct chnl_net),
+ 	.setup		= ipcaif_net_setup,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/can/af_can.c linux-3.2.66-pax/net/can/af_can.c
 --- linux-3.2.66/net/can/af_can.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.66-pax/net/can/af_can.c	2013-01-16 21:29:53.750833040 +0100
@@ -64935,7 +65265,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/decnet/sysc
  	*lenp = len;
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/ieee802154/6lowpan.c linux-3.2.66-pax/net/ieee802154/6lowpan.c
 --- linux-3.2.66/net/ieee802154/6lowpan.c	2014-01-03 15:48:45.156070556 +0100
-+++ linux-3.2.66-pax/net/ieee802154/6lowpan.c	2014-01-03 15:48:49.628070317 +0100
++++ linux-3.2.66-pax/net/ieee802154/6lowpan.c	2015-01-05 18:28:35.199764725 +0100
 @@ -329,7 +329,7 @@ static int lowpan_header_create(struct s
  			hc06_ptr += 3;
  		} else {
@@ -64945,6 +65275,15 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/ieee802154/
  			/* replace the top byte with new ECN | DSCP format */
  			*hc06_ptr = tmp;
  			hc06_ptr += 4;
+@@ -837,7 +837,7 @@ static void lowpan_dellink(struct net_de
+ 	dev_put(real_dev);
+ }
+ 
+-static struct rtnl_link_ops lowpan_link_ops __read_mostly = {
++static struct rtnl_link_ops lowpan_link_ops = {
+ 	.kind		= "lowpan",
+ 	.priv_size	= sizeof(struct lowpan_dev_info),
+ 	.setup		= lowpan_setup,
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/ipv4/af_inet.c linux-3.2.66-pax/net/ipv4/af_inet.c
 --- linux-3.2.66/net/ipv4/af_inet.c	2013-03-29 02:18:30.207676737 +0100
 +++ linux-3.2.66-pax/net/ipv4/af_inet.c	2013-03-29 04:00:53.151348751 +0100
@@ -66080,7 +66419,17 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/ipv6/udp.c 
  int udp6_seq_show(struct seq_file *seq, void *v)
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/net/ipv6/xfrm6_policy.c linux-3.2.66-pax/net/ipv6/xfrm6_policy.c
 --- linux-3.2.66/net/ipv6/xfrm6_policy.c	2013-06-09 18:04:43.501591744 +0200
-+++ linux-3.2.66-pax/net/ipv6/xfrm6_policy.c	2013-09-17 02:25:38.233620389 +0200
++++ linux-3.2.66-pax/net/ipv6/xfrm6_policy.c	2015-01-05 18:19:52.747510193 +0100
+@@ -125,8 +125,8 @@ _decode_session6(struct sk_buff *skb, st
+ {
+ 	struct flowi6 *fl6 = &fl->u.ip6;
+ 	int onlyproto = 0;
+-	u16 offset = skb_network_header_len(skb);
+ 	const struct ipv6hdr *hdr = ipv6_hdr(skb);
++	u16 offset = sizeof(*hdr);
+ 	struct ipv6_opt_hdr *exthdr;
+ 	const unsigned char *nh = skb_network_header(skb);
+ 	u8 nexthdr = nh[IP6CB(skb)->nhoff];
 @@ -202,11 +202,11 @@ _decode_session6(struct sk_buff *skb, st
  	}
  }
