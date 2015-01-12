@@ -1,4 +1,5 @@
-- forward port to 3.18.2
+- fixed some more REFCOUNT/arm fallout, reported by Michael Tremer <michael.tremer@ipfire.org>
+- fixed some CONSTIFY fallout triggered on arm
 
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/alpha/include/asm/atomic.h linux-3.18.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18.2/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -270,7 +271,7 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/alpha/mm/f
  		if (!(vma->vm_flags & (VM_READ | VM_WRITE)))
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/arm/include/asm/atomic.h linux-3.18.2-pax/arch/arm/include/asm/atomic.h
 --- linux-3.18.2/arch/arm/include/asm/atomic.h	2014-12-08 21:49:11.848772190 +0100
-+++ linux-3.18.2-pax/arch/arm/include/asm/atomic.h	2015-01-03 01:23:56.737006751 +0100
++++ linux-3.18.2-pax/arch/arm/include/asm/atomic.h	2015-01-13 00:10:16.275878926 +0100
 @@ -18,17 +18,41 @@
  #include <asm/barrier.h>
  #include <asm/cmpxchg.h>
@@ -669,7 +670,7 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/arm/includ
 +#define ATOMIC64_OP(op, op1, op2) __ATOMIC64_OP(op, , op1, op2, , ) \
 +				  __ATOMIC64_OP(op, _unchecked, op1, op2##s, __OVERFLOW_POST, __OVERFLOW_EXTABLE)
 +
-+#define __ATOMIC64_OP_RETURN(op, op1, op2, post_op, extable)		\
++#define __ATOMIC64_OP_RETURN(op, suffix, op1, op2, post_op, extable)	\
 +static inline long long atomic64_##op##_return##suffix(long long i, atomic64##suffix##_t *v) \
  {									\
  	long long result;						\
@@ -34450,7 +34451,7 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/base/no
  			       struct device_attribute *attr, char *buf)
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/base/power/domain.c linux-3.18.2-pax/drivers/base/power/domain.c
 --- linux-3.18.2/drivers/base/power/domain.c	2014-12-08 21:49:30.272815767 +0100
-+++ linux-3.18.2-pax/drivers/base/power/domain.c	2014-12-09 00:32:39.707982855 +0100
++++ linux-3.18.2-pax/drivers/base/power/domain.c	2015-01-13 00:19:42.647906161 +0100
 @@ -1725,7 +1725,7 @@ int pm_genpd_attach_cpuidle(struct gener
  {
  	struct cpuidle_driver *cpuidle_drv;
@@ -34469,6 +34470,17 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/base/po
  	int ret = 0;
  
  	if (IS_ERR_OR_NULL(genpd))
+@@ -2215,7 +2215,9 @@ int genpd_dev_pm_attach(struct device *d
+ 		return ret;
+ 	}
+ 
+-	dev->pm_domain->detach = genpd_dev_pm_detach;
++	pax_open_kernel();
++	*(void **)&dev->pm_domain->detach = genpd_dev_pm_detach;
++	pax_close_kernel();
+ 
+ 	return 0;
+ }
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/base/power/sysfs.c linux-3.18.2-pax/drivers/base/power/sysfs.c
 --- linux-3.18.2/drivers/base/power/sysfs.c	2014-12-08 21:49:30.292815813 +0100
 +++ linux-3.18.2-pax/drivers/base/power/sysfs.c	2014-12-08 21:52:13.521196850 +0100
@@ -36669,6 +36681,18 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/gpio/gp
  
  	/*
  	 * Prepare the mapping since the irqchip shall be orthogonal to
+diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/gpio/gpio-omap.c linux-3.18.2-pax/drivers/gpio/gpio-omap.c
+--- linux-3.18.2/drivers/gpio/gpio-omap.c	2014-12-08 21:49:31.764819289 +0100
++++ linux-3.18.2-pax/drivers/gpio/gpio-omap.c	2015-01-13 00:21:44.247889251 +0100
+@@ -1162,7 +1162,7 @@ static int omap_gpio_probe(struct platfo
+ 	const struct omap_gpio_platform_data *pdata;
+ 	struct resource *res;
+ 	struct gpio_bank *bank;
+-	struct irq_chip *irqc;
++	irq_chip_no_const *irqc;
+ 	int ret;
+ 
+ 	match = of_match_device(of_match_ptr(omap_gpio_match), dev);
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/gpio/gpio-rcar.c linux-3.18.2-pax/drivers/gpio/gpio-rcar.c
 --- linux-3.18.2/drivers/gpio/gpio-rcar.c	2014-10-05 21:52:11.443979806 +0200
 +++ linux-3.18.2-pax/drivers/gpio/gpio-rcar.c	2014-12-08 21:52:13.545196906 +0100
@@ -39656,6 +39680,18 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/irqchip
  	.name			= "GIC",
  	.irq_mask		= gic_mask_irq,
  	.irq_unmask		= gic_unmask_irq,
+diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/irqchip/irq-renesas-intc-irqpin.c linux-3.18.2-pax/drivers/irqchip/irq-renesas-intc-irqpin.c
+--- linux-3.18.2/drivers/irqchip/irq-renesas-intc-irqpin.c	2014-12-08 21:49:40.840840705 +0100
++++ linux-3.18.2-pax/drivers/irqchip/irq-renesas-intc-irqpin.c	2015-01-13 00:23:42.771871534 +0100
+@@ -353,7 +353,7 @@ static int intc_irqpin_probe(struct plat
+ 	struct intc_irqpin_iomem *i;
+ 	struct resource *io[INTC_IRQPIN_REG_NR];
+ 	struct resource *irq;
+-	struct irq_chip *irq_chip;
++	irq_chip_no_const *irq_chip;
+ 	void (*enable_fn)(struct irq_data *d);
+ 	void (*disable_fn)(struct irq_data *d);
+ 	const char *name = dev_name(dev);
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/drivers/irqchip/irq-renesas-irqc.c linux-3.18.2-pax/drivers/irqchip/irq-renesas-irqc.c
 --- linux-3.18.2/drivers/irqchip/irq-renesas-irqc.c	2014-03-31 12:48:05.187130898 +0200
 +++ linux-3.18.2-pax/drivers/irqchip/irq-renesas-irqc.c	2014-12-08 21:52:13.585196999 +0100
