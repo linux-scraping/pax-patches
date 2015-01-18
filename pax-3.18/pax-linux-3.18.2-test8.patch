@@ -1,4 +1,4 @@
-- fixed STACKLEAK/SCHED_STACK_END_CHECK interference, reported by Toralf Förster (https://bugs.gentoo.org/show_bug.cgi?id=536514) and KDE (http://forums.grsecurity.net/viewtopic.php?f=3&t=4121)
+- fixed early crash of Xen domU when SSP is enabled (e.g., the default Arch kernel), reported by badchemist
 
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/alpha/include/asm/atomic.h linux-3.18.2-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18.2/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -32264,7 +32264,7 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/x86/vdso/v
 -#endif
 diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/x86/xen/enlighten.c linux-3.18.2-pax/arch/x86/xen/enlighten.c
 --- linux-3.18.2/arch/x86/xen/enlighten.c	2014-12-08 21:49:29.704814425 +0100
-+++ linux-3.18.2-pax/arch/x86/xen/enlighten.c	2014-12-08 21:52:13.497196794 +0100
++++ linux-3.18.2-pax/arch/x86/xen/enlighten.c	2015-01-18 23:24:34.189752231 +0100
 @@ -123,8 +123,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -32350,7 +32350,19 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/x86/xen/en
  {
  	if (pm_power_off)
  		pm_power_off();
-@@ -1573,7 +1569,17 @@ asmlinkage __visible void __init xen_sta
+@@ -1456,8 +1452,9 @@ static void __ref xen_setup_gdt(int cpu)
+ 	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry_boot;
+ 	pv_cpu_ops.load_gdt = xen_load_gdt_boot;
+ 
+-	setup_stack_canary_segment(0);
+-	switch_to_new_gdt(0);
++	setup_stack_canary_segment(cpu);
++	load_percpu_segment(cpu);
++	switch_to_new_gdt(cpu);
+ 
+ 	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry;
+ 	pv_cpu_ops.load_gdt = xen_load_gdt;
+@@ -1573,7 +1570,17 @@ asmlinkage __visible void __init xen_sta
  	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
  
  	/* Work out if we support NX */
@@ -32369,7 +32381,7 @@ diff -NurpX linux-3.18.2-pax/Documentation/dontdiff linux-3.18.2/arch/x86/xen/en
  
  	/* Get mfn list */
  	xen_build_dynamic_phys_to_machine();
-@@ -1601,13 +1607,6 @@ asmlinkage __visible void __init xen_sta
+@@ -1601,13 +1608,6 @@ asmlinkage __visible void __init xen_sta
  
  	machine_ops = xen_machine_ops;
  
