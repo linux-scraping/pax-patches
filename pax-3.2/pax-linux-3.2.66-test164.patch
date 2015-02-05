@@ -1,12 +1,8 @@
-- added a temporary workaround for a few size overflow false positives when REFCOUNT was disabled until the new plugin is ready, by Mathias Krause <mathias.krause@secunet.com>
-- preliminary fix by Steffen Klassert (http://marc.info/?l=linux-netdev&m=141768340108789) for an upstream bug in the ipv6 tunnel code caught by the size overflow plugin, reported by Alexander Wetzel (https://forums.grsecurity.net/viewtopic.php?f=1&t=4083) and Colton Reeder (https://bugs.gentoo.org/show_bug.cgi?id=529352)
-- fixed a few REFCOUNT accessors on arm/sparc
-- fixed a few section mismatches for CONSTIFY
-- fixed a (probably harmless) integer underflow in ttm_page_pool_free, caught by the size overflow plugin, reported by hunger
-- fixed a REFCOUNT false positive in ftrace
-- fixed ESPFIX crash under per-cpu PGD configs (KERNEXEC/UDEREF on amd64), reported by Andy Lutomirski <luto@amacapital.net>
-- constified a few variables
-- removed superfluous section attr on espfix_pud_page, reported by spender
+- fixed STACKLEAK and stack overflow checking interference, reported by Toralf Förster (https://bugs.gentoo.org/show_bug.cgi?id=536514) and KDE (http://forums.grsecurity.net/viewtopic.php?f=3&t=4121)
+- fixed early crash of Xen domU when SSP is enabled (e.g., the default Arch kernel), reported by badchemist
+- fixed cc-ldoption to work with the HJL fork of binutils, reported by Rogelio M. Serrano Jr.
+- bring is_valid_bugaddr on amd64 in line with the i386 version, should fix BUG() backtraces
+- fixed rcu lock imbalance in have_submounts, by Steven Rostedt <rostedt@goodmis.org> (https://lkml.org/lkml/2015/1/17/71), reported by rfree@mempo.org
 
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/alpha/include/asm/atomic.h linux-3.2.66-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.66/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -14658,7 +14654,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
 +#endif
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/dumpstack_64.c linux-3.2.66-pax/arch/x86/kernel/dumpstack_64.c
 --- linux-3.2.66/arch/x86/kernel/dumpstack_64.c	2014-12-14 21:13:44.978054661 +0100
-+++ linux-3.2.66-pax/arch/x86/kernel/dumpstack_64.c	2014-12-14 21:13:52.754069189 +0100
++++ linux-3.2.66-pax/arch/x86/kernel/dumpstack_64.c	2015-02-05 15:31:31.452192584 +0100
 @@ -118,9 +118,9 @@ void dump_trace(struct task_struct *task
  	unsigned long *irq_stack_end =
  		(unsigned long *)per_cpu(irq_stack_ptr, cpu);
@@ -14729,7 +14725,13 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	struct task_struct *cur = current;
  
  	sp = regs->sp;
-@@ -304,3 +308,50 @@ int is_valid_bugaddr(unsigned long ip)
+@@ -299,8 +303,55 @@ int is_valid_bugaddr(unsigned long ip)
+ {
+ 	unsigned short ud2;
+ 
+-	if (__copy_from_user(&ud2, (const void __user *) ip, sizeof(ud2)))
++	if (probe_kernel_address((unsigned short *)ip, ud2))
+ 		return 0;
  
  	return ud2 == 0x0b0f;
  }
@@ -14940,8 +14942,8 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  #include <asm/fcntl.h>
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/entry_32.S linux-3.2.66-pax/arch/x86/kernel/entry_32.S
 --- linux-3.2.66/arch/x86/kernel/entry_32.S	2014-09-14 14:10:58.062117231 +0200
-+++ linux-3.2.66-pax/arch/x86/kernel/entry_32.S	2014-09-14 14:19:15.577887933 +0200
-@@ -180,13 +180,153 @@
++++ linux-3.2.66-pax/arch/x86/kernel/entry_32.S	2015-02-05 15:43:41.740021440 +0100
+@@ -180,13 +180,154 @@
  	/*CFI_REL_OFFSET gs, PT_GS*/
  .endm
  .macro SET_KERNEL_GS reg
@@ -15070,6 +15072,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
 +	jne 1b
 +
 +2:	cld
++	or $2*4, %edi
 +	mov %esp, %ecx
 +	sub %edi, %ecx
 +
@@ -15096,7 +15099,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	cld
  	PUSH_GS
  	pushl_cfi %fs
-@@ -209,7 +349,7 @@
+@@ -209,7 +350,7 @@
  	CFI_REL_OFFSET ecx, 0
  	pushl_cfi %ebx
  	CFI_REL_OFFSET ebx, 0
@@ -15105,7 +15108,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	movl %edx, %ds
  	movl %edx, %es
  	movl $(__KERNEL_PERCPU), %edx
-@@ -217,6 +357,15 @@
+@@ -217,6 +358,15 @@
  	SET_KERNEL_GS %edx
  .endm
  
@@ -15121,7 +15124,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .macro RESTORE_INT_REGS
  	popl_cfi %ebx
  	CFI_RESTORE ebx
-@@ -302,7 +451,7 @@ ENTRY(ret_from_fork)
+@@ -302,7 +452,7 @@ ENTRY(ret_from_fork)
  	popfl_cfi
  	jmp syscall_exit
  	CFI_ENDPROC
@@ -15130,7 +15133,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * Interrupt exit functions should be protected against kprobes
-@@ -336,7 +485,15 @@ resume_userspace_sig:
+@@ -336,7 +486,15 @@ resume_userspace_sig:
  	andl $SEGMENT_RPL_MASK, %eax
  #endif
  	cmpl $USER_RPL, %eax
@@ -15146,7 +15149,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(resume_userspace)
  	LOCKDEP_SYS_EXIT
-@@ -348,8 +505,8 @@ ENTRY(resume_userspace)
+@@ -348,8 +506,8 @@ ENTRY(resume_userspace)
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
  					# int/exception return?
  	jne work_pending
@@ -15157,7 +15160,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  #ifdef CONFIG_PREEMPT
  ENTRY(resume_kernel)
-@@ -364,7 +521,7 @@ need_resched:
+@@ -364,7 +522,7 @@ need_resched:
  	jz restore_all
  	call preempt_schedule_irq
  	jmp need_resched
@@ -15166,7 +15169,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  #endif
  	CFI_ENDPROC
  /*
-@@ -398,23 +555,34 @@ sysenter_past_esp:
+@@ -398,23 +556,34 @@ sysenter_past_esp:
  	/*CFI_REL_OFFSET cs, 0*/
  	/*
  	 * Push current_thread_info()->sysenter_return to the stack.
@@ -15204,7 +15207,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	movl %ebp,PT_EBP(%esp)
  .section __ex_table,"a"
  	.align 4
-@@ -423,6 +591,10 @@ sysenter_past_esp:
+@@ -423,6 +592,10 @@ sysenter_past_esp:
  
  	GET_THREAD_INFO(%ebp)
  
@@ -15215,7 +15218,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%ebp)
  	jnz sysenter_audit
  sysenter_do_call:
-@@ -438,12 +610,24 @@ sysenter_after_call:
+@@ -438,12 +611,24 @@ sysenter_after_call:
  	testl $_TIF_ALLWORK_MASK, %ecx
  	jne sysexit_audit
  sysenter_exit:
@@ -15240,7 +15243,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	PTGS_TO_GS
  	ENABLE_INTERRUPTS_SYSEXIT
  
-@@ -460,6 +644,9 @@ sysenter_audit:
+@@ -460,6 +645,9 @@ sysenter_audit:
  	movl %eax,%edx			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_I386,%eax	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -15250,7 +15253,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	pushl_cfi %ebx
  	movl PT_EAX(%esp),%eax		/* reload syscall number */
  	jmp sysenter_do_call
-@@ -486,11 +673,17 @@ sysexit_audit:
+@@ -486,11 +674,17 @@ sysexit_audit:
  
  	CFI_ENDPROC
  .pushsection .fixup,"ax"
@@ -15270,7 +15273,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .popsection
  	PTGS_TO_GS_EX
  ENDPROC(ia32_sysenter_target)
-@@ -505,6 +698,11 @@ ENTRY(system_call)
+@@ -505,6 +699,11 @@ ENTRY(system_call)
  	pushl_cfi %eax			# save orig_eax
  	SAVE_ALL
  	GET_THREAD_INFO(%ebp)
@@ -15282,7 +15285,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  					# system call tracing in operation / emulation
  	testl $_TIF_WORK_SYSCALL_ENTRY,TI_flags(%ebp)
  	jnz syscall_trace_entry
-@@ -524,6 +722,15 @@ syscall_exit:
+@@ -524,6 +723,15 @@ syscall_exit:
  	testl $_TIF_ALLWORK_MASK, %ecx	# current->work
  	jne syscall_exit_work
  
@@ -15298,7 +15301,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  restore_all:
  	TRACE_IRQS_IRET
  restore_all_notrace:
-@@ -581,14 +788,34 @@ ldt_ss:
+@@ -581,14 +789,34 @@ ldt_ss:
   * compensating for the offset by changing to the ESPFIX segment with
   * a base address that matches for the difference.
   */
@@ -15336,7 +15339,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	pushl_cfi $__ESPFIX_SS
  	pushl_cfi %eax			/* new kernel esp */
  	/* Disable interrupts, but do not irqtrace this section: we
-@@ -618,34 +845,28 @@ work_resched:
+@@ -618,34 +846,28 @@ work_resched:
  	movl TI_flags(%ebp), %ecx
  	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done other
  					# than syscall tracing?
@@ -15376,7 +15379,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -653,11 +874,14 @@ syscall_trace_entry:
+@@ -653,11 +875,14 @@ syscall_trace_entry:
  	movl $-ENOSYS,PT_EAX(%esp)
  	movl %esp, %eax
  	call syscall_trace_enter
@@ -15392,7 +15395,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  	# perform syscall exit tracing
  	ALIGN
-@@ -670,25 +894,29 @@ syscall_exit_work:
+@@ -670,25 +895,29 @@ syscall_exit_work:
  	movl %esp, %eax
  	call syscall_trace_leave
  	jmp resume_userspace
@@ -15426,7 +15429,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	CFI_ENDPROC
  /*
   * End of kprobes section
-@@ -762,6 +990,36 @@ ptregs_clone:
+@@ -762,6 +991,36 @@ ptregs_clone:
  	CFI_ENDPROC
  ENDPROC(ptregs_clone)
  
@@ -15463,7 +15466,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .macro FIXUP_ESPFIX_STACK
  /*
   * Switch back for ESPFIX stack to the normal zerobased stack
-@@ -772,8 +1030,15 @@ ENDPROC(ptregs_clone)
+@@ -772,8 +1031,15 @@ ENDPROC(ptregs_clone)
   */
  #ifdef CONFIG_X86_ESPFIX32
  	/* fixup the stack */
@@ -15481,7 +15484,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	shl $16, %eax
  	addl %esp, %eax			/* the adjusted stack pointer */
  	pushl_cfi $__KERNEL_DS
-@@ -829,7 +1094,7 @@ vector=vector+1
+@@ -829,7 +1095,7 @@ vector=vector+1
    .endr
  2:	jmp common_interrupt
  .endr
@@ -15490,7 +15493,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  .previous
  END(interrupt)
-@@ -877,7 +1142,7 @@ ENTRY(coprocessor_error)
+@@ -877,7 +1143,7 @@ ENTRY(coprocessor_error)
  	pushl_cfi $do_coprocessor_error
  	jmp error_code
  	CFI_ENDPROC
@@ -15499,7 +15502,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(simd_coprocessor_error)
  	RING0_INT_FRAME
-@@ -898,7 +1163,7 @@ ENTRY(simd_coprocessor_error)
+@@ -898,7 +1164,7 @@ ENTRY(simd_coprocessor_error)
  #endif
  	jmp error_code
  	CFI_ENDPROC
@@ -15508,7 +15511,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(device_not_available)
  	RING0_INT_FRAME
-@@ -906,7 +1171,7 @@ ENTRY(device_not_available)
+@@ -906,7 +1172,7 @@ ENTRY(device_not_available)
  	pushl_cfi $do_device_not_available
  	jmp error_code
  	CFI_ENDPROC
@@ -15517,7 +15520,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  #ifdef CONFIG_PARAVIRT
  ENTRY(native_iret)
-@@ -915,12 +1180,12 @@ ENTRY(native_iret)
+@@ -915,12 +1181,12 @@ ENTRY(native_iret)
  	.align 4
  	.long native_iret, iret_exc
  .previous
@@ -15532,7 +15535,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  #endif
  
  ENTRY(overflow)
-@@ -929,7 +1194,7 @@ ENTRY(overflow)
+@@ -929,7 +1195,7 @@ ENTRY(overflow)
  	pushl_cfi $do_overflow
  	jmp error_code
  	CFI_ENDPROC
@@ -15541,7 +15544,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(bounds)
  	RING0_INT_FRAME
-@@ -937,7 +1202,7 @@ ENTRY(bounds)
+@@ -937,7 +1203,7 @@ ENTRY(bounds)
  	pushl_cfi $do_bounds
  	jmp error_code
  	CFI_ENDPROC
@@ -15550,7 +15553,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(invalid_op)
  	RING0_INT_FRAME
-@@ -945,7 +1210,7 @@ ENTRY(invalid_op)
+@@ -945,7 +1211,7 @@ ENTRY(invalid_op)
  	pushl_cfi $do_invalid_op
  	jmp error_code
  	CFI_ENDPROC
@@ -15559,7 +15562,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(coprocessor_segment_overrun)
  	RING0_INT_FRAME
-@@ -953,35 +1218,35 @@ ENTRY(coprocessor_segment_overrun)
+@@ -953,35 +1219,35 @@ ENTRY(coprocessor_segment_overrun)
  	pushl_cfi $do_coprocessor_segment_overrun
  	jmp error_code
  	CFI_ENDPROC
@@ -15600,7 +15603,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(divide_error)
  	RING0_INT_FRAME
-@@ -989,7 +1254,7 @@ ENTRY(divide_error)
+@@ -989,7 +1255,7 @@ ENTRY(divide_error)
  	pushl_cfi $do_divide_error
  	jmp error_code
  	CFI_ENDPROC
@@ -15609,7 +15612,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  #ifdef CONFIG_X86_MCE
  ENTRY(machine_check)
-@@ -998,7 +1263,7 @@ ENTRY(machine_check)
+@@ -998,7 +1264,7 @@ ENTRY(machine_check)
  	pushl_cfi machine_check_vector
  	jmp error_code
  	CFI_ENDPROC
@@ -15618,7 +15621,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  #endif
  
  ENTRY(spurious_interrupt_bug)
-@@ -1007,7 +1272,7 @@ ENTRY(spurious_interrupt_bug)
+@@ -1007,7 +1273,7 @@ ENTRY(spurious_interrupt_bug)
  	pushl_cfi $do_spurious_interrupt_bug
  	jmp error_code
  	CFI_ENDPROC
@@ -15627,7 +15630,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  /*
   * End of kprobes section
   */
-@@ -1123,7 +1388,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector
+@@ -1123,7 +1389,7 @@ BUILD_INTERRUPT3(xen_hvm_callback_vector
  
  ENTRY(mcount)
  	ret
@@ -15636,7 +15639,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(ftrace_caller)
  	cmpl $0, function_trace_stop
-@@ -1152,7 +1417,7 @@ ftrace_graph_call:
+@@ -1152,7 +1418,7 @@ ftrace_graph_call:
  .globl ftrace_stub
  ftrace_stub:
  	ret
@@ -15645,7 +15648,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  #else /* ! CONFIG_DYNAMIC_FTRACE */
  
-@@ -1188,7 +1453,7 @@ trace:
+@@ -1188,7 +1454,7 @@ trace:
  	popl %ecx
  	popl %eax
  	jmp ftrace_stub
@@ -15654,7 +15657,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  #endif /* CONFIG_DYNAMIC_FTRACE */
  #endif /* CONFIG_FUNCTION_TRACER */
  
-@@ -1209,7 +1474,7 @@ ENTRY(ftrace_graph_caller)
+@@ -1209,7 +1475,7 @@ ENTRY(ftrace_graph_caller)
  	popl %ecx
  	popl %eax
  	ret
@@ -15663,7 +15666,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  .globl return_to_handler
  return_to_handler:
-@@ -1223,7 +1488,6 @@ return_to_handler:
+@@ -1223,7 +1489,6 @@ return_to_handler:
  	jmp *%ecx
  #endif
  
@@ -15671,7 +15674,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  #include "syscall_table_32.S"
  
  syscall_table_size=(.-sys_call_table)
-@@ -1269,15 +1533,18 @@ error_code:
+@@ -1269,15 +1534,18 @@ error_code:
  	movl $-1, PT_ORIG_EAX(%esp)	# no syscall to restart
  	REG_TO_PTGS %ecx
  	SET_KERNEL_GS %ecx
@@ -15692,7 +15695,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * Debug traps and NMI can happen at the one SYSENTER instruction
-@@ -1319,7 +1586,7 @@ debug_stack_correct:
+@@ -1319,7 +1587,7 @@ debug_stack_correct:
  	call do_debug
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -15701,7 +15704,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * NMI is doubly nasty. It can happen _while_ we're handling
-@@ -1358,6 +1625,9 @@ nmi_stack_correct:
+@@ -1358,6 +1626,9 @@ nmi_stack_correct:
  	xorl %edx,%edx		# zero error code
  	movl %esp,%eax		# pt_regs pointer
  	call do_nmi
@@ -15711,7 +15714,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	jmp restore_all_notrace
  	CFI_ENDPROC
  
-@@ -1395,13 +1665,16 @@ nmi_espfix_stack:
+@@ -1395,13 +1666,16 @@ nmi_espfix_stack:
  	FIXUP_ESPFIX_STACK		# %eax == %esp
  	xorl %edx,%edx			# zero error code
  	call do_nmi
@@ -15729,7 +15732,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(int3)
  	RING0_INT_FRAME
-@@ -1413,14 +1686,14 @@ ENTRY(int3)
+@@ -1413,14 +1687,14 @@ ENTRY(int3)
  	call do_int3
  	jmp ret_from_exception
  	CFI_ENDPROC
@@ -15746,7 +15749,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  #ifdef CONFIG_KVM_GUEST
  ENTRY(async_page_fault)
-@@ -1428,7 +1701,7 @@ ENTRY(async_page_fault)
+@@ -1428,7 +1702,7 @@ ENTRY(async_page_fault)
  	pushl_cfi $do_async_page_fault
  	jmp error_code
  	CFI_ENDPROC
@@ -15757,7 +15760,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  /*
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/entry_64.S linux-3.2.66-pax/arch/x86/kernel/entry_64.S
 --- linux-3.2.66/arch/x86/kernel/entry_64.S	2014-12-14 21:13:44.978054661 +0100
-+++ linux-3.2.66-pax/arch/x86/kernel/entry_64.S	2015-01-05 18:49:03.800938480 +0100
++++ linux-3.2.66-pax/arch/x86/kernel/entry_64.S	2015-02-05 15:44:06.816015435 +0100
 @@ -56,6 +56,8 @@
  #include <asm/ftrace.h>
  #include <asm/percpu.h>
@@ -15831,7 +15834,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	jmp *%rdi
  #endif
  
-@@ -179,6 +187,285 @@ ENTRY(native_usergs_sysret64)
+@@ -179,6 +187,286 @@ ENTRY(native_usergs_sysret64)
  ENDPROC(native_usergs_sysret64)
  #endif /* CONFIG_PARAVIRT */
  
@@ -16091,6 +16094,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
 +	jne 1b
 +
 +2:	cld
++	or $2*8, %rdi
 +	mov %esp, %ecx
 +	sub %edi, %ecx
 +
@@ -16117,7 +16121,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  .macro TRACE_IRQS_IRETQ offset=ARGOFFSET
  #ifdef CONFIG_TRACE_IRQFLAGS
-@@ -232,8 +519,8 @@ ENDPROC(native_usergs_sysret64)
+@@ -232,8 +520,8 @@ ENDPROC(native_usergs_sysret64)
  	.endm
  
  	.macro UNFAKE_STACK_FRAME
@@ -16128,7 +16132,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	.endm
  
  /*
-@@ -302,25 +589,26 @@ ENDPROC(native_usergs_sysret64)
+@@ -302,25 +590,26 @@ ENDPROC(native_usergs_sysret64)
  /* save partial stack frame */
  	.macro SAVE_ARGS_IRQ
  	cld
@@ -16168,7 +16172,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	je 1f
  	SWAPGS
  	/*
-@@ -341,24 +629,39 @@ ENDPROC(native_usergs_sysret64)
+@@ -341,24 +630,39 @@ ENDPROC(native_usergs_sysret64)
  			0x06 /* DW_OP_deref */, \
  			0x08 /* DW_OP_const1u */, SS+8-RBP, \
  			0x22 /* DW_OP_plus */
@@ -16212,7 +16216,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /* save complete stack frame */
  	.pushsection .kprobes.text, "ax"
-@@ -387,10 +690,21 @@ ENTRY(save_paranoid)
+@@ -387,10 +691,21 @@ ENTRY(save_paranoid)
  	js 1f	/* negative -> in kernel */
  	SWAPGS
  	xorl %ebx,%ebx
@@ -16237,7 +16241,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * A newly forked process directly context switches into this address.
-@@ -411,7 +725,7 @@ ENTRY(ret_from_fork)
+@@ -411,7 +726,7 @@ ENTRY(ret_from_fork)
  
  	RESTORE_REST
  
@@ -16246,7 +16250,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	je   int_ret_from_sys_call
  
  	testl $_TIF_IA32, TI_flags(%rcx)	# 32-bit compat task needs IRET
-@@ -421,7 +735,7 @@ ENTRY(ret_from_fork)
+@@ -421,7 +736,7 @@ ENTRY(ret_from_fork)
  	jmp ret_from_sys_call			# go to the SYSRET fastpath
  
  	CFI_ENDPROC
@@ -16255,7 +16259,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * System call entry. Up to 6 arguments in registers are supported.
-@@ -457,7 +771,7 @@ END(ret_from_fork)
+@@ -457,7 +772,7 @@ END(ret_from_fork)
  ENTRY(system_call)
  	CFI_STARTPROC	simple
  	CFI_SIGNAL_FRAME
@@ -16264,7 +16268,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	CFI_REGISTER	rip,rcx
  	/*CFI_REGISTER	rflags,r11*/
  	SWAPGS_UNSAFE_STACK
-@@ -470,12 +784,18 @@ ENTRY(system_call_after_swapgs)
+@@ -470,12 +785,18 @@ ENTRY(system_call_after_swapgs)
  
  	movq	%rsp,PER_CPU_VAR(old_rsp)
  	movq	PER_CPU_VAR(kernel_stack),%rsp
@@ -16284,7 +16288,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	movq  %rax,ORIG_RAX-ARGOFFSET(%rsp)
  	movq  %rcx,RIP-ARGOFFSET(%rsp)
  	CFI_REL_OFFSET rip,RIP-ARGOFFSET
-@@ -504,6 +824,8 @@ sysret_check:
+@@ -504,6 +825,8 @@ sysret_check:
  	andl %edi,%edx
  	jnz  sysret_careful
  	CFI_REMEMBER_STATE
@@ -16293,7 +16297,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	/*
  	 * sysretq will re-enable interrupts:
  	 */
-@@ -562,6 +884,9 @@ auditsys:
+@@ -562,6 +885,9 @@ auditsys:
  	movq %rax,%rsi			/* 2nd arg: syscall number */
  	movl $AUDIT_ARCH_X86_64,%edi	/* 1st arg: audit arch */
  	call audit_syscall_entry
@@ -16303,7 +16307,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	LOAD_ARGS 0		/* reload call-clobbered registers */
  	jmp system_call_fastpath
  
-@@ -592,12 +917,15 @@ tracesys:
+@@ -592,12 +918,15 @@ tracesys:
  	FIXUP_TOP_OF_STACK %rdi
  	movq %rsp,%rdi
  	call syscall_trace_enter
@@ -16320,7 +16324,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	RESTORE_REST
  	cmpq $__NR_syscall_max,%rax
  	ja   int_ret_from_sys_call	/* RAX(%rsp) set to -ENOSYS above */
-@@ -613,7 +941,7 @@ tracesys:
+@@ -613,7 +942,7 @@ tracesys:
  GLOBAL(int_ret_from_sys_call)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	TRACE_IRQS_OFF
@@ -16329,7 +16333,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	je retint_restore_args
  	movl $_TIF_ALLWORK_MASK,%edi
  	/* edi:	mask to check */
-@@ -624,7 +952,9 @@ GLOBAL(int_with_check)
+@@ -624,7 +953,9 @@ GLOBAL(int_with_check)
  	andl %edi,%edx
  	jnz   int_careful
  	andl    $~TS_COMPAT,TI_status(%rcx)
@@ -16340,7 +16344,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  	/* Either reschedule or signal or syscall exit tracking needed. */
  	/* First do a reschedule test. */
-@@ -670,7 +1000,7 @@ int_restore_rest:
+@@ -670,7 +1001,7 @@ int_restore_rest:
  	TRACE_IRQS_OFF
  	jmp int_with_check
  	CFI_ENDPROC
@@ -16349,7 +16353,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * Certain special system calls that need to save a complete full stack frame.
-@@ -678,15 +1008,13 @@ END(system_call)
+@@ -678,15 +1009,13 @@ END(system_call)
  	.macro PTREGSCALL label,func,arg
  ENTRY(\label)
  	PARTIAL_FRAME 1 8		/* offset 8: return address */
@@ -16366,7 +16370,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	.endm
  
  	PTREGSCALL stub_clone, sys_clone, %r8
-@@ -701,12 +1029,17 @@ ENTRY(ptregscall_common)
+@@ -701,12 +1030,17 @@ ENTRY(ptregscall_common)
  	movq_cfi_restore R15+8, r15
  	movq_cfi_restore R14+8, r14
  	movq_cfi_restore R13+8, r13
@@ -16386,7 +16390,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  ENTRY(stub_execve)
  	CFI_STARTPROC
-@@ -721,7 +1054,7 @@ ENTRY(stub_execve)
+@@ -721,7 +1055,7 @@ ENTRY(stub_execve)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -16395,7 +16399,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * sigreturn is special because it needs to restore all registers on return.
-@@ -739,7 +1072,7 @@ ENTRY(stub_rt_sigreturn)
+@@ -739,7 +1073,7 @@ ENTRY(stub_rt_sigreturn)
  	RESTORE_REST
  	jmp int_ret_from_sys_call
  	CFI_ENDPROC
@@ -16404,7 +16408,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * Build the entry stubs and pointer table with some assembler magic.
-@@ -774,7 +1107,7 @@ vector=vector+1
+@@ -774,7 +1108,7 @@ vector=vector+1
  2:	jmp common_interrupt
  .endr
  	CFI_ENDPROC
@@ -16413,7 +16417,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  .previous
  END(interrupt)
-@@ -791,8 +1124,8 @@ END(interrupt)
+@@ -791,8 +1125,8 @@ END(interrupt)
  /* 0(%rsp): ~(interrupt number) */
  	.macro interrupt func
  	/* reserve pt_regs for scratch regs and rbp */
@@ -16424,7 +16428,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	SAVE_ARGS_IRQ
  	call \func
  	.endm
-@@ -819,13 +1152,13 @@ ret_from_intr:
+@@ -819,13 +1153,13 @@ ret_from_intr:
  	/* Restore saved previous stack */
  	popq %rsi
  	CFI_DEF_CFA_REGISTER	rsi
@@ -16441,7 +16445,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	je retint_kernel
  
  	/* Interrupt came from user space */
-@@ -847,12 +1180,16 @@ retint_swapgs:		/* return to user-space
+@@ -847,12 +1181,16 @@ retint_swapgs:		/* return to user-space
  	 * The iretq could re-enable interrupts:
  	 */
  	DISABLE_INTERRUPTS(CLBR_ANY)
@@ -16458,7 +16462,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	/*
  	 * The iretq could re-enable interrupts:
  	 */
-@@ -890,15 +1227,15 @@ native_irq_return_ldt:
+@@ -890,15 +1228,15 @@ native_irq_return_ldt:
  	SWAPGS
  	movq PER_CPU_VAR(espfix_waddr),%rdi
  	movq %rax,(0*8)(%rdi)	/* RAX */
@@ -16479,7 +16483,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	movq %rax,(4*8)(%rdi)
  	andl $0xffff0000,%eax
  	popq_cfi %rdi
-@@ -954,7 +1291,7 @@ ENTRY(retint_kernel)
+@@ -954,7 +1292,7 @@ ENTRY(retint_kernel)
  	jmp exit_intr
  #endif
  	CFI_ENDPROC
@@ -16488,7 +16492,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * End of kprobes section
-@@ -971,7 +1308,7 @@ ENTRY(\sym)
+@@ -971,7 +1309,7 @@ ENTRY(\sym)
  	interrupt \do_sym
  	jmp ret_from_intr
  	CFI_ENDPROC
@@ -16497,7 +16501,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .endm
  
  #ifdef CONFIG_SMP
-@@ -1041,7 +1378,7 @@ ENTRY(\sym)
+@@ -1041,7 +1379,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -16506,7 +16510,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .endm
  
  .macro paranoidzeroentry sym do_sym
-@@ -1058,10 +1395,10 @@ ENTRY(\sym)
+@@ -1058,10 +1396,10 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit	/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -16519,7 +16523,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .macro paranoidzeroentry_ist sym do_sym ist
  ENTRY(\sym)
  	INTR_FRAME
-@@ -1073,12 +1410,18 @@ ENTRY(\sym)
+@@ -1073,12 +1411,18 @@ ENTRY(\sym)
  	TRACE_IRQS_OFF
  	movq %rsp,%rdi		/* pt_regs pointer */
  	xorl %esi,%esi		/* no error code */
@@ -16539,7 +16543,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .endm
  
  .macro errorentry sym do_sym
-@@ -1095,7 +1438,7 @@ ENTRY(\sym)
+@@ -1095,7 +1439,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp error_exit			/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -16548,7 +16552,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .endm
  
  	/* error code is on the stack already */
-@@ -1114,7 +1457,7 @@ ENTRY(\sym)
+@@ -1114,7 +1458,7 @@ ENTRY(\sym)
  	call \do_sym
  	jmp paranoid_exit		/* %ebx: no swapgs flag */
  	CFI_ENDPROC
@@ -16557,7 +16561,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  .endm
  
  zeroentry divide_error do_divide_error
-@@ -1144,9 +1487,10 @@ gs_change:
+@@ -1144,9 +1488,10 @@ gs_change:
  2:	mfence		/* workaround */
  	SWAPGS
  	popfq_cfi
@@ -16569,7 +16573,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  	.section __ex_table,"a"
  	.align 8
-@@ -1168,13 +1512,14 @@ ENTRY(kernel_thread_helper)
+@@ -1168,13 +1513,14 @@ ENTRY(kernel_thread_helper)
  	 * Here we are in the child and the registers are set as they were
  	 * at kernel_thread() invocation in the parent.
  	 */
@@ -16585,7 +16589,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * execve(). This function needs to use IRET, not SYSRET, to set up all state properly.
-@@ -1201,11 +1546,11 @@ ENTRY(kernel_execve)
+@@ -1201,11 +1547,11 @@ ENTRY(kernel_execve)
  	RESTORE_REST
  	testq %rax,%rax
  	je int_ret_from_sys_call
@@ -16599,7 +16603,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /* Call softirq on interrupt stack. Interrupts are off. */
  ENTRY(call_softirq)
-@@ -1223,9 +1568,10 @@ ENTRY(call_softirq)
+@@ -1223,9 +1569,10 @@ ENTRY(call_softirq)
  	CFI_DEF_CFA_REGISTER	rsp
  	CFI_ADJUST_CFA_OFFSET   -8
  	decl PER_CPU_VAR(irq_count)
@@ -16611,7 +16615,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  #ifdef CONFIG_XEN
  zeroentry xen_hypervisor_callback xen_do_hypervisor_callback
-@@ -1263,7 +1609,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
+@@ -1263,7 +1610,7 @@ ENTRY(xen_do_hypervisor_callback)   # do
  	decl PER_CPU_VAR(irq_count)
  	jmp  error_exit
  	CFI_ENDPROC
@@ -16620,7 +16624,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * Hypervisor uses this for application faults while it executes.
-@@ -1322,7 +1668,7 @@ ENTRY(xen_failsafe_callback)
+@@ -1322,7 +1669,7 @@ ENTRY(xen_failsafe_callback)
  	SAVE_ALL
  	jmp error_exit
  	CFI_ENDPROC
@@ -16629,7 +16633,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  apicinterrupt XEN_HVM_EVTCHN_CALLBACK \
  	xen_hvm_callback_vector xen_evtchn_do_upcall
-@@ -1371,16 +1717,31 @@ ENTRY(paranoid_exit)
+@@ -1371,16 +1718,31 @@ ENTRY(paranoid_exit)
  	TRACE_IRQS_OFF
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz paranoid_restore
@@ -16662,7 +16666,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	jmp irq_return
  paranoid_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1409,7 +1770,7 @@ paranoid_schedule:
+@@ -1409,7 +1771,7 @@ paranoid_schedule:
  	TRACE_IRQS_OFF
  	jmp paranoid_userspace
  	CFI_ENDPROC
@@ -16671,7 +16675,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  /*
   * Exception entry point. This expects an error code/orig_rax on the stack.
-@@ -1436,12 +1797,23 @@ ENTRY(error_entry)
+@@ -1436,12 +1798,23 @@ ENTRY(error_entry)
  	movq_cfi r14, R14+8
  	movq_cfi r15, R15+8
  	xorl %ebx,%ebx
@@ -16696,7 +16700,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	ret
  
  /*
-@@ -1475,7 +1847,7 @@ error_bad_iret:
+@@ -1475,7 +1848,7 @@ error_bad_iret:
  	decl %ebx	/* Return to usergs */
  	jmp error_sti
  	CFI_ENDPROC
@@ -16705,7 +16709,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  
  /* ebx:	no swapgs flag (1: don't need swapgs, 0: need it) */
-@@ -1495,7 +1867,7 @@ ENTRY(error_exit)
+@@ -1495,7 +1868,7 @@ ENTRY(error_exit)
  	jnz retint_careful
  	jmp retint_swapgs
  	CFI_ENDPROC
@@ -16714,7 +16718,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  
  	/* runs on exception stack */
-@@ -1507,6 +1879,7 @@ ENTRY(nmi)
+@@ -1507,6 +1880,7 @@ ENTRY(nmi)
  	CFI_ADJUST_CFA_OFFSET ORIG_RAX-R15
  	call save_paranoid
  	DEFAULT_FRAME 0
@@ -16722,7 +16726,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	/* paranoidentry do_nmi, 0; without TRACE_IRQS_OFF */
  	movq %rsp,%rdi
  	movq $-1,%rsi
-@@ -1517,12 +1890,28 @@ ENTRY(nmi)
+@@ -1517,12 +1891,28 @@ ENTRY(nmi)
  	DISABLE_INTERRUPTS(CLBR_NONE)
  	testl %ebx,%ebx				/* swapgs needed? */
  	jnz nmi_restore
@@ -16752,7 +16756,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	jmp irq_return
  nmi_userspace:
  	GET_THREAD_INFO(%rcx)
-@@ -1551,14 +1940,14 @@ nmi_schedule:
+@@ -1551,14 +1941,14 @@ nmi_schedule:
  	jmp paranoid_exit
  	CFI_ENDPROC
  #endif
@@ -18750,7 +18754,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/process_32.c linux-3.2.66-pax/arch/x86/kernel/process_32.c
 --- linux-3.2.66/arch/x86/kernel/process_32.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.66-pax/arch/x86/kernel/process_32.c	2012-12-01 02:29:42.464012819 +0100
++++ linux-3.2.66-pax/arch/x86/kernel/process_32.c	2015-02-05 15:44:58.396002601 +0100
 @@ -67,6 +67,7 @@ asmlinkage void ret_from_fork(void) __as
  unsigned long thread_saved_pc(struct task_struct *tsk)
  {
@@ -18796,7 +18800,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  
  	p->thread.sp = (unsigned long) childregs;
  	p->thread.sp0 = (unsigned long) (childregs+1);
-+	p->tinfo.lowest_stack = (unsigned long)task_stack_page(p);
++	p->tinfo.lowest_stack = (unsigned long)task_stack_page(p) + 2 * sizeof(unsigned long);
  
  	p->thread.ip = (unsigned long) ret_from_fork;
  
@@ -18846,7 +18850,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
 -
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel/process_64.c linux-3.2.66-pax/arch/x86/kernel/process_64.c
 --- linux-3.2.66/arch/x86/kernel/process_64.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.66-pax/arch/x86/kernel/process_64.c	2013-08-17 01:55:05.448229905 +0200
++++ linux-3.2.66-pax/arch/x86/kernel/process_64.c	2015-02-05 15:45:11.487999245 +0100
 @@ -89,7 +89,7 @@ static void __exit_idle(void)
  void exit_idle(void)
  {
@@ -18870,7 +18874,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/kernel
  	p->thread.sp = (unsigned long) childregs;
  	p->thread.sp0 = (unsigned long) (childregs+1);
  	p->thread.usersp = me->thread.usersp;
-+	p->tinfo.lowest_stack = (unsigned long)task_stack_page(p);
++	p->tinfo.lowest_stack = (unsigned long)task_stack_page(p) + 2 * sizeof(unsigned long);
  
  	set_tsk_thread_flag(p, TIF_FORK);
  
@@ -27640,7 +27644,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/vdso/v
 -__setup("vdso=", vdso_setup);
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/xen/enlighten.c linux-3.2.66-pax/arch/x86/xen/enlighten.c
 --- linux-3.2.66/arch/x86/xen/enlighten.c	2013-06-09 18:04:43.169591762 +0200
-+++ linux-3.2.66-pax/arch/x86/xen/enlighten.c	2013-06-09 18:04:48.861591458 +0200
++++ linux-3.2.66-pax/arch/x86/xen/enlighten.c	2015-02-05 15:41:37.444048570 +0100
 @@ -86,8 +86,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -27717,7 +27721,17 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/xen/en
  {
  	if (pm_power_off)
  		pm_power_off();
-@@ -1196,7 +1192,17 @@ asmlinkage void __init xen_start_kernel(
+@@ -1144,6 +1140,9 @@ static void __init xen_setup_stackprotec
+ 	pv_cpu_ops.load_gdt = xen_load_gdt_boot;
+ 
+ 	setup_stack_canary_segment(0);
++#ifdef CONFIG_X86_64
++	load_percpu_segment(0);
++#endif
+ 	switch_to_new_gdt(0);
+ 
+ 	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry;
+@@ -1196,7 +1195,17 @@ asmlinkage void __init xen_start_kernel(
  	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
  
  	/* Work out if we support NX */
@@ -27736,7 +27750,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/xen/en
  
  	xen_setup_features();
  
-@@ -1227,13 +1233,6 @@ asmlinkage void __init xen_start_kernel(
+@@ -1227,13 +1236,6 @@ asmlinkage void __init xen_start_kernel(
  
  	machine_ops = xen_machine_ops;
  
@@ -27750,7 +27764,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/arch/x86/xen/en
  	xen_smp_init();
  
  #ifdef CONFIG_ACPI_NUMA
-@@ -1418,7 +1417,7 @@ static int __cpuinit xen_hvm_cpu_notify(
+@@ -1418,7 +1420,7 @@ static int __cpuinit xen_hvm_cpu_notify(
  	return NOTIFY_OK;
  }
  
@@ -44590,8 +44604,20 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/fs/configfs/dir
  				 * We'll have a dentry and an inode for
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/fs/dcache.c linux-3.2.66-pax/fs/dcache.c
 --- linux-3.2.66/fs/dcache.c	2015-01-01 15:15:24.532069625 +0100
-+++ linux-3.2.66-pax/fs/dcache.c	2015-01-01 15:15:29.676069760 +0100
-@@ -3080,7 +3080,8 @@ void __init vfs_caches_init(unsigned lon
++++ linux-3.2.66-pax/fs/dcache.c	2015-02-05 14:28:57.341396377 +0100
+@@ -1034,8 +1034,10 @@ ascend:
+ 		write_sequnlock(&rename_lock);
+ 	return 0; /* No mount points found in tree */
+ positive:
+-	if (!locked && read_seqretry(&rename_lock, seq))
++	if (!locked && read_seqretry(&rename_lock, seq)) {
++		rcu_read_lock();
+ 		goto rename_retry;
++	}
+ 	if (locked)
+ 		write_sequnlock(&rename_lock);
+ 	return 1;
+@@ -3080,7 +3082,8 @@ void __init vfs_caches_init(unsigned lon
  	mempages -= reserve;
  
  	names_cachep = kmem_cache_create("names_cache", PATH_MAX, 0,
@@ -44666,7 +44692,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/fs/ecryptfs/rea
  }
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/fs/exec.c linux-3.2.66-pax/fs/exec.c
 --- linux-3.2.66/fs/exec.c	2014-01-03 15:48:45.028070563 +0100
-+++ linux-3.2.66-pax/fs/exec.c	2014-01-28 04:21:56.413073847 +0100
++++ linux-3.2.66-pax/fs/exec.c	2015-02-05 15:48:06.375951119 +0100
 @@ -55,12 +55,32 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -45179,7 +45205,7 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/fs/exec.c linux
 +{
 +	unsigned long sp = (unsigned long)&sp;
 +	if (sp < current_thread_info()->lowest_stack &&
-+	    sp > (unsigned long)task_stack_page(current))
++	    sp >= (unsigned long)task_stack_page(current) + 2 * sizeof(unsigned long))
 +		current_thread_info()->lowest_stack = sp;
 +}
 +EXPORT_SYMBOL(pax_track_stack);
@@ -68805,6 +68831,18 @@ diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/scripts/headers
  		$line =~ s/\s__attribute_const__\s/ /g;
  		$line =~ s/\s__attribute_const__$//g;
  		$line =~ s/\b__packed\b/__attribute__((packed))/g;
+diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/scripts/Kbuild.include linux-3.2.66-pax/scripts/Kbuild.include
+--- linux-3.2.66/scripts/Kbuild.include	2012-10-24 01:05:57.440814655 +0200
++++ linux-3.2.66-pax/scripts/Kbuild.include	2015-02-05 15:39:49.672067919 +0100
+@@ -143,7 +143,7 @@ cc-ifversion = $(shell [ $(call cc-versi
+ # cc-ldoption
+ # Usage: ldflags += $(call cc-ldoption, -Wl$(comma)--hash-style=both)
+ cc-ldoption = $(call try-run,\
+-	$(CC) $(1) -nostdlib -x c /dev/null -o "$$TMP",$(1),$(2))
++	$(CC) $(1) -Wl,-r -nostdlib -x c /dev/null -o "$$TMP",$(1),$(2))
+ 
+ # ld-option
+ # Usage: LDFLAGS += $(call ld-option, -X)
 diff -NurpX linux-3.2.66-pax/Documentation/dontdiff linux-3.2.66/scripts/Makefile.build linux-3.2.66-pax/scripts/Makefile.build
 --- linux-3.2.66/scripts/Makefile.build	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.66-pax/scripts/Makefile.build	2012-09-11 20:41:05.476019995 +0200
