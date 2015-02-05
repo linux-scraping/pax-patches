@@ -1,4 +1,6 @@
-- forward port to 3.14.31
+- fixed cc-ldoption to work with the HJL fork of binutils, reported by Rogelio M. Serrano Jr.
+- fixed regression on XEN/i386 caused by the previous fix meant for amd64 only, reported by timevers (https://forums.grsecurity.net/viewtopic.php?f=1&t=4138)
+- bring is_valid_bugaddr on amd64 in line with the i386 version, should fix BUG() backtraces
 
 diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/alpha/include/asm/atomic.h linux-3.14.31-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.31/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -19251,7 +19253,7 @@ diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/x86/kern
 +#endif
 diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/x86/kernel/dumpstack_64.c linux-3.14.31-pax/arch/x86/kernel/dumpstack_64.c
 --- linux-3.14.31/arch/x86/kernel/dumpstack_64.c	2014-12-07 10:31:11.184681564 +0100
-+++ linux-3.14.31-pax/arch/x86/kernel/dumpstack_64.c	2014-12-07 10:31:37.196725960 +0100
++++ linux-3.14.31-pax/arch/x86/kernel/dumpstack_64.c	2015-02-05 15:12:51.740445416 +0100
 @@ -118,9 +118,9 @@ void dump_trace(struct task_struct *task
  	unsigned long *irq_stack_end =
  		(unsigned long *)per_cpu(irq_stack_ptr, cpu);
@@ -19313,7 +19315,13 @@ diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/x86/kern
  	put_cpu();
  }
  EXPORT_SYMBOL(dump_trace);
-@@ -299,3 +303,50 @@ int is_valid_bugaddr(unsigned long ip)
+@@ -294,8 +298,55 @@ int is_valid_bugaddr(unsigned long ip)
+ {
+ 	unsigned short ud2;
+ 
+-	if (__copy_from_user(&ud2, (const void __user *) ip, sizeof(ud2)))
++	if (probe_kernel_address((unsigned short *)ip, ud2))
+ 		return 0;
  
  	return ud2 == 0x0b0f;
  }
@@ -32478,7 +32486,7 @@ diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/x86/vdso
 -__setup("vdso=", vdso_setup);
 diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/x86/xen/enlighten.c linux-3.14.31-pax/arch/x86/xen/enlighten.c
 --- linux-3.14.31/arch/x86/xen/enlighten.c	2014-03-31 12:47:57.311131318 +0200
-+++ linux-3.14.31-pax/arch/x86/xen/enlighten.c	2015-01-19 16:31:39.056423288 +0100
++++ linux-3.14.31-pax/arch/x86/xen/enlighten.c	2015-02-02 15:41:54.499513599 +0100
 @@ -123,8 +123,6 @@ EXPORT_SYMBOL_GPL(xen_start_info);
  
  struct shared_info xen_dummy_shared_info;
@@ -32564,19 +32572,21 @@ diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/x86/xen/
  {
  	if (pm_power_off)
  		pm_power_off();
-@@ -1455,8 +1451,9 @@ static void __ref xen_setup_gdt(int cpu)
+@@ -1455,8 +1451,11 @@ static void __ref xen_setup_gdt(int cpu)
  	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry_boot;
  	pv_cpu_ops.load_gdt = xen_load_gdt_boot;
  
 -	setup_stack_canary_segment(0);
 -	switch_to_new_gdt(0);
 +	setup_stack_canary_segment(cpu);
++#ifdef CONFIG_X86_64
 +	load_percpu_segment(cpu);
++#endif
 +	switch_to_new_gdt(cpu);
  
  	pv_cpu_ops.write_gdt_entry = xen_write_gdt_entry;
  	pv_cpu_ops.load_gdt = xen_load_gdt;
-@@ -1564,7 +1561,17 @@ asmlinkage void __init xen_start_kernel(
+@@ -1564,7 +1563,17 @@ asmlinkage void __init xen_start_kernel(
  	__userpte_alloc_gfp &= ~__GFP_HIGHMEM;
  
  	/* Work out if we support NX */
@@ -32595,7 +32605,7 @@ diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/arch/x86/xen/
  
  	/* Get mfn list */
  	xen_build_dynamic_phys_to_machine();
-@@ -1592,13 +1599,6 @@ asmlinkage void __init xen_start_kernel(
+@@ -1592,13 +1601,6 @@ asmlinkage void __init xen_start_kernel(
  
  	machine_ops = xen_machine_ops;
  
@@ -75820,6 +75830,18 @@ diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/scripts/heade
  		-e 's/__attribute_const__([ \t]|$)/\1/g' \
  		-e 's@^#include <linux/compiler.h>@@' \
  		-e 's/(^|[^a-zA-Z0-9])__packed([^a-zA-Z0-9_]|$)/\1__attribute__((packed))\2/g' \
+diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/scripts/Kbuild.include linux-3.14.31-pax/scripts/Kbuild.include
+--- linux-3.14.31/scripts/Kbuild.include	2013-07-08 01:59:01.676267973 +0200
++++ linux-3.14.31-pax/scripts/Kbuild.include	2015-02-05 15:10:49.028432215 +0100
+@@ -143,7 +143,7 @@ cc-ifversion = $(shell [ $(call cc-versi
+ # cc-ldoption
+ # Usage: ldflags += $(call cc-ldoption, -Wl$(comma)--hash-style=both)
+ cc-ldoption = $(call try-run,\
+-	$(CC) $(1) -nostdlib -x c /dev/null -o "$$TMP",$(1),$(2))
++	$(CC) $(1) -Wl,-r -nostdlib -x c /dev/null -o "$$TMP",$(1),$(2))
+ 
+ # ld-option
+ # Usage: LDFLAGS += $(call ld-option, -X)
 diff -NurpX linux-3.14.31-pax/Documentation/dontdiff linux-3.14.31/scripts/link-vmlinux.sh linux-3.14.31-pax/scripts/link-vmlinux.sh
 --- linux-3.14.31/scripts/link-vmlinux.sh	2014-01-20 12:36:57.128997605 +0100
 +++ linux-3.14.31-pax/scripts/link-vmlinux.sh	2014-03-31 12:53:47.283112633 +0200
