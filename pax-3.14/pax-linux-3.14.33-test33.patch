@@ -1,4 +1,5 @@
-- forward port to 3.14.33
+- fixed potential boot crash when applying alternatives under KERNEXEC/i386
+- fixed potential integer truncation bug in xlate_dev_mem_ptr under PAE/i386
 
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/alpha/include/asm/atomic.h linux-3.14.33-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.33/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -25131,7 +25132,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/kern
  	if ((segoffs >> 16) == BIOSSEG)
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/kernel/vmlinux.lds.S linux-3.14.33-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-3.14.33/arch/x86/kernel/vmlinux.lds.S	2014-01-20 12:36:07.421000259 +0100
-+++ linux-3.14.33-pax/arch/x86/kernel/vmlinux.lds.S	2014-03-31 12:53:46.367112681 +0200
++++ linux-3.14.33-pax/arch/x86/kernel/vmlinux.lds.S	2015-02-12 02:27:50.882641779 +0100
 @@ -26,6 +26,13 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -25310,7 +25311,6 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/kern
 +	.init.text (. - __KERNEL_TEXT_OFFSET): AT(init_begin - LOAD_OFFSET) {
 +		VMLINUX_SYMBOL(_sinittext) = .;
 +		INIT_TEXT
-+		VMLINUX_SYMBOL(_einittext) = .;
 +		. = ALIGN(PAGE_SIZE);
 +	} :text.init
  
@@ -25321,6 +25321,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/kern
 +	 */
 +	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET + __KERNEL_TEXT_OFFSET) {
 +		EXIT_TEXT
++		VMLINUX_SYMBOL(_einittext) = .;
 +		. = ALIGN(16);
 +	} :text.exit
 +	. = init_begin + SIZEOF(.init.text) + SIZEOF(.exit.text);
@@ -30074,7 +30075,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/mm/i
  	return (void *)vaddr;
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/mm/ioremap.c linux-3.14.33-pax/arch/x86/mm/ioremap.c
 --- linux-3.14.33/arch/x86/mm/ioremap.c	2014-07-23 21:24:18.325155739 +0200
-+++ linux-3.14.33-pax/arch/x86/mm/ioremap.c	2014-07-23 21:50:01.645152300 +0200
++++ linux-3.14.33-pax/arch/x86/mm/ioremap.c	2015-02-12 02:27:50.882641779 +0100
 @@ -56,8 +56,8 @@ static int __ioremap_check_ram(unsigned
  	unsigned long i;
  
@@ -30095,17 +30096,29 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/mm/i
  {
  	struct vm_struct *p, *o;
  
-@@ -322,6 +322,9 @@ void *xlate_dev_mem_ptr(unsigned long ph
- 
+@@ -317,23 +317,22 @@ EXPORT_SYMBOL(iounmap);
+  */
+ void *xlate_dev_mem_ptr(unsigned long phys)
+ {
+-	void *addr;
+-	unsigned long start = phys & PAGE_MASK;
+-
  	/* If page is RAM, we can use __va. Otherwise ioremap and unmap. */
- 	if (page_is_ram(start >> PAGE_SHIFT))
+-	if (page_is_ram(start >> PAGE_SHIFT))
++	if (page_is_ram(phys >> PAGE_SHIFT))
 +#ifdef CONFIG_HIGHMEM
-+	if ((start >> PAGE_SHIFT) < max_low_pfn)
++	if ((phys >> PAGE_SHIFT) < max_low_pfn)
 +#endif
  		return __va(phys);
  
- 	addr = (void __force *)ioremap_cache(start, PAGE_SIZE);
-@@ -334,6 +337,9 @@ void *xlate_dev_mem_ptr(unsigned long ph
+-	addr = (void __force *)ioremap_cache(start, PAGE_SIZE);
+-	if (addr)
+-		addr = (void *)((unsigned long)addr | (phys & ~PAGE_MASK));
+-
+-	return addr;
++	return (void __force *)ioremap_cache(phys, PAGE_SIZE);
+ }
+ 
  void unxlate_dev_mem_ptr(unsigned long phys, void *addr)
  {
  	if (page_is_ram(phys >> PAGE_SHIFT))
@@ -30115,7 +30128,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/mm/i
  		return;
  
  	iounmap((void __iomem *)((unsigned long)addr & PAGE_MASK));
-@@ -351,7 +357,7 @@ static int __init early_ioremap_debug_se
+@@ -351,7 +350,7 @@ static int __init early_ioremap_debug_se
  early_param("early_ioremap_debug", early_ioremap_debug_setup);
  
  static __initdata int after_paging_init;
@@ -30124,7 +30137,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/mm/i
  
  static inline pmd_t * __init early_ioremap_pmd(unsigned long addr)
  {
-@@ -388,8 +394,7 @@ void __init early_ioremap_init(void)
+@@ -388,8 +387,7 @@ void __init early_ioremap_init(void)
  		slot_virt[i] = __fix_to_virt(FIX_BTMAP_BEGIN - NR_FIX_BTMAPS*i);
  
  	pmd = early_ioremap_pmd(fix_to_virt(FIX_BTMAP_BEGIN));
