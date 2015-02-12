@@ -1,4 +1,5 @@
-- forward port to 3.18.7
+- fixed potential boot crash when applying alternatives under KERNEXEC/i386
+- fixed potential integer truncation bug in xlate_dev_mem_ptr under PAE/i386
 
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/alpha/include/asm/atomic.h linux-3.18.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18.7/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -25064,7 +25065,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/kernel
  	if ((segoffs >> 16) == BIOSSEG)
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/kernel/vmlinux.lds.S linux-3.18.7-pax/arch/x86/kernel/vmlinux.lds.S
 --- linux-3.18.7/arch/x86/kernel/vmlinux.lds.S	2014-06-09 12:45:14.297124848 +0200
-+++ linux-3.18.7-pax/arch/x86/kernel/vmlinux.lds.S	2014-12-08 21:52:13.461196711 +0100
++++ linux-3.18.7-pax/arch/x86/kernel/vmlinux.lds.S	2015-02-12 01:27:10.393871455 +0100
 @@ -26,6 +26,13 @@
  #include <asm/page_types.h>
  #include <asm/cache.h>
@@ -25243,7 +25244,6 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/kernel
 +	.init.text (. - __KERNEL_TEXT_OFFSET): AT(init_begin - LOAD_OFFSET) {
 +		VMLINUX_SYMBOL(_sinittext) = .;
 +		INIT_TEXT
-+		VMLINUX_SYMBOL(_einittext) = .;
 +		. = ALIGN(PAGE_SIZE);
 +	} :text.init
 +
@@ -25253,6 +25253,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/kernel
 +	 */
 +	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET + __KERNEL_TEXT_OFFSET) {
 +		EXIT_TEXT
++		VMLINUX_SYMBOL(_einittext) = .;
 +		. = ALIGN(16);
 +	} :text.exit
 +	. = init_begin + SIZEOF(.init.text) + SIZEOF(.exit.text);
@@ -29966,7 +29967,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/mm/iom
  	return (void *)vaddr;
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/mm/ioremap.c linux-3.18.7-pax/arch/x86/mm/ioremap.c
 --- linux-3.18.7/arch/x86/mm/ioremap.c	2014-12-08 21:49:29.500813943 +0100
-+++ linux-3.18.7-pax/arch/x86/mm/ioremap.c	2014-12-08 21:52:13.481196757 +0100
++++ linux-3.18.7-pax/arch/x86/mm/ioremap.c	2015-02-12 00:55:22.357633801 +0100
 @@ -56,8 +56,8 @@ static int __ioremap_check_ram(unsigned
  	unsigned long i;
  
@@ -29987,17 +29988,29 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/mm/ior
  {
  	struct vm_struct *p, *o;
  
-@@ -334,6 +334,9 @@ void *xlate_dev_mem_ptr(unsigned long ph
- 
+@@ -329,30 +329,29 @@ EXPORT_SYMBOL(iounmap);
+  */
+ void *xlate_dev_mem_ptr(unsigned long phys)
+ {
+-	void *addr;
+-	unsigned long start = phys & PAGE_MASK;
+-
  	/* If page is RAM, we can use __va. Otherwise ioremap and unmap. */
- 	if (page_is_ram(start >> PAGE_SHIFT))
+-	if (page_is_ram(start >> PAGE_SHIFT))
++	if (page_is_ram(phys >> PAGE_SHIFT))
 +#ifdef CONFIG_HIGHMEM
-+	if ((start >> PAGE_SHIFT) < max_low_pfn)
++	if ((phys >> PAGE_SHIFT) < max_low_pfn)
 +#endif
  		return __va(phys);
  
- 	addr = (void __force *)ioremap_cache(start, PAGE_SIZE);
-@@ -346,13 +349,16 @@ void *xlate_dev_mem_ptr(unsigned long ph
+-	addr = (void __force *)ioremap_cache(start, PAGE_SIZE);
+-	if (addr)
+-		addr = (void *)((unsigned long)addr | (phys & ~PAGE_MASK));
+-
+-	return addr;
++	return (void __force *)ioremap_cache(phys, PAGE_SIZE);
+ }
+ 
  void unxlate_dev_mem_ptr(unsigned long phys, void *addr)
  {
  	if (page_is_ram(phys >> PAGE_SHIFT))
@@ -30015,7 +30028,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/x86/mm/ior
  
  static inline pmd_t * __init early_ioremap_pmd(unsigned long addr)
  {
-@@ -388,8 +394,7 @@ void __init early_ioremap_init(void)
+@@ -388,8 +387,7 @@ void __init early_ioremap_init(void)
  	early_ioremap_setup();
  
  	pmd = early_ioremap_pmd(fix_to_virt(FIX_BTMAP_BEGIN));
@@ -45190,13 +45203,14 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/regulat
  	if (pdata) {
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/regulator/mc13892-regulator.c linux-3.18.7-pax/drivers/regulator/mc13892-regulator.c
 --- linux-3.18.7/drivers/regulator/mc13892-regulator.c	2014-12-08 21:49:58.768882919 +0100
-+++ linux-3.18.7-pax/drivers/regulator/mc13892-regulator.c	2014-12-09 00:52:38.470366384 +0100
++++ linux-3.18.7-pax/drivers/regulator/mc13892-regulator.c	2015-02-12 00:54:14.765628127 +0100
 @@ -584,10 +584,12 @@ static int mc13892_regulator_probe(struc
  	mc13xxx_unlock(mc13892);
  
  	/* update mc13892_vcam ops */
+-	memcpy(&mc13892_vcam_ops, mc13892_regulators[MC13892_VCAM].desc.ops,
 +	pax_open_kernel();
- 	memcpy(&mc13892_vcam_ops, mc13892_regulators[MC13892_VCAM].desc.ops,
++	memcpy((void *)&mc13892_vcam_ops, mc13892_regulators[MC13892_VCAM].desc.ops,
  						sizeof(struct regulator_ops));
 -	mc13892_vcam_ops.set_mode = mc13892_vcam_set_mode,
 -	mc13892_vcam_ops.get_mode = mc13892_vcam_get_mode,
