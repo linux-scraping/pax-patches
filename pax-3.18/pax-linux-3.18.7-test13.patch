@@ -1,5 +1,5 @@
-- fixed potential boot crash when applying alternatives under KERNEXEC/i386
-- fixed potential integer truncation bug in xlate_dev_mem_ptr under PAE/i386
+- fail gcc plugins a bit more gracefully on gcc-5
+- fixed a few shellcheck.net warnings in gcc-plugin.sh
 
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/alpha/include/asm/atomic.h linux-3.18.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18.7/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -56686,6 +56686,38 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/include/linux/c
  /*
   * Mark a position in code as unreachable.  This can be used to
   * suppress control flow warnings after asm blocks that transfer
+diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/include/linux/compiler-gcc5.h linux-3.18.7-pax/include/linux/compiler-gcc5.h
+--- linux-3.18.7/include/linux/compiler-gcc5.h	2014-12-08 21:50:25.200944952 +0100
++++ linux-3.18.7-pax/include/linux/compiler-gcc5.h	2015-02-13 20:06:37.867228712 +0100
+@@ -28,6 +28,28 @@
+ # define __compiletime_error(message) __attribute__((error(message)))
+ #endif /* __CHECKER__ */
+ 
++#define __alloc_size(...)	__attribute((alloc_size(__VA_ARGS__)))
++#define __bos(ptr, arg)		__builtin_object_size((ptr), (arg))
++#define __bos0(ptr)		__bos((ptr), 0)
++#define __bos1(ptr)		__bos((ptr), 1)
++
++#ifdef CONSTIFY_PLUGIN
++#error not yet
++#define __no_const __attribute__((no_const))
++#define __do_const __attribute__((do_const))
++#endif
++
++#ifdef SIZE_OVERFLOW_PLUGIN
++#error not yet
++#define __size_overflow(...) __attribute__((size_overflow(__VA_ARGS__)))
++#define __intentional_overflow(...) __attribute__((intentional_overflow(__VA_ARGS__)))
++#endif
++
++#ifdef LATENT_ENTROPY_PLUGIN
++#error not yet
++#define __latent_entropy __attribute__((latent_entropy))
++#endif
++
+ /*
+  * Mark a position in code as unreachable.  This can be used to
+  * suppress control flow warnings after asm blocks that transfer
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/include/linux/compiler.h linux-3.18.7-pax/include/linux/compiler.h
 --- linux-3.18.7/include/linux/compiler.h	2014-08-04 01:37:36.498877942 +0200
 +++ linux-3.18.7-pax/include/linux/compiler.h	2014-12-08 21:52:13.749197379 +0100
@@ -76582,12 +76614,12 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/scripts/basic/f
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/scripts/gcc-plugin.sh linux-3.18.7-pax/scripts/gcc-plugin.sh
 --- linux-3.18.7/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.18.7-pax/scripts/gcc-plugin.sh	2014-12-08 21:52:24.149221388 +0100
++++ linux-3.18.7-pax/scripts/gcc-plugin.sh	2015-02-13 13:43:07.675483716 +0100
 @@ -0,0 +1,51 @@
 +#!/bin/sh
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
-+plugincc=$($1 -E - -o /dev/null -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++plugincc=$($1 -E - -o /dev/null -I"${srctree}"/../tools/gcc -I"${gccplugins_dir}"/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2 CXX
@@ -76618,7 +76650,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/scripts/gcc-plu
 +esac
 +
 +# we need a c++ compiler that supports the designated initializer GNU extension
-+plugincc=$($2 -c -x c++ -std=gnu++98 - -fsyntax-only -I${srctree}/../tools/gcc -I${gccplugins_dir}/include 2>&1 <<EOF
++plugincc=$($2 -c -x c++ -std=gnu++98 - -fsyntax-only -I"${srctree}"/../tools/gcc -I"${gccplugins_dir}"/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +class test {
 +public:
