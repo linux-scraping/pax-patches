@@ -1,5 +1,5 @@
-- fail gcc plugins a bit more gracefully on gcc-5
-- fixed a few shellcheck.net warnings in gcc-plugin.sh
+- fixed kernel oops caused by accessing invalid virtual addresses via /dev/[k]mem under USERCOPY, reported by minipli
+- added preliminary support for gcc-5 to gcc-common.h and the constify plugin
 
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/alpha/include/asm/atomic.h linux-3.18.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18.7/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -35401,16 +35401,18 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/ip
  	atomic_set(&new_smi->stop_operation, 0);
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/mem.c linux-3.18.7-pax/drivers/char/mem.c
 --- linux-3.18.7/drivers/char/mem.c	2014-12-08 21:49:30.712816806 +0100
-+++ linux-3.18.7-pax/drivers/char/mem.c	2014-12-08 21:52:13.533196878 +0100
-@@ -122,6 +122,7 @@ static ssize_t read_mem(struct file *fil
++++ linux-3.18.7-pax/drivers/char/mem.c	2015-02-17 18:31:16.188426647 +0100
+@@ -121,7 +121,8 @@ static ssize_t read_mem(struct file *fil
+ #endif
  
  	while (count > 0) {
- 		unsigned long remaining;
+-		unsigned long remaining;
++		unsigned long remaining = 0;
 +		char *temp;
  
  		sz = size_inside_page(p, count);
  
-@@ -137,7 +138,23 @@ static ssize_t read_mem(struct file *fil
+@@ -137,7 +138,24 @@ static ssize_t read_mem(struct file *fil
  		if (!ptr)
  			return -EFAULT;
  
@@ -35421,12 +35423,13 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/me
 +			unxlate_dev_mem_ptr(p, ptr);
 +			return -ENOMEM;
 +		}
-+		memcpy(temp, ptr, sz);
++		remaining = probe_kernel_read(temp, ptr, sz);
 +#else
 +		temp = ptr;
 +#endif
 +
-+		remaining = copy_to_user(buf, temp, sz);
++		if (!remaining)
++			remaining = copy_to_user(buf, temp, sz);
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +		kfree(temp);
@@ -35435,7 +35438,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/me
  		unxlate_dev_mem_ptr(p, ptr);
  		if (remaining)
  			return -EFAULT;
-@@ -369,9 +386,8 @@ static ssize_t read_kmem(struct file *fi
+@@ -369,9 +387,8 @@ static ssize_t read_kmem(struct file *fi
  			 size_t count, loff_t *ppos)
  {
  	unsigned long p = *ppos;
@@ -35446,7 +35449,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/me
  
  	read = 0;
  	if (p < (unsigned long) high_memory) {
-@@ -393,6 +409,8 @@ static ssize_t read_kmem(struct file *fi
+@@ -393,6 +410,8 @@ static ssize_t read_kmem(struct file *fi
  		}
  #endif
  		while (low_count > 0) {
@@ -35455,7 +35458,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/me
  			sz = size_inside_page(p, low_count);
  
  			/*
-@@ -402,7 +420,22 @@ static ssize_t read_kmem(struct file *fi
+@@ -402,7 +421,23 @@ static ssize_t read_kmem(struct file *fi
  			 */
  			kbuf = xlate_dev_kmem_ptr((char *)p);
  
@@ -35464,12 +35467,13 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/me
 +			temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
 +			if (!temp)
 +				return -ENOMEM;
-+			memcpy(temp, kbuf, sz);
++			err = probe_kernel_read(temp, kbuf, sz);
 +#else
 +			temp = kbuf;
 +#endif
 +
-+			err = copy_to_user(buf, temp, sz);
++			if (!err)
++				err = copy_to_user(buf, temp, sz);
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +			kfree(temp);
@@ -35479,7 +35483,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/drivers/char/me
  				return -EFAULT;
  			buf += sz;
  			p += sz;
-@@ -868,7 +901,7 @@ static int __init chr_dev_init(void)
+@@ -868,7 +903,7 @@ static int __init chr_dev_init(void)
  			continue;
  
  		device_create(mem_class, NULL, MKDEV(MEM_MAJOR, minor),
@@ -79082,8 +79086,8 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/color
 +}
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/constify_plugin.c linux-3.18.7-pax/tools/gcc/constify_plugin.c
 --- linux-3.18.7/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.18.7-pax/tools/gcc/constify_plugin.c	2014-12-08 21:52:24.557222327 +0100
-@@ -0,0 +1,557 @@
++++ linux-3.18.7-pax/tools/gcc/constify_plugin.c	2015-02-17 18:31:16.188426647 +0100
+@@ -0,0 +1,558 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2014 by PaX Team <pageexec@freemail.hu>
@@ -79517,7 +79521,8 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/const
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION >= 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -79625,8 +79630,8 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/const
 +		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
 +	}
 +
-+	if (strcmp(lang_hooks.name, "GNU C")) {
-+		inform(UNKNOWN_LOCATION, G_("%s supports C only"), plugin_name);
++	if (strncmp(lang_hooks.name, "GNU C", 5) && !strncmp(lang_hooks.name, "GNU C+", 6)) {
++		inform(UNKNOWN_LOCATION, G_("%s supports C only, not %s"), plugin_name, lang_hooks.name);
 +		constify = false;
 +	}
 +
@@ -79643,8 +79648,8 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/const
 +}
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/gcc-common.h linux-3.18.7-pax/tools/gcc/gcc-common.h
 --- linux-3.18.7/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.18.7-pax/tools/gcc/gcc-common.h	2015-01-27 23:02:49.351418083 +0100
-@@ -0,0 +1,353 @@
++++ linux-3.18.7-pax/tools/gcc/gcc-common.h	2015-02-17 18:31:16.192426647 +0100
+@@ -0,0 +1,375 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -79681,7 +79686,13 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/gcc-c
 +#include "timevar.h"
 +
 +#include "params.h"
++
++#if BUILDING_GCC_VERSION <= 4009
 +#include "pointer-set.h"
++#else
++#include "hash-map.h"
++#endif
++
 +#include "emit-rtl.h"
 +//#include "reload.h"
 +//#include "ira.h"
@@ -79705,7 +79716,7 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/gcc-c
 +#include "gimple-pretty-print.h"
 +#endif
 +
-+#if BUILDING_GCC_VERSION >= 4006
++#if BUILDING_GCC_VERSION >= 4007
 +//#include "c-tree.h"
 +//#include "cp/cp-tree.h"
 +#include "c-family/c-common.h"
@@ -79857,6 +79868,8 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/gcc-c
 +	sscanf(get_random_seed(noinit), "%" HOST_WIDE_INT_PRINT "x", &seed);	\
 +	seed * seed; })
 +
++#define int_const_binop(code, arg1, arg2) int_const_binop((code), (arg1), (arg2), 0)
++
 +static inline bool gimple_clobber_p(gimple s)
 +{
 +	return false;
@@ -79989,12 +80002,26 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/tools/gcc/gcc-c
 +#define TODO_dump_cgraph 0
 +#endif
 +
++#if BUILDING_GCC_VERSION <= 4009
++#define TODO_verify_il 0
++#endif
++
 +#if BUILDING_GCC_VERSION >= 4009
 +#define TODO_ggc_collect 0
 +#define NODE_SYMBOL(node) (node)
 +#define NODE_DECL(node) (node)->decl
 +#define cgraph_node_name(node) (node)->name()
 +#define NODE_IMPLICIT_ALIAS(node) (node)->cpp_implicit_alias
++#endif
++
++#if BUILDING_GCC_VERSION >= 5000
++#define TODO_verify_ssa TODO_verify_il
++#define TODO_verify_flow TODO_verify_il
++#define TODO_verify_stmts TODO_verify_il
++#define TODO_verify_rtl_sharing TODO_verify_il
++
++#define debug_cgraph_node(node) (node)->debug()
++#define cgraph_get_node(decl) cgraph_node::get(decl)
 +#endif
 +
 +#endif
