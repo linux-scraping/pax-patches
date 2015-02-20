@@ -1,5 +1,5 @@
-- fail gcc plugins a bit more gracefully on gcc-5
-- fixed a few shellcheck.net warnings in gcc-plugin.sh
+- fixed kernel oops caused by accessing invalid virtual addresses via /dev/[k]mem under USERCOPY, reported by minipli
+- added preliminary support for gcc-5 to gcc-common.h and the constify plugin
 
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/alpha/include/asm/atomic.h linux-3.14.33-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.33/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -32414,7 +32414,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/vdso
  }
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/vdso/vma.c linux-3.14.33-pax/arch/x86/vdso/vma.c
 --- linux-3.14.33/arch/x86/vdso/vma.c	2015-01-16 19:18:24.655025615 +0100
-+++ linux-3.14.33-pax/arch/x86/vdso/vma.c	2015-01-16 22:37:53.963631418 +0100
++++ linux-3.14.33-pax/arch/x86/vdso/vma.c	2015-02-20 12:51:19.537134649 +0100
 @@ -16,8 +16,6 @@
  #include <asm/vdso.h>
  #include <asm/page.h>
@@ -32424,20 +32424,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/vdso
  extern char vdso_start[], vdso_end[];
  extern unsigned short vdso_sync_cpuid;
  
-@@ -152,12 +150,6 @@ static unsigned long vdso_addr(unsigned
- 		addr = start;
- 	}
- 
--	/*
--	 * Forcibly align the final address in case we have a hardware
--	 * issue that requires alignment for performance reasons.
--	 */
--	addr = align_vdso_addr(addr);
--
- 	return addr;
- }
- 
-@@ -169,30 +161,37 @@ static int setup_additional_pages(struct
+@@ -169,13 +167,15 @@ static int setup_additional_pages(struct
  				  unsigned size)
  {
  	struct mm_struct *mm = current->mm;
@@ -32455,16 +32442,9 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/vdso
 +#endif
 +
  	addr = vdso_addr(mm->start_stack, size);
-+
-+	/*
-+	 * Forcibly align the final address in case we have a hardware
-+	 * issue that requires alignment for performance reasons.
-+	 */
-+	addr = align_vdso_addr(addr);
-+
  	addr = get_unmapped_area(NULL, addr, size, 0, 0);
  	if (IS_ERR_VALUE(addr)) {
- 		ret = addr;
+@@ -183,16 +183,14 @@ static int setup_additional_pages(struct
  		goto up_fail;
  	}
  
@@ -32484,7 +32464,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/arch/x86/vdso
  
  up_fail:
  	up_write(&mm->mmap_sem);
-@@ -212,10 +211,3 @@ int x32_setup_additional_pages(struct li
+@@ -212,10 +210,3 @@ int x32_setup_additional_pages(struct li
  				      vdsox32_size);
  }
  #endif
@@ -35532,16 +35512,18 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/
  	atomic_set(&new_smi->stop_operation, 0);
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/mem.c linux-3.14.33-pax/drivers/char/mem.c
 --- linux-3.14.33/drivers/char/mem.c	2014-03-31 12:47:57.999131282 +0200
-+++ linux-3.14.33-pax/drivers/char/mem.c	2014-03-31 12:53:46.419112679 +0200
-@@ -119,6 +119,7 @@ static ssize_t read_mem(struct file *fil
++++ linux-3.14.33-pax/drivers/char/mem.c	2015-02-20 14:13:20.472871910 +0100
+@@ -118,7 +118,8 @@ static ssize_t read_mem(struct file *fil
+ #endif
  
  	while (count > 0) {
- 		unsigned long remaining;
+-		unsigned long remaining;
++		unsigned long remaining = 0;
 +		char *temp;
  
  		sz = size_inside_page(p, count);
  
-@@ -134,7 +135,23 @@ static ssize_t read_mem(struct file *fil
+@@ -134,7 +135,24 @@ static ssize_t read_mem(struct file *fil
  		if (!ptr)
  			return -EFAULT;
  
@@ -35552,12 +35534,13 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/
 +			unxlate_dev_mem_ptr(p, ptr);
 +			return -ENOMEM;
 +		}
-+		memcpy(temp, ptr, sz);
++		remaining = probe_kernel_read(temp, ptr, sz);
 +#else
 +		temp = ptr;
 +#endif
 +
-+		remaining = copy_to_user(buf, temp, sz);
++		if (!remaining)
++			remaining = copy_to_user(buf, temp, sz);
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +		kfree(temp);
@@ -35566,7 +35549,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/
  		unxlate_dev_mem_ptr(p, ptr);
  		if (remaining)
  			return -EFAULT;
-@@ -363,9 +380,8 @@ static ssize_t read_kmem(struct file *fi
+@@ -363,9 +381,8 @@ static ssize_t read_kmem(struct file *fi
  			 size_t count, loff_t *ppos)
  {
  	unsigned long p = *ppos;
@@ -35577,7 +35560,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/
  
  	read = 0;
  	if (p < (unsigned long) high_memory) {
-@@ -387,6 +403,8 @@ static ssize_t read_kmem(struct file *fi
+@@ -387,6 +404,8 @@ static ssize_t read_kmem(struct file *fi
  		}
  #endif
  		while (low_count > 0) {
@@ -35586,7 +35569,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/
  			sz = size_inside_page(p, low_count);
  
  			/*
-@@ -396,7 +414,22 @@ static ssize_t read_kmem(struct file *fi
+@@ -396,7 +415,23 @@ static ssize_t read_kmem(struct file *fi
  			 */
  			kbuf = xlate_dev_kmem_ptr((char *)p);
  
@@ -35595,12 +35578,13 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/
 +			temp = kmalloc(sz, GFP_KERNEL|GFP_USERCOPY);
 +			if (!temp)
 +				return -ENOMEM;
-+			memcpy(temp, kbuf, sz);
++			err = probe_kernel_read(temp, kbuf, sz);
 +#else
 +			temp = kbuf;
 +#endif
 +
-+			err = copy_to_user(buf, temp, sz);
++			if (!err)
++				err = copy_to_user(buf, temp, sz);
 +
 +#ifdef CONFIG_PAX_USERCOPY
 +			kfree(temp);
@@ -35610,7 +35594,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/drivers/char/
  				return -EFAULT;
  			buf += sz;
  			p += sz;
-@@ -892,7 +925,7 @@ static int __init chr_dev_init(void)
+@@ -892,7 +927,7 @@ static int __init chr_dev_init(void)
  			continue;
  
  		device_create(mem_class, NULL, MKDEV(MEM_MAJOR, minor),
@@ -78317,8 +78301,8 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/col
 +}
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/constify_plugin.c linux-3.14.33-pax/tools/gcc/constify_plugin.c
 --- linux-3.14.33/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.33-pax/tools/gcc/constify_plugin.c	2014-04-23 23:08:47.315423853 +0200
-@@ -0,0 +1,557 @@
++++ linux-3.14.33-pax/tools/gcc/constify_plugin.c	2015-02-20 14:13:20.472871910 +0100
+@@ -0,0 +1,558 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2014 by PaX Team <pageexec@freemail.hu>
@@ -78752,7 +78736,8 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/con
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION >= 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -78860,8 +78845,8 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/con
 +		error(G_("unkown option '-fplugin-arg-%s-%s'"), plugin_name, argv[i].key);
 +	}
 +
-+	if (strcmp(lang_hooks.name, "GNU C")) {
-+		inform(UNKNOWN_LOCATION, G_("%s supports C only"), plugin_name);
++	if (strncmp(lang_hooks.name, "GNU C", 5) && !strncmp(lang_hooks.name, "GNU C+", 6)) {
++		inform(UNKNOWN_LOCATION, G_("%s supports C only, not %s"), plugin_name, lang_hooks.name);
 +		constify = false;
 +	}
 +
@@ -78878,8 +78863,8 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/con
 +}
 diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc-common.h linux-3.14.33-pax/tools/gcc/gcc-common.h
 --- linux-3.14.33/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.33-pax/tools/gcc/gcc-common.h	2014-05-28 02:08:44.315591869 +0200
-@@ -0,0 +1,295 @@
++++ linux-3.14.33-pax/tools/gcc/gcc-common.h	2015-02-17 18:31:16.192426647 +0100
+@@ -0,0 +1,375 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -78916,7 +78901,13 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#include "timevar.h"
 +
 +#include "params.h"
++
++#if BUILDING_GCC_VERSION <= 4009
 +#include "pointer-set.h"
++#else
++#include "hash-map.h"
++#endif
++
 +#include "emit-rtl.h"
 +//#include "reload.h"
 +//#include "ira.h"
@@ -78931,11 +78922,21 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +//#include "coverage.h"
 +//#include "value-prof.h"
 +
++#if BUILDING_GCC_VERSION == 4005
++#include <sys/mman.h>
++#endif
++
 +#if BUILDING_GCC_VERSION >= 4007
 +#include "tree-pretty-print.h"
 +#include "gimple-pretty-print.h"
-+#include "c-tree.h"
-+//#include "alloc-pool.h"
++#endif
++
++#if BUILDING_GCC_VERSION >= 4007
++//#include "c-tree.h"
++//#include "cp/cp-tree.h"
++#include "c-family/c-common.h"
++#else
++#include "c-common.h"
 +#endif
 +
 +#if BUILDING_GCC_VERSION <= 4008
@@ -78957,6 +78958,7 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#include "stor-layout.h"
 +#include "internal-fn.h"
 +#include "gimple-expr.h"
++#include "gimple-fold.h"
 +//#include "diagnostic-color.h"
 +#include "context.h"
 +#include "tree-ssa-alias.h"
@@ -78979,7 +78981,11 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#endif
 +
 +//#include "lto/lto.h"
++#if BUILDING_GCC_VERSION >= 4007
 +//#include "data-streamer.h"
++#else
++//#include "lto-streamer.h"
++#endif
 +//#include "lto-compress.h"
 +
 +//#include "expr.h" where are you...
@@ -78989,6 +78995,15 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +extern void debug_dominance_info(enum cdi_direction dir);
 +extern void debug_dominance_tree(enum cdi_direction dir, basic_block root);
 +
++#ifdef __cplusplus
++static inline void debug_tree(const_tree t)
++{
++	debug_tree(CONST_CAST_TREE(t));
++}
++#else
++#define debug_tree(t) debug_tree(CONST_CAST_TREE(t))
++#endif
++
 +#define __unused __attribute__((__unused__))
 +
 +#define DECL_NAME_POINTER(node) IDENTIFIER_POINTER(DECL_NAME(node))
@@ -78996,11 +79011,19 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#define TYPE_NAME_POINTER(node) IDENTIFIER_POINTER(TYPE_NAME(node))
 +#define TYPE_NAME_LENGTH(node) IDENTIFIER_LENGTH(TYPE_NAME(node))
 +
++// should come from c-tree.h if only it were installed for gcc 4.5...
++#define C_TYPE_FIELDS_READONLY(TYPE) TREE_LANG_FLAG_1(TYPE)
++
 +#if BUILDING_GCC_VERSION == 4005
-+#define FOR_EACH_LOCAL_DECL(FUN, I, D) for (tree vars = (FUN)->local_decls; vars && (D = TREE_VALUE(vars)); vars = TREE_CHAIN(vars), I)
++#define FOR_EACH_VEC_ELT_REVERSE(T,V,I,P) for (I = VEC_length(T, (V)) - 1; VEC_iterate(T, (V), (I), (P)); (I)--)
++#define FOR_EACH_LOCAL_DECL(FUN, I, D) FOR_EACH_VEC_ELT_REVERSE(tree, (FUN)->local_decls, I, D)
 +#define DECL_CHAIN(NODE) (TREE_CHAIN(DECL_MINIMAL_CHECK(NODE)))
 +#define FOR_EACH_VEC_ELT(T, V, I, P) for (I = 0; VEC_iterate(T, (V), (I), (P)); ++(I))
 +#define TODO_rebuild_cgraph_edges 0
++
++#ifndef O_BINARY
++#define O_BINARY 0
++#endif
 +
 +static inline bool gimple_call_builtin_p(gimple stmt, enum built_in_function code)
 +{
@@ -79051,23 +79074,43 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#if BUILDING_GCC_VERSION <= 4006
 +#define ANY_RETURN_P(rtx) (GET_CODE(rtx) == RETURN)
 +#define C_DECL_REGISTER(EXP) DECL_LANG_FLAG_4(EXP)
-+
-+// should come from c-tree.h if only it were installed for gcc 4.5...
-+#define C_TYPE_FIELDS_READONLY(TYPE) TREE_LANG_FLAG_1(TYPE)
++#define EDGE_PRESERVE 0ULL
++#define HOST_WIDE_INT_PRINT_HEX_PURE "%" HOST_WIDE_INT_PRINT "x"
++#define flag_fat_lto_objects true
 +
 +#define get_random_seed(noinit) ({						\
 +	unsigned HOST_WIDE_INT seed;						\
 +	sscanf(get_random_seed(noinit), "%" HOST_WIDE_INT_PRINT "x", &seed);	\
 +	seed * seed; })
 +
++#define int_const_binop(code, arg1, arg2) int_const_binop((code), (arg1), (arg2), 0)
++
 +static inline bool gimple_clobber_p(gimple s)
 +{
++	return false;
++}
++
++static inline bool gimple_asm_clobbers_memory_p(const_gimple stmt)
++{
++	unsigned i;
++
++	for (i = 0; i < gimple_asm_nclobbers(stmt); i++) {
++		tree op = gimple_asm_clobber_op(stmt, i);
++		if (!strcmp(TREE_STRING_POINTER(TREE_VALUE(op)), "memory"))
++			return true;
++	}
++
 +	return false;
 +}
 +
 +static inline tree builtin_decl_implicit(enum built_in_function fncode)
 +{
 +	return implicit_built_in_decls[fncode];
++}
++
++static inline int ipa_reverse_postorder(struct cgraph_node **order)
++{
++	return cgraph_postorder(order);
 +}
 +
 +static inline struct cgraph_node *cgraph_get_create_node(tree decl)
@@ -79115,8 +79158,11 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#endif
 +
 +#if BUILDING_GCC_VERSION <= 4007
++#define FOR_EACH_FUNCTION(node) for (node = cgraph_nodes; node; node = node->next)
 +#define FOR_EACH_VARIABLE(node) for (node = varpool_nodes; node; node = node->next)
 +#define PROP_loops 0
++#define NODE_SYMBOL(node) (node)
++#define NODE_DECL(node) (node)->decl
 +
 +static inline int bb_loop_depth(const_basic_block bb)
 +{
@@ -79146,6 +79192,8 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#define last_basic_block_for_fn(FN)	((FN)->cfg->x_last_basic_block)
 +#define label_to_block_map_for_fn(FN)	((FN)->cfg->x_label_to_block_map)
 +#define profile_status_for_fn(FN)	((FN)->cfg->x_profile_status)
++#define BASIC_BLOCK_FOR_FN(FN, N)	BASIC_BLOCK_FOR_FUNCTION((FN), (N))
++#define NODE_IMPLICIT_ALIAS(node)	(node)->same_body_alias
 +
 +static inline const char *get_tree_code_name(enum tree_code code)
 +{
@@ -79157,9 +79205,8 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#endif
 +
 +#if BUILDING_GCC_VERSION == 4008
-+#define NODE_DECL(node) node->symbol.decl
-+#else
-+#define NODE_DECL(node) node->decl
++#define NODE_SYMBOL(node) (&(node)->symbol)
++#define NODE_DECL(node) (node)->symbol.decl
 +#endif
 +
 +#if BUILDING_GCC_VERSION >= 4008
@@ -79170,8 +79217,26 @@ diff -NurpX linux-3.14.33-pax/Documentation/dontdiff linux-3.14.33/tools/gcc/gcc
 +#define TODO_dump_cgraph 0
 +#endif
 +
++#if BUILDING_GCC_VERSION <= 4009
++#define TODO_verify_il 0
++#endif
++
 +#if BUILDING_GCC_VERSION >= 4009
 +#define TODO_ggc_collect 0
++#define NODE_SYMBOL(node) (node)
++#define NODE_DECL(node) (node)->decl
++#define cgraph_node_name(node) (node)->name()
++#define NODE_IMPLICIT_ALIAS(node) (node)->cpp_implicit_alias
++#endif
++
++#if BUILDING_GCC_VERSION >= 5000
++#define TODO_verify_ssa TODO_verify_il
++#define TODO_verify_flow TODO_verify_il
++#define TODO_verify_stmts TODO_verify_il
++#define TODO_verify_rtl_sharing TODO_verify_il
++
++#define debug_cgraph_node(node) (node)->debug()
++#define cgraph_get_node(decl) cgraph_node::get(decl)
 +#endif
 +
 +#endif
