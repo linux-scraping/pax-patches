@@ -1,5 +1,4 @@
-- fixed kernel oops caused by accessing invalid virtual addresses via /dev/[k]mem under USERCOPY, reported by minipli
-- added preliminary support for gcc-5 to gcc-common.h and the constify plugin
+- fixed a false positive refcount overflow in threaded irq handling, reported by Emese Revfy
 
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/arch/alpha/include/asm/atomic.h linux-3.18.7-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.18.7/arch/alpha/include/asm/atomic.h	2014-12-08 21:49:09.820767385 +0100
@@ -57568,6 +57567,18 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/include/linux/i
  
  void gic_init_bases(unsigned int, int, void __iomem *, void __iomem *,
  		    u32 offset, struct device_node *);
+diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/include/linux/irqdesc.h linux-3.18.7-pax/include/linux/irqdesc.h
+--- linux-3.18.7/include/linux/irqdesc.h	2014-12-08 21:50:25.648946001 +0100
++++ linux-3.18.7-pax/include/linux/irqdesc.h	2015-02-27 14:13:16.308572032 +0100
+@@ -61,7 +61,7 @@ struct irq_desc {
+ 	unsigned int		irq_count;	/* For detecting broken IRQs */
+ 	unsigned long		last_unhandled;	/* Aging timer for unhandled count */
+ 	unsigned int		irqs_unhandled;
+-	atomic_t		threads_handled;
++	atomic_unchecked_t	threads_handled;
+ 	int			threads_handled_last;
+ 	raw_spinlock_t		lock;
+ 	struct cpumask		*percpu_enabled;
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/include/linux/irq.h linux-3.18.7-pax/include/linux/irq.h
 --- linux-3.18.7/include/linux/irq.h	2014-12-08 21:50:25.632945963 +0100
 +++ linux-3.18.7-pax/include/linux/irq.h	2014-12-08 21:52:15.341201058 +0100
@@ -62604,6 +62615,30 @@ diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/kernel/gcov/bas
  			gcov_info_unlink(prev, info);
  			if (gcov_events_enabled)
  				gcov_event(GCOV_REMOVE, info);
+diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/kernel/irq/manage.c linux-3.18.7-pax/kernel/irq/manage.c
+--- linux-3.18.7/kernel/irq/manage.c	2014-12-08 21:50:28.368952371 +0100
++++ linux-3.18.7-pax/kernel/irq/manage.c	2015-02-27 14:13:06.948572531 +0100
+@@ -869,7 +869,7 @@ static int irq_thread(void *data)
+ 
+ 		action_ret = handler_fn(desc, action);
+ 		if (action_ret == IRQ_HANDLED)
+-			atomic_inc(&desc->threads_handled);
++			atomic_inc_unchecked(&desc->threads_handled);
+ 
+ 		wake_threads_waitq(desc);
+ 	}
+diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/kernel/irq/spurious.c linux-3.18.7-pax/kernel/irq/spurious.c
+--- linux-3.18.7/kernel/irq/spurious.c	2014-08-04 01:37:41.130877695 +0200
++++ linux-3.18.7-pax/kernel/irq/spurious.c	2015-02-27 14:13:35.984570981 +0100
+@@ -337,7 +337,7 @@ void note_interrupt(unsigned int irq, st
+ 			 * count. We just care about the count being
+ 			 * different than the one we saw before.
+ 			 */
+-			handled = atomic_read(&desc->threads_handled);
++			handled = atomic_read_unchecked(&desc->threads_handled);
+ 			handled |= SPURIOUS_DEFERRED;
+ 			if (handled != desc->threads_handled_last) {
+ 				action_ret = IRQ_HANDLED;
 diff -NurpX linux-3.18.7-pax/Documentation/dontdiff linux-3.18.7/kernel/jump_label.c linux-3.18.7-pax/kernel/jump_label.c
 --- linux-3.18.7/kernel/jump_label.c	2014-01-20 12:36:50.272997971 +0100
 +++ linux-3.18.7-pax/kernel/jump_label.c	2014-12-08 21:52:17.841206830 +0100
