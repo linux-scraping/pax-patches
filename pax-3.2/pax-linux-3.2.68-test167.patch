@@ -1,4 +1,6 @@
-- forward port to 3.2.68
+- fixed a use-after-free in AF_UNIX socket handling, by Mathias Krause <minipli@googlemail.com>, reported by coredumb (https://forums.grsecurity.net/viewtopic.php?f=3&t=4150)
+- fixed a USERCOPY false positive and a LATENT_ENTROPY related compile error on ppc, reported by lynliuyan (https://forums.grsecurity.net/viewtopic.php?f=3&t=4158)
+- fixed a compile regression in gcc plugins under gcc 4.6, reported by Kamil Kaczkowski and spender
 
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/alpha/include/asm/atomic.h linux-3.2.68-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.68/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -3639,6 +3641,21 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/powerpc/ke
  			found = h;
  			break;
  		}
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/powerpc/kernel/Makefile linux-3.2.68-pax/arch/powerpc/kernel/Makefile
+--- linux-3.2.68/arch/powerpc/kernel/Makefile	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/arch/powerpc/kernel/Makefile	2015-03-11 16:19:01.563127726 +0100
+@@ -14,6 +14,11 @@ CFLAGS_prom_init.o      += -fPIC
+ CFLAGS_btext.o		+= -fPIC
+ endif
+ 
++CFLAGS_REMOVE_cputable.o = $(LATENT_ENTROPY_PLUGIN_CFLAGS)
++CFLAGS_REMOVE_prom_init.o = $(LATENT_ENTROPY_PLUGIN_CFLAGS)
++CFLAGS_REMOVE_btext.o = $(LATENT_ENTROPY_PLUGIN_CFLAGS)
++CFLAGS_REMOVE_prom.o = $(LATENT_ENTROPY_PLUGIN_CFLAGS)
++
+ ifdef CONFIG_FUNCTION_TRACER
+ # Do not trace early boot code
+ CFLAGS_REMOVE_cputable.o = -pg -mno-sched-epilog
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/powerpc/kernel/module_32.c linux-3.2.68-pax/arch/powerpc/kernel/module_32.c
 --- linux-3.2.68/arch/powerpc/kernel/module_32.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/arch/powerpc/kernel/module_32.c	2014-01-16 02:55:45.870178862 +0100
@@ -3682,8 +3699,14 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/powerpc/ke
  #endif
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/powerpc/kernel/process.c linux-3.2.68-pax/arch/powerpc/kernel/process.c
 --- linux-3.2.68/arch/powerpc/kernel/process.c	2012-09-20 01:42:17.146672774 +0200
-+++ linux-3.2.68-pax/arch/powerpc/kernel/process.c	2012-09-20 01:42:29.882672813 +0200
-@@ -1255,58 +1255,3 @@ void thread_info_cache_init(void)
++++ linux-3.2.68-pax/arch/powerpc/kernel/process.c	2015-03-11 16:18:23.455127606 +0100
+@@ -1250,63 +1250,8 @@ void free_thread_info(struct thread_info
+ void thread_info_cache_init(void)
+ {
+ 	thread_info_cache = kmem_cache_create("thread_info", THREAD_SIZE,
+-					      THREAD_SIZE, 0, NULL);
++					      THREAD_SIZE, SLAB_USERCOPY, NULL);
+ 	BUG_ON(thread_info_cache == NULL);
  }
  
  #endif /* THREAD_SHIFT < PAGE_SHIFT */
@@ -68565,6 +68588,26 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/net/tipc/subscr
  	msg_sect.iov_len = sizeof(struct tipc_event);
  
  	sub->evt.event = htohl(event, sub->swap);
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/net/unix/af_unix.c linux-3.2.68-pax/net/unix/af_unix.c
+--- linux-3.2.68/net/unix/af_unix.c	2014-04-30 18:53:46.488223428 +0200
++++ linux-3.2.68-pax/net/unix/af_unix.c	2015-03-11 16:22:21.671128356 +0100
+@@ -2180,11 +2180,14 @@ static unsigned int unix_dgram_poll(stru
+ 	writable = unix_writable(sk);
+ 	other = unix_peer_get(sk);
+ 	if (other) {
+-		if (unix_peer(other) != sk) {
++		unix_state_lock(other);
++		if (!sock_flag(other, SOCK_DEAD) && unix_peer(other) != sk) {
++			unix_state_unlock(other);
+ 			sock_poll_wait(file, &unix_sk(other)->peer_wait, wait);
+ 			if (unix_recvq_full(other))
+ 				writable = 0;
+-		}
++		} else
++			unix_state_unlock(other);
+ 		sock_put(other);
+ 	}
+ 
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/net/unix/sysctl_net_unix.c linux-3.2.68-pax/net/unix/sysctl_net_unix.c
 --- linux-3.2.68/net/unix/sysctl_net_unix.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/net/unix/sysctl_net_unix.c	2013-03-28 01:35:23.568427934 +0100
@@ -71838,7 +71881,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/const
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-common.h linux-3.2.68-pax/tools/gcc/gcc-common.h
 --- linux-3.2.68/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/gcc-common.h	2015-02-17 18:28:29.844435529 +0100
++++ linux-3.2.68-pax/tools/gcc/gcc-common.h	2015-03-09 23:34:33.647053861 +0100
 @@ -0,0 +1,375 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
@@ -71906,7 +71949,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +#include "gimple-pretty-print.h"
 +#endif
 +
-+#if BUILDING_GCC_VERSION >= 4007
++#if BUILDING_GCC_VERSION >= 4006
 +//#include "c-tree.h"
 +//#include "cp/cp-tree.h"
 +#include "c-family/c-common.h"
@@ -72060,7 +72103,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +
 +#define int_const_binop(code, arg1, arg2) int_const_binop((code), (arg1), (arg2), 0)
 +
-+static inline bool gimple_clobber_p(gimple s)
++static inline bool gimple_clobber_p(gimple s __unused)
 +{
 +	return false;
 +}
@@ -77858,7 +77901,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/size_
 +zpios_read_64734 zpios_read 3 64734 NULL
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/size_overflow_plugin/size_overflow_hash.data linux-3.2.68-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data
 --- linux-3.2.68/tools/gcc/size_overflow_plugin/size_overflow_hash.data	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data	2014-11-01 00:49:45.120432616 +0100
++++ linux-3.2.68-pax/tools/gcc/size_overflow_plugin/size_overflow_hash.data	2015-03-11 16:31:52.471130152 +0100
 @@ -0,0 +1,4441 @@
 +intel_fake_agp_alloc_by_type_1 intel_fake_agp_alloc_by_type 1 1 NULL
 +compat_sock_setsockopt_23 compat_sock_setsockopt 5 23 NULL
