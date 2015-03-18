@@ -1,7 +1,4 @@
-- fixed a use-after-free in AF_UNIX socket handling, by Mathias Krause <minipli@googlemail.com>, reported by coredumb (https://forums.grsecurity.net/viewtopic.php?f=3&t=4150)
-- fixed a USERCOPY false positive and a LATENT_ENTROPY related compile error on ppc, reported by lynliuyan (https://forums.grsecurity.net/viewtopic.php?f=3&t=4158)
-- fixed a compile regression in gcc plugins under gcc 4.6, reported by Kamil Kaczkowski and spender
-- updated size overflow hash table from grsecurity
+- fixed a false positive size overflow report that triggered while resizing an ext4 file system, reported by Mathias Krause <minipli@googlemail.com>
 
 diff -NurpX linux-3.14.35-pax/Documentation/dontdiff linux-3.14.35/arch/alpha/include/asm/atomic.h linux-3.14.35-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.35/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -51798,6 +51795,47 @@ diff -NurpX linux-3.14.35-pax/Documentation/dontdiff linux-3.14.35/fs/ext4/mmp.c
  	__ext4_warning(sb, function, line,
  		       "MMP failure info: last update time: %llu, last update "
  		       "node: %s, last update device: %s\n",
+diff -NurpX linux-3.14.35-pax/Documentation/dontdiff linux-3.14.35/fs/ext4/resize.c linux-3.14.35-pax/fs/ext4/resize.c
+--- linux-3.14.35/fs/ext4/resize.c	2014-11-14 21:14:03.613282825 +0100
++++ linux-3.14.35-pax/fs/ext4/resize.c	2015-03-18 15:42:11.632353096 +0100
+@@ -400,7 +400,7 @@ static int set_flexbg_block_bitmap(struc
+ 
+ 	ext4_debug("mark blocks [%llu/%u] used\n", block, count);
+ 	for (count2 = count; count > 0; count -= count2, block += count2) {
+-		ext4_fsblk_t start;
++		ext4_fsblk_t start, diff;
+ 		struct buffer_head *bh;
+ 		ext4_group_t group;
+ 		int err;
+@@ -409,10 +409,6 @@ static int set_flexbg_block_bitmap(struc
+ 		start = ext4_group_first_block_no(sb, group);
+ 		group -= flex_gd->groups[0].group;
+ 
+-		count2 = EXT4_BLOCKS_PER_GROUP(sb) - (block - start);
+-		if (count2 > count)
+-			count2 = count;
+-
+ 		if (flex_gd->bg_flags[group] & EXT4_BG_BLOCK_UNINIT) {
+ 			BUG_ON(flex_gd->count > 1);
+ 			continue;
+@@ -429,9 +425,15 @@ static int set_flexbg_block_bitmap(struc
+ 		err = ext4_journal_get_write_access(handle, bh);
+ 		if (err)
+ 			return err;
++
++		diff = block - start;
++		count2 = EXT4_BLOCKS_PER_GROUP(sb) - diff;
++		if (count2 > count)
++			count2 = count;
++
+ 		ext4_debug("mark block bitmap %#04llx (+%llu/%u)\n", block,
+-			   block - start, count2);
+-		ext4_set_bits(bh->b_data, block - start, count2);
++			   diff, count2);
++		ext4_set_bits(bh->b_data, diff, count2);
+ 
+ 		err = ext4_handle_dirty_metadata(handle, NULL, bh);
+ 		if (unlikely(err))
 diff -NurpX linux-3.14.35-pax/Documentation/dontdiff linux-3.14.35/fs/ext4/super.c linux-3.14.35-pax/fs/ext4/super.c
 --- linux-3.14.35/fs/ext4/super.c	2014-11-14 21:14:03.613282825 +0100
 +++ linux-3.14.35-pax/fs/ext4/super.c	2014-11-14 21:14:19.649280170 +0100
