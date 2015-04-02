@@ -1,5 +1,7 @@
-- fixed a crash bug with the old PAGEEXEC method and PSE, reported by Merlin
-- added some more gcc-5 support for plugins
+- fixed early boot crash due to some misplaced STACs on i386, reported by Arnaud Fontaine <arnaud@drno.eu>
+- properly fixed CVE-2014-8159, http://seclists.org/oss-sec/2015/q1/886 and http://seclists.org/oss-sec/2015/q2/10
+- fixed some REFCOUNT false positives in the tracing ring buffer code, reported by metarox (https://forums.grsecurity.net/viewtopic.php?f=3&t=4186)
+- some more plugin porting to gcc-5
 
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/alpha/include/asm/atomic.h linux-3.14.37-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.37/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -8376,8 +8378,16 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/sparc/in
  };
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/sparc/include/asm/uaccess_32.h linux-3.14.37-pax/arch/sparc/include/asm/uaccess_32.h
 --- linux-3.14.37/arch/sparc/include/asm/uaccess_32.h	2013-08-20 19:08:15.791833390 +0200
-+++ linux-3.14.37-pax/arch/sparc/include/asm/uaccess_32.h	2014-03-31 12:53:46.303112685 +0200
-@@ -250,27 +250,46 @@ extern unsigned long __copy_user(void __
++++ linux-3.14.37-pax/arch/sparc/include/asm/uaccess_32.h	2015-04-03 01:10:50.276282528 +0200
+@@ -47,6 +47,7 @@
+ #define __user_ok(addr, size) ({ (void)(size); (addr) < STACK_TOP; })
+ #define __kernel_ok (segment_eq(get_fs(), KERNEL_DS))
+ #define __access_ok(addr,size) (__user_ok((addr) & get_fs().seg,(size)))
++#define access_ok_noprefault(type, addr, size) access_ok((type), (addr), (size))
+ #define access_ok(type, addr, size)					\
+ 	({ (void)(type); __access_ok((unsigned long)(addr), size); })
+ 
+@@ -250,27 +251,46 @@ extern unsigned long __copy_user(void __
  
  static inline unsigned long copy_to_user(void __user *to, const void *from, unsigned long n)
  {
@@ -8430,7 +8440,7 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/sparc/in
  
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/sparc/include/asm/uaccess_64.h linux-3.14.37-pax/arch/sparc/include/asm/uaccess_64.h
 --- linux-3.14.37/arch/sparc/include/asm/uaccess_64.h	2014-01-20 12:36:04.653000407 +0100
-+++ linux-3.14.37-pax/arch/sparc/include/asm/uaccess_64.h	2014-03-31 12:53:46.303112685 +0200
++++ linux-3.14.37-pax/arch/sparc/include/asm/uaccess_64.h	2015-04-03 01:11:09.016283546 +0200
 @@ -10,6 +10,7 @@
  #include <linux/compiler.h>
  #include <linux/string.h>
@@ -8439,7 +8449,19 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/sparc/in
  #include <asm/asi.h>
  #include <asm/spitfire.h>
  #include <asm-generic/uaccess-unaligned.h>
-@@ -214,8 +215,15 @@ extern unsigned long copy_from_user_fixu
+@@ -54,6 +55,11 @@ static inline int __access_ok(const void
+ 	return 1;
+ }
+ 
++static inline int access_ok_noprefault(int type, const void __user * addr, unsigned long size)
++{
++	return 1;
++}
++
+ static inline int access_ok(int type, const void __user * addr, unsigned long size)
+ {
+ 	return 1;
+@@ -214,8 +220,15 @@ extern unsigned long copy_from_user_fixu
  static inline unsigned long __must_check
  copy_from_user(void *to, const void __user *from, unsigned long size)
  {
@@ -8456,7 +8478,7 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/sparc/in
  	if (unlikely(ret))
  		ret = copy_from_user_fixup(to, from, size);
  
-@@ -231,8 +239,15 @@ extern unsigned long copy_to_user_fixup(
+@@ -231,8 +244,15 @@ extern unsigned long copy_to_user_fixup(
  static inline unsigned long __must_check
  copy_to_user(void __user *to, const void *from, unsigned long size)
  {
@@ -27018,7 +27040,7 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  EXPORT_SYMBOL(csum_partial_copy_to_user);
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/getuser.S linux-3.14.37-pax/arch/x86/lib/getuser.S
 --- linux-3.14.37/arch/x86/lib/getuser.S	2013-08-20 19:08:15.955833381 +0200
-+++ linux-3.14.37-pax/arch/x86/lib/getuser.S	2014-03-31 12:53:46.375112681 +0200
++++ linux-3.14.37-pax/arch/x86/lib/getuser.S	2015-04-01 16:53:14.144770075 +0200
 @@ -33,17 +33,40 @@
  #include <asm/thread_info.h>
  #include <asm/asm.h>
@@ -27041,8 +27063,6 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae bad_get_user
- 	ASM_STAC
--1:	movzbl (%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	mov pax_user_shadow_base,%_ASM_DX
@@ -27054,6 +27074,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +
 +#endif
 +
+ 	ASM_STAC
+-1:	movzbl (%_ASM_AX),%edx
 +1:	__copyuser_seg movzbl (%_ASM_AX),%edx
  	xor %eax,%eax
  	ASM_CLAC
@@ -27071,8 +27093,6 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae bad_get_user
- 	ASM_STAC
--2:	movzwl -1(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	mov pax_user_shadow_base,%_ASM_DX
@@ -27084,6 +27104,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +
 +#endif
 +
+ 	ASM_STAC
+-2:	movzwl -1(%_ASM_AX),%edx
 +2:	__copyuser_seg movzwl -1(%_ASM_AX),%edx
  	xor %eax,%eax
  	ASM_CLAC
@@ -27101,8 +27123,6 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  	GET_THREAD_INFO(%_ASM_DX)
  	cmp TI_addr_limit(%_ASM_DX),%_ASM_AX
  	jae bad_get_user
- 	ASM_STAC
--3:	movl -3(%_ASM_AX),%edx
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	mov pax_user_shadow_base,%_ASM_DX
@@ -27114,6 +27134,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +
 +#endif
 +
+ 	ASM_STAC
+-3:	movl -3(%_ASM_AX),%edx
 +3:	__copyuser_seg movl -3(%_ASM_AX),%edx
  	xor %eax,%eax
  	ASM_CLAC
@@ -27686,7 +27708,7 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  	CFI_RESTORE_STATE
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/putuser.S linux-3.14.37-pax/arch/x86/lib/putuser.S
 --- linux-3.14.37/arch/x86/lib/putuser.S	2013-08-20 19:08:15.959833381 +0200
-+++ linux-3.14.37-pax/arch/x86/lib/putuser.S	2014-03-31 12:53:46.379112681 +0200
++++ linux-3.14.37-pax/arch/x86/lib/putuser.S	2015-04-01 13:57:02.185334536 +0200
 @@ -16,7 +16,9 @@
  #include <asm/errno.h>
  #include <asm/asm.h>
@@ -27732,8 +27754,6 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +	GET_THREAD_INFO(%_ASM_BX)
  	cmp TI_addr_limit(%_ASM_BX),%_ASM_CX
  	jae bad_put_user
- 	ASM_STAC
--1:	movb %al,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	mov pax_user_shadow_base,%_ASM_BX
@@ -27745,6 +27765,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +
 +#endif
 +
+ 	ASM_STAC
+-1:	movb %al,(%_ASM_CX)
 +1:	__copyuser_seg movb %al,(_DEST)
  	xor %eax,%eax
  	EXIT
@@ -27759,8 +27781,6 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  	sub $1,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
- 	ASM_STAC
--2:	movw %ax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	mov pax_user_shadow_base,%_ASM_BX
@@ -27772,6 +27792,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +
 +#endif
 +
+ 	ASM_STAC
+-2:	movw %ax,(%_ASM_CX)
 +2:	__copyuser_seg movw %ax,(_DEST)
  	xor %eax,%eax
  	EXIT
@@ -27786,8 +27808,6 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  	sub $3,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
- 	ASM_STAC
--3:	movl %eax,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	mov pax_user_shadow_base,%_ASM_BX
@@ -27799,6 +27819,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +
 +#endif
 +
+ 	ASM_STAC
+-3:	movl %eax,(%_ASM_CX)
 +3:	__copyuser_seg movl %eax,(_DEST)
  	xor %eax,%eax
  	EXIT
@@ -27813,8 +27835,6 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
  	sub $7,%_ASM_BX
  	cmp %_ASM_BX,%_ASM_CX
  	jae bad_put_user
- 	ASM_STAC
--4:	mov %_ASM_AX,(%_ASM_CX)
 +
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	mov pax_user_shadow_base,%_ASM_BX
@@ -27826,6 +27846,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/arch/x86/lib/
 +
 +#endif
 +
+ 	ASM_STAC
+-4:	mov %_ASM_AX,(%_ASM_CX)
 +4:	__copyuser_seg mov %_ASM_AX,(_DEST)
  #ifdef CONFIG_X86_32
 -5:	movl %edx,4(%_ASM_CX)
@@ -39107,6 +39129,19 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/drivers/infin
  				wake_up_process(pool->thread);
  			}
  		}
+diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/drivers/infiniband/core/uverbs_cmd.c linux-3.14.37-pax/drivers/infiniband/core/uverbs_cmd.c
+--- linux-3.14.37/drivers/infiniband/core/uverbs_cmd.c	2015-03-18 16:05:41.684357533 +0100
++++ linux-3.14.37-pax/drivers/infiniband/core/uverbs_cmd.c	2015-04-03 01:12:09.544286833 +0200
+@@ -923,6 +923,9 @@ ssize_t ib_uverbs_reg_mr(struct ib_uverb
+ 	if (copy_from_user(&cmd, buf, sizeof cmd))
+ 		return -EFAULT;
+ 
++	if (!access_ok_noprefault(VERIFY_READ, cmd.start, cmd.length))
++		return -EFAULT;
++
+ 	INIT_UDATA(&udata, buf + sizeof cmd,
+ 		   (unsigned long) cmd.response + sizeof resp,
+ 		   in_len - sizeof cmd, out_len - sizeof resp);
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/drivers/infiniband/hw/cxgb4/mem.c linux-3.14.37-pax/drivers/infiniband/hw/cxgb4/mem.c
 --- linux-3.14.37/drivers/infiniband/hw/cxgb4/mem.c	2014-03-31 12:48:03.783130973 +0200
 +++ linux-3.14.37-pax/drivers/infiniband/hw/cxgb4/mem.c	2014-03-31 12:53:46.447112677 +0200
@@ -65181,7 +65216,7 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/
  	smp_wmb();
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/ring_buffer.c linux-3.14.37-pax/kernel/trace/ring_buffer.c
 --- linux-3.14.37/kernel/trace/ring_buffer.c	2014-10-09 22:46:05.040454499 +0200
-+++ linux-3.14.37-pax/kernel/trace/ring_buffer.c	2014-10-09 22:46:10.460458851 +0200
++++ linux-3.14.37-pax/kernel/trace/ring_buffer.c	2015-04-03 01:13:12.812290270 +0200
 @@ -352,9 +352,9 @@ struct buffer_data_page {
   */
  struct buffer_page {
@@ -65194,17 +65229,22 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/
  	unsigned long	 real_end;	/* real end of data */
  	struct buffer_data_page *page;	/* Actual data page */
  };
-@@ -473,8 +473,8 @@ struct ring_buffer_per_cpu {
+@@ -473,11 +473,11 @@ struct ring_buffer_per_cpu {
  	unsigned long			last_overrun;
  	local_t				entries_bytes;
  	local_t				entries;
 -	local_t				overrun;
 -	local_t				commit_overrun;
+-	local_t				dropped_events;
 +	local_unchecked_t		overrun;
 +	local_unchecked_t		commit_overrun;
- 	local_t				dropped_events;
++	local_unchecked_t		dropped_events;
  	local_t				committing;
- 	local_t				commits;
+-	local_t				commits;
++	local_unchecked_t		commits;
+ 	unsigned long			read;
+ 	unsigned long			read_bytes;
+ 	u64				write_stamp;
 @@ -1005,8 +1005,8 @@ static int rb_tail_page_update(struct ri
  	 *
  	 * We add a counter to the write field to denote this.
@@ -65296,6 +65336,15 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/
  		goto out_reset;
  	}
  
+@@ -2330,7 +2330,7 @@ rb_move_tail(struct ring_buffer_per_cpu
+ 			 * this is easy, just stop here.
+ 			 */
+ 			if (!(buffer->flags & RB_FL_OVERWRITE)) {
+-				local_inc(&cpu_buffer->dropped_events);
++				local_inc_unchecked(&cpu_buffer->dropped_events);
+ 				goto out_reset;
+ 			}
+ 
 @@ -2356,7 +2356,7 @@ rb_move_tail(struct ring_buffer_per_cpu
  				      cpu_buffer->tail_page) &&
  				     (cpu_buffer->commit_page ==
@@ -65341,6 +65390,42 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/
  		if (index == old_index) {
  			/* update counters */
  			local_sub(event_length, &cpu_buffer->entries_bytes);
+@@ -2486,7 +2486,7 @@ rb_try_to_discard(struct ring_buffer_per
+ static void rb_start_commit(struct ring_buffer_per_cpu *cpu_buffer)
+ {
+ 	local_inc(&cpu_buffer->committing);
+-	local_inc(&cpu_buffer->commits);
++	local_inc_unchecked(&cpu_buffer->commits);
+ }
+ 
+ static inline void rb_end_commit(struct ring_buffer_per_cpu *cpu_buffer)
+@@ -2498,7 +2498,7 @@ static inline void rb_end_commit(struct
+ 		return;
+ 
+  again:
+-	commits = local_read(&cpu_buffer->commits);
++	commits = local_read_unchecked(&cpu_buffer->commits);
+ 	/* synchronize with interrupts */
+ 	barrier();
+ 	if (local_read(&cpu_buffer->committing) == 1)
+@@ -2514,7 +2514,7 @@ static inline void rb_end_commit(struct
+ 	 * updating of the commit page and the clearing of the
+ 	 * committing counter.
+ 	 */
+-	if (unlikely(local_read(&cpu_buffer->commits) != commits) &&
++	if (unlikely(local_read_unchecked(&cpu_buffer->commits) != commits) &&
+ 	    !local_read(&cpu_buffer->committing)) {
+ 		local_inc(&cpu_buffer->committing);
+ 		goto again;
+@@ -2544,7 +2544,7 @@ rb_reserve_next_event(struct ring_buffer
+ 	barrier();
+ 	if (unlikely(ACCESS_ONCE(cpu_buffer->buffer) != buffer)) {
+ 		local_dec(&cpu_buffer->committing);
+-		local_dec(&cpu_buffer->commits);
++		local_dec_unchecked(&cpu_buffer->commits);
+ 		return NULL;
+ 	}
+ #endif
 @@ -2863,7 +2863,7 @@ rb_decrement_entry(struct ring_buffer_pe
  
  	/* Do the likely case first */
@@ -65386,6 +65471,15 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/
  
  	return ret;
  }
+@@ -3293,7 +3293,7 @@ ring_buffer_dropped_events_cpu(struct ri
+ 		return 0;
+ 
+ 	cpu_buffer = buffer->buffers[cpu];
+-	ret = local_read(&cpu_buffer->dropped_events);
++	ret = local_read_unchecked(&cpu_buffer->dropped_events);
+ 
+ 	return ret;
+ }
 @@ -3356,7 +3356,7 @@ unsigned long ring_buffer_overruns(struc
  	/* if you care about this being correct, lock the buffer */
  	for_each_buffer_cpu(buffer, cpu) {
@@ -65426,7 +65520,7 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/
  	local_set(&cpu_buffer->head_page->page->commit, 0);
  
  	cpu_buffer->head_page->read = 0;
-@@ -4145,14 +4145,14 @@ rb_reset_cpu(struct ring_buffer_per_cpu
+@@ -4145,18 +4145,18 @@ rb_reset_cpu(struct ring_buffer_per_cpu
  
  	INIT_LIST_HEAD(&cpu_buffer->reader_page->list);
  	INIT_LIST_HEAD(&cpu_buffer->new_pages);
@@ -65440,11 +65534,17 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/kernel/trace/
  	local_set(&cpu_buffer->entries_bytes, 0);
 -	local_set(&cpu_buffer->overrun, 0);
 -	local_set(&cpu_buffer->commit_overrun, 0);
+-	local_set(&cpu_buffer->dropped_events, 0);
 +	local_set_unchecked(&cpu_buffer->overrun, 0);
 +	local_set_unchecked(&cpu_buffer->commit_overrun, 0);
- 	local_set(&cpu_buffer->dropped_events, 0);
++	local_set_unchecked(&cpu_buffer->dropped_events, 0);
  	local_set(&cpu_buffer->entries, 0);
  	local_set(&cpu_buffer->committing, 0);
+-	local_set(&cpu_buffer->commits, 0);
++	local_set_unchecked(&cpu_buffer->commits, 0);
+ 	cpu_buffer->read = 0;
+ 	cpu_buffer->read_bytes = 0;
+ 
 @@ -4557,8 +4557,8 @@ int ring_buffer_read_page(struct ring_bu
  		rb_init_page(bpage);
  		bpage = reader->page;
@@ -75967,12 +76067,12 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/scripts/basic
  		fprintf(stderr, "fixdep: sizeof(int) != 4 or wrong endianness? %#x\n",
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/scripts/gcc-plugin.sh linux-3.14.37-pax/scripts/gcc-plugin.sh
 --- linux-3.14.37/scripts/gcc-plugin.sh	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.37-pax/scripts/gcc-plugin.sh	2015-02-13 13:43:07.675483716 +0100
++++ linux-3.14.37-pax/scripts/gcc-plugin.sh	2015-04-03 00:33:43.092161564 +0200
 @@ -0,0 +1,51 @@
 +#!/bin/sh
 +srctree=$(dirname "$0")
 +gccplugins_dir=$($3 -print-file-name=plugin)
-+plugincc=$($1 -E - -o /dev/null -I"${srctree}"/../tools/gcc -I"${gccplugins_dir}"/include 2>&1 <<EOF
++plugincc=$($1 -E -x c++ - -o /dev/null -I"${srctree}"/../tools/gcc -I"${gccplugins_dir}"/include 2>&1 <<EOF
 +#include "gcc-common.h"
 +#if BUILDING_GCC_VERSION >= 4008 || defined(ENABLE_BUILD_WITH_CXX)
 +#warning $2 CXX
@@ -78207,8 +78307,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/tools/gcc/che
 +}
 diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/tools/gcc/colorize_plugin.c linux-3.14.37-pax/tools/gcc/colorize_plugin.c
 --- linux-3.14.37/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.37-pax/tools/gcc/colorize_plugin.c	2014-04-23 23:12:39.311411466 +0200
-@@ -0,0 +1,210 @@
++++ linux-3.14.37-pax/tools/gcc/colorize_plugin.c	2015-04-03 00:47:51.860207663 +0200
+@@ -0,0 +1,215 @@
 +/*
 + * Copyright 2012-2014 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -78313,7 +78413,8 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/tools/gcc/col
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -78339,7 +78440,11 @@ diff -NurpX linux-3.14.37-pax/Documentation/dontdiff linux-3.14.37/tools/gcc/col
 +class colorize_rearm_pass : public simple_ipa_opt_pass {
 +public:
 +	colorize_rearm_pass() : simple_ipa_opt_pass(colorize_rearm_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return execute_colorize_rearm(); }
++#else
 +	unsigned int execute() { return execute_colorize_rearm(); }
++#endif
 +};
 +}
 +
