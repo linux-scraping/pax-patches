@@ -1,8 +1,11 @@
-- worked around incompatibility between SANITIZE and DEBUG_PAGEALLOC, reported by metarox (https://forums.grsecurity.net/viewtopic.php?f=3&t=4176)
-- fixed a crash bug with the old PAGEEXEC method and PSE, reported by Merlin
-- properly fixed CVE-2014-8159, http://seclists.org/oss-sec/2015/q1/886 and http://seclists.org/oss-sec/2015/q2/10
-- fixed some REFCOUNT false positives in the tracing ring buffer code, reported by metarox (https://forums.grsecurity.net/viewtopic.php?f=3&t=4186)
-- some more plugin porting to gcc-5
+- fixed a false positive size overflow bug in raid5, reported by jack mort (https://bugs.gentoo.org/show_bug.cgi?id=545492)
+- the overflow plugin caught an incorrect sign conversion in zlib, reported by Attila Tóth (https://bugs.gentoo.org/show_bug.cgi?id=545776)
+- the overflow plugin caught an incorrect sign conversion in get_user on x86, reported by Gábor Hasenfrasz (https://forums.grsecurity.net/viewtopic.php?f=3&t=4188)
+- ported all plugins to gcc-5 except size overflow
+- fixed integer signedness mixup in mmc error code handling, caught by the size overflow plugin, reported by Tom Seewald
+- fixed a few section conflicts exposed by LTO
+- fixed the latent entropy plugin for LTO
+- fixed the stackleak plugin for LTO
 
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/alpha/include/asm/atomic.h linux-3.2.68-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.68/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -10945,9 +10948,21 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
 +#define MODULE_ARCH_VERMAGIC MODULE_PROC_FAMILY MODULE_PAX_KERNEXEC MODULE_PAX_UDEREF
 +
  #endif /* _ASM_X86_MODULE_H */
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/include/asm/page_32.h linux-3.2.68-pax/arch/x86/include/asm/page_32.h
+--- linux-3.2.68/arch/x86/include/asm/page_32.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/arch/x86/include/asm/page_32.h	2015-04-30 03:00:23.456519607 +0200
+@@ -11,7 +11,7 @@
+ 
+ #define __phys_addr_nodebug(x)	((x) - PAGE_OFFSET)
+ #ifdef CONFIG_DEBUG_VIRTUAL
+-extern unsigned long __phys_addr(unsigned long);
++extern unsigned long __intentional_overflow(-1) __phys_addr(unsigned long);
+ #else
+ #define __phys_addr(x)		__phys_addr_nodebug(x)
+ #endif
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/include/asm/page_64_types.h linux-3.2.68-pax/arch/x86/include/asm/page_64_types.h
 --- linux-3.2.68/arch/x86/include/asm/page_64_types.h	2014-12-14 21:13:44.974054653 +0100
-+++ linux-3.2.68-pax/arch/x86/include/asm/page_64_types.h	2014-12-14 21:13:52.750069182 +0100
++++ linux-3.2.68-pax/arch/x86/include/asm/page_64_types.h	2015-04-30 02:59:42.660518407 +0200
 @@ -1,7 +1,7 @@
  #ifndef _ASM_X86_PAGE_64_DEFS_H
  #define _ASM_X86_PAGE_64_DEFS_H
@@ -10957,15 +10972,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  #define THREAD_SIZE  (PAGE_SIZE << THREAD_ORDER)
  #define CURRENT_MASK (~(THREAD_SIZE - 1))
  
-@@ -55,7 +55,7 @@ void copy_page(void *to, void *from);
+@@ -55,9 +55,9 @@ void copy_page(void *to, void *from);
  
  /* duplicated to the one in bootmem.h */
  extern unsigned long max_pfn;
 -extern unsigned long phys_base;
 +extern const unsigned long phys_base;
  
- extern unsigned long __phys_addr(unsigned long);
+-extern unsigned long __phys_addr(unsigned long);
++extern unsigned long __intentional_overflow(-1) __phys_addr(unsigned long);
  #define __phys_reloc_hide(x)	(x)
+ 
+ #define vmemmap ((struct page *)VMEMMAP_START)
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/include/asm/paravirt.h linux-3.2.68-pax/arch/x86/include/asm/paravirt.h
 --- linux-3.2.68/arch/x86/include/asm/paravirt.h	2013-04-30 00:45:09.439714488 +0200
 +++ linux-3.2.68-pax/arch/x86/include/asm/paravirt.h	2013-04-30 00:45:13.139714290 +0200
@@ -13019,7 +13037,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  #endif /* _ASM_X86_UACCESS_64_H */
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/include/asm/uaccess.h linux-3.2.68-pax/arch/x86/include/asm/uaccess.h
 --- linux-3.2.68/arch/x86/include/asm/uaccess.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/arch/x86/include/asm/uaccess.h	2014-06-14 15:40:54.028938748 +0200
++++ linux-3.2.68-pax/arch/x86/include/asm/uaccess.h	2015-04-30 02:58:02.112515451 +0200
 @@ -7,6 +7,7 @@
  #include <linux/compiler.h>
  #include <linux/thread_info.h>
@@ -13087,7 +13105,32 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  
  /*
   * The exception table consists of pairs of addresses: the first is the
-@@ -182,12 +216,20 @@ extern int __get_user_bad(void);
+@@ -126,6 +160,15 @@ extern int __get_user_bad(void);
+ /* Careful: we have to cast the result to the type of the pointer
+  * for sign reasons */
+ 
++/*
++ * This is a type: either (un)signed int, if the argument fits into
++ * that type, or otherwise (un)signed long long.
++ */
++#define __inttype(x) \
++__typeof__(__builtin_choose_expr(sizeof(x) > sizeof(0U),		\
++	__builtin_choose_expr(__type_is_unsigned(__typeof__(x)), 0ULL, 0LL),\
++	__builtin_choose_expr(__type_is_unsigned(__typeof__(x)), 0U, 0)))
++
+ /**
+  * get_user: - Get a simple variable from user space.
+  * @x:   Variable to store result.
+@@ -154,7 +197,7 @@ extern int __get_user_bad(void);
+ #define get_user(x, ptr)						\
+ ({									\
+ 	int __ret_gu;							\
+-	unsigned long __val_gu;						\
++	__inttype(*(ptr)) __val_gu;					\
+ 	__chk_user_ptr(ptr);						\
+ 	might_fault();							\
+ 	switch (sizeof(*(ptr))) {					\
+@@ -182,12 +225,20 @@ extern int __get_user_bad(void);
  	asm volatile("call __put_user_" #size : "=a" (__ret_pu)	\
  		     : "0" ((typeof(*(ptr)))(x)), "c" (ptr) : "ebx")
  
@@ -13111,7 +13154,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  		     "3:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "4:	movl %3,%0\n"				\
-@@ -199,8 +241,8 @@ extern int __get_user_bad(void);
+@@ -199,8 +250,8 @@ extern int __get_user_bad(void);
  		     : "A" (x), "r" (addr), "i" (errret), "0" (err))
  
  #define __put_user_asm_ex_u64(x, addr)					\
@@ -13122,7 +13165,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  		     "3:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     _ASM_EXTABLE(2b, 3b - 2b)				\
-@@ -252,7 +294,7 @@ extern void __put_user_8(void);
+@@ -252,7 +303,7 @@ extern void __put_user_8(void);
  	__typeof__(*(ptr)) __pu_val;				\
  	__chk_user_ptr(ptr);					\
  	might_fault();						\
@@ -13131,7 +13174,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  	switch (sizeof(*(ptr))) {				\
  	case 1:							\
  		__put_user_x(1, __pu_val, ptr, __ret_pu);	\
-@@ -373,7 +415,7 @@ do {									\
+@@ -373,7 +424,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -13140,7 +13183,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -381,7 +423,7 @@ do {									\
+@@ -381,7 +432,7 @@ do {									\
  		     "	jmp 2b\n"					\
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
@@ -13149,7 +13192,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  		     : "m" (__m(addr)), "i" (errret), "0" (err))
  
  #define __get_user_size_ex(x, ptr, size)				\
-@@ -406,7 +448,7 @@ do {									\
+@@ -406,7 +457,7 @@ do {									\
  } while (0)
  
  #define __get_user_asm_ex(x, addr, itype, rtype, ltype)			\
@@ -13158,7 +13201,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : ltype(x) : "m" (__m(addr)))
-@@ -423,13 +465,24 @@ do {									\
+@@ -423,13 +474,24 @@ do {									\
  	int __gu_err;							\
  	unsigned long __gu_val;						\
  	__get_user_size(__gu_val, (ptr), (size), __gu_err, -EFAULT);	\
@@ -13185,7 +13228,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  
  /*
   * Tell gcc we read from memory instead of writing: this is because
-@@ -437,7 +490,7 @@ struct __large_struct { unsigned long bu
+@@ -437,7 +499,7 @@ struct __large_struct { unsigned long bu
   * aliasing issues.
   */
  #define __put_user_asm(x, addr, err, itype, rtype, ltype, errret)	\
@@ -13194,7 +13237,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  		     "2:\n"						\
  		     ".section .fixup,\"ax\"\n"				\
  		     "3:	mov %3,%0\n"				\
-@@ -445,10 +498,10 @@ struct __large_struct { unsigned long bu
+@@ -445,10 +507,10 @@ struct __large_struct { unsigned long bu
  		     ".previous\n"					\
  		     _ASM_EXTABLE(1b, 3b)				\
  		     : "=r"(err)					\
@@ -13207,7 +13250,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  		     "2:\n"						\
  		     _ASM_EXTABLE(1b, 2b - 1b)				\
  		     : : ltype(x), "m" (__m(addr)))
-@@ -487,8 +540,12 @@ struct __large_struct { unsigned long bu
+@@ -487,8 +549,12 @@ struct __large_struct { unsigned long bu
   * On error, the variable @x is set to zero.
   */
  
@@ -13220,7 +13263,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  
  /**
   * __put_user: - Write a simple value into user space, with less checking.
-@@ -510,8 +567,12 @@ struct __large_struct { unsigned long bu
+@@ -510,8 +576,12 @@ struct __large_struct { unsigned long bu
   * Returns zero on success, or -EFAULT on error.
   */
  
@@ -13233,7 +13276,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/includ
  
  #define __get_user_unaligned __get_user
  #define __put_user_unaligned __put_user
-@@ -529,7 +590,7 @@ struct __large_struct { unsigned long bu
+@@ -529,7 +599,7 @@ struct __large_struct { unsigned long bu
  #define get_user_ex(x, ptr)	do {					\
  	unsigned long __gue_val;					\
  	__get_user_size_ex((__gue_val), (ptr), (sizeof(*(ptr))));	\
@@ -13749,7 +13792,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel
  	.probe				= probe_es7000,
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel/apic/io_apic.c linux-3.2.68-pax/arch/x86/kernel/apic/io_apic.c
 --- linux-3.2.68/arch/x86/kernel/apic/io_apic.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/arch/x86/kernel/apic/io_apic.c	2013-03-28 01:54:25.064366987 +0100
++++ linux-3.2.68-pax/arch/x86/kernel/apic/io_apic.c	2015-04-30 03:10:20.288537155 +0200
 @@ -1096,7 +1096,7 @@ int IO_APIC_get_PCI_irq_vector(int bus,
  }
  EXPORT_SYMBOL(IO_APIC_get_PCI_irq_vector);
@@ -13786,7 +13829,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel
  
  		eoi_ioapic_irq(irq, cfg);
  	}
-@@ -2634,13 +2634,16 @@ static void ir_print_prefix(struct irq_d
+@@ -2634,17 +2634,20 @@ static void ir_print_prefix(struct irq_d
  
  static void irq_remap_modify_chip_defaults(struct irq_chip *chip)
  {
@@ -13807,6 +13850,20 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel
  }
  #endif /* CONFIG_IRQ_REMAP */
  
+-static struct irq_chip ioapic_chip __read_mostly = {
++static const struct irq_chip ioapic_chip = {
+ 	.name			= "IO-APIC",
+ 	.irq_startup		= startup_ioapic_irq,
+ 	.irq_mask		= mask_ioapic_irq,
+@@ -2715,7 +2718,7 @@ static void ack_lapic_irq(struct irq_dat
+ 	ack_APIC_irq();
+ }
+ 
+-static struct irq_chip lapic_chip __read_mostly = {
++static const struct irq_chip lapic_chip = {
+ 	.name		= "local-APIC",
+ 	.irq_mask	= mask_lapic_irq,
+ 	.irq_unmask	= unmask_lapic_irq,
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel/apic/numaq_32.c linux-3.2.68-pax/arch/x86/kernel/apic/numaq_32.c
 --- linux-3.2.68/arch/x86/kernel/apic/numaq_32.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/arch/x86/kernel/apic/numaq_32.c	2013-02-17 16:28:47.520320188 +0100
@@ -13891,7 +13948,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel
  	.probe				= uv_probe,
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel/apm_32.c linux-3.2.68-pax/arch/x86/kernel/apm_32.c
 --- linux-3.2.68/arch/x86/kernel/apm_32.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/arch/x86/kernel/apm_32.c	2012-07-04 19:24:47.556063006 +0200
++++ linux-3.2.68-pax/arch/x86/kernel/apm_32.c	2015-04-30 03:07:38.396532395 +0200
 @@ -411,7 +411,7 @@ static DEFINE_MUTEX(apm_mutex);
   * This is for buggy BIOS's that refer to (real mode) segment 0x40
   * even though they are called in protected mode.
@@ -13947,6 +14004,15 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel
  	put_cpu();
  	return error;
  }
+@@ -2037,7 +2051,7 @@ static int __init swab_apm_power_in_minu
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata apm_dmi_table[] = {
++static const struct dmi_system_id __initconst apm_dmi_table[] = {
+ 	{
+ 		print_if_true,
+ 		KERN_WARNING "IBM T23 - BIOS 1.03b+ and controller firmware 1.02+ may be needed for Linux APM.",
 @@ -2347,12 +2361,15 @@ static int __init apm_init(void)
  	 * code to that CPU.
  	 */
@@ -19228,7 +19294,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel
  	return ret;
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel/reboot.c linux-3.2.68-pax/arch/x86/kernel/reboot.c
 --- linux-3.2.68/arch/x86/kernel/reboot.c	2014-01-03 15:48:44.644070583 +0100
-+++ linux-3.2.68-pax/arch/x86/kernel/reboot.c	2014-01-03 15:48:49.492070324 +0100
++++ linux-3.2.68-pax/arch/x86/kernel/reboot.c	2015-04-30 03:09:43.556536075 +0200
 @@ -35,7 +35,7 @@ void (*pm_power_off)(void);
  EXPORT_SYMBOL(pm_power_off);
  
@@ -19238,6 +19304,15 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/x86/kernel
  enum reboot_type reboot_type = BOOT_ACPI;
  int reboot_force;
  
+@@ -145,7 +145,7 @@ static int __init set_kbd_reboot(const s
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata reboot_dmi_table[] = {
++static const struct dmi_system_id __initconst reboot_dmi_table[] = {
+ 	{	/* Handle problems with rebooting on Dell E520's */
+ 		.callback = set_bios_reboot,
+ 		.ident = "Dell E520",
 @@ -324,13 +324,17 @@ core_initcall(reboot_init);
  extern const unsigned char machine_real_restart_asm[];
  extern const u64 machine_real_restart_gdt[3];
@@ -28218,6 +28293,22 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/crypto/pcrypt.c
  	if (!ret)
  		kobject_uevent(&pinst->kobj, KOBJ_ADD);
  
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/crypto/zlib.c linux-3.2.68-pax/crypto/zlib.c
+--- linux-3.2.68/crypto/zlib.c	2015-02-20 12:37:33.017178779 +0100
++++ linux-3.2.68-pax/crypto/zlib.c	2015-04-30 02:44:19.412491262 +0200
+@@ -95,10 +95,10 @@ static int zlib_compress_setup(struct cr
+ 	zlib_comp_exit(ctx);
+ 
+ 	window_bits = tb[ZLIB_COMP_WINDOWBITS]
+-					? nla_get_u32(tb[ZLIB_COMP_WINDOWBITS])
++					? nla_get_s32(tb[ZLIB_COMP_WINDOWBITS])
+ 					: MAX_WBITS;
+ 	mem_level = tb[ZLIB_COMP_MEMLEVEL]
+-					? nla_get_u32(tb[ZLIB_COMP_MEMLEVEL])
++					? nla_get_s32(tb[ZLIB_COMP_MEMLEVEL])
+ 					: DEF_MEM_LEVEL;
+ 
+ 	workspacesize = zlib_deflate_workspacesize(window_bits, mem_level);
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/Documentation/dontdiff linux-3.2.68-pax/Documentation/dontdiff
 --- linux-3.2.68/Documentation/dontdiff	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/Documentation/dontdiff	2013-06-21 20:15:56.158564327 +0200
@@ -28502,6 +28593,39 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/bl
  	{
  	.callback = dmi_disable_osi_vista,
  	.ident = "Fujitsu Siemens",
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/bus.c linux-3.2.68-pax/drivers/acpi/bus.c
+--- linux-3.2.68/drivers/acpi/bus.c	2014-07-12 17:42:33.748954216 +0200
++++ linux-3.2.68-pax/drivers/acpi/bus.c	2015-04-30 03:07:38.400532395 +0200
+@@ -72,7 +72,7 @@ static int set_copy_dsdt(const struct dm
+ }
+ #endif
+ 
+-static struct dmi_system_id dsdt_dmi_table[] __initdata = {
++static const struct dmi_system_id dsdt_dmi_table[] __initconst = {
+ 	/*
+ 	 * Invoke DSDT corruption work-around on all Toshiba Satellite.
+ 	 * https://bugzilla.kernel.org/show_bug.cgi?id=14679
+@@ -88,7 +88,7 @@ static struct dmi_system_id dsdt_dmi_tab
+ 	{}
+ };
+ #else
+-static struct dmi_system_id dsdt_dmi_table[] __initdata = {
++static const struct dmi_system_id dsdt_dmi_table[] __initconst = {
+ 	{}
+ };
+ #endif
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/ec.c linux-3.2.68-pax/drivers/acpi/ec.c
+--- linux-3.2.68/drivers/acpi/ec.c	2015-02-20 12:37:33.017178779 +0100
++++ linux-3.2.68-pax/drivers/acpi/ec.c	2015-04-30 03:09:22.244535448 +0200
+@@ -1018,7 +1018,7 @@ static int ec_clear_on_resume(const stru
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata ec_dmi_table[] = {
++static const struct dmi_system_id __initconst ec_dmi_table[] = {
+ 	{
+ 	ec_skip_dsdt_scan, "Compal JFL92", {
+ 	DMI_MATCH(DMI_BIOS_VENDOR, "COMPAL"),
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/ec_sys.c linux-3.2.68-pax/drivers/acpi/ec_sys.c
 --- linux-3.2.68/drivers/acpi/ec_sys.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/drivers/acpi/ec_sys.c	2012-07-04 19:24:47.672063004 +0200
@@ -28554,6 +28678,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/ec
  		err = ec_write(*off, byte_write);
  		if (err)
  			return err;
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/pci_slot.c linux-3.2.68-pax/drivers/acpi/pci_slot.c
+--- linux-3.2.68/drivers/acpi/pci_slot.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/acpi/pci_slot.c	2015-04-30 03:07:38.400532395 +0200
+@@ -336,7 +336,7 @@ static int do_sta_before_sun(const struc
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id acpi_pci_slot_dmi_table[] __initdata = {
++static const struct dmi_system_id acpi_pci_slot_dmi_table[] __initconst = {
+ 	/*
+ 	 * Fujitsu Primequest machines will return 1023 to indicate an
+ 	 * error if the _SUN method is evaluated on SxFy objects that
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/proc.c linux-3.2.68-pax/drivers/acpi/proc.c
 --- linux-3.2.68/drivers/acpi/proc.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/drivers/acpi/proc.c	2013-02-09 00:44:33.724732684 +0100
@@ -28578,6 +28714,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/pr
  	sscanf(strbuf, "%s", str);
  
  	mutex_lock(&acpi_device_lock);
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/processor_core.c linux-3.2.68-pax/drivers/acpi/processor_core.c
+--- linux-3.2.68/drivers/acpi/processor_core.c	2012-07-27 22:08:37.306372788 +0200
++++ linux-3.2.68-pax/drivers/acpi/processor_core.c	2015-04-30 03:08:26.404533806 +0200
+@@ -28,7 +28,7 @@ static int __init set_no_mwait(const str
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata processor_idle_dmi_table[] = {
++static const struct dmi_system_id __initconst processor_idle_dmi_table[] = {
+ 	{
+ 	set_no_mwait, "Extensa 5220", {
+ 	DMI_MATCH(DMI_BIOS_VENDOR, "Phoenix Technologies LTD"),
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/processor_driver.c linux-3.2.68-pax/drivers/acpi/processor_driver.c
 --- linux-3.2.68/drivers/acpi/processor_driver.c	2013-01-03 19:05:12.816036805 +0100
 +++ linux-3.2.68-pax/drivers/acpi/processor_driver.c	2013-01-03 19:05:22.044037076 +0100
@@ -28602,6 +28750,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/pr
  	struct cpuidle_driver *drv = &acpi_idle_driver;
  
  	if (!pr->flags.power_setup_done)
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/sleep.c linux-3.2.68-pax/drivers/acpi/sleep.c
+--- linux-3.2.68/drivers/acpi/sleep.c	2013-03-29 02:18:30.067676744 +0100
++++ linux-3.2.68-pax/drivers/acpi/sleep.c	2015-04-30 03:08:55.432534660 +0200
+@@ -120,7 +120,7 @@ static int __init init_nvs_nosave(const
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata acpisleep_dmi_table[] = {
++static const struct dmi_system_id __initconst acpisleep_dmi_table[] = {
+ 	{
+ 	.callback = init_old_suspend_ordering,
+ 	.ident = "Abit KN9 (nForce4 variant)",
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/sysfs.c linux-3.2.68-pax/drivers/acpi/sysfs.c
 --- linux-3.2.68/drivers/acpi/sysfs.c	2012-07-27 22:08:37.694372798 +0200
 +++ linux-3.2.68-pax/drivers/acpi/sysfs.c	2013-03-28 01:35:23.252427951 +0100
@@ -28619,6 +28779,30 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/sy
  
  static void delete_gpe_attr_array(void)
  {
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/thermal.c linux-3.2.68-pax/drivers/acpi/thermal.c
+--- linux-3.2.68/drivers/acpi/thermal.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/acpi/thermal.c	2015-04-30 03:07:38.400532395 +0200
+@@ -1110,7 +1110,7 @@ static int thermal_psv(const struct dmi_
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id thermal_dmi_table[] __initdata = {
++static const struct dmi_system_id thermal_dmi_table[] __initconst = {
+ 	/*
+ 	 * Award BIOS on this AOpen makes thermal control almost worthless.
+ 	 * http://bugzilla.kernel.org/show_bug.cgi?id=8842
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/acpi/video.c linux-3.2.68-pax/drivers/acpi/video.c
+--- linux-3.2.68/drivers/acpi/video.c	2014-04-02 03:15:41.039672583 +0200
++++ linux-3.2.68-pax/drivers/acpi/video.c	2015-04-30 03:07:38.400532395 +0200
+@@ -395,7 +395,7 @@ static int video_ignore_initial_backligh
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id video_dmi_table[] __initdata = {
++static const struct dmi_system_id video_dmi_table[] __initconst = {
+ 	/*
+ 	 * Broken _BQC workaround http://bugzilla.kernel.org/show_bug.cgi?id=13121
+ 	 */
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/ata/libahci.c linux-3.2.68-pax/drivers/ata/libahci.c
 --- linux-3.2.68/drivers/ata/libahci.c	2014-01-03 15:48:44.688070581 +0100
 +++ linux-3.2.68-pax/drivers/ata/libahci.c	2014-01-03 15:48:49.504070324 +0100
@@ -30572,6 +30756,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/char/hw
  		return -EBUSY;
  	}
  
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/char/i8k.c linux-3.2.68-pax/drivers/char/i8k.c
+--- linux-3.2.68/drivers/char/i8k.c	2014-01-03 15:48:44.712070579 +0100
++++ linux-3.2.68-pax/drivers/char/i8k.c	2015-04-30 03:12:29.440540952 +0200
+@@ -607,7 +607,7 @@ static void __exit i8k_exit_hwmon(void)
+ 	hwmon_device_unregister(i8k_hwmon_dev);
+ }
+ 
+-static struct dmi_system_id __initdata i8k_dmi_table[] = {
++static const struct dmi_system_id __initconst i8k_dmi_table[] = {
+ 	{
+ 		.ident = "Dell Inspiron",
+ 		.matches = {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/char/ipmi/ipmi_msghandler.c linux-3.2.68-pax/drivers/char/ipmi/ipmi_msghandler.c
 --- linux-3.2.68/drivers/char/ipmi/ipmi_msghandler.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/drivers/char/ipmi/ipmi_msghandler.c	2012-07-04 19:24:47.708063005 +0200
@@ -30820,7 +31016,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/char/ra
  	uuid = table->data;
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/char/sonypi.c linux-3.2.68-pax/drivers/char/sonypi.c
 --- linux-3.2.68/drivers/char/sonypi.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/drivers/char/sonypi.c	2012-07-04 19:24:47.712063005 +0200
++++ linux-3.2.68-pax/drivers/char/sonypi.c	2015-04-30 03:07:38.396532395 +0200
 @@ -55,6 +55,7 @@
  #include <asm/uaccess.h>
  #include <asm/io.h>
@@ -30859,6 +31055,15 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/char/so
  	mutex_unlock(&sonypi_device.lock);
  
  	return 0;
+@@ -1497,7 +1498,7 @@ static struct platform_driver sonypi_dri
+ 
+ static struct platform_device *sonypi_platform_device;
+ 
+-static struct dmi_system_id __initdata sonypi_dmi_table[] = {
++static const struct dmi_system_id __initconst sonypi_dmi_table[] = {
+ 	{
+ 		.ident = "Sony Vaio",
+ 		.matches = {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/char/tpm/tpm_bios.c linux-3.2.68-pax/drivers/char/tpm/tpm_bios.c
 --- linux-3.2.68/drivers/char/tpm/tpm_bios.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/drivers/char/tpm/tpm_bios.c	2012-07-04 19:24:47.712063005 +0200
@@ -31672,9 +31877,30 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/firmwar
  
  /*
   * For now we register the efi subsystem with the firmware subsystem
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/firmware/google/gsmi.c linux-3.2.68-pax/drivers/firmware/google/gsmi.c
+--- linux-3.2.68/drivers/firmware/google/gsmi.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/firmware/google/gsmi.c	2015-04-30 03:07:38.400532395 +0200
+@@ -718,7 +718,7 @@ static u32 __init hash_oem_table_id(char
+ 	return local_hash_64(input, 32);
+ }
+ 
+-static struct dmi_system_id gsmi_dmi_table[] __initdata = {
++static const struct dmi_system_id gsmi_dmi_table[] __initconst = {
+ 	{
+ 		.ident = "Google Board",
+ 		.matches = {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/firmware/google/memconsole.c linux-3.2.68-pax/drivers/firmware/google/memconsole.c
 --- linux-3.2.68/drivers/firmware/google/memconsole.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/drivers/firmware/google/memconsole.c	2013-03-28 01:35:23.264427950 +0100
++++ linux-3.2.68-pax/drivers/firmware/google/memconsole.c	2015-04-30 03:07:38.396532395 +0200
+@@ -126,7 +126,7 @@ static bool found_memconsole(void)
+ 	return false;
+ }
+ 
+-static struct dmi_system_id memconsole_dmi_table[] __initdata = {
++static const struct dmi_system_id memconsole_dmi_table[] __initconst = {
+ 	{
+ 		.ident = "Google Board",
+ 		.matches = {
 @@ -147,7 +147,9 @@ static int __init memconsole_init(void)
  	if (!found_memconsole())
  		return -ENODEV;
@@ -33535,7 +33761,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/hv/vmbu
  	child_device_obj->device.parent = &hv_acpi_dev->dev;
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/hwmon/acpi_power_meter.c linux-3.2.68-pax/drivers/hwmon/acpi_power_meter.c
 --- linux-3.2.68/drivers/hwmon/acpi_power_meter.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/drivers/hwmon/acpi_power_meter.c	2013-03-28 03:06:46.640135180 +0100
++++ linux-3.2.68-pax/drivers/hwmon/acpi_power_meter.c	2015-04-30 03:07:38.396532395 +0200
 @@ -124,7 +124,7 @@ struct rw_sensor_template {
  		       struct device_attribute *devattr,
  		       const char *buf, size_t count);
@@ -33572,6 +33798,15 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/hwmon/a
  		&resource->sensors[resource->num_sensors];
  	int res = 0;
  
+@@ -981,7 +979,7 @@ static int __init enable_cap_knobs(const
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata pm_dmi_table[] = {
++static const struct dmi_system_id __initconst pm_dmi_table[] = {
+ 	{
+ 		enable_cap_knobs, "IBM Active Energy Manager",
+ 		{
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/hwmon/applesmc.c linux-3.2.68-pax/drivers/hwmon/applesmc.c
 --- linux-3.2.68/drivers/hwmon/applesmc.c	2013-11-29 01:58:28.606491617 +0100
 +++ linux-3.2.68-pax/drivers/hwmon/applesmc.c	2013-11-29 01:58:37.658491883 +0100
@@ -35225,6 +35460,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/input/s
  	kref_init(&serio_raw->kref);
  	INIT_LIST_HEAD(&serio_raw->client_list);
  	init_waitqueue_head(&serio_raw->wait);
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/input/touchscreen/htcpen.c linux-3.2.68-pax/drivers/input/touchscreen/htcpen.c
+--- linux-3.2.68/drivers/input/touchscreen/htcpen.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/input/touchscreen/htcpen.c	2015-04-30 03:11:24.988539057 +0200
+@@ -227,7 +227,7 @@ static struct isa_driver htcpen_isa_driv
+ 	}
+ };
+ 
+-static struct dmi_system_id __initdata htcshift_dmi_table[] = {
++static const struct dmi_system_id __initconst htcshift_dmi_table[] = {
+ 	{
+ 		.ident = "Shift",
+ 		.matches = {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/isdn/capi/capi.c linux-3.2.68-pax/drivers/isdn/capi/capi.c
 --- linux-3.2.68/drivers/isdn/capi/capi.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/drivers/isdn/capi/capi.c	2012-07-04 19:24:48.464063007 +0200
@@ -36119,7 +36366,37 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/md/raid
  					       "(%d sectors at %llu on %s)\n",
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/md/raid5.c linux-3.2.68-pax/drivers/md/raid5.c
 --- linux-3.2.68/drivers/md/raid5.c	2014-09-14 14:10:58.886117854 +0200
-+++ linux-3.2.68-pax/drivers/md/raid5.c	2014-09-14 14:11:25.974138365 +0200
++++ linux-3.2.68-pax/drivers/md/raid5.c	2015-04-30 02:48:51.880499273 +0200
+@@ -598,23 +598,23 @@ async_copy_data(int frombio, struct bio
+ 	struct bio_vec *bvl;
+ 	struct page *bio_page;
+ 	int i;
+-	int page_offset;
++	s64 page_offset;
+ 	struct async_submit_ctl submit;
+ 	enum async_tx_flags flags = 0;
+ 
+ 	if (bio->bi_sector >= sector)
+-		page_offset = (signed)(bio->bi_sector - sector) * 512;
++		page_offset = (s64)(bio->bi_sector - sector) * 512;
+ 	else
+-		page_offset = (signed)(sector - bio->bi_sector) * -512;
++		page_offset = (s64)(sector - bio->bi_sector) * -512;
+ 
+ 	if (frombio)
+ 		flags |= ASYNC_TX_FENCE;
+ 	init_async_submit(&submit, flags, tx, NULL, NULL, NULL);
+ 
+ 	bio_for_each_segment(bvl, bio, i) {
+-		int len = bvl->bv_len;
+-		int clen;
+-		int b_offset = 0;
++		s64 len = bvl->bv_len;
++		s64 clen;
++		s64 b_offset = 0;
+ 
+ 		if (page_offset < 0) {
+ 			b_offset = -page_offset;
 @@ -1618,19 +1618,19 @@ static void raid5_end_read_request(struc
  				(unsigned long long)(sh->sector
  						     + rdev->data_offset),
@@ -37785,6 +38062,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/net/eth
  }
  
  /* To mask all all interrupts.*/
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/net/ethernet/via/via-rhine.c linux-3.2.68-pax/drivers/net/ethernet/via/via-rhine.c
+--- linux-3.2.68/drivers/net/ethernet/via/via-rhine.c	2013-10-27 17:59:57.456642374 +0100
++++ linux-3.2.68-pax/drivers/net/ethernet/via/via-rhine.c	2015-04-30 03:14:12.232543974 +0200
+@@ -2299,7 +2299,7 @@ static struct pci_driver rhine_driver =
+ 	.shutdown =	rhine_shutdown,
+ };
+ 
+-static struct dmi_system_id __initdata rhine_dmi_table[] = {
++static const struct dmi_system_id __initconst rhine_dmi_table[] = {
+ 	{
+ 		.ident = "EPIA-M",
+ 		.matches = {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/net/ifb.c linux-3.2.68-pax/drivers/net/ifb.c
 --- linux-3.2.68/drivers/net/ifb.c	2013-09-10 17:24:55.417739122 +0200
 +++ linux-3.2.68-pax/drivers/net/ifb.c	2015-01-05 18:25:55.903685735 +0100
@@ -39022,6 +39311,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/pci/pci
  #define ASPM_STATE_L0S		(ASPM_STATE_L0S_UP | ASPM_STATE_L0S_DW)
  #define ASPM_STATE_ALL		(ASPM_STATE_L0S | ASPM_STATE_L1)
  
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/pci/pcie/portdrv_pci.c linux-3.2.68-pax/drivers/pci/pcie/portdrv_pci.c
+--- linux-3.2.68/drivers/pci/pcie/portdrv_pci.c	2014-01-03 15:48:44.932070568 +0100
++++ linux-3.2.68-pax/drivers/pci/pcie/portdrv_pci.c	2015-04-30 03:07:38.404532395 +0200
+@@ -337,7 +337,7 @@ static int __init dmi_pcie_pme_disable_m
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata pcie_portdrv_dmi_table[] = {
++static const struct dmi_system_id __initconst pcie_portdrv_dmi_table[] = {
+ 	/*
+ 	 * Boxes that should not use MSI for PCIe PME signaling.
+ 	 */
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/pci/pci.h linux-3.2.68-pax/drivers/pci/pci.h
 --- linux-3.2.68/drivers/pci/pci.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/drivers/pci/pci.h	2013-03-28 01:35:23.292427948 +0100
@@ -39076,9 +39377,66 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/pci/pro
  
  	if (!dev->mmio_always_on) {
  		pci_read_config_word(dev, PCI_COMMAND, &orig_cmd);
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/compal-laptop.c linux-3.2.68-pax/drivers/platform/x86/compal-laptop.c
+--- linux-3.2.68/drivers/platform/x86/compal-laptop.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/platform/x86/compal-laptop.c	2015-04-30 03:07:38.404532395 +0200
+@@ -775,7 +775,7 @@ static int dmi_check_cb_extra(const stru
+ 	return 1;
+ }
+ 
+-static struct dmi_system_id __initdata compal_dmi_table[] = {
++static const struct dmi_system_id __initconst compal_dmi_table[] = {
+ 	{
+ 		.ident = "FL90/IFL90",
+ 		.matches = {
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/hdaps.c linux-3.2.68-pax/drivers/platform/x86/hdaps.c
+--- linux-3.2.68/drivers/platform/x86/hdaps.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/platform/x86/hdaps.c	2015-04-30 03:07:38.404532395 +0200
+@@ -511,7 +511,7 @@ static int __init hdaps_dmi_match_invert
+    "ThinkPad T42p", so the order of the entries matters.
+    If your ThinkPad is not recognized, please update to latest
+    BIOS. This is especially the case for some R52 ThinkPads. */
+-static struct dmi_system_id __initdata hdaps_whitelist[] = {
++static const struct dmi_system_id __initconst hdaps_whitelist[] = {
+ 	HDAPS_DMI_MATCH_INVERT("IBM", "ThinkPad R50p", HDAPS_BOTH_AXES),
+ 	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad R50"),
+ 	HDAPS_DMI_MATCH_NORMAL("IBM", "ThinkPad R51"),
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/ibm_rtl.c linux-3.2.68-pax/drivers/platform/x86/ibm_rtl.c
+--- linux-3.2.68/drivers/platform/x86/ibm_rtl.c	2013-02-09 01:12:40.748782285 +0100
++++ linux-3.2.68-pax/drivers/platform/x86/ibm_rtl.c	2015-04-30 03:07:38.404532395 +0200
+@@ -238,7 +238,7 @@ static void rtl_teardown_sysfs(void) {
+ }
+ 
+ 
+-static struct dmi_system_id __initdata ibm_rtl_dmi_table[] = {
++static const struct dmi_system_id __initconst ibm_rtl_dmi_table[] = {
+ 	{                                                  \
+ 		.matches = {                               \
+ 			DMI_MATCH(DMI_SYS_VENDOR, "IBM"),  \
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/intel_oaktrail.c linux-3.2.68-pax/drivers/platform/x86/intel_oaktrail.c
+--- linux-3.2.68/drivers/platform/x86/intel_oaktrail.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/platform/x86/intel_oaktrail.c	2015-04-30 03:07:38.404532395 +0200
+@@ -303,7 +303,7 @@ static int dmi_check_cb(const struct dmi
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id __initdata oaktrail_dmi_table[] = {
++static const struct dmi_system_id __initconst oaktrail_dmi_table[] = {
+ 	{
+ 		.ident = "OakTrail platform",
+ 		.matches = {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/msi-laptop.c linux-3.2.68-pax/drivers/platform/x86/msi-laptop.c
 --- linux-3.2.68/drivers/platform/x86/msi-laptop.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/drivers/platform/x86/msi-laptop.c	2013-03-28 01:35:23.292427948 +0100
++++ linux-3.2.68-pax/drivers/platform/x86/msi-laptop.c	2015-04-30 03:07:38.396532395 +0200
+@@ -451,7 +451,7 @@ static int dmi_check_cb(const struct dmi
+ 	return 1;
+ }
+ 
+-static struct dmi_system_id __initdata msi_dmi_table[] = {
++static const struct dmi_system_id __initconst msi_dmi_table[] = {
+ 	{
+ 		.ident = "MSI S270",
+ 		.matches = {
 @@ -815,12 +815,14 @@ static int __init load_scm_model_init(st
  	int result;
  
@@ -39112,6 +39470,42 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platfor
  	union acpi_object *obj;
  	ktime_t cur;
  	acpi_status status;
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/samsung-laptop.c linux-3.2.68-pax/drivers/platform/x86/samsung-laptop.c
+--- linux-3.2.68/drivers/platform/x86/samsung-laptop.c	2013-02-09 01:12:40.748782285 +0100
++++ linux-3.2.68-pax/drivers/platform/x86/samsung-laptop.c	2015-04-30 03:12:07.096540295 +0200
+@@ -543,7 +543,7 @@ static DEVICE_ATTR(performance_level, S_
+ 		   get_performance_level, set_performance_level);
+ 
+ 
+-static struct dmi_system_id __initdata samsung_dmi_table[] = {
++static const struct dmi_system_id __initconst samsung_dmi_table[] = {
+ 	{
+ 		.matches = {
+ 			DMI_MATCH(DMI_SYS_VENDOR,
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/samsung-q10.c linux-3.2.68-pax/drivers/platform/x86/samsung-q10.c
+--- linux-3.2.68/drivers/platform/x86/samsung-q10.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/platform/x86/samsung-q10.c	2015-04-30 03:07:38.404532395 +0200
+@@ -130,7 +130,7 @@ static int __init dmi_check_callback(con
+ 	return 1;
+ }
+ 
+-static struct dmi_system_id __initdata samsungq10_dmi_table[] = {
++static const struct dmi_system_id __initconst samsungq10_dmi_table[] = {
+ 	{
+ 		.ident = "Samsung Q10",
+ 		.matches = {
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/sony-laptop.c linux-3.2.68-pax/drivers/platform/x86/sony-laptop.c
+--- linux-3.2.68/drivers/platform/x86/sony-laptop.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/platform/x86/sony-laptop.c	2015-04-30 03:11:47.352539715 +0200
+@@ -3385,7 +3385,7 @@ static struct acpi_driver sony_pic_drive
+ 		},
+ };
+ 
+-static struct dmi_system_id __initdata sonypi_dmi_table[] = {
++static const struct dmi_system_id __initconst sonypi_dmi_table[] = {
+ 	{
+ 		.ident = "Sony Vaio",
+ 		.matches = {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/platform/x86/thinkpad_acpi.c linux-3.2.68-pax/drivers/platform/x86/thinkpad_acpi.c
 --- linux-3.2.68/drivers/platform/x86/thinkpad_acpi.c	2014-06-10 10:59:38.778436243 +0200
 +++ linux-3.2.68-pax/drivers/platform/x86/thinkpad_acpi.c	2014-06-10 10:59:44.162435956 +0200
@@ -39315,6 +39709,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/pnp/pnp
 +
 +	pax_close_kernel();
  }
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/pnp/pnpbios/core.c linux-3.2.68-pax/drivers/pnp/pnpbios/core.c
+--- linux-3.2.68/drivers/pnp/pnpbios/core.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/drivers/pnp/pnpbios/core.c	2015-04-30 03:07:38.404532395 +0200
+@@ -492,7 +492,7 @@ static int __init exploding_pnp_bios(con
+ 	return 0;
+ }
+ 
+-static struct dmi_system_id pnpbios_dmi_table[] __initdata = {
++static const struct dmi_system_id pnpbios_dmi_table[] __initconst = {
+ 	{			/* PnPBIOS GPF on boot */
+ 	 .callback = exploding_pnp_bios,
+ 	 .ident = "Higraded P14H",
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/pnp/resource.c linux-3.2.68-pax/drivers/pnp/resource.c
 --- linux-3.2.68/drivers/pnp/resource.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/drivers/pnp/resource.c	2012-07-04 19:24:48.584063008 +0200
@@ -42809,6 +43215,36 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/video/v
  
  
  static inline u32 get_pll_internal_frequency(u32 ref_freq,
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/drivers/xen/events.c linux-3.2.68-pax/drivers/xen/events.c
+--- linux-3.2.68/drivers/xen/events.c	2013-09-10 17:24:55.533739116 +0200
++++ linux-3.2.68-pax/drivers/xen/events.c	2015-04-30 03:07:38.404532395 +0200
+@@ -1632,7 +1632,7 @@ void xen_irq_resume(void)
+ 	restore_pirqs();
+ }
+ 
+-static struct irq_chip xen_dynamic_chip __read_mostly = {
++static const struct irq_chip xen_dynamic_chip = {
+ 	.name			= "xen-dyn",
+ 
+ 	.irq_disable		= disable_dynirq,
+@@ -1646,7 +1646,7 @@ static struct irq_chip xen_dynamic_chip
+ 	.irq_retrigger		= retrigger_dynirq,
+ };
+ 
+-static struct irq_chip xen_pirq_chip __read_mostly = {
++static const struct irq_chip xen_pirq_chip = {
+ 	.name			= "xen-pirq",
+ 
+ 	.irq_startup		= startup_pirq,
+@@ -1666,7 +1666,7 @@ static struct irq_chip xen_pirq_chip __r
+ 	.irq_retrigger		= retrigger_dynirq,
+ };
+ 
+-static struct irq_chip xen_percpu_chip __read_mostly = {
++static const struct irq_chip xen_percpu_chip = {
+ 	.name			= "xen-percpu",
+ 
+ 	.irq_disable		= disable_dynirq,
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/fs/9p/vfs_addr.c linux-3.2.68-pax/fs/9p/vfs_addr.c
 --- linux-3.2.68/fs/9p/vfs_addr.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/fs/9p/vfs_addr.c	2013-06-21 19:34:10.638698102 +0200
@@ -49901,8 +50337,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
  #if __GNUC_MINOR__ > 0
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/compiler-gcc5.h linux-3.2.68-pax/include/linux/compiler-gcc5.h
 --- linux-3.2.68/include/linux/compiler-gcc5.h	2014-12-14 21:13:45.302055266 +0100
-+++ linux-3.2.68-pax/include/linux/compiler-gcc5.h	2015-02-20 12:15:40.173248875 +0100
-@@ -28,6 +28,28 @@
++++ linux-3.2.68-pax/include/linux/compiler-gcc5.h	2015-04-30 03:07:38.396532395 +0200
+@@ -28,6 +28,26 @@
  # define __compiletime_error(message) __attribute__((error(message)))
  #endif /* __CHECKER__ */
  
@@ -49912,7 +50348,6 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
 +#define __bos1(ptr)		__bos((ptr), 1)
 +
 +#ifdef CONSTIFY_PLUGIN
-+#error not yet
 +#define __no_const __attribute__((no_const))
 +#define __do_const __attribute__((do_const))
 +#endif
@@ -49924,7 +50359,6 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
 +#endif
 +
 +#ifdef LATENT_ENTROPY_PLUGIN
-+#error not yet
 +#define __latent_entropy __attribute__((latent_entropy))
 +#endif
 +
@@ -49933,7 +50367,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
   * suppress control flow warnings after asm blocks that transfer
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/compiler.h linux-3.2.68-pax/include/linux/compiler.h
 --- linux-3.2.68/include/linux/compiler.h	2014-12-14 21:13:45.302055266 +0100
-+++ linux-3.2.68-pax/include/linux/compiler.h	2014-12-14 21:13:52.834069337 +0100
++++ linux-3.2.68-pax/include/linux/compiler.h	2015-04-30 02:47:09.352496259 +0200
 @@ -5,31 +5,51 @@
  
  #ifdef __CHECKER__
@@ -50044,7 +50478,16 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
  /* Simple shorthand for a section definition */
  #ifndef __section
  # define __section(S) __attribute__ ((__section__(#S)))
-@@ -298,6 +352,14 @@ void ftrace_likely_update(struct ftrace_
+@@ -287,6 +341,8 @@ void ftrace_likely_update(struct ftrace_
+ # define __same_type(a, b) __builtin_types_compatible_p(typeof(a), typeof(b))
+ #endif
+ 
++#define __type_is_unsigned(t) (__same_type((t)0, 0UL) || __same_type((t)0, 0U) || __same_type((t)0, (unsigned short)0) || __same_type((t)0, (unsigned char)0))
++
+ /* Compile time object size, -1 for unknown */
+ #ifndef __compiletime_object_size
+ # define __compiletime_object_size(obj) -1
+@@ -298,6 +354,14 @@ void ftrace_likely_update(struct ftrace_
  # define __compiletime_error(message)
  #endif
  
@@ -50059,7 +50502,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
  /*
   * Prevent the compiler from merging or refetching accesses.  The compiler
   * is also forbidden from reordering successive instances of ACCESS_ONCE(),
-@@ -310,6 +372,7 @@ void ftrace_likely_update(struct ftrace_
+@@ -310,6 +374,7 @@ void ftrace_likely_update(struct ftrace_
   * use is to mediate communication between process-level code and irq/NMI
   * handlers, all running on the same CPU.
   */
@@ -51064,6 +51507,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/m
  
  struct mca_bus {
  	u64			default_dma_mask;
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/mmc/core.h linux-3.2.68-pax/include/linux/mmc/core.h
+--- linux-3.2.68/include/linux/mmc/core.h	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/include/linux/mmc/core.h	2015-04-30 03:07:38.404532395 +0200
+@@ -76,7 +76,7 @@ struct mmc_command {
+ #define mmc_cmd_type(cmd)	((cmd)->flags & MMC_CMD_MASK)
+ 
+ 	unsigned int		retries;	/* max number of retries */
+-	unsigned int		error;		/* command error */
++	int			error;		/* command error */
+ 
+ /*
+  * Standard errno values are used for errors, but some have specific
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/mm.h linux-3.2.68-pax/include/linux/mm.h
 --- linux-3.2.68/include/linux/mm.h	2015-02-20 12:37:33.233178768 +0100
 +++ linux-3.2.68-pax/include/linux/mm.h	2015-02-20 12:37:41.905178305 +0100
@@ -52704,8 +53159,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/s
  	return __arch_swab64(val);
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/syscalls.h linux-3.2.68-pax/include/linux/syscalls.h
 --- linux-3.2.68/include/linux/syscalls.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/include/linux/syscalls.h	2013-09-05 01:56:07.594439160 +0200
-@@ -83,12 +83,20 @@ struct file_handle;
++++ linux-3.2.68-pax/include/linux/syscalls.h	2015-04-30 02:47:21.988496630 +0200
+@@ -83,12 +83,19 @@ struct file_handle;
  #define __SC_DECL5(t5, a5, ...) t5 a5, __SC_DECL4(__VA_ARGS__)
  #define __SC_DECL6(t6, a6, ...) t6 a6, __SC_DECL5(__VA_ARGS__)
  
@@ -52715,12 +53170,11 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/s
 -#define __SC_LONG4(t4, a4, ...) long a4, __SC_LONG3(__VA_ARGS__)
 -#define __SC_LONG5(t5, a5, ...) long a5, __SC_LONG4(__VA_ARGS__)
 -#define __SC_LONG6(t6, a6, ...) long a6, __SC_LONG5(__VA_ARGS__)
-+#define __TYPE_IS_U(t) (__same_type((t)0, 0UL) || __same_type((t)0, 0U) || __same_type((t)0, (unsigned short)0) || __same_type((t)0, (unsigned char)0))
 +#define __SC_TYPE(t, a) __typeof(				\
 +	__builtin_choose_expr(					\
 +		sizeof(t) > sizeof(int),			\
 +		(t) 0,						\
-+		__builtin_choose_expr(__TYPE_IS_U(t), 0UL, 0L)	\
++		__builtin_choose_expr(__type_is_unsigned(t), 0UL, 0L)	\
 +	)) a
 +
 +#define __SC_LONG1(t1, a1) 	__SC_TYPE(t1, a1)
@@ -52732,7 +53186,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/s
  
  #define __SC_CAST1(t1, a1)	(t1) a1
  #define __SC_CAST2(t2, a2, ...) (t2) a2, __SC_CAST1(__VA_ARGS__)
-@@ -392,11 +400,11 @@ asmlinkage long sys_sync(void);
+@@ -392,11 +399,11 @@ asmlinkage long sys_sync(void);
  asmlinkage long sys_fsync(unsigned int fd);
  asmlinkage long sys_fdatasync(unsigned int fd);
  asmlinkage long sys_bdflush(int func, long data);
@@ -52748,7 +53202,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/s
  asmlinkage long sys_truncate(const char __user *path, long length);
  asmlinkage long sys_ftruncate(unsigned int fd, unsigned long length);
  asmlinkage long sys_stat(const char __user *filename,
-@@ -608,7 +616,7 @@ asmlinkage long sys_getsockname(int, str
+@@ -608,7 +615,7 @@ asmlinkage long sys_getsockname(int, str
  asmlinkage long sys_getpeername(int, struct sockaddr __user *, int __user *);
  asmlinkage long sys_send(int, void __user *, size_t, unsigned);
  asmlinkage long sys_sendto(int, void __user *, size_t, unsigned,
@@ -53567,8 +54021,16 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/net/net
  				     const struct nf_queue_handler *qh);
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/net/netlink.h linux-3.2.68-pax/include/net/netlink.h
 --- linux-3.2.68/include/net/netlink.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/include/net/netlink.h	2012-07-04 19:24:48.812063008 +0200
-@@ -569,7 +569,7 @@ static inline void *nlmsg_get_pos(struct
++++ linux-3.2.68-pax/include/net/netlink.h	2015-04-30 03:19:27.756553251 +0200
+@@ -135,6 +135,7 @@
+  *   nla_get_u16(nla)			get payload for a u16 attribute
+  *   nla_get_u32(nla)			get payload for a u32 attribute
+  *   nla_get_u64(nla)			get payload for a u64 attribute
++ *   nla_get_s32(nla)			get payload for a s32 attribute
+  *   nla_get_flag(nla)			return 1 if flag is true
+  *   nla_get_msecs(nla)			get payload for a msecs attribute
+  *
+@@ -569,7 +570,7 @@ static inline void *nlmsg_get_pos(struct
  static inline void nlmsg_trim(struct sk_buff *skb, const void *mark)
  {
  	if (mark)
@@ -53577,6 +54039,22 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/net/net
  }
  
  /**
+@@ -998,6 +999,15 @@ static inline __be64 nla_get_be64(const
+ }
+ 
+ /**
++ * nla_get_s32 - return payload of s32 attribute
++ * @nla: s32 netlink attribute
++ */
++static inline s32 nla_get_s32(const struct nlattr *nla)
++{
++	return *(s32 *) nla_data(nla);
++}
++
++/**
+  * nla_get_flag - return payload of flag attribute
+  * @nla: flag netlink attribute
+  */
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/net/net_namespace.h linux-3.2.68-pax/include/net/net_namespace.h
 --- linux-3.2.68/include/net/net_namespace.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/include/net/net_namespace.h	2013-04-03 01:34:26.676749506 +0200
@@ -59728,7 +60206,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/mm/maccess.c li
  
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/mm/madvise.c linux-3.2.68-pax/mm/madvise.c
 --- linux-3.2.68/mm/madvise.c	2012-07-12 18:23:34.921071950 +0200
-+++ linux-3.2.68-pax/mm/madvise.c	2012-07-12 18:23:40.321071652 +0200
++++ linux-3.2.68-pax/mm/madvise.c	2015-04-30 02:44:51.224492198 +0200
 @@ -46,6 +46,10 @@ static long madvise_behavior(struct vm_a
  	pgoff_t pgoff;
  	unsigned long new_flags = vma->vm_flags;
@@ -59779,9 +60257,9 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/mm/madvise.c li
 +				.nonlinear_vma = vma_m,
 +				.last_index = ULONG_MAX,
 +			};
-+			zap_page_range(vma, start + SEGMEXEC_TASK_SIZE, end - start, &details);
++			zap_page_range(vma_m, start + SEGMEXEC_TASK_SIZE, end - start, &details);
 +		} else
-+			zap_page_range(vma, start + SEGMEXEC_TASK_SIZE, end - start, NULL);
++			zap_page_range(vma_m, start + SEGMEXEC_TASK_SIZE, end - start, NULL);
 +	}
 +#endif
 +
@@ -66872,6 +67350,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/net/key/af_key.
  	} while (!res);
  	return res;
  }
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/net/l2tp/l2tp_ip.c linux-3.2.68-pax/net/l2tp/l2tp_ip.c
+--- linux-3.2.68/net/l2tp/l2tp_ip.c	2014-01-03 15:48:45.180070554 +0100
++++ linux-3.2.68-pax/net/l2tp/l2tp_ip.c	2015-04-30 03:10:50.192538034 +0200
+@@ -667,7 +667,7 @@ static struct inet_protosw l2tp_ip_proto
+ 	.no_check	= 0,
+ };
+ 
+-static struct net_protocol l2tp_ip_protocol __read_mostly = {
++static const struct net_protocol l2tp_ip_protocol = {
+ 	.handler	= l2tp_ip_recv,
+ };
+ 
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/net/mac80211/ieee80211_i.h linux-3.2.68-pax/net/mac80211/ieee80211_i.h
 --- linux-3.2.68/net/mac80211/ieee80211_i.h	2013-11-29 01:58:28.842491624 +0100
 +++ linux-3.2.68-pax/net/mac80211/ieee80211_i.h	2013-11-29 01:58:37.734491886 +0100
@@ -71190,10 +71680,10 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/check
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/colorize_plugin.c linux-3.2.68-pax/tools/gcc/colorize_plugin.c
 --- linux-3.2.68/tools/gcc/colorize_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/colorize_plugin.c	2015-04-03 01:52:30.072418299 +0200
++++ linux-3.2.68-pax/tools/gcc/colorize_plugin.c	2015-04-30 03:07:38.396532395 +0200
 @@ -0,0 +1,215 @@
 +/*
-+ * Copyright 2012-2014 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2015 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -71286,6 +71776,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/color
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data colorize_rearm_pass_data = {
 +#else
 +struct simple_ipa_opt_pass colorize_rearm_pass = {
@@ -71319,7 +71810,6 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/color
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class colorize_rearm_pass : public simple_ipa_opt_pass {
 +public:
 +	colorize_rearm_pass() : simple_ipa_opt_pass(colorize_rearm_pass_data, g) {}
@@ -71409,11 +71899,11 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/color
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/constify_plugin.c linux-3.2.68-pax/tools/gcc/constify_plugin.c
 --- linux-3.2.68/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/constify_plugin.c	2015-02-20 12:17:09.473244107 +0100
-@@ -0,0 +1,558 @@
++++ linux-3.2.68-pax/tools/gcc/constify_plugin.c	2015-04-30 03:07:38.396532395 +0200
+@@ -0,0 +1,563 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
-+ * Copyright 2011-2014 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2015 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * This gcc plugin constifies all structures which contain only function pointers or are explicitly marked for constification.
@@ -71428,7 +71918,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/const
 +
 +#include "gcc-common.h"
 +
-+// unused C type flag in all versions 4.5-4.9
++// unused C type flag in all versions 4.5-5.0
 +#define TYPE_CONSTIFY_VISITED(TYPE) TYPE_LANG_FLAG_4(TYPE)
 +
 +int plugin_is_GPL_compatible;
@@ -71734,6 +72224,11 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/const
 +	if (type == NULL_TREE || type == error_mark_node)
 +		return;
 +
++#if BUILDING_GCC_VERSION >= 5000
++	if (TREE_CODE(type) == ENUMERAL_TYPE)
++		return;
++#endif
++
 +	if (TYPE_FIELDS(type) == NULL_TREE || TYPE_CONSTIFY_VISITED(type))
 +		return;
 +
@@ -71834,6 +72329,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/const
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data check_local_variables_pass_data = {
 +#else
 +static struct gimple_opt_pass check_local_variables_pass = {
@@ -71867,7 +72363,6 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/const
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class check_local_variables_pass : public gimple_opt_pass {
 +public:
 +	check_local_variables_pass() : gimple_opt_pass(check_local_variables_pass_data, g) {}
@@ -71971,8 +72466,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/const
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-common.h linux-3.2.68-pax/tools/gcc/gcc-common.h
 --- linux-3.2.68/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/gcc-common.h	2015-04-03 01:58:40.380438411 +0200
-@@ -0,0 +1,520 @@
++++ linux-3.2.68-pax/tools/gcc/gcc-common.h	2015-04-30 03:07:38.400532395 +0200
+@@ -0,0 +1,666 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -72074,11 +72569,13 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +//#include "diagnostic-color.h"
 +#include "context.h"
 +#include "tree-ssa-alias.h"
++#include "tree-ssa.h"
 +#include "stringpool.h"
 +#include "tree-ssanames.h"
 +#include "print-tree.h"
 +#include "tree-eh.h"
 +#include "stmt.h"
++#include "gimplify.h"
 +#endif
 +
 +#include "gimple.h"
@@ -72101,6 +72598,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +//#include "lto-compress.h"
 +#if BUILDING_GCC_VERSION >= 5000
 +//#include "lto-section-names.h"
++#include "builtins.h"
 +#endif
 +
 +//#include "expr.h" where are you...
@@ -72292,18 +72790,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +}
 +#endif
 +
-+#if BUILDING_GCC_VERSION >= 4007
-+#define cgraph_create_edge(caller, callee, call_stmt, count, freq, nest) \
-+	cgraph_create_edge((caller), (callee), (call_stmt), (count), (freq))
-+#define cgraph_create_edge_including_clones(caller, callee, old_call_stmt, call_stmt, count, freq, nest, reason) \
-+	cgraph_create_edge_including_clones((caller), (callee), (old_call_stmt), (call_stmt), (count), (freq), (reason))
-+#endif
-+
 +#if BUILDING_GCC_VERSION == 4007 || BUILDING_GCC_VERSION == 4008
 +static inline struct cgraph_node *cgraph_alias_target(struct cgraph_node *n)
 +{
 +	return cgraph_alias_aliased_node(n);
 +}
++#endif
++
++#if BUILDING_GCC_VERSION >= 4007 && BUILDING_GCC_VERSION <= 4009
++#define cgraph_create_edge(caller, callee, call_stmt, count, freq, nest) \
++	cgraph_create_edge((caller), (callee), (call_stmt), (count), (freq))
++#define cgraph_create_edge_including_clones(caller, callee, old_call_stmt, call_stmt, count, freq, nest, reason) \
++	cgraph_create_edge_including_clones((caller), (callee), (old_call_stmt), (call_stmt), (count), (freq), (reason))
 +#endif
 +
 +#if BUILDING_GCC_VERSION <= 4008
@@ -72318,6 +72816,40 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +#define BASIC_BLOCK_FOR_FN(FN, N)	BASIC_BLOCK_FOR_FUNCTION((FN), (N))
 +#define NODE_IMPLICIT_ALIAS(node)	(node)->same_body_alias
 +
++static inline bool tree_fits_shwi_p(const_tree t)
++{
++	if (t == NULL_TREE || TREE_CODE(t) != INTEGER_CST)
++		return false;
++
++	if (TREE_INT_CST_HIGH(t) == 0 && (HOST_WIDE_INT)TREE_INT_CST_LOW(t) >= 0)
++		return true;
++
++	if (TREE_INT_CST_HIGH(t) == -1 && (HOST_WIDE_INT)TREE_INT_CST_LOW(t) < 0 && !TYPE_UNSIGNED(TREE_TYPE(t)))
++		return true;
++
++	return false;
++}
++
++static inline bool tree_fits_uhwi_p(const_tree t)
++{
++	if (t == NULL_TREE || TREE_CODE(t) != INTEGER_CST)
++		return false;
++
++	return TREE_INT_CST_HIGH(t) == 0;
++}
++
++static inline HOST_WIDE_INT tree_to_shwi(const_tree t)
++{
++	gcc_assert(tree_fits_shwi_p(t));
++	return TREE_INT_CST_LOW(t);
++}
++
++static inline unsigned HOST_WIDE_INT tree_to_uhwi(const_tree t)
++{
++	gcc_assert(tree_fits_uhwi_p(t));
++	return TREE_INT_CST_LOW(t);
++}
++
 +static inline const char *get_tree_code_name(enum tree_code code)
 +{
 +	gcc_assert(code < MAX_TREE_CODES);
@@ -72328,6 +72860,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +typedef union gimple_statement_d gasm;
 +typedef union gimple_statement_d gassign;
 +typedef union gimple_statement_d gcall;
++typedef union gimple_statement_d gcond;
++typedef union gimple_statement_d gdebug;
 +typedef union gimple_statement_d gphi;
 +typedef union gimple_statement_d greturn;
 +#endif
@@ -72354,6 +72888,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +typedef struct gimple_statement_base gasm;
 +typedef struct gimple_statement_base gassign;
 +typedef struct gimple_statement_base gcall;
++typedef struct gimple_statement_base gcond;
++typedef struct gimple_statement_base gdebug;
 +typedef struct gimple_statement_base gphi;
 +typedef struct gimple_statement_base greturn;
 +#endif
@@ -72366,7 +72902,47 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +	return stmt;
 +}
 +
++static inline const gasm *as_a_const_gasm(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gassign *as_a_gassign(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gassign *as_a_const_gassign(const_gimple stmt)
++{
++	return stmt;
++}
++
 +static inline gcall *as_a_gcall(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gcall *as_a_const_gcall(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gphi *as_a_gphi(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gphi *as_a_const_gphi(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline greturn *as_a_greturn(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const greturn *as_a_const_greturn(const_gimple stmt)
 +{
 +	return stmt;
 +}
@@ -72386,20 +72962,26 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +#define TODO_verify_stmts TODO_verify_il
 +#define TODO_verify_rtl_sharing TODO_verify_il
 +
-+#define TREE_INT_CST_HIGH(NODE) ({ TREE_INT_CST_EXT_NUNITS(NODE) > 1 ? (unsigned HOST_WIDE_INT)TREE_INT_CST_ELT(NODE, 1) : 0; })
++//#define TREE_INT_CST_HIGH(NODE) ({ TREE_INT_CST_EXT_NUNITS(NODE) > 1 ? (unsigned HOST_WIDE_INT)TREE_INT_CST_ELT(NODE, 1) : 0; })
 +
 +#define INSN_DELETED_P(insn) (insn)->deleted()
-+
-+extern bool is_simple_builtin(tree);
 +
 +// symtab/cgraph related
 +#define debug_cgraph_node(node) (node)->debug()
 +#define cgraph_get_node(decl) cgraph_node::get(decl)
++#define cgraph_get_create_node(decl) cgraph_node::get_create(decl)
 +#define cgraph_n_nodes symtab->cgraph_count
 +#define cgraph_max_uid symtab->cgraph_max_uid
++#define varpool_get_node(decl) varpool_node::get(decl)
++
++#define cgraph_create_edge(caller, callee, call_stmt, count, freq, nest) \
++	(caller)->create_edge((callee), (call_stmt), (count), (freq))
++#define cgraph_create_edge_including_clones(caller, callee, old_call_stmt, call_stmt, count, freq, nest, reason) \
++	(caller)->create_edge_including_clones((callee), (old_call_stmt), (call_stmt), (count), (freq), (reason))
 +
 +typedef struct cgraph_node *cgraph_node_ptr;
 +typedef struct cgraph_edge *cgraph_edge_p;
++typedef struct varpool_node *varpool_node_ptr;
 +
 +static inline void change_decl_assembler_name(tree decl, tree name)
 +{
@@ -72472,14 +73054,68 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +	return gimple_build_assign(lhs, subcode, op1, op2 PASS_MEM_STAT);
 +}
 +
++template <>
++template <>
++inline bool is_a_helper<const gassign *>::test(const_gimple gs)
++{
++	return gs->code == GIMPLE_ASSIGN;
++}
++
++template <>
++template <>
++inline bool is_a_helper<const greturn *>::test(const_gimple gs)
++{
++	return gs->code == GIMPLE_RETURN;
++}
++
 +static inline gasm *as_a_gasm(gimple stmt)
 +{
 +	return as_a<gasm *>(stmt);
 +}
 +
++static inline const gasm *as_a_const_gasm(const_gimple stmt)
++{
++	return as_a<const gasm *>(stmt);
++}
++
++static inline gassign *as_a_gassign(gimple stmt)
++{
++	return as_a<gassign *>(stmt);
++}
++
++static inline const gassign *as_a_const_gassign(const_gimple stmt)
++{
++	return as_a<const gassign *>(stmt);
++}
++
 +static inline gcall *as_a_gcall(gimple stmt)
 +{
 +	return as_a<gcall *>(stmt);
++}
++
++static inline const gcall *as_a_const_gcall(const_gimple stmt)
++{
++	return as_a<const gcall *>(stmt);
++}
++
++static inline gphi *as_a_gphi(gimple stmt)
++{
++	return as_a<gphi *>(stmt);
++}
++
++static inline const gphi *as_a_const_gphi(const_gimple stmt)
++{
++	return as_a<const gphi *>(stmt);
++}
++
++static inline greturn *as_a_greturn(gimple stmt)
++{
++	return as_a<greturn *>(stmt);
++}
++
++static inline const greturn *as_a_const_greturn(const_gimple stmt)
++{
++	return as_a<const greturn *>(stmt);
 +}
 +
 +// IPA/LTO related
@@ -72490,15 +73126,20 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/gcc-c
 +{
 +	return dyn_cast<cgraph_node_ptr>(ref->referring);
 +}
++
++static inline void ipa_remove_stmt_references(symtab_node *referring_node, gimple stmt)
++{
++	referring_node->remove_stmt_references(stmt);
++}
 +#endif
 +
 +#endif
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kallocstat_plugin.c linux-3.2.68-pax/tools/gcc/kallocstat_plugin.c
 --- linux-3.2.68/tools/gcc/kallocstat_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/kallocstat_plugin.c	2014-04-23 23:23:37.855376305 +0200
-@@ -0,0 +1,183 @@
++++ linux-3.2.68-pax/tools/gcc/kallocstat_plugin.c	2015-04-30 03:07:38.400532395 +0200
+@@ -0,0 +1,188 @@
 +/*
-+ * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2015 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -72609,6 +73250,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kallo
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data kallocstat_pass_data = {
 +#else
 +static struct gimple_opt_pass kallocstat_pass = {
@@ -72619,7 +73261,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kallo
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -72641,11 +73284,14 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kallo
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class kallocstat_pass : public gimple_opt_pass {
 +public:
 +	kallocstat_pass() : gimple_opt_pass(kallocstat_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return execute_kallocstat(); }
++#else
 +	unsigned int execute() { return execute_kallocstat(); }
++#endif
 +};
 +}
 +
@@ -72682,10 +73328,10 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kallo
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kernexec_plugin.c linux-3.2.68-pax/tools/gcc/kernexec_plugin.c
 --- linux-3.2.68/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/kernexec_plugin.c	2014-04-23 23:23:37.847376305 +0200
-@@ -0,0 +1,522 @@
++++ linux-3.2.68-pax/tools/gcc/kernexec_plugin.c	2015-04-30 03:07:38.400532395 +0200
+@@ -0,0 +1,547 @@
 +/*
-+ * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2015 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -72718,7 +73364,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 + */
 +static void kernexec_reload_fptr_mask(gimple_stmt_iterator *gsi)
 +{
-+	gimple asm_movabs_stmt;
++	gasm *asm_movabs_stmt;
 +
 +	// build asm volatile("movabs $0x8000000000000000, %%r12\n\t" : : : );
 +	asm_movabs_stmt = gimple_build_asm_vec("movabs $0x8000000000000000, %%r12\n\t", NULL, NULL, NULL, NULL);
@@ -72740,13 +73386,16 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +			// gimple match: __asm__ ("" :  :  : "r12");
-+			gimple asm_stmt;
++			gimple stmt;
++			gasm *asm_stmt;
 +			size_t nclobbers;
 +
 +			// is it an asm ...
-+			asm_stmt = gsi_stmt(gsi);
-+			if (gimple_code(asm_stmt) != GIMPLE_ASM)
++			stmt = gsi_stmt(gsi);
++			if (gimple_code(stmt) != GIMPLE_ASM)
 +				continue;
++
++			asm_stmt = as_a_gasm(stmt);
 +
 +			// ... clobbering r12
 +			nclobbers = gimple_asm_nclobbers(asm_stmt);
@@ -72770,10 +73419,11 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 + */
 +static void kernexec_instrument_fptr_bts(gimple_stmt_iterator *gsi)
 +{
-+	gimple assign_intptr, assign_new_fptr, call_stmt;
++	gimple assign_intptr, assign_new_fptr;
++	gcall *call_stmt;
 +	tree intptr, orptr, old_fptr, new_fptr, kernexec_mask;
 +
-+	call_stmt = gsi_stmt(*gsi);
++	call_stmt = as_a_gcall(gsi_stmt(*gsi));
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary unsigned long variable used for bitops and cast fptr to it
@@ -72811,7 +73461,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +
 +static void kernexec_instrument_fptr_or(gimple_stmt_iterator *gsi)
 +{
-+	gimple asm_or_stmt, call_stmt;
++	gasm *asm_or_stmt;
++	gcall *call_stmt;
 +	tree old_fptr, new_fptr, input, output;
 +#if BUILDING_GCC_VERSION <= 4007
 +	VEC(tree, gc) *inputs = NULL;
@@ -72821,7 +73472,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +	vec<tree, va_gc> *outputs = NULL;
 +#endif
 +
-+	call_stmt = gsi_stmt(*gsi);
++	call_stmt = as_a_gcall(gsi_stmt(*gsi));
 +	old_fptr = gimple_call_fn(call_stmt);
 +
 +	// create temporary fptr variable
@@ -72830,9 +73481,9 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +	new_fptr = make_ssa_name(new_fptr, NULL);
 +
 +	// build asm volatile("orq %%r12, %0\n\t" : "=r"(new_fptr) : "0"(old_fptr));
-+	input = build_tree_list(NULL_TREE, build_string(1, "0"));
++	input = build_tree_list(NULL_TREE, build_string(2, "0"));
 +	input = chainon(NULL_TREE, build_tree_list(input, old_fptr));
-+	output = build_tree_list(NULL_TREE, build_string(2, "=r"));
++	output = build_tree_list(NULL_TREE, build_string(3, "=r"));
 +	output = chainon(NULL_TREE, build_tree_list(output, new_fptr));
 +#if BUILDING_GCC_VERSION <= 4007
 +	VEC_safe_push(tree, gc, inputs, input);
@@ -72866,12 +73517,14 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +			// gimple match: h_1 = get_fptr (); D.2709_3 = h_1 (x_2(D));
 +			tree fn;
-+			gimple call_stmt;
++			gimple stmt;
++			gcall *call_stmt;
 +
 +			// is it a call ...
-+			call_stmt = gsi_stmt(gsi);
-+			if (!is_gimple_call(call_stmt))
++			stmt = gsi_stmt(gsi);
++			if (!is_gimple_call(stmt))
 +				continue;
++			call_stmt = as_a_gcall(stmt);
 +			fn = gimple_call_fn(call_stmt);
 +			if (TREE_CODE(fn) == ADDR_EXPR)
 +				continue;
@@ -72944,7 +73597,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 + */
 +static unsigned int execute_kernexec_retaddr(void)
 +{
-+	rtx insn;
++	rtx_insn *insn;
 +
 +//	if (stack_realign_drap)
 +//		inform(DECL_SOURCE_LOCATION(current_function_decl), "drap detected in %s\n", IDENTIFIER_POINTER(DECL_NAME(current_function_decl)));
@@ -72992,6 +73645,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data kernexec_reload_pass_data = {
 +#else
 +static struct gimple_opt_pass kernexec_reload_pass = {
@@ -73002,7 +73656,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= true,
 +		.has_execute		= true,
 +#else
@@ -73034,7 +73689,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= true,
 +		.has_execute		= true,
 +#else
@@ -73066,7 +73722,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= true,
 +		.has_execute		= true,
 +#else
@@ -73088,26 +73745,40 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class kernexec_reload_pass : public gimple_opt_pass {
 +public:
 +	kernexec_reload_pass() : gimple_opt_pass(kernexec_reload_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual bool gate(function *) { return kernexec_cmodel_check(); }
++	virtual unsigned int execute(function *) { return execute_kernexec_reload(); }
++#else
 +	bool gate() { return kernexec_cmodel_check(); }
 +	unsigned int execute() { return execute_kernexec_reload(); }
++#endif
 +};
 +
 +class kernexec_fptr_pass : public gimple_opt_pass {
 +public:
 +	kernexec_fptr_pass() : gimple_opt_pass(kernexec_fptr_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual bool gate(function *) { return kernexec_cmodel_check(); }
++	virtual unsigned int execute(function *) { return execute_kernexec_fptr(); }
++#else
 +	bool gate() { return kernexec_cmodel_check(); }
 +	unsigned int execute() { return execute_kernexec_fptr(); }
++#endif
 +};
 +
 +class kernexec_retaddr_pass : public rtl_opt_pass {
 +public:
 +	kernexec_retaddr_pass() : rtl_opt_pass(kernexec_retaddr_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual bool gate(function *) { return kernexec_cmodel_check(); }
++	virtual unsigned int execute(function *) { return execute_kernexec_retaddr(); }
++#else
 +	bool gate() { return kernexec_cmodel_check(); }
 +	unsigned int execute() { return execute_kernexec_retaddr(); }
++#endif
 +};
 +}
 +
@@ -73208,10 +73879,10 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/kerne
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/latent_entropy_plugin.c linux-3.2.68-pax/tools/gcc/latent_entropy_plugin.c
 --- linux-3.2.68/tools/gcc/latent_entropy_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/latent_entropy_plugin.c	2015-04-01 02:27:03.394815639 +0200
-@@ -0,0 +1,467 @@
++++ linux-3.2.68-pax/tools/gcc/latent_entropy_plugin.c	2015-04-30 03:07:38.400532395 +0200
+@@ -0,0 +1,474 @@
 +/*
-+ * Copyright 2012-2014 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2012-2015 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -73228,7 +73899,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 + * - more instrumentation control via attribute parameters
 + *
 + * BUGS:
-+ * - LTO needs -flto-partition=none for now
++ * - none known
 + */
 +
 +#include "gcc-common.h"
@@ -73238,7 +73909,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 +static GTY(()) tree latent_entropy_decl;
 +
 +static struct plugin_info latent_entropy_plugin_info = {
-+	.version	= "201409101820",
++	.version	= "201504282240",
 +	.help		= NULL
 +};
 +
@@ -73516,6 +74187,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 +		FOR_EACH_VARIABLE(node) {
 +			tree var = NODE_DECL(node);
 +
++			if (DECL_NAME_LENGTH(var) < sizeof("latent_entropy") - 1)
++				continue;
 +			if (strcmp(IDENTIFIER_POINTER(DECL_NAME(var)), "latent_entropy"))
 +				continue;
 +			latent_entropy_decl = var;
@@ -73591,6 +74264,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data latent_entropy_pass_data = {
 +#else
 +static struct gimple_opt_pass latent_entropy_pass = {
@@ -73601,7 +74275,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= true,
 +		.has_execute		= true,
 +#else
@@ -73623,12 +74298,16 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class latent_entropy_pass : public gimple_opt_pass {
 +public:
 +	latent_entropy_pass() : gimple_opt_pass(latent_entropy_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual bool gate(function *) { return gate_latent_entropy(); }
++	virtual unsigned int execute(function *) { return execute_latent_entropy(); }
++#else
 +	bool gate() { return gate_latent_entropy(); }
 +	unsigned int execute() { return execute_latent_entropy(); }
++#endif
 +};
 +}
 +
@@ -73670,8 +74349,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 +
 +	register_callback(plugin_name, PLUGIN_INFO, NULL, &latent_entropy_plugin_info);
 +	register_callback(plugin_name, PLUGIN_START_UNIT, &latent_entropy_start_unit, NULL);
-+	if (!in_lto_p)
-+		register_callback(plugin_name, PLUGIN_REGISTER_GGC_ROOTS, NULL, (void *)&gt_ggc_r_gt_latent_entropy);
++	register_callback(plugin_name, PLUGIN_REGISTER_GGC_ROOTS, NULL, (void *)&gt_ggc_r_gt_latent_entropy);
 +	register_callback(plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &latent_entropy_pass_info);
 +	register_callback(plugin_name, PLUGIN_ATTRIBUTES, register_attributes, NULL);
 +
@@ -73679,7 +74357,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/laten
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/Makefile linux-3.2.68-pax/tools/gcc/Makefile
 --- linux-3.2.68/tools/gcc/Makefile	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/Makefile	2014-06-02 18:46:28.254285437 +0200
++++ linux-3.2.68-pax/tools/gcc/Makefile	2015-04-30 03:07:38.400532395 +0200
 @@ -0,0 +1,40 @@
 +#CC := gcc
 +#PLUGIN_SOURCE_FILES := pax_plugin.c
@@ -73693,7 +74371,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/Makef
 +export HOST_EXTRACFLAGS
 +else
 +HOSTLIBS := hostcxxlibs
-+HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(src) -std=gnu++98 -fno-rtti -ggdb -Wno-unused-parameter -Wno-narrowing -Wno-unused-variable
++HOST_EXTRACXXFLAGS += -I$(GCCPLUGINS_DIR)/include -I$(src) -std=gnu++98 -fno-rtti -fno-exceptions -fasynchronous-unwind-tables -ggdb -Wno-unused-parameter -Wno-narrowing -Wno-unused-variable
 +export HOST_EXTRACXXFLAGS
 +endif
 +
@@ -77911,7 +78589,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/size_
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/size_overflow_plugin/size_overflow.h linux-3.2.68-pax/tools/gcc/size_overflow_plugin/size_overflow.h
 --- linux-3.2.68/tools/gcc/size_overflow_plugin/size_overflow.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/size_overflow_plugin/size_overflow.h	2014-06-02 19:05:58.258222968 +0200
++++ linux-3.2.68-pax/tools/gcc/size_overflow_plugin/size_overflow.h	2015-04-30 03:15:24.116546088 +0200
 @@ -0,0 +1,127 @@
 +#ifndef SIZE_OVERFLOW_H
 +#define SIZE_OVERFLOW_H
@@ -77942,11 +78620,11 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/size_
 +};
 +
 +// size_overflow_plugin.c
-+extern tree report_size_overflow_decl;
-+extern tree size_overflow_type_HI;
-+extern tree size_overflow_type_SI;
-+extern tree size_overflow_type_DI;
-+extern tree size_overflow_type_TI;
++extern GTY(()) tree report_size_overflow_decl;
++extern GTY(()) tree size_overflow_type_HI;
++extern GTY(()) tree size_overflow_type_SI;
++extern GTY(()) tree size_overflow_type_DI;
++extern GTY(()) tree size_overflow_type_TI;
 +
 +
 +// size_overflow_plugin_hash.c
@@ -83213,10 +83891,10 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/size_
 +
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stackleak_plugin.c linux-3.2.68-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.2.68/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/stackleak_plugin.c	2015-03-27 17:16:33.440781759 +0100
-@@ -0,0 +1,396 @@
++++ linux-3.2.68-pax/tools/gcc/stackleak_plugin.c	2015-04-30 03:07:38.400532395 +0200
+@@ -0,0 +1,432 @@
 +/*
-+ * Copyright 2011-2014 by the PaX Team <pageexec@freemail.hu>
++ * Copyright 2011-2015 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -83247,29 +83925,49 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stack
 +static bool init_locals;
 +
 +static struct plugin_info stackleak_plugin_info = {
-+	.version	= "201408011900",
++	.version	= "201504282245",
 +	.help		= "track-lowest-sp=nn\ttrack sp in functions whose frame size is at least nn bytes\n"
 +//			  "initialize-locals\t\tforcibly initialize all stack frames\n"
 +};
 +
 +static void stackleak_check_alloca(gimple_stmt_iterator *gsi)
 +{
-+	gimple check_alloca;
++	gcall *check_alloca;
 +	tree alloca_size;
++	cgraph_node_ptr node;
++	int frequency;
++	basic_block bb;
 +
 +	// insert call to void pax_check_alloca(unsigned long size)
 +	alloca_size = gimple_call_arg(gsi_stmt(*gsi), 0);
 +	check_alloca = gimple_build_call(check_function_decl, 1, alloca_size);
 +	gsi_insert_before(gsi, check_alloca, GSI_SAME_STMT);
++
++	// update the cgraph
++	bb = gimple_bb(check_alloca);
++	node = cgraph_get_create_node(check_function_decl);
++	gcc_assert(node);
++	frequency = compute_call_stmt_bb_frequency(current_function_decl, bb);
++	cgraph_create_edge(cgraph_get_node(current_function_decl), node, check_alloca, bb->count, frequency, bb->loop_depth);
 +}
 +
 +static void stackleak_add_instrumentation(gimple_stmt_iterator *gsi)
 +{
-+	gimple track_stack;
++	gcall *track_stack;
++	cgraph_node_ptr node;
++	int frequency;
++	basic_block bb;
 +
 +	// insert call to void pax_track_stack(void)
 +	track_stack = gimple_build_call(track_function_decl, 0);
 +	gsi_insert_after(gsi, track_stack, GSI_CONTINUE_LINKING);
++
++	// update the cgraph
++	bb = gimple_bb(track_stack);
++	node = cgraph_get_create_node(track_function_decl);
++	gcc_assert(node);
++	frequency = compute_call_stmt_bb_frequency(current_function_decl, bb);
++	cgraph_create_edge(cgraph_get_node(current_function_decl), node, track_stack, bb->count, frequency, bb->loop_depth);
 +}
 +
 +static bool is_alloca(gimple stmt)
@@ -83343,7 +84041,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stack
 +
 +static unsigned int execute_stackleak_final(void)
 +{
-+	rtx insn, next;
++	rtx_insn *insn, *next;
 +
 +	if (cfun->calls_alloca)
 +		return 0;
@@ -83424,19 +84122,24 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stack
 +	track_function_decl = build_fn_decl(track_function, fntype);
 +	DECL_ASSEMBLER_NAME(track_function_decl); // for LTO
 +	TREE_PUBLIC(track_function_decl) = 1;
++	TREE_USED(track_function_decl) = 1;
 +	DECL_EXTERNAL(track_function_decl) = 1;
 +	DECL_ARTIFICIAL(track_function_decl) = 1;
++	DECL_PRESERVE_P(track_function_decl) = 1;
 +
 +	// void pax_check_alloca(unsigned long)
 +	fntype = build_function_type_list(void_type_node, long_unsigned_type_node, NULL_TREE);
 +	check_function_decl = build_fn_decl(check_function, fntype);
 +	DECL_ASSEMBLER_NAME(check_function_decl); // for LTO
 +	TREE_PUBLIC(check_function_decl) = 1;
++	TREE_USED(check_function_decl) = 1;
 +	DECL_EXTERNAL(check_function_decl) = 1;
 +	DECL_ARTIFICIAL(check_function_decl) = 1;
++	DECL_PRESERVE_P(check_function_decl) = 1;
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data stackleak_tree_instrument_pass_data = {
 +#else
 +static struct gimple_opt_pass stackleak_tree_instrument_pass = {
@@ -83447,7 +84150,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stack
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= true,
 +		.has_execute		= true,
 +#else
@@ -83479,7 +84183,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stack
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= true,
 +		.has_execute		= true,
 +#else
@@ -83501,19 +84206,28 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stack
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class stackleak_tree_instrument_pass : public gimple_opt_pass {
 +public:
 +	stackleak_tree_instrument_pass() : gimple_opt_pass(stackleak_tree_instrument_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual bool gate(function *) { return gate_stackleak_track_stack(); }
++	virtual unsigned int execute(function *) { return execute_stackleak_tree_instrument(); }
++#else
 +	bool gate() { return gate_stackleak_track_stack(); }
 +	unsigned int execute() { return execute_stackleak_tree_instrument(); }
++#endif
 +};
 +
 +class stackleak_final_rtl_opt_pass : public rtl_opt_pass {
 +public:
 +	stackleak_final_rtl_opt_pass() : rtl_opt_pass(stackleak_final_rtl_opt_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual bool gate(function *) { return gate_stackleak_track_stack(); }
++	virtual unsigned int execute(function *) { return execute_stackleak_final(); }
++#else
 +	bool gate() { return gate_stackleak_track_stack(); }
 +	unsigned int execute() { return execute_stackleak_final(); }
++#endif
 +};
 +}
 +
@@ -83613,10 +84327,10 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/stack
 +}
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/structleak_plugin.c linux-3.2.68-pax/tools/gcc/structleak_plugin.c
 --- linux-3.2.68/tools/gcc/structleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.68-pax/tools/gcc/structleak_plugin.c	2014-04-23 23:23:37.871376304 +0200
-@@ -0,0 +1,274 @@
++++ linux-3.2.68-pax/tools/gcc/structleak_plugin.c	2015-04-30 03:07:38.400532395 +0200
+@@ -0,0 +1,287 @@
 +/*
-+ * Copyright 2013-2014 by PaX Team <pageexec@freemail.hu>
++ * Copyright 2013-2015 by PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
 + *
 + * Note: the choice of the license means that the compilation process is
@@ -83643,8 +84357,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/struc
 +
 +#include "gcc-common.h"
 +
-+// unused C type flag in all versions 4.5-4.9
-+#define TYPE_USERSPACE(TYPE) TYPE_LANG_FLAG_3(TYPE)
++// unused C type flag in all versions 4.5-5.0
++#define TYPE_USERSPACE(TYPE) TYPE_LANG_FLAG_5(TYPE)
 +
 +int plugin_is_GPL_compatible;
 +
@@ -83710,6 +84424,14 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/struc
 +static void finish_type(void *event_data, void *data)
 +{
 +	tree type = (tree)event_data;
++
++	if (type == NULL_TREE || type == error_mark_node)
++		return;
++
++#if BUILDING_GCC_VERSION >= 5000
++	if (TREE_CODE(type) == ENUMERAL_TYPE)
++		return;
++#endif
 +
 +	if (TYPE_USERSPACE(type))
 +		return;
@@ -83797,6 +84519,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/struc
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data structleak_pass_data = {
 +#else
 +static struct gimple_opt_pass structleak_pass = {
@@ -83807,7 +84530,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/struc
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -83829,11 +84553,14 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/struc
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class structleak_pass : public gimple_opt_pass {
 +public:
 +	structleak_pass() : gimple_opt_pass(structleak_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return handle_function(); }
++#else
 +	unsigned int execute() { return handle_function(); }
++#endif
 +};
 +}
 +
@@ -83867,7 +84594,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/tools/gcc/struc
 +		return 1;
 +	}
 +
-+	if (strcmp(lang_hooks.name, "GNU C")) {
++	if (strncmp(lang_hooks.name, "GNU C", 5) || !strncmp(lang_hooks.name, "GNU C+", 6)) {
 +		inform(UNKNOWN_LOCATION, G_("%s supports C only"), plugin_name);
 +		enable = false;
 +	}
