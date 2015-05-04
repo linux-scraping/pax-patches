@@ -1,4 +1,4 @@
-- fixed compilation errors due to some overzealous constification of irq_chip variables, reported by spender
+- fixed a bunch of NULL function pointer dereference regressions in the compat drm ioctl code for i915/mga/r128/radeon, reported by minipli
 
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/arch/alpha/include/asm/atomic.h linux-3.14.40-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.40/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -37421,7 +37421,32 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/i915/i915_ioc32.c linux-3.14.40-pax/drivers/gpu/drm/i915/i915_ioc32.c
 --- linux-3.14.40/drivers/gpu/drm/i915/i915_ioc32.c	2013-08-20 19:08:16.099833373 +0200
-+++ linux-3.14.40-pax/drivers/gpu/drm/i915/i915_ioc32.c	2014-03-31 12:53:46.431112678 +0200
++++ linux-3.14.40-pax/drivers/gpu/drm/i915/i915_ioc32.c	2015-05-05 00:53:06.304150605 +0200
+@@ -62,7 +62,7 @@ static int compat_i915_batchbuffer(struc
+ 	    || __put_user(batchbuffer32.DR4, &batchbuffer->DR4)
+ 	    || __put_user(batchbuffer32.num_cliprects,
+ 			  &batchbuffer->num_cliprects)
+-	    || __put_user((int __user *)(unsigned long)batchbuffer32.cliprects,
++	    || __put_user((struct drm_clip_rect __user *)(unsigned long)batchbuffer32.cliprects,
+ 			  &batchbuffer->cliprects))
+ 		return -EFAULT;
+ 
+@@ -91,13 +91,13 @@ static int compat_i915_cmdbuffer(struct
+ 
+ 	cmdbuffer = compat_alloc_user_space(sizeof(*cmdbuffer));
+ 	if (!access_ok(VERIFY_WRITE, cmdbuffer, sizeof(*cmdbuffer))
+-	    || __put_user((int __user *)(unsigned long)cmdbuffer32.buf,
++	    || __put_user((char __user *)(unsigned long)cmdbuffer32.buf,
+ 			  &cmdbuffer->buf)
+ 	    || __put_user(cmdbuffer32.sz, &cmdbuffer->sz)
+ 	    || __put_user(cmdbuffer32.DR1, &cmdbuffer->DR1)
+ 	    || __put_user(cmdbuffer32.DR4, &cmdbuffer->DR4)
+ 	    || __put_user(cmdbuffer32.num_cliprects, &cmdbuffer->num_cliprects)
+-	    || __put_user((int __user *)(unsigned long)cmdbuffer32.cliprects,
++	    || __put_user((struct drm_clip_rect __user *)(unsigned long)cmdbuffer32.cliprects,
+ 			  &cmdbuffer->cliprects))
+ 		return -EFAULT;
+ 
 @@ -181,7 +181,7 @@ static int compat_i915_alloc(struct file
  			 (unsigned long)request);
  }
@@ -37431,7 +37456,7 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  	[DRM_I915_BATCHBUFFER] = compat_i915_batchbuffer,
  	[DRM_I915_CMDBUFFER] = compat_i915_cmdbuffer,
  	[DRM_I915_GETPARAM] = compat_i915_getparam,
-@@ -202,18 +202,15 @@ static drm_ioctl_compat_t *i915_compat_i
+@@ -202,17 +202,13 @@ static drm_ioctl_compat_t *i915_compat_i
  long i915_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
  {
  	unsigned int nr = DRM_IOCTL_NR(cmd);
@@ -37445,14 +37470,12 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
 -		fn = i915_compat_ioctls[nr - DRM_COMMAND_BASE];
 -
 -	if (fn != NULL)
-+	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(i915_compat_ioctls)) {
-+		drm_ioctl_compat_t fn = i915_compat_ioctls[nr - DRM_COMMAND_BASE];
- 		ret = (*fn) (filp, cmd, arg);
--	else
-+	} else
+-		ret = (*fn) (filp, cmd, arg);
++	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(i915_compat_ioctls) && i915_compat_ioctls[nr - DRM_COMMAND_BASE])
++		ret = (*i915_compat_ioctls[nr - DRM_COMMAND_BASE]) (filp, cmd, arg);
+ 	else
  		ret = drm_ioctl(filp, cmd, arg);
  
- 	return ret;
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/i915/i915_irq.c linux-3.14.40-pax/drivers/gpu/drm/i915/i915_irq.c
 --- linux-3.14.40/drivers/gpu/drm/i915/i915_irq.c	2014-06-10 13:36:23.437934107 +0200
 +++ linux-3.14.40-pax/drivers/gpu/drm/i915/i915_irq.c	2014-06-10 13:36:33.377933577 +0200
@@ -37640,7 +37663,7 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  	unsigned int fb_cpp;
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/mga/mga_ioc32.c linux-3.14.40-pax/drivers/gpu/drm/mga/mga_ioc32.c
 --- linux-3.14.40/drivers/gpu/drm/mga/mga_ioc32.c	2014-03-31 12:48:00.167131166 +0200
-+++ linux-3.14.40-pax/drivers/gpu/drm/mga/mga_ioc32.c	2014-03-31 12:53:46.435112678 +0200
++++ linux-3.14.40-pax/drivers/gpu/drm/mga/mga_ioc32.c	2015-05-05 00:53:51.976151948 +0200
 @@ -190,7 +190,7 @@ static int compat_mga_dma_bootstrap(stru
  	return 0;
  }
@@ -37650,7 +37673,7 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  	[DRM_MGA_INIT] = compat_mga_init,
  	[DRM_MGA_GETPARAM] = compat_mga_getparam,
  	[DRM_MGA_DMA_BOOTSTRAP] = compat_mga_dma_bootstrap,
-@@ -208,18 +208,15 @@ drm_ioctl_compat_t *mga_compat_ioctls[]
+@@ -208,17 +208,13 @@ drm_ioctl_compat_t *mga_compat_ioctls[]
  long mga_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
  {
  	unsigned int nr = DRM_IOCTL_NR(cmd);
@@ -37664,14 +37687,12 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
 -		fn = mga_compat_ioctls[nr - DRM_COMMAND_BASE];
 -
 -	if (fn != NULL)
-+	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(mga_compat_ioctls)) {
-+		drm_ioctl_compat_t fn = mga_compat_ioctls[nr - DRM_COMMAND_BASE];
- 		ret = (*fn) (filp, cmd, arg);
--	else
-+	} else
+-		ret = (*fn) (filp, cmd, arg);
++	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(mga_compat_ioctls) && mga_compat_ioctls[nr - DRM_COMMAND_BASE])
++		ret = (*mga_compat_ioctls[nr - DRM_COMMAND_BASE]) (filp, cmd, arg);
+ 	else
  		ret = drm_ioctl(filp, cmd, arg);
  
- 	return ret;
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/mga/mga_irq.c linux-3.14.40-pax/drivers/gpu/drm/mga/mga_irq.c
 --- linux-3.14.40/drivers/gpu/drm/mga/mga_irq.c	2014-03-31 12:48:00.167131166 +0200
 +++ linux-3.14.40-pax/drivers/gpu/drm/mga/mga_irq.c	2014-03-31 12:53:46.435112678 +0200
@@ -38007,7 +38028,7 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  	unsigned int front_offset;
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/r128/r128_ioc32.c linux-3.14.40-pax/drivers/gpu/drm/r128/r128_ioc32.c
 --- linux-3.14.40/drivers/gpu/drm/r128/r128_ioc32.c	2014-03-31 12:48:01.759131081 +0200
-+++ linux-3.14.40-pax/drivers/gpu/drm/r128/r128_ioc32.c	2014-03-31 12:53:46.435112678 +0200
++++ linux-3.14.40-pax/drivers/gpu/drm/r128/r128_ioc32.c	2015-05-05 00:54:31.148153100 +0200
 @@ -178,7 +178,7 @@ static int compat_r128_getparam(struct f
  	return drm_ioctl(file, DRM_IOCTL_R128_GETPARAM, (unsigned long)getparam);
  }
@@ -38017,7 +38038,7 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  	[DRM_R128_INIT] = compat_r128_init,
  	[DRM_R128_DEPTH] = compat_r128_depth,
  	[DRM_R128_STIPPLE] = compat_r128_stipple,
-@@ -197,18 +197,15 @@ drm_ioctl_compat_t *r128_compat_ioctls[]
+@@ -197,17 +197,13 @@ drm_ioctl_compat_t *r128_compat_ioctls[]
  long r128_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
  {
  	unsigned int nr = DRM_IOCTL_NR(cmd);
@@ -38031,14 +38052,12 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
 -		fn = r128_compat_ioctls[nr - DRM_COMMAND_BASE];
 -
 -	if (fn != NULL)
-+	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(r128_compat_ioctls)) {
-+		drm_ioctl_compat_t fn = r128_compat_ioctls[nr - DRM_COMMAND_BASE];
- 		ret = (*fn) (filp, cmd, arg);
--	else
-+	} else
+-		ret = (*fn) (filp, cmd, arg);
++	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(r128_compat_ioctls) && r128_compat_ioctls[nr - DRM_COMMAND_BASE])
++		ret = (*r128_compat_ioctls[nr - DRM_COMMAND_BASE]) (filp, cmd, arg);
+ 	else
  		ret = drm_ioctl(filp, cmd, arg);
  
- 	return ret;
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/r128/r128_irq.c linux-3.14.40-pax/drivers/gpu/drm/r128/r128_irq.c
 --- linux-3.14.40/drivers/gpu/drm/r128/r128_irq.c	2014-03-31 12:48:01.759131081 +0200
 +++ linux-3.14.40-pax/drivers/gpu/drm/r128/r128_irq.c	2014-03-31 12:53:46.435112678 +0200
@@ -38122,7 +38141,7 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  	uint32_t r500_disp_irq_reg;
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/radeon/radeon_ioc32.c linux-3.14.40-pax/drivers/gpu/drm/radeon/radeon_ioc32.c
 --- linux-3.14.40/drivers/gpu/drm/radeon/radeon_ioc32.c	2014-01-20 12:36:14.296999892 +0100
-+++ linux-3.14.40-pax/drivers/gpu/drm/radeon/radeon_ioc32.c	2014-03-31 12:53:46.439112678 +0200
++++ linux-3.14.40-pax/drivers/gpu/drm/radeon/radeon_ioc32.c	2015-05-05 00:55:06.572154141 +0200
 @@ -358,7 +358,7 @@ static int compat_radeon_cp_setparam(str
  	request = compat_alloc_user_space(sizeof(*request));
  	if (!access_ok(VERIFY_WRITE, request, sizeof(*request))
@@ -38141,7 +38160,7 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
  	[DRM_RADEON_CP_INIT] = compat_radeon_cp_init,
  	[DRM_RADEON_CLEAR] = compat_radeon_cp_clear,
  	[DRM_RADEON_STIPPLE] = compat_radeon_cp_stipple,
-@@ -393,18 +393,15 @@ static drm_ioctl_compat_t *radeon_compat
+@@ -393,17 +393,13 @@ static drm_ioctl_compat_t *radeon_compat
  long radeon_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
  {
  	unsigned int nr = DRM_IOCTL_NR(cmd);
@@ -38155,14 +38174,12 @@ diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/d
 -		fn = radeon_compat_ioctls[nr - DRM_COMMAND_BASE];
 -
 -	if (fn != NULL)
-+	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(radeon_compat_ioctls)) {
-+		drm_ioctl_compat_t fn = radeon_compat_ioctls[nr - DRM_COMMAND_BASE];
- 		ret = (*fn) (filp, cmd, arg);
--	else
-+	} else
+-		ret = (*fn) (filp, cmd, arg);
++	if (nr < DRM_COMMAND_BASE + DRM_ARRAY_SIZE(radeon_compat_ioctls) && radeon_compat_ioctls[nr - DRM_COMMAND_BASE])
++		ret = (*radeon_compat_ioctls[nr - DRM_COMMAND_BASE]) (filp, cmd, arg);
+ 	else
  		ret = drm_ioctl(filp, cmd, arg);
  
- 	return ret;
 diff -NurpX linux-3.14.40-pax/Documentation/dontdiff linux-3.14.40/drivers/gpu/drm/radeon/radeon_irq.c linux-3.14.40-pax/drivers/gpu/drm/radeon/radeon_irq.c
 --- linux-3.14.40/drivers/gpu/drm/radeon/radeon_irq.c	2014-03-31 12:48:02.795131026 +0200
 +++ linux-3.14.40-pax/drivers/gpu/drm/radeon/radeon_irq.c	2014-03-31 12:53:46.439112678 +0200
