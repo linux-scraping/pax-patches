@@ -1,4 +1,5 @@
-- fixed a bunch of NULL function pointer dereference regressions in the compat drm ioctl code for i915/mga/r128/radeon, reported by minipli
+- F_SETPIPE_SZ handling ignored pipe_min_size and could trigger the size overflow instrumentation, reported by minipli
+- fixed an integer signedness mixup in a parameter of semop and semtimedop, by minipli
 
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/arch/alpha/include/asm/atomic.h linux-3.2.68-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.68/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -48382,7 +48383,16 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/fs/partitions/e
  		     count) < count) {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/fs/pipe.c linux-3.2.68-pax/fs/pipe.c
 --- linux-3.2.68/fs/pipe.c	2013-03-29 02:18:38.735676282 +0100
-+++ linux-3.2.68-pax/fs/pipe.c	2013-03-29 02:20:31.363670268 +0100
++++ linux-3.2.68-pax/fs/pipe.c	2015-05-05 17:39:39.029926259 +0200
+@@ -33,7 +33,7 @@ unsigned int pipe_max_size = 1048576;
+ /*
+  * Minimum pipe size, as required by POSIX
+  */
+-unsigned int pipe_min_size = PAGE_SIZE;
++unsigned int pipe_min_size __read_only = PAGE_SIZE;
+ 
+ /*
+  * We use a start+len construction, which provides full use of the 
 @@ -437,9 +437,9 @@ redo:
  		}
  		if (bufs)	/* More to do? */
@@ -48497,6 +48507,35 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/fs/pipe.c linux
  	inode->i_fop = &rdwr_pipefifo_fops;
  
  	/*
+@@ -1203,7 +1204,7 @@ static long pipe_set_size(struct pipe_in
+  * Currently we rely on the pipe array holding a power-of-2 number
+  * of pages.
+  */
+-static inline unsigned int round_pipe_size(unsigned int size)
++static inline unsigned long round_pipe_size(unsigned long size)
+ {
+ 	unsigned long nr_pages;
+ 
+@@ -1253,13 +1254,16 @@ long pipe_fcntl(struct file *file, unsig
+ 
+ 	switch (cmd) {
+ 	case F_SETPIPE_SZ: {
+-		unsigned int size, nr_pages;
++		unsigned long size, nr_pages;
++
++		ret = -EINVAL;
++		if (arg < pipe_min_size)
++			goto out;
+ 
+ 		size = round_pipe_size(arg);
+ 		nr_pages = size >> PAGE_SHIFT;
+ 
+-		ret = -EINVAL;
+-		if (!nr_pages)
++		if (size < pipe_min_size)
+ 			goto out;
+ 
+ 		if (!capable(CAP_SYS_RESOURCE) && size > pipe_max_size) {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/fs/proc/array.c linux-3.2.68-pax/fs/proc/array.c
 --- linux-3.2.68/fs/proc/array.c	2013-01-03 19:05:14.696036860 +0100
 +++ linux-3.2.68-pax/fs/proc/array.c	2013-01-03 19:05:22.116037079 +0100
@@ -50289,8 +50328,8 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
  	cleancache_register_ops(struct cleancache_ops *ops);
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/compat.h linux-3.2.68-pax/include/linux/compat.h
 --- linux-3.2.68/include/linux/compat.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/include/linux/compat.h	2013-03-28 04:17:05.791909910 +0100
-@@ -240,7 +240,7 @@ long compat_sys_msgrcv(int first, int se
++++ linux-3.2.68-pax/include/linux/compat.h	2015-05-05 17:40:21.521927508 +0200
+@@ -240,10 +240,10 @@ long compat_sys_msgrcv(int first, int se
  		int version, void __user *uptr);
  long compat_sys_msgctl(int first, int second, void __user *uptr);
  long compat_sys_shmat(int first, int second, compat_uptr_t third, int version,
@@ -50298,7 +50337,11 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/c
 +		void __user *uptr) __intentional_overflow(0);
  long compat_sys_shmctl(int first, int second, void __user *uptr);
  long compat_sys_semtimedop(int semid, struct sembuf __user *tsems,
- 		unsigned nsems, const struct compat_timespec __user *timeout);
+-		unsigned nsems, const struct compat_timespec __user *timeout);
++		compat_long_t nsems, const struct compat_timespec __user *timeout);
+ asmlinkage long compat_sys_keyctl(u32 option,
+ 			      u32 arg2, u32 arg3, u32 arg4, u32 arg5);
+ asmlinkage long compat_sys_ustat(unsigned dev, struct compat_ustat __user *u32);
 @@ -334,7 +334,7 @@ extern int compat_ptrace_request(struct
  extern long compat_arch_ptrace(struct task_struct *child, compat_long_t request,
  			       compat_ulong_t addr, compat_ulong_t data);
@@ -53169,7 +53212,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/s
  	return __arch_swab64(val);
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/syscalls.h linux-3.2.68-pax/include/linux/syscalls.h
 --- linux-3.2.68/include/linux/syscalls.h	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/include/linux/syscalls.h	2015-04-30 02:47:21.988496630 +0200
++++ linux-3.2.68-pax/include/linux/syscalls.h	2015-05-05 17:40:55.649928512 +0200
 @@ -83,12 +83,19 @@ struct file_handle;
  #define __SC_DECL5(t5, a5, ...) t5 a5, __SC_DECL4(__VA_ARGS__)
  #define __SC_DECL6(t6, a6, ...) t6 a6, __SC_DECL5(__VA_ARGS__)
@@ -53221,6 +53264,19 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/s
  asmlinkage long sys_sendmsg(int fd, struct msghdr __user *msg, unsigned flags);
  asmlinkage long sys_sendmmsg(int fd, struct mmsghdr __user *msg,
  			     unsigned int vlen, unsigned flags);
+@@ -667,10 +674,10 @@ asmlinkage long sys_msgctl(int msqid, in
+ 
+ asmlinkage long sys_semget(key_t key, int nsems, int semflg);
+ asmlinkage long sys_semop(int semid, struct sembuf __user *sops,
+-				unsigned nsops);
++				long nsops);
+ asmlinkage long sys_semctl(int semid, int semnum, int cmd, union semun arg);
+ asmlinkage long sys_semtimedop(int semid, struct sembuf __user *sops,
+-				unsigned nsops,
++				long nsops,
+ 				const struct timespec __user *timeout);
+ asmlinkage long sys_shmat(int shmid, char __user *shmaddr, int shmflg);
+ asmlinkage long sys_shmget(key_t key, size_t size, int flag);
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/include/linux/syscore_ops.h linux-3.2.68-pax/include/linux/syscore_ops.h
 --- linux-3.2.68/include/linux/syscore_ops.h	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/include/linux/syscore_ops.h	2013-03-28 01:35:23.460427940 +0100
@@ -54909,6 +54965,18 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/init/main.c lin
  		ramdisk_execute_command = NULL;
  		prepare_namespace();
  	}
+diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/ipc/compat.c linux-3.2.68-pax/ipc/compat.c
+--- linux-3.2.68/ipc/compat.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.68-pax/ipc/compat.c	2015-05-05 17:41:50.653930129 +0200
+@@ -672,7 +672,7 @@ long compat_sys_shmctl(int first, int se
+ }
+ 
+ long compat_sys_semtimedop(int semid, struct sembuf __user *tsems,
+-		unsigned nsops, const struct compat_timespec __user *timeout)
++		compat_long_t nsops, const struct compat_timespec __user *timeout)
+ {
+ 	struct timespec __user *ts64 = NULL;
+ 	if (timeout) {
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/ipc/ipc_sysctl.c linux-3.2.68-pax/ipc/ipc_sysctl.c
 --- linux-3.2.68/ipc/ipc_sysctl.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.68-pax/ipc/ipc_sysctl.c	2013-03-28 01:35:23.496427938 +0100
@@ -55008,7 +55076,7 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/ipc/msg.c linux
  
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/ipc/sem.c linux-3.2.68-pax/ipc/sem.c
 --- linux-3.2.68/ipc/sem.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.68-pax/ipc/sem.c	2012-07-04 19:24:48.828063008 +0200
++++ linux-3.2.68-pax/ipc/sem.c	2015-05-05 17:42:14.033930816 +0200
 @@ -364,10 +364,15 @@ static inline int sem_more_checks(struct
  	return 0;
  }
@@ -55037,6 +55105,24 @@ diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/ipc/sem.c linux
  	sem_params.key = key;
  	sem_params.flg = semflg;
  	sem_params.u.nsems = nsems;
+@@ -1328,7 +1329,7 @@ static int get_queue_result(struct sem_q
+ 
+ 
+ SYSCALL_DEFINE4(semtimedop, int, semid, struct sembuf __user *, tsops,
+-		unsigned, nsops, const struct timespec __user *, timeout)
++		long, nsops, const struct timespec __user *, timeout)
+ {
+ 	int error = -EINVAL;
+ 	struct sem_array *sma;
+@@ -1546,7 +1547,7 @@ out_free:
+ }
+ 
+ SYSCALL_DEFINE3(semop, int, semid, struct sembuf __user *, tsops,
+-		unsigned, nsops)
++		long, nsops)
+ {
+ 	return sys_semtimedop(semid, tsops, nsops, NULL);
+ }
 diff -NurpX linux-3.2.68-pax/Documentation/dontdiff linux-3.2.68/ipc/shm.c linux-3.2.68-pax/ipc/shm.c
 --- linux-3.2.68/ipc/shm.c	2013-05-14 13:33:40.660285670 +0200
 +++ linux-3.2.68-pax/ipc/shm.c	2013-05-14 13:33:46.592285354 +0200
