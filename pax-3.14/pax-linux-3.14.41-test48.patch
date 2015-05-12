@@ -1,4 +1,6 @@
-- forward port to 3.14.41
+- disable PCID before exiting the kernel to code that may not sanitize its environment properly before turning off paging, fixes tboot/TXT shutdown among others, reported and debugged by Jason Zaman perfinion@gentoo.org
+- fixed a size overflow false positive in squashfs, reported by Martin Vath <martin@mvath.de> (https://bugs.gentoo.org/show_bug.cgi?id=548960)
+- fixed a /proc/kcore regression to not return uninitialized memory if the requested kernel address range is not fully mapped
 
 diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/alpha/include/asm/atomic.h linux-3.14.41-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.41/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -15321,7 +15323,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/incl
  #endif /* _ASM_X86_PGTABLE_64_DEFS_H */
 diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/include/asm/pgtable.h linux-3.14.41-pax/arch/x86/include/asm/pgtable.h
 --- linux-3.14.41/arch/x86/include/asm/pgtable.h	2014-03-31 12:47:33.175132607 +0200
-+++ linux-3.14.41-pax/arch/x86/include/asm/pgtable.h	2014-10-02 15:18:27.024882239 +0200
++++ linux-3.14.41-pax/arch/x86/include/asm/pgtable.h	2015-05-13 00:25:35.553431806 +0200
 @@ -45,6 +45,7 @@ extern struct mm_struct *pgd_page_get_mm
  
  #ifndef __PAGETABLE_PUD_FOLDED
@@ -22256,7 +22258,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  
 diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kernel/head_64.S linux-3.14.41-pax/arch/x86/kernel/head_64.S
 --- linux-3.14.41/arch/x86/kernel/head_64.S	2014-03-31 12:47:57.283131320 +0200
-+++ linux-3.14.41-pax/arch/x86/kernel/head_64.S	2014-09-21 21:25:20.816380542 +0200
++++ linux-3.14.41-pax/arch/x86/kernel/head_64.S	2015-05-13 00:19:09.841410857 +0200
 @@ -20,6 +20,8 @@
  #include <asm/processor-flags.h>
  #include <asm/percpu.h>
@@ -22279,7 +22281,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  
  	.text
  	__HEAD
-@@ -89,11 +97,24 @@ startup_64:
+@@ -89,11 +97,26 @@ startup_64:
  	 * Fixup the physical addresses in the page table
  	 */
  	addq	%rbp, early_level4_pgt + (L4_START_KERNEL*8)(%rip)
@@ -22297,16 +22299,18 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
 +#endif
 +
 +	addq	%rbp, level3_vmemmap_pgt + (L3_VMEMMAP_START*8)(%rip)
-+
+ 
 +	addq	%rbp, level3_kernel_pgt + (L3_START_KERNEL*8)(%rip)
 +	addq	%rbp, level3_kernel_pgt + ((L3_START_KERNEL+1)*8)(%rip)
- 
++
++	addq	%rbp, level2_fixmap_pgt + (504*8)(%rip)
++	addq	%rbp, level2_fixmap_pgt + (505*8)(%rip)
  	addq	%rbp, level2_fixmap_pgt + (506*8)(%rip)
 +	addq	%rbp, level2_fixmap_pgt + (507*8)(%rip)
  
  	/*
  	 * Set up the identity mapping for the switchover.  These
-@@ -174,11 +195,12 @@ ENTRY(secondary_startup_64)
+@@ -174,11 +197,12 @@ ENTRY(secondary_startup_64)
  	 * after the boot processor executes this code.
  	 */
  
@@ -22321,7 +22325,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  	movq	%rcx, %cr4
  
  	/* Setup early boot stage 4 level pagetables. */
-@@ -199,10 +221,19 @@ ENTRY(secondary_startup_64)
+@@ -199,10 +223,21 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -22336,13 +22340,15 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_START(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_END(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMEMMAP_START(%rip)
++	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*504(%rip)
++	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*505(%rip)
 +	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*506(%rip)
 +	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*507(%rip)
 +	btsq	$_PAGE_BIT_NX, __supported_pte_mask(%rip)
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -282,6 +313,7 @@ ENTRY(secondary_startup_64)
+@@ -282,6 +317,7 @@ ENTRY(secondary_startup_64)
  	 *	REX.W + FF /5 JMP m16:64 Jump far, absolute indirect,
  	 *		address given in m16:64.
  	 */
@@ -22350,7 +22356,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -313,7 +345,7 @@ ENDPROC(start_cpu0)
+@@ -313,7 +349,7 @@ ENDPROC(start_cpu0)
  	.quad	INIT_PER_CPU_VAR(irq_stack_union)
  
  	GLOBAL(stack_start)
@@ -22359,7 +22365,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  	.word  0
  	__FINITDATA
  
-@@ -391,7 +423,7 @@ ENTRY(early_idt_handler)
+@@ -391,7 +427,7 @@ ENTRY(early_idt_handler)
  	call dump_stack
  #ifdef CONFIG_KALLSYMS	
  	leaq early_idt_ripmsg(%rip),%rdi
@@ -22368,7 +22374,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  	call __print_symbol
  #endif
  #endif /* EARLY_PRINTK */
-@@ -420,6 +452,7 @@ ENDPROC(early_idt_handler)
+@@ -420,6 +456,7 @@ ENDPROC(early_idt_handler)
  early_recursion_flag:
  	.long 0
  
@@ -22376,7 +22382,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  #ifdef CONFIG_EARLY_PRINTK
  early_idt_msg:
  	.asciz "PANIC: early exception %02lx rip %lx:%lx error %lx cr2 %lx\n"
-@@ -447,29 +480,52 @@ NEXT_PAGE(early_level4_pgt)
+@@ -447,29 +484,52 @@ NEXT_PAGE(early_level4_pgt)
  NEXT_PAGE(early_dynamic_pgts)
  	.fill	512*EARLY_DYNAMIC_PAGE_TABLES,8,0
  
@@ -22438,7 +22444,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -477,6 +533,9 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -477,6 +537,9 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -22448,22 +22454,28 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  NEXT_PAGE(level2_kernel_pgt)
  	/*
  	 * 512 MB kernel mapping. We spend a full page on this pagetable
-@@ -494,28 +553,64 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -492,30 +555,68 @@ NEXT_PAGE(level2_kernel_pgt)
+ 		KERNEL_IMAGE_SIZE/PMD_SIZE)
+ 
  NEXT_PAGE(level2_fixmap_pgt)
- 	.fill	506,8,0
- 	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
+-	.fill	506,8,0
+-	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
 -	/* 8MB reserved for vsyscalls + a 2MB hole = 4 + 1 entries */
 -	.fill	5,8,0
++	.fill	504,8,0
++	.quad	level1_fixmap_pgt - __START_KERNEL_map + 0 * PAGE_SIZE + _PAGE_TABLE
++	.quad	level1_fixmap_pgt - __START_KERNEL_map + 1 * PAGE_SIZE + _PAGE_TABLE
++	.quad	level1_fixmap_pgt - __START_KERNEL_map + 2 * PAGE_SIZE + _PAGE_TABLE
 +	.quad	level1_vsyscall_pgt - __START_KERNEL_map + _PAGE_TABLE
 +	/* 6MB reserved for vsyscalls + a 2MB hole = 3 + 1 entries */
 +	.fill	4,8,0
  
  NEXT_PAGE(level1_fixmap_pgt)
++	.fill	3*512,8,0
++
++NEXT_PAGE(level1_vsyscall_pgt)
  	.fill	512,8,0
  
-+NEXT_PAGE(level1_vsyscall_pgt)
-+	.fill	512,8,0
-+
  #undef PMDS
  
 -	.data
@@ -24863,8 +24875,16 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  
 diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kernel/tboot.c linux-3.14.41-pax/arch/x86/kernel/tboot.c
 --- linux-3.14.41/arch/x86/kernel/tboot.c	2013-11-04 01:46:24.831116136 +0100
-+++ linux-3.14.41-pax/arch/x86/kernel/tboot.c	2014-03-31 12:53:46.367112681 +0200
-@@ -221,7 +221,7 @@ static int tboot_setup_sleep(void)
++++ linux-3.14.41-pax/arch/x86/kernel/tboot.c	2015-05-13 00:43:34.589490412 +0200
+@@ -44,6 +44,7 @@
+ #include <asm/setup.h>
+ #include <asm/e820.h>
+ #include <asm/io.h>
++#include <asm/tlbflush.h>
+ 
+ #include "../realmode/rm/wakeup.h"
+ 
+@@ -221,7 +222,7 @@ static int tboot_setup_sleep(void)
  
  void tboot_shutdown(u32 shutdown_type)
  {
@@ -24873,16 +24893,18 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  
  	if (!tboot_enabled())
  		return;
-@@ -243,7 +243,7 @@ void tboot_shutdown(u32 shutdown_type)
+@@ -242,8 +243,9 @@ void tboot_shutdown(u32 shutdown_type)
+ 	tboot->shutdown_type = shutdown_type;
  
  	switch_to_tboot_pt();
++	write_cr4(read_cr4() & ~X86_CR4_PCIDE);
  
 -	shutdown = (void(*)(void))(unsigned long)tboot->shutdown_entry;
 +	shutdown = (void *)(unsigned long)tboot->shutdown_entry;
  	shutdown();
  
  	/* should not reach here */
-@@ -310,7 +310,7 @@ static int tboot_extended_sleep(u8 sleep
+@@ -310,7 +312,7 @@ static int tboot_extended_sleep(u8 sleep
  	return -ENODEV;
  }
  
@@ -24891,7 +24913,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  
  static int tboot_wait_for_aps(int num_aps)
  {
-@@ -334,9 +334,9 @@ static int tboot_cpu_callback(struct not
+@@ -334,9 +336,9 @@ static int tboot_cpu_callback(struct not
  {
  	switch (action) {
  	case CPU_DYING:
@@ -24903,7 +24925,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/kern
  				return NOTIFY_BAD;
  		break;
  	}
-@@ -422,7 +422,7 @@ static __init int tboot_late_init(void)
+@@ -422,7 +424,7 @@ static __init int tboot_late_init(void)
  
  	tboot_create_trampoline();
  
@@ -32094,6 +32116,20 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/real
 +endif
  KBUILD_AFLAGS	:= $(KBUILD_CFLAGS) -D__ASSEMBLY__
  GCOV_PROFILE := n
+diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/realmode/rm/reboot.S linux-3.14.41-pax/arch/x86/realmode/rm/reboot.S
+--- linux-3.14.41/arch/x86/realmode/rm/reboot.S	2014-03-31 12:47:57.311131318 +0200
++++ linux-3.14.41-pax/arch/x86/realmode/rm/reboot.S	2015-05-13 00:13:46.321393286 +0200
+@@ -27,6 +27,10 @@ ENTRY(machine_real_restart_asm)
+ 	lgdtl	pa_tr_gdt
+ 
+ 	/* Disable paging to drop us out of long mode */
++	movl	%cr4, %eax
++	andl	$~X86_CR4_PCIDE, %eax
++	movl	%eax, %cr4
++
+ 	movl	%cr0, %eax
+ 	andl	$~X86_CR0_PG, %eax
+ 	movl	%eax, %cr0
 diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/arch/x86/realmode/rm/trampoline_32.S linux-3.14.41-pax/arch/x86/realmode/rm/trampoline_32.S
 --- linux-3.14.41/arch/x86/realmode/rm/trampoline_32.S	2014-03-31 12:47:57.311131318 +0200
 +++ linux-3.14.41-pax/arch/x86/realmode/rm/trampoline_32.S	2014-04-25 19:42:50.272772521 +0200
@@ -55101,7 +55137,7 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/fs/proc/base.
  			break;
 diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/fs/proc/kcore.c linux-3.14.41-pax/fs/proc/kcore.c
 --- linux-3.14.41/fs/proc/kcore.c	2014-03-31 12:48:26.899129739 +0200
-+++ linux-3.14.41-pax/fs/proc/kcore.c	2014-03-31 12:53:47.147112640 +0200
++++ linux-3.14.41-pax/fs/proc/kcore.c	2015-05-13 00:19:09.845410858 +0200
 @@ -483,9 +483,10 @@ read_kcore(struct file *file, char __use
  	 * the addresses in the elf_phdr on our list.
  	 */
@@ -55115,11 +55151,10 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/fs/proc/kcore
  	while (buflen) {
  		struct kcore_list *m;
  
-@@ -514,20 +515,23 @@ read_kcore(struct file *file, char __use
- 			kfree(elf_buf);
+@@ -515,19 +516,20 @@ read_kcore(struct file *file, char __use
  		} else {
  			if (kern_addr_valid(start)) {
--				unsigned long n;
+ 				unsigned long n;
 +				char *elf_buf;
 +				mm_segment_t oldfs;
  
@@ -55133,20 +55168,19 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/fs/proc/kcore
 -				if (n) { 
 -					if (clear_user(buffer + tsz - n,
 -								n))
-+				elf_buf = kmalloc(tsz, GFP_KERNEL);
+-						return -EFAULT;
+-				}
++				elf_buf = kzalloc(tsz, GFP_KERNEL);
 +				if (!elf_buf)
 +					return -ENOMEM;
 +				oldfs = get_fs();
 +				set_fs(KERNEL_DS);
-+				if (!__copy_from_user(elf_buf, (const void __user *)start, tsz)) {
-+					set_fs(oldfs);
-+					if (copy_to_user(buffer, elf_buf, tsz)) {
-+						kfree(elf_buf);
- 						return -EFAULT;
-+					}
- 				}
++				n = __copy_from_user(elf_buf, (const void __user *)start, tsz);
 +				set_fs(oldfs);
++				n = copy_to_user(buffer, elf_buf, tsz);
 +				kfree(elf_buf);
++				if (n)
++					return -EFAULT;
  			} else {
  				if (clear_user(buffer, tsz))
  					return -EFAULT;
@@ -55695,6 +55729,52 @@ diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/fs/splice.c l
  		ret = -EAGAIN;
  
  	pipe_unlock(ipipe);
+diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/fs/squashfs/xattr.c linux-3.14.41-pax/fs/squashfs/xattr.c
+--- linux-3.14.41/fs/squashfs/xattr.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.14.41-pax/fs/squashfs/xattr.c	2015-05-13 00:19:09.845410858 +0200
+@@ -46,8 +46,8 @@ ssize_t squashfs_listxattr(struct dentry
+ 						 + msblk->xattr_table;
+ 	int offset = SQUASHFS_XATTR_OFFSET(squashfs_i(inode)->xattr);
+ 	int count = squashfs_i(inode)->xattr_count;
+-	size_t rest = buffer_size;
+-	int err;
++	size_t used = 0;
++	ssize_t err;
+ 
+ 	/* check that the file system has xattrs */
+ 	if (msblk->xattr_id_table == NULL)
+@@ -68,11 +68,11 @@ ssize_t squashfs_listxattr(struct dentry
+ 		name_size = le16_to_cpu(entry.size);
+ 		handler = squashfs_xattr_handler(le16_to_cpu(entry.type));
+ 		if (handler)
+-			prefix_size = handler->list(d, buffer, rest, NULL,
++			prefix_size = handler->list(d, buffer, buffer ? buffer_size - used : 0, NULL,
+ 				name_size, handler->flags);
+ 		if (prefix_size) {
+ 			if (buffer) {
+-				if (prefix_size + name_size + 1 > rest) {
++				if (prefix_size + name_size + 1 > buffer_size - used) {
+ 					err = -ERANGE;
+ 					goto failed;
+ 				}
+@@ -86,7 +86,7 @@ ssize_t squashfs_listxattr(struct dentry
+ 				buffer[name_size] = '\0';
+ 				buffer += name_size + 1;
+ 			}
+-			rest -= prefix_size + name_size + 1;
++			used += prefix_size + name_size + 1;
+ 		} else  {
+ 			/* no handler or insuffficient privileges, so skip */
+ 			err = squashfs_read_metadata(sb, NULL, &start,
+@@ -107,7 +107,7 @@ ssize_t squashfs_listxattr(struct dentry
+ 		if (err < 0)
+ 			goto failed;
+ 	}
+-	err = buffer_size - rest;
++	err = used;
+ 
+ failed:
+ 	return err;
 diff -NurpX linux-3.14.41-pax/Documentation/dontdiff linux-3.14.41/fs/sysv/sysv.h linux-3.14.41-pax/fs/sysv/sysv.h
 --- linux-3.14.41/fs/sysv/sysv.h	2013-08-20 19:08:16.475833353 +0200
 +++ linux-3.14.41-pax/fs/sysv/sysv.h	2014-03-31 12:53:47.151112640 +0200
