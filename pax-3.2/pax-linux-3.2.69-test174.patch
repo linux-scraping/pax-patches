@@ -1,4 +1,5 @@
-- forward port to 3.2.69
+- fixed a size overflow false positive in squashfs, reported by Martin Vath <martin@mvath.de> (https://bugs.gentoo.org/show_bug.cgi?id=548960)
+- fixed a /proc/kcore regression to not return uninitialized memory if the requested kernel address range is not fully mapped
 
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/alpha/include/asm/atomic.h linux-3.2.69-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.69/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -17440,7 +17441,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
 +	.endr
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel/head_64.S linux-3.2.69-pax/arch/x86/kernel/head_64.S
 --- linux-3.2.69/arch/x86/kernel/head_64.S	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.69-pax/arch/x86/kernel/head_64.S	2014-03-27 02:59:21.520154157 +0100
++++ linux-3.2.69-pax/arch/x86/kernel/head_64.S	2015-05-13 00:50:40.481513543 +0200
 @@ -19,6 +19,8 @@
  #include <asm/cache.h>
  #include <asm/processor-flags.h>
@@ -17463,7 +17464,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  
  	.text
  	__HEAD
-@@ -85,35 +93,23 @@ startup_64:
+@@ -85,35 +93,25 @@ startup_64:
  	 */
  	addq	%rbp, init_level4_pgt + 0(%rip)
  	addq	%rbp, init_level4_pgt + (L4_PAGE_OFFSET*8)(%rip)
@@ -17505,12 +17506,14 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
 -	leaq	level2_spare_pgt(%rip), %rbx
 -	movq	%rdx, 0(%rbx, %rax, 8)
 -ident_complete:
++	addq	%rbp, level2_fixmap_pgt + (504*8)(%rip)
++	addq	%rbp, level2_fixmap_pgt + (505*8)(%rip)
 +	addq	%rbp, level2_fixmap_pgt + (506*8)(%rip)
 +	addq	%rbp, level2_fixmap_pgt + (507*8)(%rip)
  
  	/*
  	 * Fixup the kernel text+data virtual addresses. Note that
-@@ -160,8 +156,8 @@ ENTRY(secondary_startup_64)
+@@ -160,8 +158,8 @@ ENTRY(secondary_startup_64)
  	 * after the boot processor executes this code.
  	 */
  
@@ -17521,7 +17524,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  	movq	%rax, %cr4
  
  	/* Setup early boot stage 4 level pagetables. */
-@@ -183,9 +179,18 @@ ENTRY(secondary_startup_64)
+@@ -183,9 +181,20 @@ ENTRY(secondary_startup_64)
  	movl	$MSR_EFER, %ecx
  	rdmsr
  	btsl	$_EFER_SCE, %eax	/* Enable System Call */
@@ -17535,13 +17538,15 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_START(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMALLOC_END(%rip)
 +	btsq	$_PAGE_BIT_NX, init_level4_pgt + 8*L4_VMEMMAP_START(%rip)
++	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*504(%rip)
++	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*505(%rip)
 +	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*506(%rip)
 +	btsq	$_PAGE_BIT_NX, level2_fixmap_pgt + 8*507(%rip)
 +	btsq	$_PAGE_BIT_NX, __supported_pte_mask(%rip)
  1:	wrmsr				/* Make changes effective */
  
  	/* Setup cr0 */
-@@ -247,6 +252,7 @@ ENTRY(secondary_startup_64)
+@@ -247,6 +256,7 @@ ENTRY(secondary_startup_64)
  	 * jump.  In addition we need to ensure %cs is set so we make this
  	 * a far return.
  	 */
@@ -17549,7 +17554,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  	movq	initial_code(%rip),%rax
  	pushq	$0		# fake return address to stop unwinder
  	pushq	$__KERNEL_CS	# set correct cs
-@@ -262,14 +268,14 @@ ENTRY(secondary_startup_64)
+@@ -262,14 +272,14 @@ ENTRY(secondary_startup_64)
  	.quad	INIT_PER_CPU_VAR(irq_stack_union)
  
  	ENTRY(stack_start)
@@ -17566,7 +17571,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  #ifdef CONFIG_EARLY_PRINTK
  	.globl early_idt_handlers
  early_idt_handlers:
-@@ -314,18 +320,23 @@ ENTRY(early_idt_handler)
+@@ -314,18 +324,23 @@ ENTRY(early_idt_handler)
  #endif /* EARLY_PRINTK */
  1:	hlt
  	jmp 1b
@@ -17591,7 +17596,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  #define NEXT_PAGE(name) \
  	.balign	PAGE_SIZE; \
  ENTRY(name)
-@@ -338,7 +349,6 @@ ENTRY(name)
+@@ -338,7 +353,6 @@ ENTRY(name)
  	i = i + 1 ;					\
  	.endr
  
@@ -17599,7 +17604,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  	/*
  	 * This default setting generates an ident mapping at address 0x100000
  	 * and a mapping for the kernel that precisely maps virtual address
-@@ -349,13 +359,41 @@ NEXT_PAGE(init_level4_pgt)
+@@ -349,13 +363,41 @@ NEXT_PAGE(init_level4_pgt)
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.org	init_level4_pgt + L4_PAGE_OFFSET*8, 0
  	.quad	level3_ident_pgt - __START_KERNEL_map + _KERNPG_TABLE
@@ -17641,7 +17646,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  
  NEXT_PAGE(level3_kernel_pgt)
  	.fill	L3_START_KERNEL,8,0
-@@ -363,20 +401,27 @@ NEXT_PAGE(level3_kernel_pgt)
+@@ -363,20 +405,29 @@ NEXT_PAGE(level3_kernel_pgt)
  	.quad	level2_kernel_pgt - __START_KERNEL_map + _KERNPG_TABLE
  	.quad	level2_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
  
@@ -17649,22 +17654,26 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
 +	.fill	512,8,0
 +
  NEXT_PAGE(level2_fixmap_pgt)
- 	.fill	506,8,0
- 	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
+-	.fill	506,8,0
+-	.quad	level1_fixmap_pgt - __START_KERNEL_map + _PAGE_TABLE
 -	/* 8MB reserved for vsyscalls + a 2MB hole = 4 + 1 entries */
 -	.fill	5,8,0
++	.fill	504,8,0
++	.quad	level1_fixmap_pgt - __START_KERNEL_map + 0 * PAGE_SIZE + _PAGE_TABLE
++	.quad	level1_fixmap_pgt - __START_KERNEL_map + 1 * PAGE_SIZE + _PAGE_TABLE
++	.quad	level1_fixmap_pgt - __START_KERNEL_map + 2 * PAGE_SIZE + _PAGE_TABLE
 +	.quad	level1_vsyscall_pgt - __START_KERNEL_map + _PAGE_TABLE
 +	/* 6MB reserved for vsyscalls + a 2MB hole = 3 + 1 entries */
 +	.fill	4,8,0
  
  NEXT_PAGE(level1_fixmap_pgt)
++	.fill	3*512,8,0
++
++NEXT_PAGE(level1_vsyscall_pgt)
  	.fill	512,8,0
  
 -NEXT_PAGE(level2_ident_pgt)
 -	/* Since I easily can, map the first 1G.
-+NEXT_PAGE(level1_vsyscall_pgt)
-+	.fill	512,8,0
-+
 +	/* Since I easily can, map the first 2G.
  	 * Don't set NX because code runs from these pages.
  	 */
@@ -17674,7 +17683,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/x86/kernel
  
  NEXT_PAGE(level2_kernel_pgt)
  	/*
-@@ -389,35 +434,56 @@ NEXT_PAGE(level2_kernel_pgt)
+@@ -389,35 +440,56 @@ NEXT_PAGE(level2_kernel_pgt)
  	 *  If you want to increase this then increase MODULES_VADDR
  	 *  too.)
  	 */
@@ -48622,7 +48631,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/fs/proc/base.c 
  }
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/fs/proc/kcore.c linux-3.2.69-pax/fs/proc/kcore.c
 --- linux-3.2.69/fs/proc/kcore.c	2012-07-04 06:44:35.000000000 +0200
-+++ linux-3.2.69-pax/fs/proc/kcore.c	2012-07-04 19:24:48.724063008 +0200
++++ linux-3.2.69-pax/fs/proc/kcore.c	2015-05-13 00:51:51.465517398 +0200
 @@ -478,9 +478,10 @@ read_kcore(struct file *file, char __use
  	 * the addresses in the elf_phdr on our list.
  	 */
@@ -48636,11 +48645,10 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/fs/proc/kcore.c
  	while (buflen) {
  		struct kcore_list *m;
  
-@@ -509,20 +510,23 @@ read_kcore(struct file *file, char __use
- 			kfree(elf_buf);
+@@ -510,19 +511,20 @@ read_kcore(struct file *file, char __use
  		} else {
  			if (kern_addr_valid(start)) {
--				unsigned long n;
+ 				unsigned long n;
 +				char *elf_buf;
 +				mm_segment_t oldfs;
  
@@ -48654,20 +48662,19 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/fs/proc/kcore.c
 -				if (n) { 
 -					if (clear_user(buffer + tsz - n,
 -								n))
-+				elf_buf = kmalloc(tsz, GFP_KERNEL);
+-						return -EFAULT;
+-				}
++				elf_buf = kzalloc(tsz, GFP_KERNEL);
 +				if (!elf_buf)
 +					return -ENOMEM;
 +				oldfs = get_fs();
 +				set_fs(KERNEL_DS);
-+				if (!__copy_from_user(elf_buf, (const void __user *)start, tsz)) {
-+					set_fs(oldfs);
-+					if (copy_to_user(buffer, elf_buf, tsz)) {
-+						kfree(elf_buf);
- 						return -EFAULT;
-+					}
- 				}
++				n = __copy_from_user(elf_buf, (const void __user *)start, tsz);
 +				set_fs(oldfs);
++				n = copy_to_user(buffer, elf_buf, tsz);
 +				kfree(elf_buf);
++				if (n)
++					return -EFAULT;
  			} else {
  				if (clear_user(buffer, tsz))
  					return -EFAULT;
@@ -49077,6 +49084,52 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/fs/splice.c lin
  		ret = -EAGAIN;
  
  	pipe_unlock(ipipe);
+diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/fs/squashfs/xattr.c linux-3.2.69-pax/fs/squashfs/xattr.c
+--- linux-3.2.69/fs/squashfs/xattr.c	2012-07-04 06:44:35.000000000 +0200
++++ linux-3.2.69-pax/fs/squashfs/xattr.c	2015-05-13 00:51:51.465517398 +0200
+@@ -46,8 +46,8 @@ ssize_t squashfs_listxattr(struct dentry
+ 						 + msblk->xattr_table;
+ 	int offset = SQUASHFS_XATTR_OFFSET(squashfs_i(inode)->xattr);
+ 	int count = squashfs_i(inode)->xattr_count;
+-	size_t rest = buffer_size;
+-	int err;
++	size_t used = 0;
++	ssize_t err;
+ 
+ 	/* check that the file system has xattrs */
+ 	if (msblk->xattr_id_table == NULL)
+@@ -68,11 +68,11 @@ ssize_t squashfs_listxattr(struct dentry
+ 		name_size = le16_to_cpu(entry.size);
+ 		handler = squashfs_xattr_handler(le16_to_cpu(entry.type));
+ 		if (handler)
+-			prefix_size = handler->list(d, buffer, rest, NULL,
++			prefix_size = handler->list(d, buffer, buffer ? buffer_size - used : 0, NULL,
+ 				name_size, handler->flags);
+ 		if (prefix_size) {
+ 			if (buffer) {
+-				if (prefix_size + name_size + 1 > rest) {
++				if (prefix_size + name_size + 1 > buffer_size - used) {
+ 					err = -ERANGE;
+ 					goto failed;
+ 				}
+@@ -86,7 +86,7 @@ ssize_t squashfs_listxattr(struct dentry
+ 				buffer[name_size] = '\0';
+ 				buffer += name_size + 1;
+ 			}
+-			rest -= prefix_size + name_size + 1;
++			used += prefix_size + name_size + 1;
+ 		} else  {
+ 			/* no handler or insuffficient privileges, so skip */
+ 			err = squashfs_read_metadata(sb, NULL, &start,
+@@ -107,7 +107,7 @@ ssize_t squashfs_listxattr(struct dentry
+ 		if (err < 0)
+ 			goto failed;
+ 	}
+-	err = buffer_size - rest;
++	err = used;
+ 
+ failed:
+ 	return err;
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/fs/sysfs/bin.c linux-3.2.69-pax/fs/sysfs/bin.c
 --- linux-3.2.69/fs/sysfs/bin.c	2012-07-04 06:44:35.000000000 +0200
 +++ linux-3.2.69-pax/fs/sysfs/bin.c	2013-04-05 19:58:05.772903585 +0200
