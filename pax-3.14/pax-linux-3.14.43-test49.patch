@@ -1,4 +1,5 @@
-- forward port to 3.14.43
+- fixed a xen regression introduced with the recent enlargement of level1_fixmap_pgt, reported by 2d1
+- fixed a regression in the structleak plugin that would disable it under LTO
 
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/alpha/include/asm/atomic.h linux-3.14.43-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.43/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -15247,7 +15248,7 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/incl
  /*
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/include/asm/pgtable_64.h linux-3.14.43-pax/arch/x86/include/asm/pgtable_64.h
 --- linux-3.14.43/arch/x86/include/asm/pgtable_64.h	2014-10-06 01:00:12.451765601 +0200
-+++ linux-3.14.43-pax/arch/x86/include/asm/pgtable_64.h	2014-10-07 18:29:05.561282602 +0200
++++ linux-3.14.43-pax/arch/x86/include/asm/pgtable_64.h	2015-05-19 16:29:45.721629514 +0200
 @@ -16,11 +16,16 @@
  
  extern pud_t level3_kernel_pgt[512];
@@ -15259,9 +15260,10 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/incl
  extern pmd_t level2_kernel_pgt[512];
  extern pmd_t level2_fixmap_pgt[512];
 -extern pmd_t level2_ident_pgt[512];
-+extern pmd_t level2_ident_pgt[512*2];
- extern pte_t level1_fixmap_pgt[512];
+-extern pte_t level1_fixmap_pgt[512];
 -extern pgd_t init_level4_pgt[];
++extern pmd_t level2_ident_pgt[2][512];
++extern pte_t level1_fixmap_pgt[3][512];
 +extern pte_t level1_vsyscall_pgt[512];
 +extern pgd_t init_level4_pgt[512];
  
@@ -32743,7 +32745,7 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/xen/
  #ifdef CONFIG_ACPI_NUMA
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/xen/mmu.c linux-3.14.43-pax/arch/x86/xen/mmu.c
 --- linux-3.14.43/arch/x86/xen/mmu.c	2014-10-06 01:00:12.451765601 +0200
-+++ linux-3.14.43-pax/arch/x86/xen/mmu.c	2014-10-07 16:51:24.638441374 +0200
++++ linux-3.14.43-pax/arch/x86/xen/mmu.c	2015-05-19 16:29:45.725629515 +0200
 @@ -379,7 +379,7 @@ static pteval_t pte_mfn_to_pfn(pteval_t
  	return val;
  }
@@ -32766,7 +32768,7 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/xen/
  		convert_pfn_mfn(level2_fixmap_pgt);
  	}
  	/* We get [511][511] and have Xen's version of level2_kernel_pgt */
-@@ -1929,11 +1933,16 @@ void __init xen_setup_kernel_pagetable(p
+@@ -1929,11 +1933,18 @@ void __init xen_setup_kernel_pagetable(p
  		set_page_prot(init_level4_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level3_ident_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level3_kernel_pgt, PAGE_KERNEL_RO);
@@ -32778,12 +32780,15 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/xen/
 +		set_page_prot(level2_vmemmap_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level2_kernel_pgt, PAGE_KERNEL_RO);
  		set_page_prot(level2_fixmap_pgt, PAGE_KERNEL_RO);
- 		set_page_prot(level1_fixmap_pgt, PAGE_KERNEL_RO);
+-		set_page_prot(level1_fixmap_pgt, PAGE_KERNEL_RO);
++		set_page_prot(level1_fixmap_pgt[0], PAGE_KERNEL_RO);
++		set_page_prot(level1_fixmap_pgt[1], PAGE_KERNEL_RO);
++		set_page_prot(level1_fixmap_pgt[2], PAGE_KERNEL_RO);
 +		set_page_prot(level1_vsyscall_pgt, PAGE_KERNEL_RO);
  
  		/* Pin down new L4 */
  		pin_pagetable_pfn(MMUEXT_PIN_L4_TABLE,
-@@ -2120,6 +2129,7 @@ static void __init xen_post_allocator_in
+@@ -2120,6 +2131,7 @@ static void __init xen_post_allocator_in
  	pv_mmu_ops.set_pud = xen_set_pud;
  #if PAGETABLE_LEVELS == 4
  	pv_mmu_ops.set_pgd = xen_set_pgd;
@@ -32791,7 +32796,7 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/x86/xen/
  #endif
  
  	/* This will work as long as patching hasn't happened yet
-@@ -2198,6 +2208,7 @@ static const struct pv_mmu_ops xen_mmu_o
+@@ -2198,6 +2210,7 @@ static const struct pv_mmu_ops xen_mmu_o
  	.pud_val = PV_CALLEE_SAVE(xen_pud_val),
  	.make_pud = PV_CALLEE_SAVE(xen_make_pud),
  	.set_pgd = xen_set_pgd_hyper,
@@ -93305,7 +93310,7 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/sta
 +}
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/structleak_plugin.c linux-3.14.43-pax/tools/gcc/structleak_plugin.c
 --- linux-3.14.43/tools/gcc/structleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.43-pax/tools/gcc/structleak_plugin.c	2015-04-30 01:46:38.264389498 +0200
++++ linux-3.14.43-pax/tools/gcc/structleak_plugin.c	2015-05-19 16:29:45.737629515 +0200
 @@ -0,0 +1,287 @@
 +/*
 + * Copyright 2013-2015 by PaX Team <pageexec@freemail.hu>
@@ -93572,7 +93577,7 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/str
 +		return 1;
 +	}
 +
-+	if (strncmp(lang_hooks.name, "GNU C", 5) || !strncmp(lang_hooks.name, "GNU C+", 6)) {
++	if (strncmp(lang_hooks.name, "GNU C", 5) && !strncmp(lang_hooks.name, "GNU C+", 6)) {
 +		inform(UNKNOWN_LOCATION, G_("%s supports C only"), plugin_name);
 +		enable = false;
 +	}
