@@ -1,5 +1,5 @@
-- fixed a xen regression introduced with the recent enlargement of level1_fixmap_pgt, reported by 2d1
-- fixed a regression in the structleak plugin that would disable it under LTO
+- synchronized some plugin files with the other trees
+- have xfs_error_report resolve the caller to a symbol
 
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/arch/alpha/include/asm/atomic.h linux-3.14.43-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.43/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -40523,7 +40523,7 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/drivers/isdn/
  	struct dsp_conf *conf;
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/drivers/leds/leds-clevo-mail.c linux-3.14.43-pax/drivers/leds/leds-clevo-mail.c
 --- linux-3.14.43/drivers/leds/leds-clevo-mail.c	2013-11-04 01:46:33.363115681 +0100
-+++ linux-3.14.43-pax/drivers/leds/leds-clevo-mail.c	2014-03-31 12:53:46.463112676 +0200
++++ linux-3.14.43-pax/drivers/leds/leds-clevo-mail.c	2015-05-24 20:04:57.892186823 +0200
 @@ -40,7 +40,7 @@ static int __init clevo_mail_led_dmi_cal
   * detected as working, but in reality it is not) as low as
   * possible.
@@ -55895,6 +55895,18 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/fs/xfs/xfs_di
  			    xfs_dir3_get_dtype(mp, filetype)))
  			return 0;
  		sfep = dp->d_ops->sf_nextentry(sfp, sfep);
+diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/fs/xfs/xfs_error.c linux-3.14.43-pax/fs/xfs/xfs_error.c
+--- linux-3.14.43/fs/xfs/xfs_error.c	2014-01-20 12:36:46.824998155 +0100
++++ linux-3.14.43-pax/fs/xfs/xfs_error.c	2015-05-20 20:08:36.807035312 +0200
+@@ -156,7 +156,7 @@ xfs_error_report(
+ {
+ 	if (level <= xfs_error_level) {
+ 		xfs_alert_tag(mp, XFS_PTAG_ERROR_REPORT,
+-		"Internal error %s at line %d of file %s.  Caller 0x%p",
++		"Internal error %s at line %d of file %s.  Caller 0x%pS",
+ 			    tag, linenum, filename, ra);
+ 
+ 		xfs_stack_trace();
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/fs/xfs/xfs_ioctl.c linux-3.14.43-pax/fs/xfs/xfs_ioctl.c
 --- linux-3.14.43/fs/xfs/xfs_ioctl.c	2014-06-16 23:48:02.629739022 +0200
 +++ linux-3.14.43-pax/fs/xfs/xfs_ioctl.c	2014-06-16 23:48:48.489740370 +0200
@@ -79280,8 +79292,8 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/col
 +}
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/constify_plugin.c linux-3.14.43-pax/tools/gcc/constify_plugin.c
 --- linux-3.14.43/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.43-pax/tools/gcc/constify_plugin.c	2015-04-30 01:46:38.264389498 +0200
-@@ -0,0 +1,563 @@
++++ linux-3.14.43-pax/tools/gcc/constify_plugin.c	2015-05-22 03:16:36.329514366 +0200
+@@ -0,0 +1,564 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2015 by PaX Team <pageexec@freemail.hu>
@@ -79520,7 +79532,8 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/con
 +		return NULL_TREE;
 +	}
 +
-+	error("%qE attribute used on type %qT that is not constified", name, type);
++	if (TYPE_FIELDS(type))
++		error("%qE attribute used on type %qT that is not constified", name, type);
 +	return NULL_TREE;
 +}
 +
@@ -79847,8 +79860,8 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/con
 +}
 diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/gcc-common.h linux-3.14.43-pax/tools/gcc/gcc-common.h
 --- linux-3.14.43/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.43-pax/tools/gcc/gcc-common.h	2015-04-30 01:51:49.796398658 +0200
-@@ -0,0 +1,666 @@
++++ linux-3.14.43-pax/tools/gcc/gcc-common.h	2015-05-22 13:15:23.631465673 +0200
+@@ -0,0 +1,689 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -80063,6 +80076,12 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/gcc
 +	return false;
 +	}
 +}
++
++static inline void add_local_decl(struct function *fun, tree d)
++{
++	gcc_assert(TREE_CODE(d) == VAR_DECL);
++	fun->local_decls = tree_cons(NULL_TREE, d, fun->local_decls);
++}
 +#endif
 +
 +#if BUILDING_GCC_VERSION <= 4006
@@ -80140,6 +80159,11 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/gcc
 +#define FOR_EACH_FUNCTION_WITH_GIMPLE_BODY(node) \
 +	for ((node) = cgraph_first_function_with_gimple_body(); (node); \
 +		(node) = cgraph_next_function_with_gimple_body(node))
++
++static inline void varpool_add_new_variable(tree decl)
++{
++	varpool_finalize_decl(decl);
++}
 +#endif
 +
 +#if BUILDING_GCC_VERSION == 4006
@@ -80256,8 +80280,10 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/gcc
 +#define add_referenced_var(var)
 +#define mark_sym_for_renaming(var)
 +#define varpool_mark_needed_node(node)
++#define create_var_ann(var)
 +#define TODO_dump_func 0
 +#define TODO_dump_cgraph 0
++
 +#endif
 +
 +#if BUILDING_GCC_VERSION <= 4009
@@ -80277,6 +80303,11 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/gcc
 +
 +#if BUILDING_GCC_VERSION <= 4009
 +typedef struct rtx_def rtx_insn;
++
++static inline void set_decl_section_name(tree node, const char *value)
++{
++	DECL_SECTION_NAME(node) = build_string(strlen(value) + 1, value);
++}
 +
 +static inline gasm *as_a_gasm(gimple stmt)
 +{
@@ -80372,6 +80403,11 @@ diff -NurpX linux-3.14.43-pax/Documentation/dontdiff linux-3.14.43/tools/gcc/gcc
 +static inline void varpool_finalize_decl(tree decl)
 +{
 +	varpool_node::finalize_decl(decl);
++}
++
++static inline void varpool_add_new_variable(tree decl)
++{
++	varpool_node::add(decl);
 +}
 +
 +static inline cgraph_node_ptr cgraph_function_node(cgraph_node_ptr node, enum availability *availability)
