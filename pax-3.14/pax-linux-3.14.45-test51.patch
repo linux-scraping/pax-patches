@@ -1,4 +1,7 @@
-- forward port to 3.14.45
+- Emese fixed a size overflow compile error, reported by Daniel Micay (https://bugs.archlinux.org/task/45320)
+- the size overflow plugin caught an integer mixup in scsi_finish_command and sd_done, reported by hunger
+- changed the loglevel of our own messages that could result in a kernel panic
+- some small cleanups backported from the upcoming 4.1 port
 
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/alpha/include/asm/atomic.h linux-3.14.45-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.45/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -3116,7 +3119,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/arm/mm/c
  	}
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/arm/mm/fault.c linux-3.14.45-pax/arch/arm/mm/fault.c
 --- linux-3.14.45/arch/arm/mm/fault.c	2013-11-04 01:46:19.263116433 +0100
-+++ linux-3.14.45-pax/arch/arm/mm/fault.c	2014-10-30 21:43:38.187908085 +0100
++++ linux-3.14.45-pax/arch/arm/mm/fault.c	2015-06-26 17:10:49.474484896 +0200
 @@ -25,6 +25,7 @@
  #include <asm/system_misc.h>
  #include <asm/system_info.h>
@@ -3131,7 +3134,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/arm/mm/f
  
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (addr < TASK_SIZE)
-+		printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to access userland memory at %08lx\n", current->comm, task_pid_nr(current),
++		printk(KERN_EMERG "PAX: %s:%d, uid/euid: %u/%u, attempted to access userland memory at %08lx\n", current->comm, task_pid_nr(current),
 +				from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()), addr);
 +#endif
 +
@@ -3140,7 +3143,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/arm/mm/f
 +	    (((unsigned long)_stext <= addr && addr < init_mm.end_code) ||
 +	     (MODULES_VADDR <= addr && addr < MODULES_END)))
 +	{
-+		printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to modify kernel code\n", current->comm, task_pid_nr(current),
++		printk(KERN_EMERG "PAX: %s:%d, uid/euid: %u/%u, attempted to modify kernel code\n", current->comm, task_pid_nr(current),
 +				from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()));
 +	}
 +#endif
@@ -3202,7 +3205,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/arm/mm/f
  
 +#ifdef CONFIG_PAX_MEMORY_UDEREF
 +	if (addr < TASK_SIZE && is_domain_fault(fsr)) {
-+		printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to access userland memory at %08lx\n", current->comm, task_pid_nr(current),
++		printk(KERN_EMERG "PAX: %s:%d, uid/euid: %u/%u, attempted to access userland memory at %08lx\n", current->comm, task_pid_nr(current),
 +				from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()), addr);
 +		goto die;
 +	}
@@ -3281,7 +3284,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/arm/mm/f
 +
 +#if defined(CONFIG_PAX_KERNEXEC) || defined(CONFIG_PAX_MEMORY_UDEREF)
 +	else if (is_domain_fault(ifsr) || is_xn_fault(ifsr)) {
-+		printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to execute %s memory at %08lx\n",
++		printk(KERN_EMERG "PAX: %s:%d, uid/euid: %u/%u, attempted to execute %s memory at %08lx\n",
 +				current->comm, task_pid_nr(current),
 +				from_kuid_munged(&init_user_ns, current_uid()),
 +				from_kuid_munged(&init_user_ns, current_euid()),
@@ -7782,8 +7785,21 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/s390/ker
 -}
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/s390/mm/mmap.c linux-3.14.45-pax/arch/s390/mm/mmap.c
 --- linux-3.14.45/arch/s390/mm/mmap.c	2014-01-20 12:36:04.365000422 +0100
-+++ linux-3.14.45-pax/arch/s390/mm/mmap.c	2014-03-31 12:53:46.299112685 +0200
-@@ -95,9 +95,21 @@ void arch_pick_mmap_layout(struct mm_str
++++ linux-3.14.45-pax/arch/s390/mm/mmap.c	2015-06-26 17:09:56.410485014 +0200
+@@ -58,6 +58,12 @@ static inline int mmap_is_legacy(void)
+ 
+ static unsigned long mmap_rnd(void)
+ {
++
++#ifdef CONFIG_PAX_RANDMMAP
++	if (current->mm->pax_flags & MF_PAX_RANDMMAP)
++		return 0;
++#endif
++
+ 	if (!(current->flags & PF_RANDOMIZE))
+ 		return 0;
+ 	/* 8MB randomization for mmap_base */
+@@ -95,9 +101,21 @@ void arch_pick_mmap_layout(struct mm_str
  	 */
  	if (mmap_is_legacy()) {
  		mm->mmap_base = mmap_base_legacy();
@@ -7805,7 +7821,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/s390/mm/
  		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
  	}
  }
-@@ -170,9 +182,21 @@ void arch_pick_mmap_layout(struct mm_str
+@@ -170,9 +188,21 @@ void arch_pick_mmap_layout(struct mm_str
  	 */
  	if (mmap_is_legacy()) {
  		mm->mmap_base = mmap_base_legacy();
@@ -28817,7 +28833,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/mm/e
  
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/mm/fault.c linux-3.14.45-pax/arch/x86/mm/fault.c
 --- linux-3.14.45/arch/x86/mm/fault.c	2015-04-30 02:05:39.388423049 +0200
-+++ linux-3.14.45-pax/arch/x86/mm/fault.c	2015-04-30 02:07:23.740426118 +0200
++++ linux-3.14.45-pax/arch/x86/mm/fault.c	2015-06-26 17:09:13.978485109 +0200
 @@ -14,11 +14,18 @@
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
  #include <linux/prefetch.h>		/* prefetchw			*/
@@ -29024,7 +29040,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/mm/f
  
 +#ifdef CONFIG_PAX_KERNEXEC
 +	if (init_mm.start_code <= address && address < init_mm.end_code)
-+		printk(KERN_ERR "PAX: %s:%d, uid/euid: %u/%u, attempted to modify kernel code\n", current->comm, task_pid_nr(current),
++		printk(KERN_EMERG "PAX: %s:%d, uid/euid: %u/%u, attempted to modify kernel code\n", current->comm, task_pid_nr(current),
 +				from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()));
 +#endif
 +
@@ -29189,13 +29205,13 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/mm/f
 +#if defined(CONFIG_X86_64) && defined(CONFIG_PAX_MEMORY_UDEREF)
 +	if (!user_mode(regs) && address < 2 * pax_user_shadow_base) {
 +		if (!search_exception_tables(regs->ip)) {
-+			printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
++			printk(KERN_EMERG "PAX: please report this to pageexec@freemail.hu\n");
 +			bad_area_nosemaphore(regs, error_code, address);
 +			return;
 +		}
 +		if (address < pax_user_shadow_base) {
-+			printk(KERN_ERR "PAX: please report this to pageexec@freemail.hu\n");
-+			printk(KERN_ERR "PAX: faulting IP: %pS\n", (void *)regs->ip);
++			printk(KERN_EMERG "PAX: please report this to pageexec@freemail.hu\n");
++			printk(KERN_EMERG "PAX: faulting IP: %pS\n", (void *)regs->ip);
 +			show_trace_log_lvl(NULL, NULL, (void *)regs->sp, regs->bp, KERN_ERR);
 +		} else
 +			address -= pax_user_shadow_base;
@@ -46139,7 +46155,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/
  		(def_timeout > LOGIN_TOV) && (def_timeout < LOGIN_TOV * 10) ?
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/scsi.c linux-3.14.45-pax/drivers/scsi/scsi.c
 --- linux-3.14.45/drivers/scsi/scsi.c	2014-03-31 12:48:18.847130168 +0200
-+++ linux-3.14.45-pax/drivers/scsi/scsi.c	2014-03-31 12:53:47.055112645 +0200
++++ linux-3.14.45-pax/drivers/scsi/scsi.c	2015-06-26 17:06:41.030485450 +0200
 @@ -658,7 +658,7 @@ int scsi_dispatch_cmd(struct scsi_cmnd *
  	struct Scsi_Host *host = cmd->device->host;
  	int rtn = 0;
@@ -46149,6 +46165,15 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/
  
  	/* check if the device is still usable */
  	if (unlikely(cmd->device->sdev_state == SDEV_DEL)) {
+@@ -804,7 +804,7 @@ void scsi_finish_command(struct scsi_cmn
+ 
+ 	good_bytes = scsi_bufflen(cmd);
+         if (cmd->request->cmd_type != REQ_TYPE_BLOCK_PC) {
+-		int old_good_bytes = good_bytes;
++		unsigned int old_good_bytes = good_bytes;
+ 		drv = scsi_cmd_to_driver(cmd);
+ 		if (drv->done)
+ 			good_bytes = drv->done(cmd);
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/scsi_lib.c linux-3.14.45-pax/drivers/scsi/scsi_lib.c
 --- linux-3.14.45/drivers/scsi/scsi_lib.c	2015-04-19 12:17:11.421111298 +0200
 +++ linux-3.14.45-pax/drivers/scsi/scsi_lib.c	2015-04-19 12:17:19.837111755 +0200
@@ -46298,7 +46323,25 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/
  	transport_setup_device(&rport->dev);
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/sd.c linux-3.14.45-pax/drivers/scsi/sd.c
 --- linux-3.14.45/drivers/scsi/sd.c	2015-06-26 13:41:14.234512920 +0200
-+++ linux-3.14.45-pax/drivers/scsi/sd.c	2015-06-26 13:41:34.726512874 +0200
++++ linux-3.14.45-pax/drivers/scsi/sd.c	2015-06-26 17:04:06.078485795 +0200
+@@ -109,7 +109,7 @@ static int sd_suspend_system(struct devi
+ static int sd_suspend_runtime(struct device *);
+ static int sd_resume(struct device *);
+ static void sd_rescan(struct device *);
+-static int sd_done(struct scsi_cmnd *);
++static unsigned int sd_done(struct scsi_cmnd *);
+ static int sd_eh_action(struct scsi_cmnd *, int);
+ static void sd_read_capacity(struct scsi_disk *sdkp, unsigned char *buffer);
+ static void scsi_disk_release(struct device *cdev);
+@@ -1645,7 +1645,7 @@ static unsigned int sd_completed_bytes(s
+  *
+  *	Note: potentially run from within an ISR. Must not block.
+  **/
+-static int sd_done(struct scsi_cmnd *SCpnt)
++static unsigned int sd_done(struct scsi_cmnd *SCpnt)
+ {
+ 	int result = SCpnt->result;
+ 	unsigned int good_bytes = result ? 0 : scsi_bufflen(SCpnt);
 @@ -2958,7 +2958,7 @@ static int sd_probe(struct device *dev)
  	sdkp->disk = gd;
  	sdkp->index = index;
@@ -46320,6 +46363,33 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/
  	case BLKTRACESTART:
  		return blk_trace_startstop(sdp->device->request_queue, 1);
  	case BLKTRACESTOP:
+diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/scsi/sr.c linux-3.14.45-pax/drivers/scsi/sr.c
+--- linux-3.14.45/drivers/scsi/sr.c	2014-03-31 12:48:18.867130167 +0200
++++ linux-3.14.45-pax/drivers/scsi/sr.c	2015-06-26 17:05:14.934485642 +0200
+@@ -79,7 +79,7 @@ MODULE_ALIAS_SCSI_DEVICE(TYPE_WORM);
+ static DEFINE_MUTEX(sr_mutex);
+ static int sr_probe(struct device *);
+ static int sr_remove(struct device *);
+-static int sr_done(struct scsi_cmnd *);
++static unsigned int sr_done(struct scsi_cmnd *);
+ static int sr_runtime_suspend(struct device *dev);
+ 
+ static struct dev_pm_ops sr_pm_ops = {
+@@ -310,11 +310,11 @@ do_tur:
+  * It will be notified on the end of a SCSI read / write, and will take one
+  * of several actions based on success or failure.
+  */
+-static int sr_done(struct scsi_cmnd *SCpnt)
++static unsigned int sr_done(struct scsi_cmnd *SCpnt)
+ {
+ 	int result = SCpnt->result;
+-	int this_count = scsi_bufflen(SCpnt);
+-	int good_bytes = (result == 0 ? this_count : 0);
++	unsigned int this_count = scsi_bufflen(SCpnt);
++	unsigned int good_bytes = (result == 0 ? this_count : 0);
+ 	int block_sectors = 0;
+ 	long error_sector;
+ 	struct scsi_cd *cd = scsi_cd(SCpnt->request->rq_disk);
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/drivers/spi/spi.c linux-3.14.45-pax/drivers/spi/spi.c
 --- linux-3.14.45/drivers/spi/spi.c	2015-04-14 21:46:51.872142249 +0200
 +++ linux-3.14.45-pax/drivers/spi/spi.c	2015-04-14 21:47:01.800141719 +0200
@@ -51661,7 +51731,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/fs/ecryptfs/m
  		if (copy_to_user(&buf[i], msg_ctx->msg, msg_ctx->msg_size))
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/fs/exec.c linux-3.14.45-pax/fs/exec.c
 --- linux-3.14.45/fs/exec.c	2015-05-07 00:02:04.264038701 +0200
-+++ linux-3.14.45-pax/fs/exec.c	2015-05-07 00:02:09.016038841 +0200
++++ linux-3.14.45-pax/fs/exec.c	2015-06-26 17:07:45.454485306 +0200
 @@ -56,6 +56,15 @@
  #include <linux/pipe_fs_i.h>
  #include <linux/oom.h>
@@ -52061,9 +52131,9 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/fs/exec.c lin
 +#ifdef CONFIG_PAX_REFCOUNT
 +void pax_report_refcount_overflow(struct pt_regs *regs)
 +{
-+	printk(KERN_ERR "PAX: refcount overflow detected in: %s:%d, uid/euid: %u/%u\n", current->comm, task_pid_nr(current),
++	printk(KERN_EMERG "PAX: refcount overflow detected in: %s:%d, uid/euid: %u/%u\n", current->comm, task_pid_nr(current),
 +			from_kuid_munged(&init_user_ns, current_uid()), from_kuid_munged(&init_user_ns, current_euid()));
-+	print_symbol(KERN_ERR "PAX: refcount overflow occured at: %s\n", instruction_pointer(regs));
++	print_symbol(KERN_EMERG "PAX: refcount overflow occured at: %s\n", instruction_pointer(regs));
 +	preempt_disable();
 +	show_regs(regs);
 +	preempt_enable();
@@ -52121,7 +52191,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/fs/exec.c lin
 +
 +static __noreturn void pax_report_usercopy(const void *ptr, unsigned long len, bool to_user, const char *type)
 +{
-+	printk(KERN_ERR "PAX: kernel memory %s attempt detected %s %p (%s) (%lu bytes)\n",
++	printk(KERN_EMERG "PAX: kernel memory %s attempt detected %s %p (%s) (%lu bytes)\n",
 +		to_user ? "leak" : "overwrite", to_user ? "from" : "to", ptr, type ? : "unknown", len);
 +	dump_stack();
 +	do_group_exit(SIGKILL);
@@ -52164,7 +52234,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/fs/exec.c lin
 +#ifdef CONFIG_PAX_SIZE_OVERFLOW
 +void report_size_overflow(const char *file, unsigned int line, const char *func, const char *ssa_name)
 +{
-+	printk(KERN_ERR "PAX: size overflow detected in function %s %s:%u %s", func, file, line, ssa_name);
++	printk(KERN_EMERG "PAX: size overflow detected in function %s %s:%u %s", func, file, line, ssa_name);
 +	dump_stack();
 +	do_group_exit(SIGKILL);
 +}
@@ -61185,6 +61255,18 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/include/scsi/
  
  	struct device		sdev_gendev,
  				sdev_dev;
+diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/include/scsi/scsi_driver.h linux-3.14.45-pax/include/scsi/scsi_driver.h
+--- linux-3.14.45/include/scsi/scsi_driver.h	2014-03-31 12:48:30.683129537 +0200
++++ linux-3.14.45-pax/include/scsi/scsi_driver.h	2015-06-26 17:06:04.338485532 +0200
+@@ -15,7 +15,7 @@ struct scsi_driver {
+ 	struct device_driver	gendrv;
+ 
+ 	void (*rescan)(struct device *);
+-	int (*done)(struct scsi_cmnd *);
++	unsigned int (*done)(struct scsi_cmnd *);
+ 	int (*eh_action)(struct scsi_cmnd *, int);
+ };
+ #define to_scsi_driver(drv) \
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/include/scsi/scsi_transport_fc.h linux-3.14.45-pax/include/scsi/scsi_transport_fc.h
 --- linux-3.14.45/include/scsi/scsi_transport_fc.h	2013-08-20 19:08:16.795833336 +0200
 +++ linux-3.14.45-pax/include/scsi/scsi_transport_fc.h	2014-03-31 12:53:47.199112637 +0200
@@ -66560,6 +66642,22 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/lib/decompres
  
  	bd->dbuf = large_malloc(bd->dbufSize * sizeof(int));
  	if (!bd->dbuf)
+diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/lib/decompress_unlzma.c linux-3.14.45-pax/lib/decompress_unlzma.c
+--- linux-3.14.45/lib/decompress_unlzma.c	2012-12-11 04:30:57.000000000 +0100
++++ linux-3.14.45-pax/lib/decompress_unlzma.c	2015-06-26 17:03:05.270485931 +0200
+@@ -39,10 +39,10 @@
+ 
+ #define	MIN(a, b) (((a) < (b)) ? (a) : (b))
+ 
+-static long long INIT read_int(unsigned char *ptr, int size)
++static unsigned long long INIT read_int(unsigned char *ptr, int size)
+ {
+ 	int i;
+-	long long ret = 0;
++	unsigned long long ret = 0;
+ 
+ 	for (i = 0; i < size; i++)
+ 		ret = (ret << 8) | ptr[size-i-1];
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/lib/devres.c linux-3.14.45-pax/lib/devres.c
 --- linux-3.14.45/lib/devres.c	2013-08-20 19:08:16.899833331 +0200
 +++ linux-3.14.45-pax/lib/devres.c	2014-03-31 12:53:47.227112636 +0200
@@ -79856,7 +79954,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/tools/gcc/con
 +}
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/tools/gcc/gcc-common.h linux-3.14.45-pax/tools/gcc/gcc-common.h
 --- linux-3.14.45/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.45-pax/tools/gcc/gcc-common.h	2015-05-22 13:15:23.631465673 +0200
++++ linux-3.14.45-pax/tools/gcc/gcc-common.h	2015-06-26 17:11:43.906484775 +0200
 @@ -0,0 +1,689 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
@@ -80018,7 +80116,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/tools/gcc/gcc
 +#define C_TYPE_FIELDS_READONLY(TYPE) TREE_LANG_FLAG_1(TYPE)
 +
 +#if BUILDING_GCC_VERSION == 4005
-+#define FOR_EACH_LOCAL_DECL(FUN, I, D) for (tree vars = (FUN)->local_decls; vars && (D = TREE_VALUE(vars)); vars = TREE_CHAIN(vars), I)
++#define FOR_EACH_LOCAL_DECL(FUN, I, D) for (tree vars = (FUN)->local_decls, (I) = 0; vars && ((D) = TREE_VALUE(vars)); vars = TREE_CHAIN(vars), (I)++)
 +#define DECL_CHAIN(NODE) (TREE_CHAIN(DECL_MINIMAL_CHECK(NODE)))
 +#define FOR_EACH_VEC_ELT(T, V, I, P) for (I = 0; VEC_iterate(T, (V), (I), (P)); ++(I))
 +#define TODO_rebuild_cgraph_edges 0
@@ -80258,6 +80356,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/tools/gcc/gcc
 +}
 +
 +#define ipa_remove_stmt_references(cnode, stmt)
++
 +typedef union gimple_statement_d gasm;
 +typedef union gimple_statement_d gassign;
 +typedef union gimple_statement_d gcall;
@@ -80279,7 +80378,6 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/tools/gcc/gcc
 +#define create_var_ann(var)
 +#define TODO_dump_func 0
 +#define TODO_dump_cgraph 0
-+
 +#endif
 +
 +#if BUILDING_GCC_VERSION <= 4009
