@@ -1,7 +1,4 @@
-- Emese fixed a size overflow compile error, reported by Daniel Micay (https://bugs.archlinux.org/task/45320)
-- the size overflow plugin caught an integer mixup in scsi_finish_command and sd_done, reported by hunger
-- changed the loglevel of our own messages that could result in a kernel panic
-- some small cleanups backported from the upcoming 4.1 port
+- use non-deprecated cpumask accessors
 
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/alpha/include/asm/atomic.h linux-3.14.45-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.45/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -14632,7 +14629,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/incl
 +#endif /* X86_MMAN_H */
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/include/asm/mmu_context.h linux-3.14.45-pax/arch/x86/include/asm/mmu_context.h
 --- linux-3.14.45/arch/x86/include/asm/mmu_context.h	2013-11-04 01:46:22.131116280 +0100
-+++ linux-3.14.45-pax/arch/x86/include/asm/mmu_context.h	2014-03-31 12:53:46.327112684 +0200
++++ linux-3.14.45-pax/arch/x86/include/asm/mmu_context.h	2015-06-28 00:17:09.782444589 +0200
 @@ -24,6 +24,20 @@ void destroy_context(struct mm_struct *m
  
  static inline void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
@@ -14722,9 +14719,9 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/incl
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_SMP)
 +		if (!(__supported_pte_mask & _PAGE_NX)) {
 +			smp_mb__before_clear_bit();
-+			cpu_clear(cpu, prev->context.cpu_user_cs_mask);
++			cpumask_clear_cpu(cpu, &prev->context.cpu_user_cs_mask);
 +			smp_mb__after_clear_bit();
-+			cpu_set(cpu, next->context.cpu_user_cs_mask);
++			cpumask_set_cpu(cpu, &next->context.cpu_user_cs_mask);
 +		}
 +#endif
 +
@@ -14796,7 +14793,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/incl
 +
 +#if defined(CONFIG_X86_32) && defined(CONFIG_PAX_PAGEEXEC)
 +			if (!(__supported_pte_mask & _PAGE_NX))
-+				cpu_set(cpu, next->context.cpu_user_cs_mask);
++				cpumask_set_cpu(cpu, &next->context.cpu_user_cs_mask);
 +#endif
 +
 +#if defined(CONFIG_X86_32) && (defined(CONFIG_PAX_PAGEEXEC) || defined(CONFIG_PAX_SEGMEXEC))
@@ -23161,7 +23158,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/kern
  		.mode = S_IRUGO,
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/kernel/ldt.c linux-3.14.45-pax/arch/x86/kernel/ldt.c
 --- linux-3.14.45/arch/x86/kernel/ldt.c	2014-08-08 02:15:42.909614643 +0200
-+++ linux-3.14.45-pax/arch/x86/kernel/ldt.c	2014-08-08 02:17:45.833614369 +0200
++++ linux-3.14.45-pax/arch/x86/kernel/ldt.c	2015-06-28 00:17:29.990444544 +0200
 @@ -66,13 +66,13 @@ static int alloc_ldt(mm_context_t *pc, i
  	if (reload) {
  #ifdef CONFIG_SMP
@@ -23201,7 +23198,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/kern
 +		mm->context.user_cs_limit = ~0UL;
 +
 +#if defined(CONFIG_PAX_PAGEEXEC) && defined(CONFIG_SMP)
-+		cpus_clear(mm->context.cpu_user_cs_mask);
++		cpumask_clear(&mm->context.cpu_user_cs_mask);
 +#endif
 +
 +#endif
@@ -28833,7 +28830,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/mm/e
  
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/mm/fault.c linux-3.14.45-pax/arch/x86/mm/fault.c
 --- linux-3.14.45/arch/x86/mm/fault.c	2015-04-30 02:05:39.388423049 +0200
-+++ linux-3.14.45-pax/arch/x86/mm/fault.c	2015-06-26 17:09:13.978485109 +0200
++++ linux-3.14.45-pax/arch/x86/mm/fault.c	2015-06-28 00:17:29.990444544 +0200
 @@ -14,11 +14,18 @@
  #include <linux/hugetlb.h>		/* hstate_index_to_shift	*/
  #include <linux/prefetch.h>		/* prefetchw			*/
@@ -29130,7 +29127,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/arch/x86/mm/f
 +	}
 +
 +#ifdef CONFIG_SMP
-+	if (likely(address > get_limit(regs->cs) && cpu_isset(smp_processor_id(), mm->context.cpu_user_cs_mask)))
++	if (likely(address > get_limit(regs->cs) && cpumask_test_cpu(smp_processor_id(), &mm->context.cpu_user_cs_mask)))
 +#else
 +	if (likely(address > get_limit(regs->cs)))
 +#endif
@@ -69866,7 +69863,7 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/mm/mmap.c lin
  
 diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/mm/mprotect.c linux-3.14.45-pax/mm/mprotect.c
 --- linux-3.14.45/mm/mprotect.c	2014-03-31 12:48:31.135129512 +0200
-+++ linux-3.14.45-pax/mm/mprotect.c	2014-03-31 12:53:47.235112635 +0200
++++ linux-3.14.45-pax/mm/mprotect.c	2015-06-28 00:17:29.994444544 +0200
 @@ -24,10 +24,18 @@
  #include <linux/migrate.h>
  #include <linux/perf_event.h>
@@ -69913,8 +69910,8 @@ diff -NurpX linux-3.14.45-pax/Documentation/dontdiff linux-3.14.45/mm/mprotect.c
 +
 +#ifdef CONFIG_SMP
 +		wmb();
-+		cpus_clear(mm->context.cpu_user_cs_mask);
-+		cpu_set(smp_processor_id(), mm->context.cpu_user_cs_mask);
++		cpumask_clear(&mm->context.cpu_user_cs_mask);
++		cpumask_set_cpu(smp_processor_id(), &mm->context.cpu_user_cs_mask);
 +#endif
 +
 +		set_user_cs(mm->context.user_cs_base, mm->context.user_cs_limit, smp_processor_id());
