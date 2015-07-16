@@ -1,4 +1,5 @@
-- forward port to 3.14.48
+- fixed the constify plugin for gcc-5
+- Emese fixed the size_overflow plugin for gcc-5
 
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/arch/alpha/include/asm/atomic.h linux-3.14.48-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.14.48/arch/alpha/include/asm/atomic.h	2013-09-03 00:44:45.494913262 +0200
@@ -57065,8 +57066,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/include/linux
   * suppress control flow warnings after asm blocks that transfer
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/include/linux/compiler-gcc5.h linux-3.14.48-pax/include/linux/compiler-gcc5.h
 --- linux-3.14.48/include/linux/compiler-gcc5.h	2014-10-30 22:44:00.991974722 +0100
-+++ linux-3.14.48-pax/include/linux/compiler-gcc5.h	2015-04-30 01:59:19.720411886 +0200
-@@ -28,6 +28,26 @@
++++ linux-3.14.48-pax/include/linux/compiler-gcc5.h	2015-07-16 02:28:31.580778209 +0200
+@@ -28,6 +28,25 @@
  # define __compiletime_error(message) __attribute__((error(message)))
  #endif /* __CHECKER__ */
  
@@ -57081,7 +57082,6 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/include/linux
 +#endif
 +
 +#ifdef SIZE_OVERFLOW_PLUGIN
-+#error not yet
 +#define __size_overflow(...) __attribute__((size_overflow(__VA_ARGS__)))
 +#define __intentional_overflow(...) __attribute__((intentional_overflow(__VA_ARGS__)))
 +#endif
@@ -79383,8 +79383,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/col
 +}
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/constify_plugin.c linux-3.14.48-pax/tools/gcc/constify_plugin.c
 --- linux-3.14.48/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/constify_plugin.c	2015-05-22 03:16:36.329514366 +0200
-@@ -0,0 +1,564 @@
++++ linux-3.14.48-pax/tools/gcc/constify_plugin.c	2015-07-12 01:00:54.769483488 +0200
+@@ -0,0 +1,568 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2015 by PaX Team <pageexec@freemail.hu>
@@ -79826,7 +79826,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/con
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
 +#if BUILDING_GCC_VERSION >= 5000
-+#elif BUILDING_GCC_VERSION >= 4009
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -79851,7 +79851,11 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/con
 +class check_local_variables_pass : public gimple_opt_pass {
 +public:
 +	check_local_variables_pass() : gimple_opt_pass(check_local_variables_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return check_local_variables(); }
++#else
 +	unsigned int execute() { return check_local_variables(); }
++#endif
 +};
 +}
 +
@@ -79951,8 +79955,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/con
 +}
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/gcc-common.h linux-3.14.48-pax/tools/gcc/gcc-common.h
 --- linux-3.14.48/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/gcc-common.h	2015-06-26 17:11:43.906484775 +0200
-@@ -0,0 +1,689 @@
++++ linux-3.14.48-pax/tools/gcc/gcc-common.h	2015-07-13 23:28:16.198057366 +0200
+@@ -0,0 +1,787 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -80031,6 +80035,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/gcc
 +#include "tree-flow.h"
 +#else
 +#include "tree-cfgcleanup.h"
++#include "tree-ssa-operands.h"
++#include "tree-into-ssa.h"
 +#endif
 +
 +#if BUILDING_GCC_VERSION >= 4008
@@ -80361,44 +80367,6 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/gcc
 +typedef union gimple_statement_d gdebug;
 +typedef union gimple_statement_d gphi;
 +typedef union gimple_statement_d greturn;
-+#endif
-+
-+#if BUILDING_GCC_VERSION == 4008
-+#define NODE_SYMBOL(node) (&(node)->symbol)
-+#define NODE_DECL(node) (node)->symbol.decl
-+#endif
-+
-+#if BUILDING_GCC_VERSION >= 4008
-+#define add_referenced_var(var)
-+#define mark_sym_for_renaming(var)
-+#define varpool_mark_needed_node(node)
-+#define create_var_ann(var)
-+#define TODO_dump_func 0
-+#define TODO_dump_cgraph 0
-+#endif
-+
-+#if BUILDING_GCC_VERSION <= 4009
-+#define TODO_verify_il 0
-+#define AVAIL_INTERPOSABLE AVAIL_OVERWRITABLE
-+#endif
-+
-+#if BUILDING_GCC_VERSION == 4009
-+typedef struct gimple_statement_base gasm;
-+typedef struct gimple_statement_base gassign;
-+typedef struct gimple_statement_base gcall;
-+typedef struct gimple_statement_base gcond;
-+typedef struct gimple_statement_base gdebug;
-+typedef struct gimple_statement_base gphi;
-+typedef struct gimple_statement_base greturn;
-+#endif
-+
-+#if BUILDING_GCC_VERSION <= 4009
-+typedef struct rtx_def rtx_insn;
-+
-+static inline void set_decl_section_name(tree node, const char *value)
-+{
-+	DECL_SECTION_NAME(node) = build_string(strlen(value) + 1, value);
-+}
 +
 +static inline gasm *as_a_gasm(gimple stmt)
 +{
@@ -80430,6 +80398,26 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/gcc
 +	return stmt;
 +}
 +
++static inline gcond *as_a_gcond(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gcond *as_a_const_gcond(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gdebug *as_a_gdebug(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gdebug *as_a_const_gdebug(const_gimple stmt)
++{
++	return stmt;
++}
++
 +static inline gphi *as_a_gphi(gimple stmt)
 +{
 +	return stmt;
@@ -80438,6 +80426,115 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/gcc
 +static inline const gphi *as_a_const_gphi(const_gimple stmt)
 +{
 +	return stmt;
++}
++
++static inline greturn *as_a_greturn(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const greturn *as_a_const_greturn(const_gimple stmt)
++{
++	return stmt;
++}
++#endif
++
++#if BUILDING_GCC_VERSION == 4008
++#define NODE_SYMBOL(node) (&(node)->symbol)
++#define NODE_DECL(node) (node)->symbol.decl
++#endif
++
++#if BUILDING_GCC_VERSION >= 4008
++#define add_referenced_var(var)
++#define mark_sym_for_renaming(var)
++#define varpool_mark_needed_node(node)
++#define create_var_ann(var)
++#define TODO_dump_func 0
++#define TODO_dump_cgraph 0
++#endif
++
++#if BUILDING_GCC_VERSION <= 4009
++#define TODO_verify_il 0
++#define AVAIL_INTERPOSABLE AVAIL_OVERWRITABLE
++
++#define section_name_prefix LTO_SECTION_NAME_PREFIX
++#define fatal_error(loc, gmsgid, ...) fatal_error((gmsgid), __VA_ARGS__)
++
++typedef struct rtx_def rtx_insn;
++
++static inline void set_decl_section_name(tree node, const char *value)
++{
++	DECL_SECTION_NAME(node) = build_string(strlen(value) + 1, value);
++}
++#endif
++
++#if BUILDING_GCC_VERSION == 4009
++typedef struct gimple_statement_asm gasm;
++typedef struct gimple_statement_base gassign;
++typedef struct gimple_statement_call gcall;
++typedef struct gimple_statement_base gcond;
++typedef struct gimple_statement_base gdebug;
++typedef struct gimple_statement_phi gphi;
++typedef struct gimple_statement_base greturn;
++
++static inline gasm *as_a_gasm(gimple stmt)
++{
++	return as_a<gasm>(stmt);
++}
++
++static inline const gasm *as_a_const_gasm(const_gimple stmt)
++{
++	return as_a<const gasm>(stmt);
++}
++
++static inline gassign *as_a_gassign(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gassign *as_a_const_gassign(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gcall *as_a_gcall(gimple stmt)
++{
++	return as_a<gcall>(stmt);
++}
++
++static inline const gcall *as_a_const_gcall(const_gimple stmt)
++{
++	return as_a<const gcall>(stmt);
++}
++
++static inline gcond *as_a_gcond(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gcond *as_a_const_gcond(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gdebug *as_a_gdebug(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gdebug *as_a_const_gdebug(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gphi *as_a_gphi(gimple stmt)
++{
++	return as_a<gphi>(stmt);
++}
++
++static inline const gphi *as_a_const_gphi(const_gimple stmt)
++{
++	return as_a<const gphi>(stmt);
 +}
 +
 +static inline greturn *as_a_greturn(gimple stmt)
@@ -80499,6 +80596,11 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/gcc
 +static inline void varpool_add_new_variable(tree decl)
 +{
 +	varpool_node::add(decl);
++}
++
++static inline unsigned int rebuild_cgraph_edges(void)
++{
++	return cgraph_edge::rebuild_edges();
 +}
 +
 +static inline cgraph_node_ptr cgraph_function_node(cgraph_node_ptr node, enum availability *availability)
@@ -80642,6 +80744,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/gcc
 +#endif
 +
 +#endif
+Binary files linux-3.14.48/tools/gcc/.gcc-common.h.swp and linux-3.14.48-pax/tools/gcc/.gcc-common.h.swp differ
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/kallocstat_plugin.c linux-3.14.48-pax/tools/gcc/kallocstat_plugin.c
 --- linux-3.14.48/tools/gcc/kallocstat_plugin.c	1970-01-01 01:00:00.000000000 +0100
 +++ linux-3.14.48-pax/tools/gcc/kallocstat_plugin.c	2015-04-30 01:46:38.264389498 +0200
@@ -82020,13 +82123,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +size_overflow_hash.h
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c	2014-07-27 23:41:19.797093866 +0200
-@@ -0,0 +1,748 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_asm.c	2015-07-16 02:41:18.976737236 +0200
+@@ -0,0 +1,762 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
++ * https://github.com/ephox-gcc-plugins
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
 + *
 + * Documentation:
@@ -82044,8 +82148,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +#include "gcc-common.h"
 +#include "size_overflow.h"
 +
-+static void search_size_overflow_attribute(struct pointer_set_t *visited, tree lhs);
-+static enum mark search_intentional(struct pointer_set_t *visited, const_tree lhs);
++static void search_size_overflow_attribute(gimple_set *visited, tree lhs);
++static enum mark search_intentional(gimple_set *visited, const_tree lhs);
 +
 +// data for the size_overflow asm stmt
 +struct asm_data {
@@ -82079,7 +82183,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +static void create_asm_stmt(const char *str, tree str_input, tree str_output, struct asm_data *asm_data)
 +{
-+	gimple asm_stmt;
++	gasm *asm_stmt;
 +	gimple_stmt_iterator gsi;
 +#if BUILDING_GCC_VERSION <= 4007
 +	VEC(tree, gc) *input, *output = NULL;
@@ -82092,7 +82196,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (asm_data->output)
 +		output = create_asm_io_list(str_output, asm_data->output);
 +
-+	asm_stmt = gimple_build_asm_vec(str, input, output, NULL, NULL);
++	asm_stmt = as_a_gasm(gimple_build_asm_vec(str, input, output, NULL, NULL));
 +	gsi = gsi_for_stmt(asm_data->def_stmt);
 +	gsi_insert_after(&gsi, asm_stmt, GSI_NEW_STMT);
 +
@@ -82107,13 +82211,13 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	SSA_NAME_DEF_STMT(asm_data->input) = asm_data->def_stmt;
 +}
 +
-+static enum mark search_intentional_phi(struct pointer_set_t *visited, const_tree result)
++static enum mark search_intentional_phi(gimple_set *visited, const_tree result)
 +{
 +	enum mark cur_fndecl_attr;
-+	gimple phi = get_def_stmt(result);
++	gphi *phi = as_a_gphi(get_def_stmt(result));
 +	unsigned int i, n = gimple_phi_num_args(phi);
 +
-+	pointer_set_insert(visited, phi);
++	pointer_set_insert(visited, (gimple)phi);
 +	for (i = 0; i < n; i++) {
 +		tree arg = gimple_phi_arg_def(phi, i);
 +
@@ -82124,11 +82228,11 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return MARK_NO;
 +}
 +
-+static enum mark search_intentional_binary(struct pointer_set_t *visited, const_tree lhs)
++static enum mark search_intentional_binary(gimple_set *visited, const_tree lhs)
 +{
 +	enum mark cur_fndecl_attr;
 +	const_tree rhs1, rhs2;
-+	gimple def_stmt = get_def_stmt(lhs);
++	gassign *def_stmt = as_a_gassign(get_def_stmt(lhs));
 +
 +	rhs1 = gimple_assign_rhs1(def_stmt);
 +	rhs2 = gimple_assign_rhs2(def_stmt);
@@ -82140,7 +82244,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// Look up the intentional_overflow attribute on the caller and the callee functions.
-+static enum mark search_intentional(struct pointer_set_t *visited, const_tree lhs)
++static enum mark search_intentional(gimple_set *visited, const_tree lhs)
 +{
 +	const_gimple def_stmt;
 +
@@ -82158,7 +82262,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_NOP:
 +		return search_intentional(visited, SSA_NAME_VAR(lhs));
 +	case GIMPLE_ASM:
-+		if (is_size_overflow_intentional_asm_turn_off(def_stmt))
++		if (is_size_overflow_intentional_asm_turn_off(as_a_const_gasm(def_stmt)))
 +			return MARK_TURN_OFF;
 +		return MARK_NO;
 +	case GIMPLE_CALL:
@@ -82168,7 +82272,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_ASSIGN:
 +		switch (gimple_num_ops(def_stmt)) {
 +		case 2:
-+			return search_intentional(visited, gimple_assign_rhs1(def_stmt));
++			return search_intentional(visited, gimple_assign_rhs1(as_a_const_gassign(def_stmt)));
 +		case 3:
 +			return search_intentional_binary(visited, lhs);
 +		}
@@ -82185,7 +82289,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +static enum mark check_intentional_attribute_gimple(const_tree arg, const_gimple stmt, unsigned int argnum)
 +{
 +	const_tree fndecl;
-+	struct pointer_set_t *visited;
++	gimple_set *visited;
 +	enum mark cur_fndecl_attr, decl_attr = MARK_NO;
 +
 +	fndecl = get_interesting_orig_fndecl(stmt, argnum);
@@ -82228,7 +82332,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	is_missing_function(orig_fndecl, num);
 +}
 +
-+static void search_size_overflow_attribute_phi(struct pointer_set_t *visited, const_tree result)
++static void search_size_overflow_attribute_phi(gimple_set *visited, const_tree result)
 +{
 +	gimple phi = get_def_stmt(result);
 +	unsigned int i, n = gimple_phi_num_args(phi);
@@ -82241,7 +82345,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	}
 +}
 +
-+static void search_size_overflow_attribute_binary(struct pointer_set_t *visited, const_tree lhs)
++static void search_size_overflow_attribute_binary(gimple_set *visited, const_tree lhs)
 +{
 +	const_gimple def_stmt = get_def_stmt(lhs);
 +	tree rhs1, rhs2;
@@ -82253,7 +82357,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	search_size_overflow_attribute(visited, rhs2);
 +}
 +
-+static void search_size_overflow_attribute(struct pointer_set_t *visited, tree lhs)
++static void search_size_overflow_attribute(gimple_set *visited, tree lhs)
 +{
 +	const_gimple def_stmt;
 +
@@ -82303,18 +82407,20 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +{
 +	tree fndecl = NULL_TREE;
 +	tree lhs;
-+	struct pointer_set_t *visited;
++	gimple_set *visited;
 +
 +	if (is_turn_off_intentional_attr(DECL_ORIGIN(current_function_decl)))
 +		return;
 +
 +	if (num == 0) {
 +		gcc_assert(gimple_code(stmt) == GIMPLE_RETURN);
-+		lhs = gimple_return_retval(stmt);
++		lhs = gimple_return_retval(as_a_const_greturn(stmt));
 +	} else {
-+		gcc_assert(is_gimple_call(stmt));
-+		lhs = gimple_call_arg(stmt, num - 1);
-+		fndecl = gimple_call_fndecl(stmt);
++		const gcall *call = as_a_const_gcall(stmt);
++
++		gcc_assert(is_gimple_call(call));
++		lhs = gimple_call_arg(call, num - 1);
++		fndecl = gimple_call_fndecl(call);
 +	}
 +
 +	if (fndecl != NULL_TREE && is_turn_off_intentional_attr(DECL_ORIGIN(fndecl)))
@@ -82338,9 +82444,9 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	asm_data->output = create_new_var(TREE_TYPE(asm_data->output));
 +	asm_data->output = make_ssa_name(asm_data->output, stmt);
 +	if (gimple_code(stmt) == GIMPLE_RETURN)
-+		gimple_return_set_retval(stmt, asm_data->output);
++		gimple_return_set_retval(as_a_greturn(stmt), asm_data->output);
 +	else
-+		gimple_call_set_arg(stmt, argnum - 1, asm_data->output);
++		gimple_call_set_arg(as_a_gcall(stmt), argnum - 1, asm_data->output);
 +	update_stmt(stmt);
 +}
 +
@@ -82420,7 +82526,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +		break;
 +	}
 +	case GIMPLE_ASM:
-+		if (is_size_overflow_asm(asm_data->def_stmt)) {
++		if (is_size_overflow_asm(as_a_const_gasm(asm_data->def_stmt))) {
 +			asm_data->input = NULL_TREE;
 +			break;
 +		}
@@ -82451,7 +82557,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +		search_missing_size_overflow_attribute_gimple(stmt, argnum);
 +
 +	asm_data.def_stmt = get_def_stmt(asm_data.output);
-+	if (is_size_overflow_intentional_asm_turn_off(asm_data.def_stmt))
++	if (gimple_code(asm_data.def_stmt) == GIMPLE_ASM && is_size_overflow_intentional_asm_turn_off(as_a_const_gasm(asm_data.def_stmt)))
 +		return;
 +
 +	create_asm_input(stmt, argnum, &asm_data);
@@ -82501,7 +82607,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return true;
 +}
 +
-+static void walk_use_def_ptr(struct pointer_set_t *visited, const_tree lhs)
++static void walk_use_def_ptr(gimple_set *visited, const_tree lhs)
 +{
 +	gimple def_stmt;
 +
@@ -82518,28 +82624,33 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_CALL:
 +		break;
 +	case GIMPLE_PHI: {
-+		unsigned int i, n = gimple_phi_num_args(def_stmt);
++		gphi *phi = as_a_gphi(def_stmt);
++		unsigned int i, n = gimple_phi_num_args(phi);
 +
 +		pointer_set_insert(visited, def_stmt);
 +
 +		for (i = 0; i < n; i++) {
-+			tree arg = gimple_phi_arg_def(def_stmt, i);
++			tree arg = gimple_phi_arg_def(phi, i);
 +
 +			walk_use_def_ptr(visited, arg);
 +		}
++		break;
 +	}
-+	case GIMPLE_ASSIGN:
-+		switch (gimple_num_ops(def_stmt)) {
++	case GIMPLE_ASSIGN: {
++		gassign *assign = as_a_gassign(def_stmt);
++
++		switch (gimple_num_ops(assign)) {
 +		case 2:
-+			walk_use_def_ptr(visited, gimple_assign_rhs1(def_stmt));
++			walk_use_def_ptr(visited, gimple_assign_rhs1(assign));
 +			return;
 +		case 3:
-+			walk_use_def_ptr(visited, gimple_assign_rhs1(def_stmt));
-+			walk_use_def_ptr(visited, gimple_assign_rhs2(def_stmt));
++			walk_use_def_ptr(visited, gimple_assign_rhs1(assign));
++			walk_use_def_ptr(visited, gimple_assign_rhs2(assign));
 +			return;
 +		default:
 +			return;
 +		}
++	}
 +	default:
 +		debug_gimple_stmt((gimple)def_stmt);
 +		error("%s: unknown gimple code", __func__);
@@ -82550,7 +82661,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +// Look for a ptr - ptr expression (e.g., cpuset_common_file_read() s - page)
 +static void insert_mark_not_intentional_asm_at_ptr(const_tree arg)
 +{
-+	struct pointer_set_t *visited;
++	gimple_set *visited;
 +
 +	visited = pointer_set_create();
 +	walk_use_def_ptr(visited, arg);
@@ -82558,7 +82669,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// Determine the return value and insert the asm stmt to mark the return stmt.
-+static void insert_asm_ret(gimple stmt)
++static void insert_asm_ret(greturn *stmt)
 +{
 +	tree ret;
 +
@@ -82567,7 +82678,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// Determine the correct arg index and arg and insert the asm stmt to mark the stmt.
-+static void insert_asm_arg(gimple stmt, unsigned int orig_argnum)
++static void insert_asm_arg(gcall *stmt, unsigned int orig_argnum)
 +{
 +	tree arg;
 +	unsigned int argnum;
@@ -82644,7 +82755,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 + * Look up the intentional_overflow attribute that turns off ipa based duplication
 + * on the callee function.
 + */
-+static bool is_mark_turn_off_attribute(gimple stmt)
++static bool is_mark_turn_off_attribute(gcall *stmt)
 +{
 +	enum mark mark;
 +	const_tree fndecl = gimple_call_fndecl(stmt);
@@ -82656,7 +82767,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// If the argument(s) of the callee function is/are in the hash table or are marked by an attribute then mark the call stmt with an asm stmt
-+static void handle_interesting_function(gimple stmt)
++static void handle_interesting_function(gcall *stmt)
 +{
 +	unsigned int argnum;
 +	tree fndecl;
@@ -82682,7 +82793,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// If the return value of the caller function is in hash table (its index is 0) then mark the return stmt with an asm stmt
-+static void handle_interesting_ret(gimple stmt)
++static void handle_interesting_ret(greturn *stmt)
 +{
 +	bool orig_argnums[MAX_PARAM + 1] = {false};
 +
@@ -82703,13 +82814,13 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +		for (gsi = gsi_start_bb(bb); !gsi_end_p(gsi); gsi_next(&gsi)) {
 +			gimple stmt = gsi_stmt(gsi);
 +
-+			if (is_size_overflow_asm(stmt))
++			if (gimple_code(stmt) == GIMPLE_ASM && is_size_overflow_asm(as_a_const_gasm(stmt)))
 +				continue;
 +
 +			if (is_gimple_call(stmt))
-+				handle_interesting_function(stmt);
++				handle_interesting_function(as_a_gcall(stmt));
 +			else if (gimple_code(stmt) == GIMPLE_RETURN)
-+				handle_interesting_ret(stmt);
++				handle_interesting_ret(as_a_greturn(stmt));
 +		}
 +	}
 +	return 0;
@@ -82721,6 +82832,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 + * that the ipa pass will detect and insert the size overflow checks for.
 + */
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data insert_size_overflow_asm_pass_data = {
 +#else
 +static struct gimple_opt_pass insert_size_overflow_asm_pass = {
@@ -82731,7 +82843,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -82753,32 +82866,37 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class insert_size_overflow_asm_pass : public gimple_opt_pass {
 +public:
 +	insert_size_overflow_asm_pass() : gimple_opt_pass(insert_size_overflow_asm_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return search_interesting_functions(); }
++#else
 +	unsigned int execute() { return search_interesting_functions(); }
++#endif
 +};
 +}
-+#endif
 +
++opt_pass *make_insert_size_overflow_asm_pass(void)
++{
++	return new insert_size_overflow_asm_pass();
++}
++#else
 +struct opt_pass *make_insert_size_overflow_asm_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new insert_size_overflow_asm_pass();
-+#else
 +	return &insert_size_overflow_asm_pass.pass;
-+#endif
 +}
++#endif
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c	2014-07-27 23:41:19.817093866 +0200
-@@ -0,0 +1,943 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_core.c	2015-07-16 02:27:37.932781073 +0200
+@@ -0,0 +1,931 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
++ * https://github.com/ephox-gcc-plugins
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
 + *
 + * Documentation:
@@ -82840,19 +82958,6 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (TYPE_QUALS(type) != 0)
 +		return build_qualified_type(new_type, TYPE_QUALS(type));
 +	return new_type;
-+}
-+
-+static tree get_lhs(const_gimple stmt)
-+{
-+	switch (gimple_code(stmt)) {
-+	case GIMPLE_ASSIGN:
-+	case GIMPLE_CALL:
-+		return gimple_get_lhs(stmt);
-+	case GIMPLE_PHI:
-+		return gimple_phi_result(stmt);
-+	default:
-+		return NULL_TREE;
-+	}
 +}
 +
 +static tree cast_to_new_size_overflow_type(struct visited *visited, gimple stmt, tree rhs, tree size_overflow_type, bool before)
@@ -82928,7 +83033,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return cast_to_new_size_overflow_type(visited, oldstmt, rhs1, dst_type, before);
 +}
 +
-+tree dup_assign(struct visited *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3)
++tree dup_assign(struct visited *visited, gassign *oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3)
 +{
 +	gimple stmt;
 +	gimple_stmt_iterator gsi;
@@ -82997,13 +83102,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	assign = build_cast_stmt(visited, size_overflow_type, arg, phi_ssa_name, &gsi, BEFORE_STMT, false);
 +	pointer_set_insert(visited->my_stmts, assign);
 +
-+	return gimple_assign_lhs(assign);
++	return get_lhs(assign);
 +}
 +
 +static tree use_phi_ssa_name(struct visited *visited, tree ssa_name_var, tree new_arg)
 +{
 +	gimple_stmt_iterator gsi;
-+	gimple assign, def_stmt = get_def_stmt(new_arg);
++	gimple assign;
++	gimple def_stmt = get_def_stmt(new_arg);
 +
 +	if (gimple_code(def_stmt) == GIMPLE_PHI) {
 +		gsi = gsi_after_labels(gimple_bb(def_stmt));
@@ -83014,7 +83120,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	}
 +
 +	pointer_set_insert(visited->my_stmts, assign);
-+	return gimple_assign_lhs(assign);
++	return get_lhs(assign);
 +}
 +
 +static tree cast_visited_phi_arg(struct visited *visited, tree ssa_name_var, tree arg, tree size_overflow_type)
@@ -83031,13 +83137,12 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +	assign = build_cast_stmt(visited, size_overflow_type, arg, ssa_name_var, &gsi, BEFORE_STMT, false);
 +	pointer_set_insert(visited->my_stmts, assign);
-+	return gimple_assign_lhs(assign);
++	return get_lhs(assign);
 +}
 +
-+static tree create_new_phi_arg(struct visited *visited, tree ssa_name_var, tree new_arg, gimple oldstmt, unsigned int i)
++static tree create_new_phi_arg(struct visited *visited, tree ssa_name_var, tree new_arg, gphi *oldstmt, unsigned int i)
 +{
-+	tree size_overflow_type;
-+	tree arg;
++	tree size_overflow_type, arg;
 +	const_gimple def_stmt;
 +
 +	if (new_arg != NULL_TREE && is_gimple_constant(new_arg))
@@ -83054,7 +83159,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_NOP: {
 +		basic_block bb;
 +
-+		bb = gimple_phi_arg_edge(oldstmt, i)->src;
++		bb = gimple_phi_arg_edge(as_a_gphi(oldstmt), i)->src;
 +		return cast_parm_decl(visited, ssa_name_var, arg, size_overflow_type, bb);
 +	}
 +	case GIMPLE_ASM: {
@@ -83064,7 +83169,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +		gsi = gsi_for_stmt(stmt);
 +		assign = build_cast_stmt(visited, size_overflow_type, arg, ssa_name_var, &gsi, AFTER_STMT, false);
 +		pointer_set_insert(visited->my_stmts, assign);
-+		return gimple_assign_lhs(assign);
++		return get_lhs(assign);
 +	}
 +	default:
 +		gcc_assert(new_arg != NULL_TREE);
@@ -83073,10 +83178,10 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	}
 +}
 +
-+static gimple overflow_create_phi_node(struct visited *visited, gimple oldstmt, tree result)
++static gphi *overflow_create_phi_node(struct visited *visited, gphi *oldstmt, tree result)
 +{
 +	basic_block bb;
-+	gimple phi;
++	gphi *phi;
 +	gimple_seq seq;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(oldstmt);
 +
@@ -83089,7 +83194,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +		result = create_new_var(size_overflow_type);
 +	}
 +
-+	phi = create_phi_node(result, bb);
++	phi = as_a_gphi(create_phi_node(result, bb));
 +	gimple_phi_set_result(phi, make_ssa_name(result, phi));
 +	seq = phi_nodes(bb);
 +	gsi = gsi_last(seq);
@@ -83102,12 +83207,12 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +#if BUILDING_GCC_VERSION <= 4007
-+static tree create_new_phi_node(struct visited *visited, VEC(tree, heap) **args, tree ssa_name_var, gimple oldstmt)
++static tree create_new_phi_node(struct visited *visited, VEC(tree, heap) **args, tree ssa_name_var, gphi *oldstmt)
 +#else
-+static tree create_new_phi_node(struct visited *visited, vec<tree, va_heap, vl_embed> *&args, tree ssa_name_var, gimple oldstmt)
++static tree create_new_phi_node(struct visited *visited, vec<tree, va_heap, vl_embed> *&args, tree ssa_name_var, gphi *oldstmt)
 +#endif
 +{
-+	gimple new_phi;
++	gphi *new_phi;
 +	unsigned int i;
 +	tree arg, result;
 +	location_t loc = gimple_location(oldstmt);
@@ -83149,7 +83254,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +#else
 +	vec<tree, va_heap, vl_embed> *args = NULL;
 +#endif
-+	gimple oldstmt = get_def_stmt(orig_result);
++	gphi *oldstmt = as_a_gphi(get_def_stmt(orig_result));
 +	unsigned int i, len = gimple_phi_num_args(oldstmt);
 +
 +	pointer_set_insert(visited->stmts, oldstmt);
@@ -83182,7 +83287,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +#endif
 +}
 +
-+static tree create_cast_assign(struct visited *visited, gimple stmt)
++static tree create_cast_assign(struct visited *visited, gassign *stmt)
 +{
 +	tree rhs1 = gimple_assign_rhs1(stmt);
 +	tree lhs = gimple_assign_lhs(stmt);
@@ -83195,7 +83300,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return create_assign(visited, stmt, rhs1, AFTER_STMT);
 +}
 +
-+static bool skip_lhs_cast_check(const_gimple stmt)
++static bool skip_lhs_cast_check(const gassign *stmt)
 +{
 +	const_tree rhs = gimple_assign_rhs1(stmt);
 +	const_gimple def_stmt = get_def_stmt(rhs);
@@ -83229,7 +83334,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +static void insert_cond(basic_block cond_bb, tree arg, enum tree_code cond_code, tree type_value)
 +{
-+	gimple cond_stmt;
++	gcond *cond_stmt;
 +	gimple_stmt_iterator gsi = gsi_last_bb(cond_bb);
 +
 +	cond_stmt = gimple_build_cond(cond_code, arg, type_value, NULL_TREE, NULL_TREE);
@@ -83239,7 +83344,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +static void insert_cond_result(struct cgraph_node *caller_node, basic_block bb_true, const_gimple stmt, const_tree arg, bool min)
 +{
-+	gimple func_stmt;
++	gcall *func_stmt;
 +	const_gimple def_stmt;
 +	const_tree loc_line;
 +	tree loc_file, ssa_name, current_func;
@@ -83277,7 +83382,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	ssa_name = create_string_param(ssa_name);
 +
 +	// void report_size_overflow(const char *file, unsigned int line, const char *func, const char *ssa_name)
-+	func_stmt = gimple_build_call(report_size_overflow_decl, 4, loc_file, loc_line, current_func, ssa_name);
++	func_stmt = as_a_gcall(gimple_build_call(report_size_overflow_decl, 4, loc_file, loc_line, current_func, ssa_name));
 +	gsi_insert_after(&gsi, func_stmt, GSI_CONTINUE_LINKING);
 +
 +	callee_node = cgraph_get_create_node(report_size_overflow_decl);
@@ -83361,7 +83466,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	insert_check_size_overflow(caller_node, stmt, LT_EXPR, cast_rhs, type_min, before, MIN_CHECK);
 +}
 +
-+static tree create_cast_overflow_check(struct visited *visited, struct cgraph_node *caller_node, tree new_rhs1, gimple stmt)
++static tree create_cast_overflow_check(struct visited *visited, struct cgraph_node *caller_node, tree new_rhs1, gassign *stmt)
 +{
 +	bool cast_lhs, cast_rhs;
 +	tree lhs = gimple_assign_lhs(stmt);
@@ -83414,7 +83519,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return dup_assign(visited, stmt, lhs, new_rhs1, NULL_TREE, NULL_TREE);
 +}
 +
-+static tree handle_unary_rhs(struct visited *visited, struct cgraph_node *caller_node, gimple stmt)
++static tree handle_unary_rhs(struct visited *visited, struct cgraph_node *caller_node, gassign *stmt)
 +{
 +	enum tree_code rhs_code;
 +	tree rhs1, new_rhs1, lhs = gimple_assign_lhs(stmt);
@@ -83449,10 +83554,10 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return create_cast_overflow_check(visited, caller_node, new_rhs1, stmt);
 +}
 +
-+static tree handle_unary_ops(struct visited *visited, struct cgraph_node *caller_node, gimple stmt)
++static tree handle_unary_ops(struct visited *visited, struct cgraph_node *caller_node, gassign *stmt)
 +{
 +	tree rhs1, lhs = gimple_assign_lhs(stmt);
-+	gimple def_stmt = get_def_stmt(lhs);
++	gassign *def_stmt = as_a_gassign(get_def_stmt(lhs));
 +
 +	gcc_assert(gimple_code(def_stmt) != GIMPLE_NOP);
 +	rhs1 = gimple_assign_rhs1(def_stmt);
@@ -83511,7 +83616,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// Skip duplication when there is a minus expr and the type of rhs1 or rhs2 is a pointer_type.
-+static bool is_a_ptr_minus(gimple stmt)
++static bool is_a_ptr_minus(gassign *stmt)
 +{
 +	const_tree rhs1, rhs2, ptr1_rhs, ptr2_rhs;
 +
@@ -83539,7 +83644,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +{
 +	enum intentional_overflow_type res;
 +	tree rhs1, rhs2, new_lhs;
-+	gimple def_stmt = get_def_stmt(lhs);
++	gassign *def_stmt = as_a_gassign(get_def_stmt(lhs));
 +	tree new_rhs1 = NULL_TREE;
 +	tree new_rhs2 = NULL_TREE;
 +
@@ -83580,13 +83685,13 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	res = add_mul_intentional_overflow(def_stmt);
 +	if (res != NO_INTENTIONAL_OVERFLOW) {
 +		new_lhs = dup_assign(visited, def_stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
-+		insert_cast_expr(visited, get_def_stmt(new_lhs), res);
++		insert_cast_expr(visited, as_a_gassign(get_def_stmt(new_lhs)), res);
 +		return new_lhs;
 +	}
 +
 +	if (skip_expr_on_double_type(def_stmt)) {
 +		new_lhs = dup_assign(visited, def_stmt, lhs, new_rhs1, new_rhs2, NULL_TREE);
-+		insert_cast_expr(visited, get_def_stmt(new_lhs), NO_INTENTIONAL_OVERFLOW);
++		insert_cast_expr(visited, as_a_gassign(get_def_stmt(new_lhs)), NO_INTENTIONAL_OVERFLOW);
 +		return new_lhs;
 +	}
 +
@@ -83623,7 +83728,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +static tree handle_ternary_ops(struct visited *visited, struct cgraph_node *caller_node, tree lhs)
 +{
 +	tree rhs1, rhs2, rhs3, new_rhs1, new_rhs2, new_rhs3, size_overflow_type;
-+	gimple def_stmt = get_def_stmt(lhs);
++	gassign *def_stmt = as_a_gassign(get_def_stmt(lhs));
 +
 +	size_overflow_type = get_size_overflow_type(visited, def_stmt, lhs);
 +
@@ -83702,7 +83807,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_ASSIGN:
 +		switch (gimple_num_ops(def_stmt)) {
 +		case 2:
-+			return handle_unary_ops(visited, caller_node, def_stmt);
++			return handle_unary_ops(visited, caller_node, as_a_gassign(def_stmt));
 +		case 3:
 +			return handle_binary_ops(visited, caller_node, lhs);
 +#if BUILDING_GCC_VERSION >= 4006
@@ -83719,14 +83824,15 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	2014-07-27 23:41:19.817093866 +0200
-@@ -0,0 +1,1141 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/insert_size_overflow_check_ipa.c	2015-07-16 02:27:37.932781073 +0200
+@@ -0,0 +1,1157 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
++ * https://github.com/ephox-gcc-plugins
 + *
 + * Documentation:
 + * http://forums.grsecurity.net/viewtopic.php?f=7&t=3043
@@ -83750,8 +83856,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +unsigned int call_count;
 +
-+static void set_conditions(struct pointer_set_t *visited, bool *interesting_conditions, const_tree lhs);
-+static void walk_use_def(struct pointer_set_t *visited, struct interesting_node *cur_node, tree lhs);
++static void set_conditions(gimple_set *visited, bool *interesting_conditions, const_tree lhs);
++static void walk_use_def(gimple_set *visited, struct interesting_node *cur_node, tree lhs);
 +
 +struct visited_fns {
 +	struct visited_fns *next;
@@ -83921,9 +84027,9 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return cnodes;
 +}
 +
-+static void walk_phi_set_conditions(struct pointer_set_t *visited, bool *interesting_conditions, const_tree result)
++static void walk_phi_set_conditions(gimple_set *visited, bool *interesting_conditions, const_tree result)
 +{
-+	gimple phi = get_def_stmt(result);
++	gphi *phi = as_a_gphi(get_def_stmt(result));
 +	unsigned int i, n = gimple_phi_num_args(phi);
 +
 +	pointer_set_insert(visited, phi);
@@ -83939,7 +84045,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +};
 +
 +// Search for constants, cast assignments and binary/ternary assignments
-+static void set_conditions(struct pointer_set_t *visited, bool *interesting_conditions, const_tree lhs)
++static void set_conditions(gimple_set *visited, bool *interesting_conditions, const_tree lhs)
 +{
 +	gimple def_stmt = get_def_stmt(lhs);
 +
@@ -83956,7 +84062,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +	switch (gimple_code(def_stmt)) {
 +	case GIMPLE_CALL:
-+		if (lhs == gimple_call_lhs(def_stmt))
++		if (lhs == gimple_call_lhs(as_a_const_gcall(def_stmt)))
 +			interesting_conditions[RET] = true;
 +		return;
 +	case GIMPLE_NOP:
@@ -83965,11 +84071,13 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_PHI:
 +		interesting_conditions[PHI] = true;
 +		return walk_phi_set_conditions(visited, interesting_conditions, lhs);
-+	case GIMPLE_ASSIGN:
-+		if (gimple_num_ops(def_stmt) == 2) {
-+			const_tree rhs = gimple_assign_rhs1(def_stmt);
++	case GIMPLE_ASSIGN: {
++		gassign *assign = as_a_gassign(def_stmt);
 +
-+			if (gimple_assign_cast_p(def_stmt))
++		if (gimple_num_ops(assign) == 2) {
++			const_tree rhs = gimple_assign_rhs1(assign);
++
++			if (gimple_assign_cast_p(assign))
 +				interesting_conditions[CAST] = true;
 +
 +			return set_conditions(visited, interesting_conditions, rhs);
@@ -83977,6 +84085,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +			interesting_conditions[NOT_UNARY] = true;
 +			return;
 +		}
++	}
 +	default:
 +		debug_gimple_stmt(def_stmt);
 +		gcc_unreachable();
@@ -83986,7 +84095,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +// determine whether duplication will be necessary or not.
 +static void search_interesting_conditions(struct interesting_node *cur_node, bool *interesting_conditions)
 +{
-+	struct pointer_set_t *visited;
++	gimple_set *visited;
 +
 +	if (gimple_assign_cast_p(cur_node->first_stmt))
 +		interesting_conditions[CAST] = true;
@@ -83999,9 +84108,9 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// Remove the size_overflow asm stmt and create an assignment from the input and output of the asm
-+static void replace_size_overflow_asm_with_assign(gimple asm_stmt, tree lhs, tree rhs)
++static void replace_size_overflow_asm_with_assign(gasm *asm_stmt, tree lhs, tree rhs)
 +{
-+	gimple assign;
++	gassign *assign;
 +	gimple_stmt_iterator gsi;
 +
 +	// already removed
@@ -84042,13 +84151,13 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (!def_stmt || !gimple_assign_cast_p(def_stmt))
 +		return false;
 +
-+	def_stmt = get_def_stmt(gimple_assign_rhs1(def_stmt));
++	def_stmt = get_def_stmt(gimple_assign_rhs1(as_a_gassign(def_stmt)));
 +	return def_stmt && gimple_code(def_stmt) == GIMPLE_ASM;
 +}
 +
-+static void walk_use_def_phi(struct pointer_set_t *visited, struct interesting_node *cur_node, tree result)
++static void walk_use_def_phi(gimple_set *visited, struct interesting_node *cur_node, tree result)
 +{
-+	gimple phi = get_def_stmt(result);
++	gphi *phi = as_a_gphi(get_def_stmt(result));
 +	unsigned int i, n = gimple_phi_num_args(phi);
 +
 +	pointer_set_insert(visited, phi);
@@ -84059,9 +84168,9 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	}
 +}
 +
-+static void walk_use_def_binary(struct pointer_set_t *visited, struct interesting_node *cur_node, tree lhs)
++static void walk_use_def_binary(gimple_set *visited, struct interesting_node *cur_node, tree lhs)
 +{
-+	gimple def_stmt = get_def_stmt(lhs);
++	gassign *def_stmt = as_a_gassign(get_def_stmt(lhs));
 +	tree rhs1, rhs2;
 +
 +	rhs1 = gimple_assign_rhs1(def_stmt);
@@ -84110,16 +84219,16 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// a size_overflow asm stmt in the control flow doesn't stop the recursion
-+static void handle_asm_stmt(struct pointer_set_t *visited, struct interesting_node *cur_node, tree lhs, const_gimple stmt)
++static void handle_asm_stmt(gimple_set *visited, struct interesting_node *cur_node, tree lhs, const gasm *stmt)
 +{
-+	if (!is_size_overflow_asm(stmt))
++	if (gimple_code(stmt) != GIMPLE_ASM || !is_size_overflow_asm(stmt))
 +		walk_use_def(visited, cur_node, SSA_NAME_VAR(lhs));
 +}
 +
 +/* collect the parm_decls and fndecls (for checking a missing size_overflow attribute (ret or arg) or intentional_overflow)
 + * and component refs (for checking the intentional_overflow attribute).
 + */
-+static void walk_use_def(struct pointer_set_t *visited, struct interesting_node *cur_node, tree lhs)
++static void walk_use_def(gimple_set *visited, struct interesting_node *cur_node, tree lhs)
 +{
 +	const_gimple def_stmt;
 +
@@ -84139,9 +84248,9 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_NOP:
 +		return walk_use_def(visited, cur_node, SSA_NAME_VAR(lhs));
 +	case GIMPLE_ASM:
-+		return handle_asm_stmt(visited, cur_node, lhs, def_stmt);
++		return handle_asm_stmt(visited, cur_node, lhs, as_a_const_gasm(def_stmt));
 +	case GIMPLE_CALL: {
-+		tree fndecl = gimple_call_fndecl(def_stmt);
++		tree fndecl = gimple_call_fndecl(as_a_const_gcall(def_stmt));
 +
 +		if (fndecl == NULL_TREE)
 +			return;
@@ -84153,7 +84262,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	case GIMPLE_ASSIGN:
 +		switch (gimple_num_ops(def_stmt)) {
 +		case 2:
-+			return walk_use_def(visited, cur_node, gimple_assign_rhs1(def_stmt));
++			return walk_use_def(visited, cur_node, gimple_assign_rhs1(as_a_const_gassign(def_stmt)));
 +		case 3:
 +			return walk_use_def_binary(visited, cur_node, lhs);
 +		}
@@ -84167,7 +84276,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +// Collect all the last nodes for checking the intentional_overflow and size_overflow attributes
 +static void set_last_nodes(struct interesting_node *cur_node)
 +{
-+	struct pointer_set_t *visited;
++	gimple_set *visited;
 +
 +	visited = pointer_set_create();
 +	walk_use_def(visited, cur_node, cur_node->node);
@@ -84220,7 +84329,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
 +
 +	assign = build_cast_stmt(visited, orig_type, new_node, CREATE_NEW_VAR, &gsi, BEFORE_STMT, false);
-+	return gimple_assign_lhs(assign);
++	return get_lhs(assign);
 +}
 +
 +static void change_orig_node(struct visited *visited, struct interesting_node *cur_node, tree new_node)
@@ -84231,10 +84340,10 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +	switch (gimple_code(stmt)) {
 +	case GIMPLE_RETURN:
-+		gimple_return_set_retval(stmt, cast_to_orig_type(visited, stmt, orig_node, new_node));
++		gimple_return_set_retval(as_a_greturn(stmt), cast_to_orig_type(visited, stmt, orig_node, new_node));
 +		break;
 +	case GIMPLE_CALL:
-+		gimple_call_set_arg(stmt, cur_node->num - 1, cast_to_orig_type(visited, stmt, orig_node, new_node));
++		gimple_call_set_arg(as_a_gcall(stmt), cur_node->num - 1, cast_to_orig_type(visited, stmt, orig_node, new_node));
 +		break;
 +	case GIMPLE_ASSIGN:
 +		switch (cur_node->num) {
@@ -84253,7 +84362,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +			gcc_unreachable();
 +		}
 +
-+		set_rhs(stmt, cast_to_orig_type(visited, stmt, orig_node, new_node));
++		set_rhs(as_a_gassign(stmt), cast_to_orig_type(visited, stmt, orig_node, new_node));
 +		break;
 +	default:
 +		debug_gimple_stmt(stmt);
@@ -84340,7 +84449,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +   intentional_attr_cur_fndecl: intentional_overflow attribute of the caller function
 +   intentional_mark_from_gimple: the intentional overflow type of size_overflow asm stmt from gimple if it exists
 + */
-+static struct interesting_node *create_new_interesting_node(struct interesting_node *head, gimple first_stmt, tree node, unsigned int num, gimple asm_stmt)
++static struct interesting_node *create_new_interesting_node(struct interesting_node *head, gimple first_stmt, tree node, unsigned int num, gasm *asm_stmt)
 +{
 +	struct interesting_node *new_node;
 +	tree fndecl;
@@ -84360,7 +84469,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +		return head;
 +
 +	if (is_gimple_call(first_stmt))
-+		fndecl = gimple_call_fndecl(first_stmt);
++		fndecl = gimple_call_fndecl(as_a_const_gcall(first_stmt));
 +	else
 +		fndecl = current_function_decl;
 +
@@ -84396,7 +84505,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +/* Check the ret stmts in the functions on the next cgraph node list (these functions will be in the hash table and they are reachable from ipa).
 + * If the ret stmt is in the next cgraph node list then it's an interesting ret.
 + */
-+static struct interesting_node *handle_stmt_by_cgraph_nodes_ret(struct interesting_node *head, gimple stmt, struct next_cgraph_node *next_node)
++static struct interesting_node *handle_stmt_by_cgraph_nodes_ret(struct interesting_node *head, greturn *stmt, struct next_cgraph_node *next_node)
 +{
 +	struct next_cgraph_node *cur_node;
 +	tree ret = gimple_return_retval(stmt);
@@ -84417,7 +84526,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +/* Check the call stmts in the functions on the next cgraph node list (these functions will be in the hash table and they are reachable from ipa).
 + * If the call stmt is in the next cgraph node list then it's an interesting call.
 + */
-+static struct interesting_node *handle_stmt_by_cgraph_nodes_call(struct interesting_node *head, gimple stmt, struct next_cgraph_node *next_node)
++static struct interesting_node *handle_stmt_by_cgraph_nodes_call(struct interesting_node *head, gcall *stmt, struct next_cgraph_node *next_node)
 +{
 +	unsigned int argnum;
 +	tree arg;
@@ -84453,7 +84562,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// Get the index of the rhs node in an assignment
-+static unsigned int get_assign_ops_count(const_gimple stmt, tree node)
++static unsigned int get_assign_ops_count(const gassign *stmt, tree node)
 +{
 +	const_tree rhs1, rhs2;
 +	unsigned int ret;
@@ -84481,7 +84590,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +// Find the correct arg number of a call stmt. It is needed when the interesting function is a cloned function.
-+static unsigned int find_arg_number_gimple(const_tree arg, const_gimple stmt)
++static unsigned int find_arg_number_gimple(const_tree arg, const gcall *stmt)
 +{
 +	unsigned int i;
 +
@@ -84504,7 +84613,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +/* starting from the size_overflow asm stmt collect interesting stmts. They can be
 + * any of return, call or assignment stmts (because of inlining).
 + */
-+static struct interesting_node *get_interesting_ret_or_call(struct pointer_set_t *visited, struct interesting_node *head, tree node, gimple intentional_asm)
++static struct interesting_node *get_interesting_ret_or_call(tree_set *visited, struct interesting_node *head, tree node, gasm *intentional_asm)
 +{
 +	use_operand_p use_p;
 +	imm_use_iterator imm_iter;
@@ -84525,28 +84634,31 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +		switch (gimple_code(stmt)) {
 +		case GIMPLE_CALL:
-+			argnum = find_arg_number_gimple(node, stmt);
++			argnum = find_arg_number_gimple(node, as_a_gcall(stmt));
 +			head = create_new_interesting_node(head, stmt, node, argnum, intentional_asm);
 +			break;
 +		case GIMPLE_RETURN:
 +			head = create_new_interesting_node(head, stmt, node, 0, intentional_asm);
 +			break;
 +		case GIMPLE_ASSIGN:
-+			argnum = get_assign_ops_count(stmt, node);
++			argnum = get_assign_ops_count(as_a_const_gassign(stmt), node);
 +			head = create_new_interesting_node(head, stmt, node, argnum, intentional_asm);
 +			break;
 +		case GIMPLE_PHI: {
-+			tree result = gimple_phi_result(stmt);
++			tree result = gimple_phi_result(as_a_gphi(stmt));
 +			head = get_interesting_ret_or_call(visited, head, result, intentional_asm);
 +			break;
 +		}
-+		case GIMPLE_ASM:
-+			if (gimple_asm_noutputs(stmt) != 0)
++		case GIMPLE_ASM: {
++			gasm *asm_stmt = as_a_gasm(stmt);
++
++			if (gimple_asm_noutputs(asm_stmt) != 0)
 +				break;
-+			if (!is_size_overflow_asm(stmt))
++			if (!is_size_overflow_asm(asm_stmt))
 +				break;
-+			head = create_new_interesting_node(head, stmt, node, 1, intentional_asm);
++			head = create_new_interesting_node(head, asm_stmt, node, 1, intentional_asm);
 +			break;
++		}
 +		case GIMPLE_COND:
 +		case GIMPLE_SWITCH:
 +			break;
@@ -84561,66 +84673,71 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +static void remove_size_overflow_asm(gimple stmt)
 +{
++	gasm *asm_stmt;
 +	gimple_stmt_iterator gsi;
 +	tree input, output;
 +
-+	if (!is_size_overflow_asm(stmt))
++	if (gimple_code(stmt) != GIMPLE_ASM)
 +		return;
 +
-+	if (gimple_asm_noutputs(stmt) == 0) {
-+		gsi = gsi_for_stmt(stmt);
-+		ipa_remove_stmt_references(cgraph_get_create_node(current_function_decl), stmt);
++	asm_stmt = as_a_gasm(stmt);
++	if (!is_size_overflow_asm(asm_stmt))
++		return;
++
++	if (gimple_asm_noutputs(asm_stmt) == 0) {
++		gsi = gsi_for_stmt(asm_stmt);
++		ipa_remove_stmt_references(cgraph_get_create_node(current_function_decl), asm_stmt);
 +		gsi_remove(&gsi, true);
 +		return;
 +	}
 +
-+	input = gimple_asm_input_op(stmt, 0);
-+	output = gimple_asm_output_op(stmt, 0);
-+	replace_size_overflow_asm_with_assign(stmt, TREE_VALUE(output), TREE_VALUE(input));
++	input = gimple_asm_input_op(asm_stmt, 0);
++	output = gimple_asm_output_op(asm_stmt, 0);
++	replace_size_overflow_asm_with_assign(asm_stmt, TREE_VALUE(output), TREE_VALUE(input));
 +}
 +
 +/* handle the size_overflow asm stmts from the gimple pass and collect the interesting stmts.
 + * If the asm stmt is a parm_decl kind (noutputs == 0) then remove it.
 + * If it is a simple asm stmt then replace it with an assignment from the asm input to the asm output.
 + */
-+static struct interesting_node *handle_stmt_by_size_overflow_asm(gimple stmt, struct interesting_node *head)
++static struct interesting_node *handle_stmt_by_size_overflow_asm(gasm *asm_stmt, struct interesting_node *head)
 +{
 +	const_tree output;
-+	struct pointer_set_t *visited;
-+	gimple intentional_asm = NOT_INTENTIONAL_ASM;
++	tree_set *visited;
++	gasm *intentional_asm = NOT_INTENTIONAL_ASM;
 +
-+	if (!is_size_overflow_asm(stmt))
++	if (!is_size_overflow_asm(asm_stmt))
 +		return head;
 +
-+	if (is_size_overflow_intentional_asm_yes(stmt) || is_size_overflow_intentional_asm_turn_off(stmt))
-+		intentional_asm = stmt;
++	if (is_size_overflow_intentional_asm_yes(asm_stmt) || is_size_overflow_intentional_asm_turn_off(asm_stmt))
++		intentional_asm = asm_stmt;
 +
-+	gcc_assert(gimple_asm_ninputs(stmt) == 1);
++	gcc_assert(gimple_asm_ninputs(asm_stmt) == 1);
 +
-+	if (gimple_asm_noutputs(stmt) == 0 && is_size_overflow_intentional_asm_turn_off(stmt))
++	if (gimple_asm_noutputs(asm_stmt) == 0 && is_size_overflow_intentional_asm_turn_off(asm_stmt))
 +		return head;
 +
-+	if (gimple_asm_noutputs(stmt) == 0) {
++	if (gimple_asm_noutputs(asm_stmt) == 0) {
 +		const_tree input;
 +
-+		if (!is_size_overflow_intentional_asm_turn_off(stmt))
++		if (!is_size_overflow_intentional_asm_turn_off(asm_stmt))
 +			return head;
 +
-+		input = gimple_asm_input_op(stmt, 0);
-+		remove_size_overflow_asm(stmt);
++		input = gimple_asm_input_op(asm_stmt, 0);
++		remove_size_overflow_asm(asm_stmt);
 +		if (is_gimple_constant(TREE_VALUE(input)))
 +			return head;
-+		visited = pointer_set_create();
++		visited = tree_pointer_set_create();
 +		head = get_interesting_ret_or_call(visited, head, TREE_VALUE(input), intentional_asm);
 +		pointer_set_destroy(visited);
 +		return head;
 +	}
 +
-+	if (!is_size_overflow_intentional_asm_yes(stmt) && !is_size_overflow_intentional_asm_turn_off(stmt))
-+		remove_size_overflow_asm(stmt);
++	if (!is_size_overflow_intentional_asm_yes(asm_stmt) && !is_size_overflow_intentional_asm_turn_off(asm_stmt))
++		remove_size_overflow_asm(asm_stmt);
 +
-+	visited = pointer_set_create();
-+	output = gimple_asm_output_op(stmt, 0);
++	visited = tree_pointer_set_create();
++	output = gimple_asm_output_op(asm_stmt, 0);
 +	head = get_interesting_ret_or_call(visited, head, TREE_VALUE(output), intentional_asm);
 +	pointer_set_destroy(visited);
 +	return head;
@@ -84644,14 +84761,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +			code = gimple_code(stmt);
 +
 +			if (code == GIMPLE_ASM)
-+				head = handle_stmt_by_size_overflow_asm(stmt, head);
++				head = handle_stmt_by_size_overflow_asm(as_a_gasm(stmt), head);
 +
 +			if (!next_node)
 +				continue;
 +			if (code == GIMPLE_CALL)
-+				head = handle_stmt_by_cgraph_nodes_call(head, stmt, next_node);
++				head = handle_stmt_by_cgraph_nodes_call(head, as_a_gcall(stmt), next_node);
 +			if (code == GIMPLE_RETURN)
-+				head = handle_stmt_by_cgraph_nodes_ret(head, stmt, next_node);
++				head = handle_stmt_by_cgraph_nodes_ret(head, as_a_greturn(stmt), next_node);
 +		}
 +	}
 +	return head;
@@ -84788,7 +84905,6 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	struct visited_fns *visited_fns = NULL;
 +
 +	FOR_EACH_FUNCTION_WITH_GIMPLE_BODY(node) {
-+		gcc_assert(cgraph_function_flags_ready);
 +#if BUILDING_GCC_VERSION <= 4007
 +		gcc_assert(node->reachable);
 +#endif
@@ -84801,6 +84917,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data insert_size_overflow_check_data = {
 +#else
 +static struct ipa_opt_pass_d insert_size_overflow_check = {
@@ -84811,7 +84928,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -84844,34 +84962,38 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class insert_size_overflow_check : public ipa_opt_pass_d {
 +public:
 +	insert_size_overflow_check() : ipa_opt_pass_d(insert_size_overflow_check_data, g, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return search_function(); }
++#else
 +	unsigned int execute() { return search_function(); }
++#endif
 +};
 +}
-+#endif
 +
++opt_pass *make_insert_size_overflow_check(void)
++{
++	return new insert_size_overflow_check();
++}
++#else
 +struct opt_pass *make_insert_size_overflow_check(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new insert_size_overflow_check();
-+#else
 +	return &insert_size_overflow_check.pass;
-+#endif
 +}
-+
++#endif
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/intentional_overflow.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/intentional_overflow.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/intentional_overflow.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/intentional_overflow.c	2014-07-27 23:41:19.817093866 +0200
-@@ -0,0 +1,736 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/intentional_overflow.c	2015-07-16 02:44:11.828728007 +0200
+@@ -0,0 +1,748 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
++ * https://github.com/ephox-gcc-plugins
 + *
 + * Documentation:
 + * http://forums.grsecurity.net/viewtopic.php?f=7&t=3043
@@ -84916,7 +85038,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (param_head == NULL_TREE)
 +		return false;
 +
-+	if (TREE_INT_CST_HIGH(TREE_VALUE(param_head)) == -1)
++	if (tree_to_shwi(TREE_VALUE(param_head)) == -1)
 +		return true;
 +	return false;
 +}
@@ -85108,13 +85230,15 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +{
 +	const_tree rhs1, lhs, rhs1_type, lhs_type;
 +	enum machine_mode lhs_mode, rhs_mode;
++	const gassign *assign;
 +	gimple def_stmt = get_def_stmt(no_const_rhs);
 +
 +	if (!def_stmt || !gimple_assign_cast_p(def_stmt))
 +		return false;
 +
-+	rhs1 = gimple_assign_rhs1(def_stmt);
-+	lhs = gimple_assign_lhs(def_stmt);
++	assign = as_a_const_gassign(def_stmt);
++	rhs1 = gimple_assign_rhs1(assign);
++	lhs = gimple_assign_lhs(assign);
 +	rhs1_type = TREE_TYPE(rhs1);
 +	lhs_type = TREE_TYPE(lhs);
 +	rhs_mode = TYPE_MODE(rhs1_type);
@@ -85138,7 +85262,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +			return num;
 +		if (is_gimple_debug(use_stmt))
 +			continue;
-+		if (gimple_assign_cast_p(use_stmt) && is_size_overflow_type(gimple_assign_lhs(use_stmt)))
++		if (gimple_assign_cast_p(use_stmt) && is_size_overflow_type(gimple_assign_lhs(as_a_const_gassign(use_stmt))))
 +			continue;
 +		num++;
 +	}
@@ -85154,12 +85278,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +bool is_const_plus_unsigned_signed_truncation(const_tree lhs)
 +{
 +	tree rhs1, lhs_type, rhs_type, rhs2, not_const_rhs;
++	gassign *assign;
 +	gimple def_stmt = get_def_stmt(lhs);
 +
 +	if (!def_stmt || !gimple_assign_cast_p(def_stmt))
 +		return false;
 +
-+	rhs1 = gimple_assign_rhs1(def_stmt);
++	assign = as_a_gassign(def_stmt);
++	rhs1 = gimple_assign_rhs1(assign);
 +	rhs_type = TREE_TYPE(rhs1);
 +	lhs_type = TREE_TYPE(lhs);
 +	if (TYPE_UNSIGNED(lhs_type) || !TYPE_UNSIGNED(rhs_type))
@@ -85171,11 +85297,12 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (!def_stmt || !is_gimple_assign(def_stmt) || gimple_num_ops(def_stmt) != 3)
 +		return false;
 +
-+	if (gimple_assign_rhs_code(def_stmt) != PLUS_EXPR)
++	assign = as_a_gassign(def_stmt);
++	if (gimple_assign_rhs_code(assign) != PLUS_EXPR)
 +		return false;
 +
-+	rhs1 = gimple_assign_rhs1(def_stmt);
-+	rhs2 = gimple_assign_rhs2(def_stmt);
++	rhs1 = gimple_assign_rhs1(assign);
++	rhs2 = gimple_assign_rhs2(assign);
 +	if (!is_gimple_constant(rhs1) && !is_gimple_constant(rhs2))
 +		return false;
 +
@@ -85232,7 +85359,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return false;
 +}
 +
-+bool is_a_constant_overflow(const_gimple stmt, const_tree rhs)
++bool is_a_constant_overflow(const gassign *stmt, const_tree rhs)
 +{
 +	if (gimple_assign_rhs_code(stmt) == MIN_EXPR)
 +		return false;
@@ -85246,7 +85373,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return true;
 +}
 +
-+static tree change_assign_rhs(struct visited *visited, gimple stmt, const_tree orig_rhs, tree new_rhs)
++static tree change_assign_rhs(struct visited *visited, gassign *stmt, const_tree orig_rhs, tree new_rhs)
 +{
 +	gimple assign;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
@@ -85256,10 +85383,10 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +	assign = build_cast_stmt(visited, origtype, new_rhs, CREATE_NEW_VAR, &gsi, BEFORE_STMT, false);
 +	pointer_set_insert(visited->my_stmts, assign);
-+	return gimple_assign_lhs(assign);
++	return get_lhs(assign);
 +}
 +
-+tree handle_intentional_overflow(struct visited *visited, struct cgraph_node *caller_node, bool check_overflow, gimple stmt, tree change_rhs, tree new_rhs2)
++tree handle_intentional_overflow(struct visited *visited, struct cgraph_node *caller_node, bool check_overflow, gassign *stmt, tree change_rhs, tree new_rhs2)
 +{
 +	tree new_rhs, orig_rhs;
 +	void (*gimple_assign_set_rhs)(gimple, tree);
@@ -85290,9 +85417,10 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return create_assign(visited, stmt, lhs, AFTER_STMT);
 +}
 +
-+static bool is_subtraction_special(struct visited *visited, const_gimple stmt)
++static bool is_subtraction_special(struct visited *visited, const gassign *stmt)
 +{
-+	gimple rhs1_def_stmt, rhs2_def_stmt;
++	gimple def_stmt_1, def_stmt_2;
++	const gassign *rhs1_def_stmt, *rhs2_def_stmt;
 +	const_tree rhs1_def_stmt_rhs1, rhs2_def_stmt_rhs1, rhs1_def_stmt_lhs, rhs2_def_stmt_lhs;
 +	enum machine_mode rhs1_def_stmt_rhs1_mode, rhs2_def_stmt_rhs1_mode, rhs1_def_stmt_lhs_mode, rhs2_def_stmt_lhs_mode;
 +	const_tree rhs1 = gimple_assign_rhs1(stmt);
@@ -85306,15 +85434,18 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (gimple_assign_rhs_code(stmt) != MINUS_EXPR)
 +		return false;
 +
-+	rhs1_def_stmt = get_def_stmt(rhs1);
-+	rhs2_def_stmt = get_def_stmt(rhs2);
-+	if (!gimple_assign_cast_p(rhs1_def_stmt) || !gimple_assign_cast_p(rhs2_def_stmt))
++	def_stmt_1 = get_def_stmt(rhs1);
++	def_stmt_2 = get_def_stmt(rhs2);
++	if (!gimple_assign_cast_p(def_stmt_1) || !gimple_assign_cast_p(def_stmt_2))
 +		return false;
 +
++	rhs1_def_stmt = as_a_const_gassign(def_stmt_1);
++	rhs2_def_stmt = as_a_const_gassign(def_stmt_2);
 +	rhs1_def_stmt_rhs1 = gimple_assign_rhs1(rhs1_def_stmt);
 +	rhs2_def_stmt_rhs1 = gimple_assign_rhs1(rhs2_def_stmt);
 +	rhs1_def_stmt_lhs = gimple_assign_lhs(rhs1_def_stmt);
 +	rhs2_def_stmt_lhs = gimple_assign_lhs(rhs2_def_stmt);
++
 +	rhs1_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs1_def_stmt_rhs1));
 +	rhs2_def_stmt_rhs1_mode = TYPE_MODE(TREE_TYPE(rhs2_def_stmt_rhs1));
 +	rhs1_def_stmt_lhs_mode = TYPE_MODE(TREE_TYPE(rhs1_def_stmt_lhs));
@@ -85329,15 +85460,15 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return true;
 +}
 +
-+static gimple create_binary_assign(struct visited *visited, enum tree_code code, gimple stmt, tree rhs1, tree rhs2)
++static gassign *create_binary_assign(struct visited *visited, enum tree_code code, gassign *stmt, tree rhs1, tree rhs2)
 +{
-+	gimple assign;
++	gassign *assign;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(stmt);
 +	tree type = TREE_TYPE(rhs1);
 +	tree lhs = create_new_var(type);
 +
 +	gcc_assert(types_compatible_p(type, TREE_TYPE(rhs2)));
-+	assign = gimple_build_assign_with_ops(code, lhs, rhs1, rhs2);
++	assign = as_a_gassign(gimple_build_assign_with_ops(code, lhs, rhs1, rhs2));
 +	gimple_assign_set_lhs(assign, make_ssa_name(lhs, assign));
 +
 +	gsi_insert_before(&gsi, assign, GSI_NEW_STMT);
@@ -85357,11 +85488,11 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +	gsi = gsi_for_stmt(stmt);
 +	cast_stmt = build_cast_stmt(visited, intTI_type_node, node, CREATE_NEW_VAR, &gsi, BEFORE_STMT, false);
-+	pointer_set_insert(visited->my_stmts, cast_stmt);
-+	return gimple_assign_lhs(cast_stmt);
++	pointer_set_insert(visited->my_stmts, (gimple)cast_stmt);
++	return get_lhs(cast_stmt);
 +}
 +
-+static tree get_def_stmt_rhs(struct visited *visited, const_tree var)
++static tree get_def_stmt_rhs(const_tree var)
 +{
 +	tree rhs1, def_stmt_rhs1;
 +	gimple rhs1_def_stmt, def_stmt_rhs1_def_stmt, def_stmt;
@@ -85369,14 +85500,13 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	def_stmt = get_def_stmt(var);
 +	if (!gimple_assign_cast_p(def_stmt))
 +		return NULL_TREE;
-+	gcc_assert(gimple_code(def_stmt) != GIMPLE_NOP && pointer_set_contains(visited->my_stmts, def_stmt) && gimple_assign_cast_p(def_stmt));
 +
-+	rhs1 = gimple_assign_rhs1(def_stmt);
++	rhs1 = gimple_assign_rhs1(as_a_const_gassign(def_stmt));
 +	rhs1_def_stmt = get_def_stmt(rhs1);
 +	if (!gimple_assign_cast_p(rhs1_def_stmt))
 +		return rhs1;
 +
-+	def_stmt_rhs1 = gimple_assign_rhs1(rhs1_def_stmt);
++	def_stmt_rhs1 = gimple_assign_rhs1(as_a_const_gassign(rhs1_def_stmt));
 +	def_stmt_rhs1_def_stmt = get_def_stmt(def_stmt_rhs1);
 +
 +	switch (gimple_code(def_stmt_rhs1_def_stmt)) {
@@ -85397,7 +85527,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +{
 +	tree new_rhs1, new_rhs2;
 +	tree new_rhs1_def_stmt_rhs1, new_rhs2_def_stmt_rhs1, new_lhs;
-+	gimple assign, stmt = get_def_stmt(lhs);
++	gassign *assign, *stmt = as_a_gassign(get_def_stmt(lhs));
 +	tree rhs1 = gimple_assign_rhs1(stmt);
 +	tree rhs2 = gimple_assign_rhs2(stmt);
 +
@@ -85407,8 +85537,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	new_rhs1 = expand(visited, caller_node, rhs1);
 +	new_rhs2 = expand(visited, caller_node, rhs2);
 +
-+	new_rhs1_def_stmt_rhs1 = get_def_stmt_rhs(visited, new_rhs1);
-+	new_rhs2_def_stmt_rhs1 = get_def_stmt_rhs(visited, new_rhs2);
++	new_rhs1_def_stmt_rhs1 = get_def_stmt_rhs(new_rhs1);
++	new_rhs2_def_stmt_rhs1 = get_def_stmt_rhs(new_rhs2);
 +
 +	if (new_rhs1_def_stmt_rhs1 == NULL_TREE || new_rhs2_def_stmt_rhs1 == NULL_TREE)
 +		return NULL_TREE;
@@ -85451,6 +85581,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	const_tree res;
 +	tree rhs1, rhs2, def_rhs1, def_rhs2, const_rhs, def_const_rhs;
 +	const_gimple def_stmt;
++	const gassign *assign, *def_assign;
 +
 +	if (!stmt || gimple_code(stmt) == GIMPLE_NOP)
 +		return false;
@@ -85459,8 +85590,9 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (gimple_assign_rhs_code(stmt) != MULT_EXPR)
 +		return false;
 +
-+	rhs1 = gimple_assign_rhs1(stmt);
-+	rhs2 = gimple_assign_rhs2(stmt);
++	assign = as_a_const_gassign(stmt);
++	rhs1 = gimple_assign_rhs1(assign);
++	rhs2 = gimple_assign_rhs2(assign);
 +	if (is_gimple_constant(rhs1)) {
 +		const_rhs = rhs1;
 +		def_stmt = get_def_stmt(rhs2);
@@ -85476,8 +85608,9 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (gimple_assign_rhs_code(def_stmt) != PLUS_EXPR && gimple_assign_rhs_code(def_stmt) != MINUS_EXPR)
 +		return false;
 +
-+	def_rhs1 = gimple_assign_rhs1(def_stmt);
-+	def_rhs2 = gimple_assign_rhs2(def_stmt);
++	def_assign = as_a_const_gassign(def_stmt);
++	def_rhs1 = gimple_assign_rhs1(def_assign);
++	def_rhs2 = gimple_assign_rhs2(def_assign);
 +	if (is_gimple_constant(def_rhs1))
 +		def_const_rhs = def_rhs1;
 +	else if (is_gimple_constant(def_rhs2))
@@ -85485,13 +85618,13 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	else
 +		return false;
 +
-+	res = fold_binary_loc(gimple_location(def_stmt), MULT_EXPR, TREE_TYPE(const_rhs), const_rhs, def_const_rhs);
++	res = fold_binary_loc(gimple_location(def_assign), MULT_EXPR, TREE_TYPE(const_rhs), const_rhs, def_const_rhs);
 +	if (is_lt_signed_type_max(res) && is_gt_zero(res))
 +		return false;
 +	return true;
 +}
 +
-+enum intentional_overflow_type add_mul_intentional_overflow(const_gimple stmt)
++enum intentional_overflow_type add_mul_intentional_overflow(const gassign *stmt)
 +{
 +	const_gimple def_stmt_1, def_stmt_2;
 +	const_tree rhs1, rhs2;
@@ -85557,17 +85690,17 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +	if (!is_gimple_assign(def_stmt) || gimple_num_ops(def_stmt) != 2)
 +		return false;
-+	rhs = gimple_assign_rhs1(def_stmt);
++	rhs = gimple_assign_rhs1(as_a_const_gassign(def_stmt));
 +	def_stmt = get_def_stmt(rhs);
 +	if (!def_stmt)
 +		return false;
 +	return is_call_or_cast(def_stmt);
 +}
 +
-+void unsigned_signed_cast_intentional_overflow(struct visited *visited, gimple stmt)
++void unsigned_signed_cast_intentional_overflow(struct visited *visited, gassign *stmt)
 +{
 +	unsigned int use_num;
-+	gimple so_stmt;
++	gassign *so_stmt;
 +	const_gimple def_stmt;
 +	const_tree rhs1, rhs2;
 +	tree rhs = gimple_assign_rhs1(stmt);
@@ -85588,17 +85721,17 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	if (!is_gimple_assign(def_stmt))
 +		return;
 +
-+	rhs1 = gimple_assign_rhs1(def_stmt);
++	rhs1 = gimple_assign_rhs1(as_a_const_gassign(def_stmt));
 +	if (!is_unsigned_cast_or_call_def_stmt(rhs1))
 +		return;
 +
-+	rhs2 = gimple_assign_rhs2(def_stmt);
++	rhs2 = gimple_assign_rhs2(as_a_const_gassign(def_stmt));
 +	if (!is_unsigned_cast_or_call_def_stmt(rhs2))
 +		return;
 +	if (gimple_num_ops(def_stmt) == 3 && !is_gimple_constant(rhs1) && !is_gimple_constant(rhs2))
 +		return;
 +
-+	so_stmt = get_dup_stmt(visited, stmt);
++	so_stmt = as_a_gassign(get_dup_stmt(visited, stmt));
 +	create_up_and_down_cast(visited, so_stmt, lhs_type, gimple_assign_rhs1(so_stmt));
 +}
 +
@@ -85628,13 +85761,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +targets += size_overflow_hash.h size_overflow_hash_aux.h
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/misc.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/misc.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/misc.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/misc.c	2014-05-17 02:07:23.433683828 +0200
-@@ -0,0 +1,203 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/misc.c	2015-07-16 02:27:37.936781073 +0200
+@@ -0,0 +1,219 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
++ * https://github.com/ephox-gcc-plugins
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
 + *
 + * Documentation:
@@ -85666,6 +85800,20 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	free_dominance_info(CDI_DOMINATORS);
 +	pop_cfun();
 +	current_function_decl = NULL_TREE;
++}
++
++tree get_lhs(const_gimple stmt)
++{
++	switch (gimple_code(stmt)) {
++	case GIMPLE_ASSIGN:
++	case GIMPLE_CALL:
++		return gimple_get_lhs(as_a_const_gassign(stmt));
++	case GIMPLE_PHI:
++		return gimple_phi_result(as_a_const_gphi(stmt));
++	default:
++		debug_gimple_stmt((gimple)stmt);
++		gcc_unreachable();
++	}
 +}
 +
 +static bool is_bool(const_tree node)
@@ -85779,7 +85927,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +gimple build_cast_stmt(struct visited *visited, tree dst_type, tree rhs, tree lhs, gimple_stmt_iterator *gsi, bool before, bool force)
 +{
-+	gimple assign, def_stmt;
++	gimple def_stmt;
++	gassign *assign;
 +
 +	gcc_assert(dst_type != NULL_TREE && rhs != NULL_TREE);
 +	gcc_assert(!is_gimple_constant(rhs));
@@ -85835,13 +85984,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/remove_unnecessary_dup.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/remove_unnecessary_dup.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/remove_unnecessary_dup.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/remove_unnecessary_dup.c	2014-05-17 02:07:23.433683828 +0200
-@@ -0,0 +1,138 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/remove_unnecessary_dup.c	2015-07-16 02:27:37.936781073 +0200
+@@ -0,0 +1,139 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
++ * https://github.com/ephox-gcc-plugins
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
 + *
 + * Documentation:
@@ -85859,7 +86009,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +#include "gcc-common.h"
 +#include "size_overflow.h"
 +
-+bool skip_expr_on_double_type(const_gimple stmt)
++bool skip_expr_on_double_type(const gassign *stmt)
 +{
 +	enum tree_code code = gimple_assign_rhs_code(stmt);
 +
@@ -85881,19 +86031,19 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	}
 +}
 +
-+void create_up_and_down_cast(struct visited *visited, gimple use_stmt, tree orig_type, tree rhs)
++void create_up_and_down_cast(struct visited *visited, gassign *use_stmt, tree orig_type, tree rhs)
 +{
 +	const_tree orig_rhs1;
 +	tree down_lhs, new_lhs, dup_type = TREE_TYPE(rhs);
-+	gimple down_cast, up_cast;
++	const_gimple down_cast, up_cast;
 +	gimple_stmt_iterator gsi = gsi_for_stmt(use_stmt);
 +
 +	down_cast = build_cast_stmt(visited, orig_type, rhs, CREATE_NEW_VAR, &gsi, BEFORE_STMT, false);
-+	down_lhs = gimple_assign_lhs(down_cast);
++	down_lhs = get_lhs(down_cast);
 +
 +	gsi = gsi_for_stmt(use_stmt);
 +	up_cast = build_cast_stmt(visited, dup_type, down_lhs, CREATE_NEW_VAR, &gsi, BEFORE_STMT, false);
-+	new_lhs = gimple_assign_lhs(up_cast);
++	new_lhs = get_lhs(up_cast);
 +
 +	orig_rhs1 = gimple_assign_rhs1(use_stmt);
 +	if (operand_equal_p(orig_rhs1, rhs, 0))
@@ -85937,7 +86087,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return new_type;
 +}
 +
-+static void insert_cast_rhs(struct visited *visited, gimple stmt, tree rhs)
++static void insert_cast_rhs(struct visited *visited, gassign *stmt, tree rhs)
 +{
 +	tree type;
 +
@@ -85952,7 +86102,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	create_up_and_down_cast(visited, stmt, type, rhs);
 +}
 +
-+static void insert_cast(struct visited *visited, gimple stmt, tree rhs)
++static void insert_cast(struct visited *visited, gassign *stmt, tree rhs)
 +{
 +	if (LONG_TYPE_SIZE == GET_MODE_BITSIZE(SImode) && !is_size_overflow_type(rhs))
 +		return;
@@ -85960,7 +86110,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	insert_cast_rhs(visited, stmt, rhs);
 +}
 +
-+void insert_cast_expr(struct visited *visited, gimple stmt, enum intentional_overflow_type type)
++void insert_cast_expr(struct visited *visited, gassign *stmt, enum intentional_overflow_type type)
 +{
 +	tree rhs1, rhs2;
 +
@@ -85977,13 +86127,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow_debug.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_debug.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow_debug.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_debug.c	2014-04-24 02:04:18.000000000 +0200
-@@ -0,0 +1,116 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_debug.c	2015-07-16 02:27:37.936781073 +0200
+@@ -0,0 +1,123 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
++ * https://github.com/ephox-gcc-plugins
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
 + *
 + * Documentation:
@@ -86000,7 +86151,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +#include "gcc-common.h"
 +
-+static unsigned int dump_functions(void)
++static unsigned int __unused dump_functions(void)
 +{
 +	struct cgraph_node *node;
 +
@@ -86035,6 +86186,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 +
 +#if BUILDING_GCC_VERSION >= 4009
++namespace {
 +static const struct pass_data dump_pass_data = {
 +#else
 +static struct ipa_opt_pass_d dump_pass = {
@@ -86045,7 +86197,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +#if BUILDING_GCC_VERSION >= 4008
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
-+#if BUILDING_GCC_VERSION >= 4009
++#if BUILDING_GCC_VERSION >= 5000
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -86078,27 +86231,31 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +};
 +
 +#if BUILDING_GCC_VERSION >= 4009
-+namespace {
 +class dump_pass : public ipa_opt_pass_d {
 +public:
 +	dump_pass() : ipa_opt_pass_d(dump_pass_data, g, NULL, NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return dump_functions(); }
++#else
 +	unsigned int execute() { return dump_functions(); }
++#endif
 +};
 +}
-+#endif
 +
++opt_pass *make_dump_pass(void)
++{
++	return new dump_pass();
++}
++#else
 +struct opt_pass *make_dump_pass(void)
 +{
-+#if BUILDING_GCC_VERSION >= 4009
-+	return new dump_pass();
-+#else
 +	return &dump_pass.pass;
-+#endif
 +}
++#endif
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow.h linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow.h
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow.h	2015-04-01 02:54:45.790726880 +0200
-@@ -0,0 +1,127 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow.h	2015-07-16 02:27:37.936781073 +0200
+@@ -0,0 +1,183 @@
 +#ifndef SIZE_OVERFLOW_H
 +#define SIZE_OVERFLOW_H
 +
@@ -86120,11 +86277,66 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	NO_INTENTIONAL_OVERFLOW, RHS1_INTENTIONAL_OVERFLOW, RHS2_INTENTIONAL_OVERFLOW
 +};
 +
++
++#if BUILDING_GCC_VERSION >= 5000
++typedef struct hash_set<const_gimple> gimple_set;
++
++static inline bool pointer_set_insert(gimple_set *visited, const_gimple stmt)
++{
++	return visited->add(stmt);
++}
++
++static inline bool pointer_set_contains(gimple_set *visited, const_gimple stmt)
++{
++	return visited->contains(stmt);
++}
++
++static inline gimple_set* pointer_set_create(void)
++{
++	return new hash_set<const_gimple>;
++}
++
++static inline void pointer_set_destroy(gimple_set *visited)
++{
++	delete visited;
++}
++
++typedef struct hash_set<tree> tree_set;
++
++static inline bool pointer_set_insert(tree_set *visited, tree node)
++{
++	return visited->add(node);
++}
++
++static inline bool pointer_set_contains(tree_set *visited, tree node)
++{
++	return visited->contains(node);
++}
++
++static inline tree_set *tree_pointer_set_create(void)
++{
++	return new hash_set<tree>;
++}
++
++static inline void pointer_set_destroy(tree_set *visited)
++{
++	delete visited;
++}
++#else
++typedef struct pointer_set_t gimple_set;
++typedef struct pointer_set_t tree_set;
++
++static inline tree_set *tree_pointer_set_create(void)
++{
++	return pointer_set_create();
++}
++#endif
++
 +struct visited {
-+	struct pointer_set_t *stmts;
-+	struct pointer_set_t *my_stmts;
-+	struct pointer_set_t *skip_expr_casts;
-+	struct pointer_set_t *no_cast_check;
++	gimple_set *stmts;
++	gimple_set *my_stmts;
++	gimple_set *skip_expr_casts;
++	gimple_set *no_cast_check;
 +};
 +
 +// size_overflow_plugin.c
@@ -86155,10 +86367,10 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	unsigned int num;
 +	enum mark intentional_attr_decl;
 +	enum mark intentional_attr_cur_fndecl;
-+	gimple intentional_mark_from_gimple;
++	gasm *intentional_mark_from_gimple;
 +};
 +
-+extern bool is_size_overflow_asm(const_gimple stmt);
++extern bool is_size_overflow_asm(const gasm *stmt);
 +extern unsigned int get_function_num(const_tree node, const_tree orig_fndecl);
 +extern unsigned int get_correct_arg_count(unsigned int argnum, const_tree fndecl);
 +extern bool is_missing_function(const_tree orig_fndecl, unsigned int num);
@@ -86173,8 +86385,8 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +
 +// intentional_overflow.c
 +extern enum mark get_intentional_attr_type(const_tree node);
-+extern bool is_size_overflow_intentional_asm_yes(const_gimple stmt);
-+extern bool is_size_overflow_intentional_asm_turn_off(const_gimple stmt);
++extern bool is_size_overflow_intentional_asm_yes(const gasm *stmt);
++extern bool is_size_overflow_intentional_asm_turn_off(const gasm *stmt);
 +extern bool is_end_intentional_intentional_attr(const_tree decl, unsigned int argnum);
 +extern bool is_yes_intentional_attr(const_tree decl, unsigned int argnum);
 +extern bool is_turn_off_intentional_attr(const_tree decl);
@@ -86182,12 +86394,12 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +extern void check_intentional_attribute_ipa(struct interesting_node *cur_node);
 +extern bool is_a_cast_and_const_overflow(const_tree no_const_rhs);
 +extern bool is_const_plus_unsigned_signed_truncation(const_tree lhs);
-+extern bool is_a_constant_overflow(const_gimple stmt, const_tree rhs);
-+extern tree handle_intentional_overflow(struct visited *visited, struct cgraph_node *caller_node, bool check_overflow, gimple stmt, tree change_rhs, tree new_rhs2);
++extern bool is_a_constant_overflow(const gassign *stmt, const_tree rhs);
++extern tree handle_intentional_overflow(struct visited *visited, struct cgraph_node *caller_node, bool check_overflow, gassign *stmt, tree change_rhs, tree new_rhs2);
 +extern tree handle_integer_truncation(struct visited *visited, struct cgraph_node *caller_node, const_tree lhs);
 +extern bool is_a_neg_overflow(const_gimple stmt, const_tree rhs);
-+extern enum intentional_overflow_type add_mul_intentional_overflow(const_gimple def_stmt);
-+extern void unsigned_signed_cast_intentional_overflow(struct visited *visited, gimple stmt);
++extern enum intentional_overflow_type add_mul_intentional_overflow(const gassign *def_stmt);
++extern void unsigned_signed_cast_intentional_overflow(struct visited *visited, gassign *stmt);
 +
 +
 +// insert_size_overflow_check_ipa.c
@@ -86204,6 +86416,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +// misc.c
 +extern void set_current_function_decl(tree fndecl);
 +extern void unset_current_function_decl(void);
++extern tree get_lhs(const_gimple stmt);
 +extern gimple get_def_stmt(const_tree node);
 +extern tree create_new_var(tree type);
 +extern gimple build_cast_stmt(struct visited *visited, tree dst_type, tree rhs, tree lhs, gimple_stmt_iterator *gsi, bool before, bool force);
@@ -86215,15 +86428,15 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +// insert_size_overflow_check_core.c
 +extern tree expand(struct visited *visited, struct cgraph_node *caller_node, tree lhs);
 +extern void check_size_overflow(struct cgraph_node *caller_node, gimple stmt, tree size_overflow_type, tree cast_rhs, tree rhs, bool before);
-+extern tree dup_assign(struct visited *visited, gimple oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
++extern tree dup_assign(struct visited *visited, gassign *oldstmt, const_tree node, tree rhs1, tree rhs2, tree __unused rhs3);
 +extern tree create_assign(struct visited *visited, gimple oldstmt, tree rhs1, bool before);
 +
 +
 +// remove_unnecessary_dup.c
 +extern struct opt_pass *make_remove_unnecessary_dup_pass(void);
-+extern void insert_cast_expr(struct visited *visited, gimple stmt, enum intentional_overflow_type type);
-+extern bool skip_expr_on_double_type(const_gimple stmt);
-+extern void create_up_and_down_cast(struct visited *visited, gimple use_stmt, tree orig_type, tree rhs);
++extern void insert_cast_expr(struct visited *visited, gassign *stmt, enum intentional_overflow_type type);
++extern bool skip_expr_on_double_type(const gassign *stmt);
++extern void create_up_and_down_cast(struct visited *visited, gassign *use_stmt, tree orig_type, tree rhs);
 +
 +#endif
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow_hash_aux.data linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_hash_aux.data
@@ -92370,13 +92583,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +tree_mod_log_eb_copy_65535 tree_mod_log_eb_copy 6 65535 NULL
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow_plugin.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	2014-07-27 23:41:19.821093866 +0200
-@@ -0,0 +1,259 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin.c	2015-07-16 02:31:53.144767447 +0200
+@@ -0,0 +1,260 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
++ * https://github.com/ephox-gcc-plugins
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
 + *
 + * Documentation:
@@ -92404,7 +92618,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +tree size_overflow_type_TI;
 +
 +static struct plugin_info size_overflow_plugin_info = {
-+	.version	= "20140725",
++	.version	= "20140725_01",
 +	.help		= "no-size-overflow\tturn off size overflow checking\n",
 +};
 +
@@ -92458,7 +92672,7 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +		return NULL_TREE;
 +	}
 +
-+	if (TREE_INT_CST_HIGH(TREE_VALUE(args)) != 0)
++	if (tree_to_shwi(TREE_VALUE(args)) != 0)
 +		return NULL_TREE;
 +
 +	for (; args; args = TREE_CHAIN(args)) {
@@ -92633,13 +92847,14 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +}
 diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow_plugin_hash.c linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin_hash.c
 --- linux-3.14.48/tools/gcc/size_overflow_plugin/size_overflow_plugin_hash.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin_hash.c	2014-04-30 23:24:26.000000000 +0200
-@@ -0,0 +1,364 @@
++++ linux-3.14.48-pax/tools/gcc/size_overflow_plugin/size_overflow_plugin_hash.c	2015-07-16 02:27:37.936781073 +0200
+@@ -0,0 +1,355 @@
 +/*
-+ * Copyright 2011-2014 by Emese Revfy <re.emese@gmail.com>
++ * Copyright 2011-2015 by Emese Revfy <re.emese@gmail.com>
 + * Licensed under the GPL v2, or (at your option) v3
 + *
 + * Homepage:
++ * https://github.com/ephox-gcc-plugins
 + * http://www.grsecurity.net/~ephox/overflow_plugin/
 + *
 + * Documentation:
@@ -92867,43 +93082,33 @@ diff -NurpX linux-3.14.48-pax/Documentation/dontdiff linux-3.14.48/tools/gcc/siz
 +	return CANNOT_FIND_ARG;
 +}
 +
-+static const char *get_asm_string(const_gimple stmt)
-+{
-+	if (!stmt)
-+		return NULL;
-+	if (gimple_code(stmt) != GIMPLE_ASM)
-+		return NULL;
-+
-+	return gimple_asm_string(stmt);
-+}
-+
-+bool is_size_overflow_intentional_asm_turn_off(const_gimple stmt)
++bool is_size_overflow_intentional_asm_turn_off(const gasm *stmt)
 +{
 +	const char *str;
 +
-+	str = get_asm_string(stmt);
-+	if (!str)
++	if (!stmt)
 +		return false;
++	str = gimple_asm_string(stmt);
 +	return !strncmp(str, TURN_OFF_ASM_STR, sizeof(TURN_OFF_ASM_STR) - 1);
 +}
 +
-+bool is_size_overflow_intentional_asm_yes(const_gimple stmt)
++bool is_size_overflow_intentional_asm_yes(const gasm *stmt)
 +{
 +	const char *str;
 +
-+	str = get_asm_string(stmt);
-+	if (!str)
++	if (!stmt)
 +		return false;
++	str = gimple_asm_string(stmt);
 +	return !strncmp(str, YES_ASM_STR, sizeof(YES_ASM_STR) - 1);
 +}
 +
-+bool is_size_overflow_asm(const_gimple stmt)
++bool is_size_overflow_asm(const gasm *stmt)
 +{
 +	const char *str;
 +
-+	str = get_asm_string(stmt);
-+	if (!str)
++	if (!stmt)
 +		return false;
++	str = gimple_asm_string(stmt);
 +	return !strncmp(str, OK_ASM_STR, sizeof(OK_ASM_STR) - 1);
 +}
 +
