@@ -1,4 +1,5 @@
-- fixed incorrect lowmem mapping setup on certain amd64 memory configurations (also fixed by the never backported upstream commit 20167d3421a089a1bf1bd680b150dc69c9506810), reported and much helped by rfree@mempo.org
+- fixed the constify plugin for gcc-5
+- fixed the kernexec and stackleak plugins for gcc-5
 
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/arch/alpha/include/asm/atomic.h linux-3.2.69-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.69/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -72177,8 +72178,8 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/color
 +}
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/constify_plugin.c linux-3.2.69-pax/tools/gcc/constify_plugin.c
 --- linux-3.2.69/tools/gcc/constify_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.69-pax/tools/gcc/constify_plugin.c	2015-05-22 03:16:36.329514366 +0200
-@@ -0,0 +1,564 @@
++++ linux-3.2.69-pax/tools/gcc/constify_plugin.c	2015-07-13 19:15:01.598868640 +0200
+@@ -0,0 +1,568 @@
 +/*
 + * Copyright 2011 by Emese Revfy <re.emese@gmail.com>
 + * Copyright 2011-2015 by PaX Team <pageexec@freemail.hu>
@@ -72620,7 +72621,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/const
 +		.optinfo_flags		= OPTGROUP_NONE,
 +#endif
 +#if BUILDING_GCC_VERSION >= 5000
-+#elif BUILDING_GCC_VERSION >= 4009
++#elif BUILDING_GCC_VERSION == 4009
 +		.has_gate		= false,
 +		.has_execute		= true,
 +#else
@@ -72645,7 +72646,11 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/const
 +class check_local_variables_pass : public gimple_opt_pass {
 +public:
 +	check_local_variables_pass() : gimple_opt_pass(check_local_variables_pass_data, g) {}
++#if BUILDING_GCC_VERSION >= 5000
++	virtual unsigned int execute(function *) { return check_local_variables(); }
++#else
 +	unsigned int execute() { return check_local_variables(); }
++#endif
 +};
 +}
 +
@@ -72745,8 +72750,8 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/const
 +}
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/gcc-common.h linux-3.2.69-pax/tools/gcc/gcc-common.h
 --- linux-3.2.69/tools/gcc/gcc-common.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.69-pax/tools/gcc/gcc-common.h	2015-06-26 17:48:46.862479821 +0200
-@@ -0,0 +1,689 @@
++++ linux-3.2.69-pax/tools/gcc/gcc-common.h	2015-07-13 23:28:16.198057366 +0200
+@@ -0,0 +1,787 @@
 +#ifndef GCC_COMMON_H_INCLUDED
 +#define GCC_COMMON_H_INCLUDED
 +
@@ -72825,6 +72830,8 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/gcc-c
 +#include "tree-flow.h"
 +#else
 +#include "tree-cfgcleanup.h"
++#include "tree-ssa-operands.h"
++#include "tree-into-ssa.h"
 +#endif
 +
 +#if BUILDING_GCC_VERSION >= 4008
@@ -73155,44 +73162,6 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/gcc-c
 +typedef union gimple_statement_d gdebug;
 +typedef union gimple_statement_d gphi;
 +typedef union gimple_statement_d greturn;
-+#endif
-+
-+#if BUILDING_GCC_VERSION == 4008
-+#define NODE_SYMBOL(node) (&(node)->symbol)
-+#define NODE_DECL(node) (node)->symbol.decl
-+#endif
-+
-+#if BUILDING_GCC_VERSION >= 4008
-+#define add_referenced_var(var)
-+#define mark_sym_for_renaming(var)
-+#define varpool_mark_needed_node(node)
-+#define create_var_ann(var)
-+#define TODO_dump_func 0
-+#define TODO_dump_cgraph 0
-+#endif
-+
-+#if BUILDING_GCC_VERSION <= 4009
-+#define TODO_verify_il 0
-+#define AVAIL_INTERPOSABLE AVAIL_OVERWRITABLE
-+#endif
-+
-+#if BUILDING_GCC_VERSION == 4009
-+typedef struct gimple_statement_base gasm;
-+typedef struct gimple_statement_base gassign;
-+typedef struct gimple_statement_base gcall;
-+typedef struct gimple_statement_base gcond;
-+typedef struct gimple_statement_base gdebug;
-+typedef struct gimple_statement_base gphi;
-+typedef struct gimple_statement_base greturn;
-+#endif
-+
-+#if BUILDING_GCC_VERSION <= 4009
-+typedef struct rtx_def rtx_insn;
-+
-+static inline void set_decl_section_name(tree node, const char *value)
-+{
-+	DECL_SECTION_NAME(node) = build_string(strlen(value) + 1, value);
-+}
 +
 +static inline gasm *as_a_gasm(gimple stmt)
 +{
@@ -73224,6 +73193,26 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/gcc-c
 +	return stmt;
 +}
 +
++static inline gcond *as_a_gcond(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gcond *as_a_const_gcond(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gdebug *as_a_gdebug(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gdebug *as_a_const_gdebug(const_gimple stmt)
++{
++	return stmt;
++}
++
 +static inline gphi *as_a_gphi(gimple stmt)
 +{
 +	return stmt;
@@ -73232,6 +73221,115 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/gcc-c
 +static inline const gphi *as_a_const_gphi(const_gimple stmt)
 +{
 +	return stmt;
++}
++
++static inline greturn *as_a_greturn(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const greturn *as_a_const_greturn(const_gimple stmt)
++{
++	return stmt;
++}
++#endif
++
++#if BUILDING_GCC_VERSION == 4008
++#define NODE_SYMBOL(node) (&(node)->symbol)
++#define NODE_DECL(node) (node)->symbol.decl
++#endif
++
++#if BUILDING_GCC_VERSION >= 4008
++#define add_referenced_var(var)
++#define mark_sym_for_renaming(var)
++#define varpool_mark_needed_node(node)
++#define create_var_ann(var)
++#define TODO_dump_func 0
++#define TODO_dump_cgraph 0
++#endif
++
++#if BUILDING_GCC_VERSION <= 4009
++#define TODO_verify_il 0
++#define AVAIL_INTERPOSABLE AVAIL_OVERWRITABLE
++
++#define section_name_prefix LTO_SECTION_NAME_PREFIX
++#define fatal_error(loc, gmsgid, ...) fatal_error((gmsgid), __VA_ARGS__)
++
++typedef struct rtx_def rtx_insn;
++
++static inline void set_decl_section_name(tree node, const char *value)
++{
++	DECL_SECTION_NAME(node) = build_string(strlen(value) + 1, value);
++}
++#endif
++
++#if BUILDING_GCC_VERSION == 4009
++typedef struct gimple_statement_asm gasm;
++typedef struct gimple_statement_base gassign;
++typedef struct gimple_statement_call gcall;
++typedef struct gimple_statement_base gcond;
++typedef struct gimple_statement_base gdebug;
++typedef struct gimple_statement_phi gphi;
++typedef struct gimple_statement_base greturn;
++
++static inline gasm *as_a_gasm(gimple stmt)
++{
++	return as_a<gasm>(stmt);
++}
++
++static inline const gasm *as_a_const_gasm(const_gimple stmt)
++{
++	return as_a<const gasm>(stmt);
++}
++
++static inline gassign *as_a_gassign(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gassign *as_a_const_gassign(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gcall *as_a_gcall(gimple stmt)
++{
++	return as_a<gcall>(stmt);
++}
++
++static inline const gcall *as_a_const_gcall(const_gimple stmt)
++{
++	return as_a<const gcall>(stmt);
++}
++
++static inline gcond *as_a_gcond(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gcond *as_a_const_gcond(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gdebug *as_a_gdebug(gimple stmt)
++{
++	return stmt;
++}
++
++static inline const gdebug *as_a_const_gdebug(const_gimple stmt)
++{
++	return stmt;
++}
++
++static inline gphi *as_a_gphi(gimple stmt)
++{
++	return as_a<gphi>(stmt);
++}
++
++static inline const gphi *as_a_const_gphi(const_gimple stmt)
++{
++	return as_a<const gphi>(stmt);
 +}
 +
 +static inline greturn *as_a_greturn(gimple stmt)
@@ -73293,6 +73391,11 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/gcc-c
 +static inline void varpool_add_new_variable(tree decl)
 +{
 +	varpool_node::add(decl);
++}
++
++static inline unsigned int rebuild_cgraph_edges(void)
++{
++	return cgraph_edge::rebuild_edges();
 +}
 +
 +static inline cgraph_node_ptr cgraph_function_node(cgraph_node_ptr node, enum availability *availability)
@@ -73630,8 +73733,8 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/kallo
 +}
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/kernexec_plugin.c linux-3.2.69-pax/tools/gcc/kernexec_plugin.c
 --- linux-3.2.69/tools/gcc/kernexec_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.69-pax/tools/gcc/kernexec_plugin.c	2015-04-30 03:07:38.400532395 +0200
-@@ -0,0 +1,547 @@
++++ linux-3.2.69-pax/tools/gcc/kernexec_plugin.c	2015-07-13 23:32:15.038044614 +0200
+@@ -0,0 +1,551 @@
 +/*
 + * Copyright 2011-2015 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -73666,10 +73769,12 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/kerne
 + */
 +static void kernexec_reload_fptr_mask(gimple_stmt_iterator *gsi)
 +{
++	gimple stmt;
 +	gasm *asm_movabs_stmt;
 +
 +	// build asm volatile("movabs $0x8000000000000000, %%r12\n\t" : : : );
-+	asm_movabs_stmt = gimple_build_asm_vec("movabs $0x8000000000000000, %%r12\n\t", NULL, NULL, NULL, NULL);
++	stmt = gimple_build_asm_vec("movabs $0x8000000000000000, %%r12\n\t", NULL, NULL, NULL, NULL);
++	asm_movabs_stmt = as_a_gasm(stmt);
 +	gimple_asm_set_volatile(asm_movabs_stmt, true);
 +	gsi_insert_after(gsi, asm_movabs_stmt, GSI_CONTINUE_LINKING);
 +	update_stmt(asm_movabs_stmt);
@@ -73763,6 +73868,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/kerne
 +
 +static void kernexec_instrument_fptr_or(gimple_stmt_iterator *gsi)
 +{
++	gimple stmt;
 +	gasm *asm_or_stmt;
 +	gcall *call_stmt;
 +	tree old_fptr, new_fptr, input, output;
@@ -73794,7 +73900,8 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/kerne
 +	vec_safe_push(inputs, input);
 +	vec_safe_push(outputs, output);
 +#endif
-+	asm_or_stmt = gimple_build_asm_vec("orq %%r12, %0\n\t", inputs, outputs, NULL, NULL);
++	stmt = gimple_build_asm_vec("orq %%r12, %0\n\t", inputs, outputs, NULL, NULL);
++	asm_or_stmt = as_a_gasm(stmt);
 +	SSA_NAME_DEF_STMT(new_fptr) = asm_or_stmt;
 +	gimple_asm_set_volatile(asm_or_stmt, true);
 +	gsi_insert_before(gsi, asm_or_stmt, GSI_SAME_STMT);
@@ -84193,8 +84300,8 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/size_
 +
 diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/stackleak_plugin.c linux-3.2.69-pax/tools/gcc/stackleak_plugin.c
 --- linux-3.2.69/tools/gcc/stackleak_plugin.c	1970-01-01 01:00:00.000000000 +0100
-+++ linux-3.2.69-pax/tools/gcc/stackleak_plugin.c	2015-04-30 03:07:38.400532395 +0200
-@@ -0,0 +1,432 @@
++++ linux-3.2.69-pax/tools/gcc/stackleak_plugin.c	2015-07-14 00:12:35.677915370 +0200
+@@ -0,0 +1,436 @@
 +/*
 + * Copyright 2011-2015 by the PaX Team <pageexec@freemail.hu>
 + * Licensed under the GPL v2
@@ -84234,6 +84341,7 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/stack
 +
 +static void stackleak_check_alloca(gimple_stmt_iterator *gsi)
 +{
++	gimple stmt;
 +	gcall *check_alloca;
 +	tree alloca_size;
 +	cgraph_node_ptr node;
@@ -84242,7 +84350,8 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/stack
 +
 +	// insert call to void pax_check_alloca(unsigned long size)
 +	alloca_size = gimple_call_arg(gsi_stmt(*gsi), 0);
-+	check_alloca = gimple_build_call(check_function_decl, 1, alloca_size);
++	stmt = gimple_build_call(check_function_decl, 1, alloca_size);
++	check_alloca = as_a_gcall(stmt);
 +	gsi_insert_before(gsi, check_alloca, GSI_SAME_STMT);
 +
 +	// update the cgraph
@@ -84255,13 +84364,15 @@ diff -NurpX linux-3.2.69-pax/Documentation/dontdiff linux-3.2.69/tools/gcc/stack
 +
 +static void stackleak_add_instrumentation(gimple_stmt_iterator *gsi)
 +{
++	gimple stmt;
 +	gcall *track_stack;
 +	cgraph_node_ptr node;
 +	int frequency;
 +	basic_block bb;
 +
 +	// insert call to void pax_track_stack(void)
-+	track_stack = gimple_build_call(track_function_decl, 0);
++	stmt = gimple_build_call(track_function_decl, 0);
++	track_stack = as_a_gcall(stmt);
 +	gsi_insert_after(gsi, track_stack, GSI_CONTINUE_LINKING);
 +
 +	// update the cgraph
