@@ -1,4 +1,4 @@
-- forward port to 3.2.71
+- fixed mm counter accounting for swap entries under SEGMEXEC/i386
 
 diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/arch/alpha/include/asm/atomic.h linux-3.2.71-pax/arch/alpha/include/asm/atomic.h
 --- linux-3.2.71/arch/alpha/include/asm/atomic.h	2012-09-12 12:17:18.711311266 +0200
@@ -60566,7 +60566,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/madvise.c li
  		goto out;
 diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c linux-3.2.71-pax/mm/memory.c
 --- linux-3.2.71/mm/memory.c	2015-08-14 21:48:35.380707909 +0200
-+++ linux-3.2.71-pax/mm/memory.c	2015-08-14 21:50:19.956702325 +0200
++++ linux-3.2.71-pax/mm/memory.c	2015-08-20 15:12:35.253248835 +0200
 @@ -462,8 +462,12 @@ static inline void free_pmd_range(struct
  		return;
  
@@ -60713,7 +60713,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	if (!pud)
  		return -ENOMEM;
  	do {
-@@ -2515,6 +2532,186 @@ static inline void cow_user_page(struct
+@@ -2515,6 +2532,192 @@ static inline void cow_user_page(struct
  		copy_user_highpage(dst, src, va, vma);
  }
  
@@ -60726,12 +60726,18 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
 +
 +	pte = pte_offset_map_lock(mm, pmd, address, &ptl);
 +	entry = *pte;
-+	if (!pte_present(entry)) {
-+		if (!pte_none(entry)) {
-+			BUG_ON(pte_file(entry));
-+			free_swap_and_cache(pte_to_swp_entry(entry));
-+			pte_clear_not_present_full(mm, address, pte, 0);
-+		}
++	if (pte_none(entry))
++		;
++	else if (!pte_present(entry)) {
++		swp_entry_t swapentry;
++
++		BUG_ON(pte_file(entry));
++
++		swapentry = pte_to_swp_entry(entry);
++		if (!non_swap_entry(swapentry))
++			dec_mm_counter_fast(mm, MM_SWAPENTS);
++		free_swap_and_cache(swapentry);
++		pte_clear_not_present_full(mm, address, pte, 0);
 +	} else {
 +		struct page *page;
 +
@@ -60900,7 +60906,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  /*
   * This routine handles present pages, when users try to write
   * to a shared page. It is done by copying the page to a new address
-@@ -2733,6 +2930,12 @@ gotten:
+@@ -2733,6 +2936,12 @@ gotten:
  	 */
  	page_table = pte_offset_map_lock(mm, pmd, address, &ptl);
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -60913,7 +60919,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  		if (old_page) {
  			if (!PageAnon(old_page)) {
  				dec_mm_counter_fast(mm, MM_FILEPAGES);
-@@ -2784,6 +2987,10 @@ gotten:
+@@ -2784,6 +2993,10 @@ gotten:
  			page_remove_rmap(old_page);
  		}
  
@@ -60924,7 +60930,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  		/* Free the old page.. */
  		new_page = old_page;
  		ret |= VM_FAULT_WRITE;
-@@ -3063,6 +3270,11 @@ static int do_swap_page(struct mm_struct
+@@ -3063,6 +3276,11 @@ static int do_swap_page(struct mm_struct
  	swap_free(entry);
  	if (vm_swap_full() || (vma->vm_flags & VM_LOCKED) || PageMlocked(page))
  		try_to_free_swap(page);
@@ -60936,7 +60942,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	unlock_page(page);
  	if (swapcache) {
  		/*
-@@ -3086,6 +3298,11 @@ static int do_swap_page(struct mm_struct
+@@ -3086,6 +3304,11 @@ static int do_swap_page(struct mm_struct
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -60948,7 +60954,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  out:
-@@ -3105,40 +3322,6 @@ out_release:
+@@ -3105,40 +3328,6 @@ out_release:
  }
  
  /*
@@ -60989,7 +60995,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
   * We enter with non-exclusive mmap_sem (to exclude vma changes,
   * but allow concurrent faults), and pte mapped but not yet locked.
   * We return with mmap_sem still held, but pte unmapped and unlocked.
-@@ -3147,31 +3330,29 @@ static int do_anonymous_page(struct mm_s
+@@ -3147,31 +3336,29 @@ static int do_anonymous_page(struct mm_s
  		unsigned long address, pte_t *page_table, pmd_t *pmd,
  		unsigned int flags)
  {
@@ -61029,7 +61035,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	if (unlikely(anon_vma_prepare(vma)))
  		goto oom;
  	page = alloc_zeroed_user_highpage_movable(vma, address);
-@@ -3190,6 +3371,11 @@ static int do_anonymous_page(struct mm_s
+@@ -3190,6 +3377,11 @@ static int do_anonymous_page(struct mm_s
  	if (!pte_none(*page_table))
  		goto release;
  
@@ -61041,7 +61047,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	inc_mm_counter_fast(mm, MM_ANONPAGES);
  	page_add_new_anon_rmap(page, vma, address);
  setpte:
-@@ -3197,6 +3383,12 @@ setpte:
+@@ -3197,6 +3389,12 @@ setpte:
  
  	/* No need to invalidate - it was non-present before */
  	update_mmu_cache(vma, address, page_table);
@@ -61054,7 +61060,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  unlock:
  	pte_unmap_unlock(page_table, ptl);
  	return 0;
-@@ -3340,6 +3532,12 @@ static int __do_fault(struct mm_struct *
+@@ -3340,6 +3538,12 @@ static int __do_fault(struct mm_struct *
  	 */
  	/* Only go through if we didn't race with anybody else... */
  	if (likely(pte_same(*page_table, orig_pte))) {
@@ -61067,7 +61073,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  		flush_icache_page(vma, page);
  		entry = mk_pte(page, vma->vm_page_prot);
  		if (flags & FAULT_FLAG_WRITE)
-@@ -3359,6 +3557,14 @@ static int __do_fault(struct mm_struct *
+@@ -3359,6 +3563,14 @@ static int __do_fault(struct mm_struct *
  
  		/* no need to invalidate: a not-present page won't be cached */
  		update_mmu_cache(vma, address, page_table);
@@ -61082,7 +61088,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	} else {
  		if (cow_page)
  			mem_cgroup_uncharge_page(cow_page);
-@@ -3513,6 +3719,12 @@ int handle_pte_fault(struct mm_struct *m
+@@ -3513,6 +3725,12 @@ int handle_pte_fault(struct mm_struct *m
  		if (flags & FAULT_FLAG_WRITE)
  			flush_tlb_fix_spurious_fault(vma, address);
  	}
@@ -61095,7 +61101,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  unlock:
  	pte_unmap_unlock(pte, ptl);
  	return 0;
-@@ -3529,6 +3741,10 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -3529,6 +3747,10 @@ int handle_mm_fault(struct mm_struct *mm
  	pmd_t *pmd;
  	pte_t *pte;
  
@@ -61106,7 +61112,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	__set_current_state(TASK_RUNNING);
  
  	count_vm_event(PGFAULT);
-@@ -3540,6 +3756,34 @@ int handle_mm_fault(struct mm_struct *mm
+@@ -3540,6 +3762,34 @@ int handle_mm_fault(struct mm_struct *mm
  	if (unlikely(is_vm_hugetlb_page(vma)))
  		return hugetlb_fault(mm, vma, address, flags);
  
@@ -61141,7 +61147,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  retry:
  	pgd = pgd_offset(mm, address);
  	pud = pud_alloc(mm, pgd, address);
-@@ -3581,7 +3825,7 @@ retry:
+@@ -3581,7 +3831,7 @@ retry:
  	 * run pte_offset_map on the pmd, if an huge pmd could
  	 * materialize from under us from a different thread.
  	 */
@@ -61150,7 +61156,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  		return VM_FAULT_OOM;
  	/* if an huge pmd materialized from under us just retry later */
  	if (unlikely(pmd_trans_huge(*pmd)))
-@@ -3618,6 +3862,23 @@ int __pud_alloc(struct mm_struct *mm, pg
+@@ -3618,6 +3868,23 @@ int __pud_alloc(struct mm_struct *mm, pg
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -61174,7 +61180,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  #endif /* __PAGETABLE_PUD_FOLDED */
  
  #ifndef __PAGETABLE_PMD_FOLDED
-@@ -3648,11 +3909,35 @@ int __pmd_alloc(struct mm_struct *mm, pu
+@@ -3648,11 +3915,35 @@ int __pmd_alloc(struct mm_struct *mm, pu
  	spin_unlock(&mm->page_table_lock);
  	return 0;
  }
@@ -61212,7 +61218,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	struct vm_area_struct * vma;
  
  	vma = find_vma(current->mm, addr);
-@@ -3685,7 +3970,7 @@ static int __init gate_vma_init(void)
+@@ -3685,7 +3976,7 @@ static int __init gate_vma_init(void)
  	gate_vma.vm_start = FIXADDR_USER_START;
  	gate_vma.vm_end = FIXADDR_USER_END;
  	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
@@ -61221,7 +61227,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  	/*
  	 * Make sure the vDSO gets into every core dump.
  	 * Dumping its contents makes post-mortem fully interpretable later
-@@ -3825,8 +4110,8 @@ out:
+@@ -3825,8 +4116,8 @@ out:
  	return ret;
  }
  
@@ -61232,7 +61238,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  {
  	resource_size_t phys_addr;
  	unsigned long prot = 0;
-@@ -3851,8 +4136,8 @@ int generic_access_phys(struct vm_area_s
+@@ -3851,8 +4142,8 @@ int generic_access_phys(struct vm_area_s
   * Access another process' address space as given in mm.  If non-NULL, use the
   * given task for page fault accounting.
   */
@@ -61243,7 +61249,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  {
  	struct vm_area_struct *vma;
  	void *old_buf = buf;
-@@ -3860,7 +4145,7 @@ static int __access_remote_vm(struct tas
+@@ -3860,7 +4151,7 @@ static int __access_remote_vm(struct tas
  	down_read(&mm->mmap_sem);
  	/* ignore errors, just check how much was successfully transferred */
  	while (len) {
@@ -61252,7 +61258,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  		void *maddr;
  		struct page *page = NULL;
  
-@@ -3919,8 +4204,8 @@ static int __access_remote_vm(struct tas
+@@ -3919,8 +4210,8 @@ static int __access_remote_vm(struct tas
   *
   * The caller must hold a reference on @mm.
   */
@@ -61263,7 +61269,7 @@ diff -NurpX linux-3.2.71-pax/Documentation/dontdiff linux-3.2.71/mm/memory.c lin
  {
  	return __access_remote_vm(NULL, mm, addr, buf, len, write);
  }
-@@ -3930,11 +4215,11 @@ int access_remote_vm(struct mm_struct *m
+@@ -3930,11 +4221,11 @@ int access_remote_vm(struct mm_struct *m
   * Source/target buffer must be kernel space,
   * Do not walk the page table directly, use get_user_pages
   */
